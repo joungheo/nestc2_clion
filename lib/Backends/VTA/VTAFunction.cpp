@@ -241,8 +241,10 @@ Error BoundVTAFunction::execute(IRFunction *F, ExecutionContext *context) {
     if (!irInstructionProcessingHandler ||
         !irInstructionProcessingHandler(
             &I, IRInstructionProcessingStage::PROCESSING, this)) {
-      // glow::dbgs()<<I.getName() <<"    : ";
-      // glow::dbgs()<<I.getKindName() <<"\n";
+              //##### JO uncomment 2 lines
+       glow::dbgs()<<I.getName() <<"    : ";
+       glow::dbgs()<<I.getKindName() <<"\n";
+       
       switch (I.getKind()) {
 #define DEF_INSTR(CLASS, NAME)                                                 \
   case Kinded::Kind::CLASS##Kind: {                                            \

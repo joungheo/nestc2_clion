@@ -253,10 +253,19 @@ add_library(Miniz
   ${GLOW_THIRDPARTY_DIR}/miniz-2.0.8/miniz.c)
 target_include_directories(Miniz PUBLIC ${GLOW_THIRDPARTY_DIR}/miniz-2.0.8)
 
+#### JO generate model-compiler, VTASaverTest, ... even if ZCU102=ON
 if(NOT NESTC_EVTA_RUN_ON_ZCU102)
   add_subdirectory(lib)
   add_subdirectory(tools)
 endif()
+
+#### JO add VTASaverTest target to inform the location
+#if(NOT TARGET VTASaverTest)
+#    add_executable(VTASaverTest IMPORTED)
+#    set_target_properties(VTASaverTest PROPERTIES
+#        IMPORTED_LOCATION "/home/ubuntu/npuprg/nestc2_clion/Debug9/tests/VTASaverTest" # 실제 VTASaverTest가 생성된 절대 경로
+#    )
+#endif()
 
 if (GLOW_BUILD_EXAMPLES)
   add_subdirectory(examples)

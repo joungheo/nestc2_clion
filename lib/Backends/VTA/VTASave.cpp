@@ -1699,6 +1699,13 @@ void generateInputTranspose(const glow::ConvolutionInst *Inst,
   bundle->append(", ");
   bundle->append(std::to_string(C));
   bundle->append(");\n");
+  //#### JO added: flush the CPU-written transposed input before the EVTA reads it
+  //#### (non-coherent EVTA, VTA_COHERENT_ACCESSES=false; no-op otherwise)
+  bundle->append("  VTABufferFlush(");
+  bundle->append(Inst->getName());
+  bundle->append("_input_transpose, 0, ");
+  bundle->append(std::to_string(N * H * W * C));
+  bundle->append(");\n");
 
 #ifdef VTA_PROFILE
   bundle->append("  clock_t ");
@@ -1838,6 +1845,13 @@ void generateFirstBNNInputTranspose(const glow::ConvolutionInst *Inst,
     bundle->append(", ");
     bundle->append(std::to_string(C));
     bundle->append(");\n");
+    //#### JO added: flush the CPU-written transposed input before the EVTA reads it
+    //#### (non-coherent EVTA, VTA_COHERENT_ACCESSES=false; no-op otherwise)
+    bundle->append("  VTABufferFlush(");
+    bundle->append(Inst->getName());
+    bundle->append("_input_transpose, 0, ");
+    bundle->append(std::to_string(N * H * W * C));
+    bundle->append(");\n");
 
   #ifdef VTA_PROFILE
     bundle->append("  clock_t ");
@@ -1905,6 +1919,13 @@ void generateBNNInputTranspose(const glow::BNNConvolutionInst *Inst,
   bundle->append(std::to_string(W));
   bundle->append(", ");
   bundle->append(std::to_string(C));
+  bundle->append(");\n");
+  //#### JO added: flush the CPU-written transposed input before the EVTA reads it
+  //#### (non-coherent EVTA, VTA_COHERENT_ACCESSES=false; no-op otherwise)
+  bundle->append("  VTABufferFlush(");
+  bundle->append(Inst->getName());
+  bundle->append("_input_transpose, 0, ");
+  bundle->append(std::to_string(N * H * W * C));
   bundle->append(");\n");
 
 #ifdef VTA_PROFILE
@@ -1977,6 +1998,13 @@ void generatezeroFillBNNInputTranspose(const glow::BNNConvolutionInst *Inst,
   bundle->append(std::to_string(W));
   bundle->append(", ");
   bundle->append(std::to_string(C));
+  bundle->append(");\n");
+  //#### JO added: flush the CPU-written transposed input before the EVTA reads it
+  //#### (non-coherent EVTA, VTA_COHERENT_ACCESSES=false; no-op otherwise)
+  bundle->append("  VTABufferFlush(");
+  bundle->append(Inst->getName());
+  bundle->append("_input_transpose, 0, ");
+  bundle->append(std::to_string(N * H * W * 16));
   bundle->append(");\n");
 
 #ifdef VTA_PROFILE
@@ -2655,6 +2683,13 @@ void generateOutputTranspose(const glow::ConvolutionInst *Inst,
   bundle->append(Inst->getName());
   bundle->append("_output_transpose_start = clock();\n");
 #endif
+  //#### JO added: invalidate stale CPU cache lines before the CPU reads the EVTA output
+  //#### (non-coherent EVTA, VTA_COHERENT_ACCESSES=false; no-op otherwise)
+  bundle->append("  VTABufferInvalidate(");
+  bundle->append(Inst->getName());
+  bundle->append("_output_bef_transpose, 0, ");
+  bundle->append(std::to_string(outN * outH * outW * outC));
+  bundle->append(");\n");
   bundle->append("  transpose_vtaio2nhwc(");
   bundle->append("(int8_t* )VTABufferGetVirtAddr(");
   bundle->append(Inst->getName());
@@ -2718,6 +2753,13 @@ void generateOutputTranspose(const glow::BNNConvolutionInst *Inst,
     bundle->append(Inst->getName());
     bundle->append("_output_transpose_start = clock();\n");
 #endif
+  //#### JO added: invalidate stale CPU cache lines before the CPU reads the EVTA output
+  //#### (non-coherent EVTA, VTA_COHERENT_ACCESSES=false; no-op otherwise)
+  bundle->append("  VTABufferInvalidate(");
+  bundle->append(Inst->getName());
+  bundle->append("_output_bef_transpose, 0, ");
+  bundle->append(std::to_string(outN * outH * outW * outC));
+  bundle->append(");\n");
   bundle->append("  transpose_vtaio2nhwc(");
   bundle->append("(int8_t* )VTABufferGetVirtAddr(");
   bundle->append(Inst->getName());

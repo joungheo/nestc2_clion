@@ -1,2 +1,5 @@
 cmake-build-*/
 .idea/
+Debug2_remote/
+vta/bundles/Resnet50Test/resnet50.onnx
+vta/bundles/Vgg16Cifar10Test/vgg16_cifar10.onnx

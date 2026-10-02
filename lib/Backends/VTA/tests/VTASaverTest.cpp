@@ -430,6 +430,29 @@ TEST(VTASaverTest, convTest3) {
   backend->save(F, outputDir, bundleName, mainEntryName);
   inferVTAConvNet(&inputs, &filter, &bias, &out1, 3, 1, 1, "VTA");
   inferVTAConvNet(&inputs, &filter, &bias, &out2, 3, 1, 1, "VTAInterpreter");
+
+//#### JO added to test
+auto h1 = out1.getHandle<int8_t>();
+auto h2 = out2.getHandle<int8_t>();
+
+size_t zero1 = 0, zero2 = 0;
+for (size_t i = 0; i < h1.size(); ++i) {
+  zero1 += (h1.raw(i) == 0);
+  zero2 += (h2.raw(i) == 0);
+}
+
+std::cerr << "VTA zeros: " << zero1 << "/" << h1.size()
+          << ", Interpreter zeros: " << zero2 << "/" << h2.size()
+          << "\n";
+
+for (size_t i = 0; i < 16 && i < h1.size(); ++i) {
+  std::cerr << i
+            << ": VTA=" << static_cast<int>(h1.raw(i))
+            << ", Interpreter=" << static_cast<int>(h2.raw(i))
+            << "\n";
+}
+
+
   out1.toBin("vtaConv3TestGolden");
   EXPECT_TRUE(out1.isEqual(out2, 0.0));
 }

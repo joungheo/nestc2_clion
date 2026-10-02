@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.5)
 
+#### modified 260904
 if ("${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
+#if (("${CMAKE_BUILD_TYPE}" STREQUAL "Debug") AND (NOT (CMAKE_CXX_COMPILER MATCHES "aarch64|arm")))
     add_definitions(-fno-limit-debug-info)
 endif()
 
