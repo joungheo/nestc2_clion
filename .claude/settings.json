@@ -1,0 +1,25 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && git pull --rebase --autostash github main && cat HANDOFF.md 2>/dev/null"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && git add -A && (git diff --cached --quiet || (git commit -m \"auto: $(date '+%F %T')\" && git push))"
+          }
+        ]
+      }
+    ]
+  }
+}
