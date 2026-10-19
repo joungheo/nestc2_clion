@@ -47,6 +47,7 @@ so a backend with **no** corresponding option (e.g. `Relay`) is always built.
 | `VTA` | EVTA NPU code generation (the flagship backend) | `NESTC_WITH_EVTA=ON` sets `NESTC_WITH_VTA` |
 | `VTAInterpreter` | Reference/simulated EVTA execution, used for quantization profiling | implied by `NESTC_WITH_EVTA` |
 | `Relay` | Lowers to TVM Relay (CPU/OpenCL/Mali/aarch64) | always on; needs `NESTC_WITH_TVM` (default ON) |
+
 The partner backends (`Newton`, `Enlight`, `NMP`, `openedge`) are OFF by default and are not used in this
 checkout — work here targets EVTA on ZCU102 only. Leave their sources in place (they cost nothing when OFF)
 and do not enable them.
@@ -115,6 +116,9 @@ from CLion over remote.
   the EVTA bitstream (`zcu102_1x16_i8w8a32_16_16_19_18.bit` from etri/nest-data).
 - `make` re-runs cmake whenever a CMakeLists changes, and Glow puts `-DGLOW_BUILD_DATE=<today>` on every
   target — a cmake re-run on a new day recompiles all of Glow (~1 h at `-j2`).
+  Even on the same day (or with `SOURCE_DATE_EPOCH` pinning the date), a re-run rewrites
+  `glow/glow/{Node,Instr}GenIncludes.h` (`cmake/glow/tools/ClassGen/CMakeLists.txt`: `file(REMOVE)` + `file(APPEND)`),
+  so NodeGen/InstrGen and everything including `AutoGenNodes.h` rebuild — most of Glow, ~1 h at `-j2`.
 
 ### EVTA on this board (verified 2026-09-29/30)
 
@@ -122,7 +126,7 @@ from CLion over remote.
   `vta/vtalib/include/zcu102/vta/hw_spec.h` and `.../simulator/hw_spec.h` are set to that (`//#### JO`
   markers); with 3 bits every LOAD/STORE address is off by one bit (results 0, deadlocks). ALU `MUL` (4) and
   `VTA_MEM_ID_MOVE` (5) cannot be encoded, so BNN/XP-GEMM paths do not run on this bitstream. If a different
-  bitstream is used, re-check the widths first (probes in `../vtabundles_xcmpl/hwtest/rawtest*.cpp`).
+  bitstream is used, re-check the widths first (probes in `vtabundles_xcmpl/hwtest/rawtest*.cpp`).
 - **Not cache-coherent.** vtalib option `NESTC_EVTA_COHERENT_ACCESSES` (default **OFF** →
   `-DVTA_COHERENT_ACCESSES=false`) makes the runtime flush/invalidate; ON hangs on this board. Generated
   bundles call `VTABufferFlush` / `VTABufferInvalidate` (new vtalib API) around the CPU-side transposes —
@@ -132,8 +136,9 @@ from CLion over remote.
   The runtime pre-allocates 64 MB of the 128 MB CMA pool per command handle. Other users share this board.
 - With `NESTC_EVTA_RUN_ON_ZCU102=ON`, `cmake/glow/CMakeLists.txt` skips `lib`/`tools`, so VTASaverTest /
   model-compiler are not built there: generate bundle sources in the simulator build (`Debug2_remote`) and
-  build them for the board outside CMake, as `../vtabundles_xcmpl/Conv3Test/{build.sh,run.sh}` does
-  (Conv3 bundle matches the simulator golden on the board).
+  build them for the board with the standalone CMake project in `vtabundles_xcmpl/` (not part of the NEST-C
+  CMake; its build dirs are git-ignored; see its `README.md`:
+  `build_sim_bundles.sh` → `collect_hw_bundles.py` → `make` in `build/` → `hw/run_all.sh`).
 
 Useful options (full list at the top of [CMakeLists.txt](CMakeLists.txt) and per-backend CMakeLists):
 

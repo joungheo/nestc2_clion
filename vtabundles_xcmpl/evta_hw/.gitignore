@@ -1,0 +1,5 @@
+build/
+.Xil/
+*.jou
+*.log
+vivado_hls.log

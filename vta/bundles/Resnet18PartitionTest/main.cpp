@@ -146,6 +146,8 @@ int main(int argc, char **argv) {
 	uint8_t *mutableWeightVarsAddr16 =  allocateMutableWeightVars(p16_config);
 	uint8_t *mutableWeightVarsAddr17 =  allocateMutableWeightVars(p17_config);
 
+	//#### JO added: p0 is a VTA partition now (NESTOptimalFusedPlan_p0VTA.yaml)
+	p0_load_module(constantWeightVarsAddr0);
 	p1_load_module(constantWeightVarsAddr1);
 	p3_load_module(constantWeightVarsAddr3);
 	p6_load_module(constantWeightVarsAddr6);
@@ -157,114 +159,210 @@ int main(int argc, char **argv) {
 
 	//======== multiple partitions =======//
 
-	clock_t start_total = 0;
-	start_total = clock();
-	p0(constantWeightVarsAddr0, mutableWeightVarsAddr0, activationsAddr0);
+	//#### JO changed: clock() is CPU time of all threads (OpenMP) -> wall clock; run all partitions twice
+	//#### (warm-up + measured)
+	// clock_t start_total = 0;
+	// start_total = clock();
+	for (int run = 1; run <= 2; run++) {
+	timespec start_total, now_total;
+	clock_gettime(CLOCK_MONOTONIC, &start_total);
+	//#### JO added: per-partition wall time (VTA partitions: p0 p1 p3 p6 p8 p10 p12 p14 p16, the rest CPU/LLVM)
+	double part_ms[18] = {0};
+	//#### JO changed: time each partition
+	// p0(constantWeightVarsAddr0, mutableWeightVarsAddr0, activationsAddr0);
+	{ timespec a, b; clock_gettime(CLOCK_MONOTONIC, &a);
+	  p0(constantWeightVarsAddr0, mutableWeightVarsAddr0, activationsAddr0);
+	  clock_gettime(CLOCK_MONOTONIC, &b); part_ms[0] = (b.tv_sec - a.tv_sec) * 1e3 + (b.tv_nsec - a.tv_nsec) * 1e-6; }
 
 	float* resultVar0 = getInferenceResultVar(p0_config, mutableWeightVarsAddr0, "resnetv10_pool0_fwd__1");
 	copyMutableWeightVarsWithoutAlloc(p1_config, mutableWeightVarsAddr1, "resnetv10_pool0_fwd__1", resultVar0);
 
-	p1(constantWeightVarsAddr1, mutableWeightVarsAddr1, activationsAddr1);
+	//#### JO changed: time each partition
+	// p1(constantWeightVarsAddr1, mutableWeightVarsAddr1, activationsAddr1);
+	{ timespec a, b; clock_gettime(CLOCK_MONOTONIC, &a);
+	  p1(constantWeightVarsAddr1, mutableWeightVarsAddr1, activationsAddr1);
+	  clock_gettime(CLOCK_MONOTONIC, &b); part_ms[1] = (b.tv_sec - a.tv_sec) * 1e3 + (b.tv_nsec - a.tv_nsec) * 1e-6; }
 
 	float* resultVar1 = getInferenceResultVar(p1_config, mutableWeightVarsAddr1, "resnetv10_stage1_conv1_fwd__2");
 	copyMutableWeightVarsWithoutAlloc(p2_config, mutableWeightVarsAddr2, "resnetv10_pool0_fwd__1", resultVar0);
 	copyMutableWeightVarsWithoutAlloc(p2_config, mutableWeightVarsAddr2, "resnetv10_stage1_conv1_fwd__2", resultVar1);
 
-	p2(constantWeightVarsAddr2, mutableWeightVarsAddr2, activationsAddr2);
+	//#### JO changed: time each partition
+	// p2(constantWeightVarsAddr2, mutableWeightVarsAddr2, activationsAddr2);
+	{ timespec a, b; clock_gettime(CLOCK_MONOTONIC, &a);
+	  p2(constantWeightVarsAddr2, mutableWeightVarsAddr2, activationsAddr2);
+	  clock_gettime(CLOCK_MONOTONIC, &b); part_ms[2] = (b.tv_sec - a.tv_sec) * 1e3 + (b.tv_nsec - a.tv_nsec) * 1e-6; }
 
 	float* resultVar2 = getInferenceResultVar(p2_config, mutableWeightVarsAddr2, "resnetv10_stage1_activation0__1");
 	copyMutableWeightVarsWithoutAlloc(p3_config, mutableWeightVarsAddr3, "resnetv10_stage1_activation0__1", resultVar2);
 
-	p3(constantWeightVarsAddr3, mutableWeightVarsAddr3, activationsAddr3);
+	//#### JO changed: time each partition
+	// p3(constantWeightVarsAddr3, mutableWeightVarsAddr3, activationsAddr3);
+	{ timespec a, b; clock_gettime(CLOCK_MONOTONIC, &a);
+	  p3(constantWeightVarsAddr3, mutableWeightVarsAddr3, activationsAddr3);
+	  clock_gettime(CLOCK_MONOTONIC, &b); part_ms[3] = (b.tv_sec - a.tv_sec) * 1e3 + (b.tv_nsec - a.tv_nsec) * 1e-6; }
 
 	float* resultVar3 = getInferenceResultVar(p3_config, mutableWeightVarsAddr3, "resnetv10_stage1_conv3_fwd__2");
 	copyMutableWeightVarsWithoutAlloc(p4_config, mutableWeightVarsAddr4, "resnetv10_stage1_activation0__1", resultVar2);
 	copyMutableWeightVarsWithoutAlloc(p4_config, mutableWeightVarsAddr4, "resnetv10_stage1_conv3_fwd__2", resultVar3);
 
-	p4(constantWeightVarsAddr4, mutableWeightVarsAddr4, activationsAddr4);
+	//#### JO changed: time each partition
+	// p4(constantWeightVarsAddr4, mutableWeightVarsAddr4, activationsAddr4);
+	{ timespec a, b; clock_gettime(CLOCK_MONOTONIC, &a);
+	  p4(constantWeightVarsAddr4, mutableWeightVarsAddr4, activationsAddr4);
+	  clock_gettime(CLOCK_MONOTONIC, &b); part_ms[4] = (b.tv_sec - a.tv_sec) * 1e3 + (b.tv_nsec - a.tv_nsec) * 1e-6; }
 
 	float* resultVar4 = getInferenceResultVar(p4_config, mutableWeightVarsAddr4, "resnetv10_stage1_activation1__1");
 	copyMutableWeightVarsWithoutAlloc(p5_config, mutableWeightVarsAddr5, "resnetv10_stage1_activation1__1", resultVar4);
 
-	p5(constantWeightVarsAddr5, mutableWeightVarsAddr5, activationsAddr5);
+	//#### JO changed: time each partition
+	// p5(constantWeightVarsAddr5, mutableWeightVarsAddr5, activationsAddr5);
+	{ timespec a, b; clock_gettime(CLOCK_MONOTONIC, &a);
+	  p5(constantWeightVarsAddr5, mutableWeightVarsAddr5, activationsAddr5);
+	  clock_gettime(CLOCK_MONOTONIC, &b); part_ms[5] = (b.tv_sec - a.tv_sec) * 1e3 + (b.tv_nsec - a.tv_nsec) * 1e-6; }
 
 	float* resultVar5 = getInferenceResultVar(p5_config, mutableWeightVarsAddr5, "resnetv10_stage2_conv2_fwd__2");
 	copyMutableWeightVarsWithoutAlloc(p6_config, mutableWeightVarsAddr6, "resnetv10_stage1_activation1__1", resultVar4);
 
-	p6(constantWeightVarsAddr6, mutableWeightVarsAddr6, activationsAddr6);
+	//#### JO changed: time each partition
+	// p6(constantWeightVarsAddr6, mutableWeightVarsAddr6, activationsAddr6);
+	{ timespec a, b; clock_gettime(CLOCK_MONOTONIC, &a);
+	  p6(constantWeightVarsAddr6, mutableWeightVarsAddr6, activationsAddr6);
+	  clock_gettime(CLOCK_MONOTONIC, &b); part_ms[6] = (b.tv_sec - a.tv_sec) * 1e3 + (b.tv_nsec - a.tv_nsec) * 1e-6; }
 
 	float* resultVar6 = getInferenceResultVar(p6_config, mutableWeightVarsAddr6, "resnetv10_stage2_conv1_fwd__2");
 	copyMutableWeightVarsWithoutAlloc(p7_config, mutableWeightVarsAddr7, "resnetv10_stage2_conv2_fwd__2", resultVar5);
 	copyMutableWeightVarsWithoutAlloc(p7_config, mutableWeightVarsAddr7, "resnetv10_stage2_conv1_fwd__2", resultVar6);
 
-	p7(constantWeightVarsAddr7, mutableWeightVarsAddr7, activationsAddr7);
+	//#### JO changed: time each partition
+	// p7(constantWeightVarsAddr7, mutableWeightVarsAddr7, activationsAddr7);
+	{ timespec a, b; clock_gettime(CLOCK_MONOTONIC, &a);
+	  p7(constantWeightVarsAddr7, mutableWeightVarsAddr7, activationsAddr7);
+	  clock_gettime(CLOCK_MONOTONIC, &b); part_ms[7] = (b.tv_sec - a.tv_sec) * 1e3 + (b.tv_nsec - a.tv_nsec) * 1e-6; }
 
 	float* resultVar7 = getInferenceResultVar(p7_config, mutableWeightVarsAddr7, "resnetv10_stage2_activation0__1");
 	copyMutableWeightVarsWithoutAlloc(p8_config, mutableWeightVarsAddr8, "resnetv10_stage2_activation0__1", resultVar7);
 
-	p8(constantWeightVarsAddr8, mutableWeightVarsAddr8, activationsAddr8);
+	//#### JO changed: time each partition
+	// p8(constantWeightVarsAddr8, mutableWeightVarsAddr8, activationsAddr8);
+	{ timespec a, b; clock_gettime(CLOCK_MONOTONIC, &a);
+	  p8(constantWeightVarsAddr8, mutableWeightVarsAddr8, activationsAddr8);
+	  clock_gettime(CLOCK_MONOTONIC, &b); part_ms[8] = (b.tv_sec - a.tv_sec) * 1e3 + (b.tv_nsec - a.tv_nsec) * 1e-6; }
 
 	float* resultVar8 = getInferenceResultVar(p8_config, mutableWeightVarsAddr8, "resnetv10_stage2_conv4_fwd__2");
 	copyMutableWeightVarsWithoutAlloc(p9_config, mutableWeightVarsAddr9, "resnetv10_stage2_activation0__1", resultVar7);
 	copyMutableWeightVarsWithoutAlloc(p9_config, mutableWeightVarsAddr9, "resnetv10_stage2_conv4_fwd__2", resultVar8);
 
-	p9(constantWeightVarsAddr9, mutableWeightVarsAddr9, activationsAddr9);
+	//#### JO changed: time each partition
+	// p9(constantWeightVarsAddr9, mutableWeightVarsAddr9, activationsAddr9);
+	{ timespec a, b; clock_gettime(CLOCK_MONOTONIC, &a);
+	  p9(constantWeightVarsAddr9, mutableWeightVarsAddr9, activationsAddr9);
+	  clock_gettime(CLOCK_MONOTONIC, &b); part_ms[9] = (b.tv_sec - a.tv_sec) * 1e3 + (b.tv_nsec - a.tv_nsec) * 1e-6; }
 
 	float* resultVar9 = getInferenceResultVar(p9_config, mutableWeightVarsAddr9, "resnetv10_stage2_activation1__1");
 	copyMutableWeightVarsWithoutAlloc(p10_config, mutableWeightVarsAddr10, "resnetv10_stage2_activation1__1", resultVar9);
 
-	p10(constantWeightVarsAddr10, mutableWeightVarsAddr10, activationsAddr10);
+	//#### JO changed: time each partition
+	// p10(constantWeightVarsAddr10, mutableWeightVarsAddr10, activationsAddr10);
+	{ timespec a, b; clock_gettime(CLOCK_MONOTONIC, &a);
+	  p10(constantWeightVarsAddr10, mutableWeightVarsAddr10, activationsAddr10);
+	  clock_gettime(CLOCK_MONOTONIC, &b); part_ms[10] = (b.tv_sec - a.tv_sec) * 1e3 + (b.tv_nsec - a.tv_nsec) * 1e-6; }
 
 	float* resultVar10_1 = getInferenceResultVar(p10_config, mutableWeightVarsAddr10, "resnetv10_stage3_conv2_fwd__2");
 	float* resultVar10_2 = getInferenceResultVar(p10_config, mutableWeightVarsAddr10, "resnetv10_stage3_conv1_fwd__2");
 	copyMutableWeightVarsWithoutAlloc(p11_config, mutableWeightVarsAddr11, "resnetv10_stage3_conv2_fwd__2", resultVar10_1);
 	copyMutableWeightVarsWithoutAlloc(p11_config, mutableWeightVarsAddr11, "resnetv10_stage3_conv1_fwd__2", resultVar10_2);
 
-	p11(constantWeightVarsAddr11, mutableWeightVarsAddr11, activationsAddr11);
+	//#### JO changed: time each partition
+	// p11(constantWeightVarsAddr11, mutableWeightVarsAddr11, activationsAddr11);
+	{ timespec a, b; clock_gettime(CLOCK_MONOTONIC, &a);
+	  p11(constantWeightVarsAddr11, mutableWeightVarsAddr11, activationsAddr11);
+	  clock_gettime(CLOCK_MONOTONIC, &b); part_ms[11] = (b.tv_sec - a.tv_sec) * 1e3 + (b.tv_nsec - a.tv_nsec) * 1e-6; }
 
 	float* resultVar11 = getInferenceResultVar(p11_config, mutableWeightVarsAddr11, "resnetv10_stage3_activation0__1");
 	copyMutableWeightVarsWithoutAlloc(p12_config, mutableWeightVarsAddr12, "resnetv10_stage3_activation0__1", resultVar11);
 
-	p12(constantWeightVarsAddr12, mutableWeightVarsAddr12, activationsAddr12);
+	//#### JO changed: time each partition
+	// p12(constantWeightVarsAddr12, mutableWeightVarsAddr12, activationsAddr12);
+	{ timespec a, b; clock_gettime(CLOCK_MONOTONIC, &a);
+	  p12(constantWeightVarsAddr12, mutableWeightVarsAddr12, activationsAddr12);
+	  clock_gettime(CLOCK_MONOTONIC, &b); part_ms[12] = (b.tv_sec - a.tv_sec) * 1e3 + (b.tv_nsec - a.tv_nsec) * 1e-6; }
 
 	float* resultVar12 = getInferenceResultVar(p12_config, mutableWeightVarsAddr12, "resnetv10_stage3_conv4_fwd__2");
 	copyMutableWeightVarsWithoutAlloc(p13_config, mutableWeightVarsAddr13, "resnetv10_stage3_activation0__1", resultVar11);
 	copyMutableWeightVarsWithoutAlloc(p13_config, mutableWeightVarsAddr13, "resnetv10_stage3_conv4_fwd__2", resultVar12);
 
-	p13(constantWeightVarsAddr13, mutableWeightVarsAddr13, activationsAddr13);
+	//#### JO changed: time each partition
+	// p13(constantWeightVarsAddr13, mutableWeightVarsAddr13, activationsAddr13);
+	{ timespec a, b; clock_gettime(CLOCK_MONOTONIC, &a);
+	  p13(constantWeightVarsAddr13, mutableWeightVarsAddr13, activationsAddr13);
+	  clock_gettime(CLOCK_MONOTONIC, &b); part_ms[13] = (b.tv_sec - a.tv_sec) * 1e3 + (b.tv_nsec - a.tv_nsec) * 1e-6; }
 
 	float* resultVar13 = getInferenceResultVar(p13_config, mutableWeightVarsAddr13, "resnetv10_stage3_activation1__1");
 	copyMutableWeightVarsWithoutAlloc(p14_config, mutableWeightVarsAddr14, "resnetv10_stage3_activation1__1", resultVar13);
 
-	p14(constantWeightVarsAddr14, mutableWeightVarsAddr14, activationsAddr14);
+	//#### JO changed: time each partition
+	// p14(constantWeightVarsAddr14, mutableWeightVarsAddr14, activationsAddr14);
+	{ timespec a, b; clock_gettime(CLOCK_MONOTONIC, &a);
+	  p14(constantWeightVarsAddr14, mutableWeightVarsAddr14, activationsAddr14);
+	  clock_gettime(CLOCK_MONOTONIC, &b); part_ms[14] = (b.tv_sec - a.tv_sec) * 1e3 + (b.tv_nsec - a.tv_nsec) * 1e-6; }
 
 	float* resultVar14_1 = getInferenceResultVar(p14_config, mutableWeightVarsAddr14, "resnetv10_stage4_conv2_fwd__2");
 	float* resultVar14_2 = getInferenceResultVar(p14_config, mutableWeightVarsAddr14, "resnetv10_stage4_conv1_fwd__2");
 	copyMutableWeightVarsWithoutAlloc(p15_config, mutableWeightVarsAddr15, "resnetv10_stage4_conv2_fwd__2", resultVar14_1);
 	copyMutableWeightVarsWithoutAlloc(p15_config, mutableWeightVarsAddr15, "resnetv10_stage4_conv1_fwd__2", resultVar14_2);
 
-	p15(constantWeightVarsAddr15, mutableWeightVarsAddr15, activationsAddr15);
+	//#### JO changed: time each partition
+	// p15(constantWeightVarsAddr15, mutableWeightVarsAddr15, activationsAddr15);
+	{ timespec a, b; clock_gettime(CLOCK_MONOTONIC, &a);
+	  p15(constantWeightVarsAddr15, mutableWeightVarsAddr15, activationsAddr15);
+	  clock_gettime(CLOCK_MONOTONIC, &b); part_ms[15] = (b.tv_sec - a.tv_sec) * 1e3 + (b.tv_nsec - a.tv_nsec) * 1e-6; }
 
 	float* resultVar15 = getInferenceResultVar(p15_config, mutableWeightVarsAddr15, "resnetv10_stage4_activation0__1");
 	copyMutableWeightVarsWithoutAlloc(p16_config, mutableWeightVarsAddr16, "resnetv10_stage4_activation0__1", resultVar15);
 
-	p16(constantWeightVarsAddr16, mutableWeightVarsAddr16, activationsAddr16);
+	//#### JO changed: time each partition
+	// p16(constantWeightVarsAddr16, mutableWeightVarsAddr16, activationsAddr16);
+	{ timespec a, b; clock_gettime(CLOCK_MONOTONIC, &a);
+	  p16(constantWeightVarsAddr16, mutableWeightVarsAddr16, activationsAddr16);
+	  clock_gettime(CLOCK_MONOTONIC, &b); part_ms[16] = (b.tv_sec - a.tv_sec) * 1e3 + (b.tv_nsec - a.tv_nsec) * 1e-6; }
 
 	float* resultVar16 = getInferenceResultVar(p16_config, mutableWeightVarsAddr16, "resnetv10_stage4_conv4_fwd__2");
 	copyMutableWeightVarsWithoutAlloc(p17_config, mutableWeightVarsAddr17, "resnetv10_stage4_activation0__1", resultVar15);
 	copyMutableWeightVarsWithoutAlloc(p17_config, mutableWeightVarsAddr17, "resnetv10_stage4_conv4_fwd__2", resultVar16);
 
-	p17(constantWeightVarsAddr17, mutableWeightVarsAddr17, activationsAddr17);
+	//#### JO changed: time each partition
+	// p17(constantWeightVarsAddr17, mutableWeightVarsAddr17, activationsAddr17);
+	{ timespec a, b; clock_gettime(CLOCK_MONOTONIC, &a);
+	  p17(constantWeightVarsAddr17, mutableWeightVarsAddr17, activationsAddr17);
+	  clock_gettime(CLOCK_MONOTONIC, &b); part_ms[17] = (b.tv_sec - a.tv_sec) * 1e3 + (b.tv_nsec - a.tv_nsec) * 1e-6; }
 
-	clock_t now_total;
-	now_total = clock();
-	unsigned long inftime_total = (unsigned long)(now_total - start_total);
+	//#### JO changed: wall clock, end of the run loop
+	// clock_t now_total;
+	// now_total = clock();
+	// unsigned long inftime_total = (unsigned long)(now_total - start_total);
+	// printf("\n====> [Total inference time] %lu microsec.\n", inftime_total);
+	clock_gettime(CLOCK_MONOTONIC, &now_total);
+	unsigned long inftime_total = (unsigned long)((now_total.tv_sec - start_total.tv_sec) * 1000000L +
+	                                              (now_total.tv_nsec - start_total.tv_nsec) / 1000);
 	printf("\n====> [Total inference time] %lu microsec.\n", inftime_total);
+	printf("run %d (%s): inference %.3f ms\n", run, run == 1 ? "warm-up" : "measured", inftime_total / 1000.0);
+	//#### JO added: per-partition times; the rest of the total is the copies between partitions
+	//#### JO changed: p0 is VTA now
+	// { const int isVTA[18] = {0,1,0,1,0,0,1,0,1,0,1,0,1,0,1,0,1,0};
+	{ const int isVTA[18] = {1,1,0,1,0,0,1,0,1,0,1,0,1,0,1,0,1,0};
+	  double cpu = 0, vta = 0;
+	  for (int i = 0; i < 18; i++) { printf("  p%-2d %s %9.3f ms\n", i, isVTA[i] ? "VTA" : "CPU", part_ms[i]); (isVTA[i] ? vta : cpu) += part_ms[i]; }
+	  printf("  CPU partitions %.3f ms, VTA partitions %.3f ms, copies between partitions %.3f ms\n",
+	         cpu, vta, inftime_total / 1000.0 - cpu - vta); }
+	}
 
 	// Report the results.
 	printf("====== final result of this neural net ========\n");
 	dumpInferenceResults(p17_config, mutableWeightVarsAddr17, "resnetv10_dense0_fwd");
 
+	//#### JO added: p0 is a VTA partition now
+	p0_destroy_module();
 	p1_destroy_module();
 	p3_destroy_module();
 	p6_destroy_module();

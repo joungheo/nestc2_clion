@@ -26,6 +26,8 @@
 #include <iostream>
 #include "VTARuntime.h"
 #include "vta/runtime.h"
+//#### JO added: clock_gettime for the run timing
+#include <time.h>
 
 #define DEFAULT_HEIGHT 7
 #define DEFAULT_WIDTH 7
@@ -259,11 +261,25 @@ int main(int argc, char **argv) {
 
   Conv_inception_5b_5x5_1__1MainEntry_load_module((uint8_t*)constantWeightVarsAddr);
 
-    // Perform the computation.
-    int errCode =
-        Conv_inception_5b_5x5_1__1MainEntry((uint8_t*)constantWeightVarsAddr, (uint8_t*)mutableWeightVarsAddr, (uint8_t*)activationsAddr);
-    if (errCode != GLOW_SUCCESS) {
+    //#### JO changed: run twice (warm-up + measured) and print the wall time of each run
+    // // Perform the computation.
+    // int errCode =
+    // Conv_inception_5b_5x5_1__1MainEntry((uint8_t*)constantWeightVarsAddr, (uint8_t*)mutableWeightVarsAddr, (uint8_t*)activationsAddr);
+    // if (errCode != GLOW_SUCCESS) {
+    // printf("Error running bundle: error code %d\n", errCode);
+    // }
+    int errCode = GLOW_SUCCESS;
+    for (int run = 1; run <= 2; run++) {
+      timespec t0, t1;
+      clock_gettime(CLOCK_MONOTONIC, &t0);
+      // Perform the computation.
+      errCode = Conv_inception_5b_5x5_1__1MainEntry((uint8_t*)constantWeightVarsAddr, (uint8_t*)mutableWeightVarsAddr, (uint8_t*)activationsAddr);
+      clock_gettime(CLOCK_MONOTONIC, &t1);
+      if (errCode != GLOW_SUCCESS) {
         printf("Error running bundle: error code %d\n", errCode);
+      }
+      printf("run %d (%s): inference %.3f ms\n", run, run == 1 ? "warm-up" : "measured",
+             (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) * 1e-6);
     }
 
     // Report the results.

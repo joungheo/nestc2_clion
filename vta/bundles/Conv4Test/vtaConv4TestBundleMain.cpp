@@ -26,6 +26,8 @@
 #include <iostream>
 #include "VTARuntime.h"
 #include "vta/runtime.h"
+//#### JO added: clock_gettime for the run timing
+#include <time.h>
 
 #define DEFAULT_HEIGHT 56
 #define DEFAULT_WIDTH 56
@@ -260,11 +262,29 @@ int main(int argc, char **argv) {
 
     vtaConv4TestMainEntry_load_module((uint8_t*)constantWeightVarsAddr);
 
-    // Perform the computation.
-    int errCode =
-            vtaConv4TestMainEntry((uint8_t*)constantWeightVarsAddr, (uint8_t*)mutableWeightVarsAddr, (uint8_t*)activationsAddr);
-    if (errCode != GLOW_SUCCESS) {
-        printf("Error running bundle: error code %d\n", errCode);
+    //#### JO changed: run twice (warm-up + measured) like the Resnet18 main, and report time/GOPS
+    // // Perform the computation.
+    // int errCode =
+    //         vtaConv4TestMainEntry((uint8_t*)constantWeightVarsAddr, (uint8_t*)mutableWeightVarsAddr, (uint8_t*)activationsAddr);
+    // if (errCode != GLOW_SUCCESS) {
+    //     printf("Error running bundle: error code %d\n", errCode);
+    // }
+    // conv 3x3, 56x56x64 -> 56x56x64: 2 ops (mul+add) per MAC
+    const double convOps = 2.0 * DEFAULT_OHEIGHT * DEFAULT_OWIDTH * DEFAULT_OCHANNEL * 3 * 3 * DEFAULT_CHANNEL;
+    int errCode = GLOW_SUCCESS;
+    for (int run = 1; run <= 2; run++) {
+        timespec t0, t1;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        // Perform the computation.
+        errCode =
+                vtaConv4TestMainEntry((uint8_t*)constantWeightVarsAddr, (uint8_t*)mutableWeightVarsAddr, (uint8_t*)activationsAddr);
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        if (errCode != GLOW_SUCCESS) {
+            printf("Error running bundle: error code %d\n", errCode);
+        }
+        double ms = (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) * 1e-6;
+        printf("run %d (%s): inference %.3f ms, %.0f Mops, %.2f GOPS (end-to-end incl. CPU transposes)\n",
+               run, run == 1 ? "warm-up" : "measured", ms, convOps * 1e-6, convOps / (ms * 1e6));
     }
 
     // Report the results.

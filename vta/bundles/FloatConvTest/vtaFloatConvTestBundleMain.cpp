@@ -26,6 +26,8 @@
 #include <iostream>
 
 #include "vta/runtime.h"
+//#### JO added: clock_gettime for the run timing
+#include <time.h>
 
 #define DEFAULT_HEIGHT 14
 #define DEFAULT_WIDTH 14
@@ -229,19 +231,35 @@ int main(int argc, char **argv) {
 
   vtaFloatConvTestMainEntry_load_module((uint8_t *)constantWeightVarsAddr);
 
-  clock_t start, end;
-  double result;
-  start = clock();
+  //#### JO changed: clock() is CPU time of all OpenMP threads (both runs: ~600 ms for 2 x 76 ms); the run loop prints wall time
+  // clock_t start, end;
+  // double result;
+  // start = clock();
 
-  // Perform the computation.
-  int errCode =
-          vtaFloatConvTestMainEntry((uint8_t*)constantWeightVarsAddr, (uint8_t*)mutableWeightVarsAddr, (uint8_t*)activationsAddr);
-  if (errCode != GLOW_SUCCESS) {
-    printf("Error running bundle: error code %d\n", errCode);
+  //#### JO changed: run twice (warm-up + measured) and print the wall time of each run
+  // // Perform the computation.
+  // int errCode =
+  // vtaFloatConvTestMainEntry((uint8_t*)constantWeightVarsAddr, (uint8_t*)mutableWeightVarsAddr, (uint8_t*)activationsAddr);
+  // if (errCode != GLOW_SUCCESS) {
+  // printf("Error running bundle: error code %d\n", errCode);
+  // }
+  int errCode = GLOW_SUCCESS;
+  for (int run = 1; run <= 2; run++) {
+    timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    // Perform the computation.
+    errCode = vtaFloatConvTestMainEntry((uint8_t*)constantWeightVarsAddr, (uint8_t*)mutableWeightVarsAddr, (uint8_t*)activationsAddr);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    if (errCode != GLOW_SUCCESS) {
+      printf("Error running bundle: error code %d\n", errCode);
+    }
+    printf("run %d (%s): inference %.3f ms\n", run, run == 1 ? "warm-up" : "measured",
+           (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) * 1e-6);
   }
-  end = clock();
-  result = (double)(end-start)/CLOCKS_PER_SEC*1000;
-  std::cout<<"Inference time: "<<result<<"ms\n";
+  //#### JO changed: see above
+  // end = clock();
+  // result = (double)(end-start)/CLOCKS_PER_SEC*1000;
+  // std::cout<<"Inference time: "<<result<<"ms\n";
 
 
   // Report the results.

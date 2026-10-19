@@ -400,19 +400,37 @@ int main(int argc, char **argv) {
   uint8_t *activationsAddr = (uint8_t* )initActivations(resnet50_config);
 
 
-  clock_t start, end;
-  double result;
-  resnet50_load_module(constantWeightVarsAddr);
-  start = clock();
+  //#### JO changed: clock() is CPU time of all threads (OpenMP) -> wall clock; run twice (warm-up + measured);
+  //#### destroy_module no longer inside the timed region
+  // clock_t start, end;
+  // double result;
+  // resnet50_load_module(constantWeightVarsAddr);
+  // start = clock();
 
-  // Perform the computation.
-  resnet50(constantWeightVarsAddr, mutableWeightVarsAddr, activationsAddr);
+  // // Perform the computation.
+  // resnet50(constantWeightVarsAddr, mutableWeightVarsAddr, activationsAddr);
+  // resnet50_destroy_module();
+  // end = clock();
+
+  // // Report the results.
+  // int maxIdx = dumpInferenceResults(resnet50_config, (uint8_t*) mutableWeightVarsAddr, "gpu_0_softmax_1");
+  // result = (double)(end-start)/CLOCKS_PER_SEC*1000;
+  // std::cout<<"Inference time: "<<result<<"ms\n";
+  double result = 0;
+  resnet50_load_module(constantWeightVarsAddr);
+  for (int run = 1; run <= 2; run++) {
+    timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    // Perform the computation.
+    resnet50(constantWeightVarsAddr, mutableWeightVarsAddr, activationsAddr);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    result = (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) * 1e-6;
+    printf("run %d (%s): inference %.3f ms\n", run, run == 1 ? "warm-up" : "measured", result);
+  }
   resnet50_destroy_module();
-  end = clock();
 
   // Report the results.
   int maxIdx = dumpInferenceResults(resnet50_config, (uint8_t*) mutableWeightVarsAddr, "gpu_0_softmax_1");
-  result = (double)(end-start)/CLOCKS_PER_SEC*1000;
   std::cout<<"Inference time: "<<result<<"ms\n";
   // Free all resources.
   free(activationsAddr);

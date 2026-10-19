@@ -47,8 +47,9 @@ if(NOT NESTC_USE_PRECOMPILED_BUNDLE)
                 #-dump-graph-DAG=opt.dot
                 -load-profile=${CMAKE_CURRENT_BINARY_DIR}/vgg16_calib_1.yaml
                 -quantization-schema=symmetric_with_power2_scale
-                -instrument-debug
-                -instrument-debug-format=rawbin
+                #### JO changed: debug instrumentation dumps every tensor (93% of the board run time); off
+                #-instrument-debug
+                #-instrument-debug-format=rawbin
                 DEPENDS
                 model-compiler VTA ${CMAKE_CURRENT_BINARY_DIR}/vgg16_calib_1.yaml #Interpreter
         )

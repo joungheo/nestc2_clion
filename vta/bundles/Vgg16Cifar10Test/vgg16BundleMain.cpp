@@ -16,6 +16,8 @@
  */
 
 #include <sys/time.h>
+//#### JO added: clock_gettime for the run timing
+#include <time.h>
 #include "VTARuntime.h"
 #include <assert.h>
 #include <inttypes.h>
@@ -468,18 +470,32 @@ int main(int argc, char **argv) {
     usleep(1000000);
   }
 
-  start = clock();
-  vgg16_cifar10(constantWeightVarsAddr, mutableWeightVarsAddr,
-      activationsAddr);
+  //#### JO changed: clock() is CPU time of all threads (OpenMP) -> wall clock; run twice (warm-up + measured);
+  //#### destroy_module no longer inside the timed region
+  // start = clock();
+  // vgg16_cifar10(constantWeightVarsAddr, mutableWeightVarsAddr,
+  // activationsAddr);
+
+  // vgg16_cifar10_destroy_module();
+  // end = clock();
+  for (int run = 1; run <= 2; run++) {
+    timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    vgg16_cifar10(constantWeightVarsAddr, mutableWeightVarsAddr,
+        activationsAddr);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    result = (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) * 1e-6;
+    printf("run %d (%s): inference %.3f ms\n", run, run == 1 ? "warm-up" : "measured", result);
+  }
 
   vgg16_cifar10_destroy_module();
-  end = clock();
 
   // Report the results.
   int maxIdx = dumpInferenceResults(vgg16_cifar10_config, (uint8_t*) mutableWeightVarsAddr,
                                     "output");
 //  result = (t2.tv_sec - t1.tv_sec)*1000.0 + (t2.tv_usec - t1.tv_usec)/1000.0;
-  result = (double)(end - start)/CLOCKS_PER_SEC*1000;
+  //#### JO changed: result is set in the run loop above
+  // result = (double)(end - start)/CLOCKS_PER_SEC*1000;
   std::cout<<"Inference time: "<<result<<"ms\n";
   // Free all resources.
   free(activationsAddr);

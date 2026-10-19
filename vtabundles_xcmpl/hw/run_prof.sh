@@ -1,0 +1,65 @@
+#!/bin/bash
+# Run profiling bundles and keep each full output in <Dir>/<suffix>.log:
+#   _prof  (default) built in ../build_prof  (-DNESTC_EVTA_PROFILE=ON -DBUNDLE_EXE_SUFFIX=_prof): per VTA run
+#   _timed           built in ../build_timed (-DBUNDLE_TIMED=ON -DBUNDLE_EXE_SUFFIX=_timed): per statement,
+#                    also <Dir>/timing.csv
+# Executable, input and golden come from the "run <dir> <exe> <input> <golden>" lines of run_all.sh. Reloads the bitstream before each run.
+# usage (from hw/): sudo ./run_prof.sh [-s _timed] Dir [Dir ...]
+#                   sudo ./run_prof.sh [-s _timed] [all|hw_bundles]   (no Dir = every run line of run_all.sh)
+# One line per Dir (exit, golden check, total time) is also written to <suffix>_summary.txt, printed at the end.
+set -u
+cd "$(dirname "$0")"
+#### JO changed: bitstream from run_all.sh of this hw dir (hw/: single EVTA, hw_multievtax2/: 2 EVTAs)
+#BIN=zcu102_1x16_i8w8a32_16_16_19_18.bin
+BIN=$(sed -n "s/^BIN=//p" run_all.sh)
+[ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
+SUFFIX=_prof
+[ "${1:-}" = -s ] && { SUFFIX=$2; shift 2; }
+LOG=${SUFFIX#_}.log
+#### JO changed: no Dir / "all" / "hw_bundles" runs every bundle listed in run_all.sh
+# [ $# -gt 0 ] || { echo "usage: sudo ./run_prof.sh [-s _timed] Dir [Dir ...]"; exit 1; }
+if [ $# = 0 ] || [ "$1" = all ] || [ "$1" = hw_bundles ]; then
+  set -- $(sed -n "s/^run \([^ ]*\) .*/\1/p" run_all.sh | uniq)
+fi
+SUM=${SUFFIX#_}_summary.txt; : > $SUM
+
+for D in "$@"; do
+  #### JO changed: a Dir can have several run lines (multi-EVTA: threaded + single-thread executable)
+  # line=$(grep -E "^run $D " run_all.sh) || { echo "$D: not in run_all.sh"; continue; }
+  grep -qE "^run $D " run_all.sh || { echo "$D: not in run_all.sh"; continue; }
+  while read -r line <&3; do
+  eval "set -- $line"     # -> run dir exe input golden
+  EXE=$3$SUFFIX; IN=$4; GOLD=$5
+  echo "================ $D ($EXE)"
+  #### JO changed: also record it in the summary
+  # [ -x $D/$EXE ] || { echo "$D/$EXE not built (cd ../build${SUFFIX} && make $3)"; continue; }
+  [ -x $D/$EXE ] || { echo "$D/$EXE not built (cd ../build${SUFFIX} && make $3)"
+                      printf "%-30s %-34s NOT BUILT\n" $D $EXE >> $SUM; continue; }
+  echo 0 > /sys/class/fpga_manager/fpga0/flags; echo $BIN > /sys/class/fpga_manager/fpga0/firmware
+  python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" 2>/dev/null
+  #### JO changed: keep exit code and golden result for the summary
+  # ( cd $D && rm -f output.bin && timeout 300 ./$EXE $IN > $LOG 2>&1; echo "exit=$? (124 = timeout)" )
+  # [ -n "$GOLD" ] && [ -f $D/output.bin ] && { cmp -s $D/output.bin $D/$GOLD && echo "RESULT: PASS" || echo "RESULT: MISMATCH"; }
+  ( cd $D && rm -f output.bin && timeout 300 ./$EXE $IN > $LOG 2>&1 ); rc=$?
+  echo "exit=$rc (124 = timeout)"
+  res="no golden"
+  [ -n "$GOLD" ] && { [ -f $D/output.bin ] && cmp -s $D/output.bin $D/$GOLD && res=PASS || res=MISMATCH; }
+  echo "RESULT: $res"
+  chown -R --reference=. $D
+  grep -E "event buffer full|total_time|^run [0-9]+ \(" $D/$LOG
+  sed -n "/^==== timing/,\$p" $D/$LOG
+  echo "  VTA events: $(grep -c '^VTA_SYNC' $D/$LOG)   full log: $D/$LOG"
+  # summary: total of the last run (_timed) or the VTA total_time line (_prof)
+  #### JO changed: a partitioned bundle prints one timing table per VTA partition .cpp -> sum the last run of each
+  # t=$(grep -E "^run #[0-9]+: total" $D/$LOG | tail -1 | sed "s/, statements.*//"); [ -n "$t" ] || t=$(grep -m1 total_time $D/$LOG)
+  t=$(awk '/^==== timing/ {n++} /^run #[0-9]+: total/ {r[n]=$2; ms[n]=$4}
+           END {if (n == 1) print "run " r[1] " total " ms[1] " ms";
+                else if (n > 1) {for (i = 1; i <= n; i++) s += ms[i]; printf "%d timed partitions: sum %.3f ms (CPU .o partitions not timed)\n", n, s}}' $D/$LOG)
+  [ -n "$t" ] || t=$(grep -m1 total_time $D/$LOG)
+  #### JO changed: executable column, end of the per-line loop
+  # printf "%-30s exit=%-3s %-10s %s\n" $D $rc "$res" "$t" >> $SUM
+  printf "%-30s %-34s exit=%-3s %-10s %s\n" $D $EXE $rc "$res" "$t" >> $SUM
+  done 3< <(grep -E "^run $D " run_all.sh)
+done
+echo; echo "== summary ($SUM)"; cat $SUM
+chown --reference=. $SUM
