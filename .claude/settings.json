@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" && git pull --rebase --autostash github main && cat HANDOFF.md 2>/dev/null"
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" && git pull --rebase --autostash && cat HANDOFF.md 2>/dev/null"
           }
         ]
       }
