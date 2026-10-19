@@ -81,9 +81,14 @@ vta-hw HLS를 vtalib의 256비트 `hw_spec.h`로 합성, ZCU102·HP 포트·EVTA
 Vivado/HLS 2020.1(docker, PC). 1단계: `make ip && make bin NUM_EVTA=1` → 지금 비트스트림과 같은 결과인지 확인.
 자세한 내용은 `evta_hw/README.md`.
 
+2026-10-20: EVTA 1개는 `vta-hw-zcu102-single/hardware/xilinx`(vta-hw Makefile에 zcu102 타깃 추가)로 합성 완료.
+PC docker `vivado2020-build`, Vivado `/tools/Xilinx/v2020.1`. `vtahw_zcu102_1x16_i8w8a32_16_16_19_18.bin`,
+333 MHz WNS +0.027 ns, BRAM 253/912. `PROFILE=1`이면 compute 카운터(0x50/0x60/0x70)와 AXI Perf Monitor
+(0xA0050000, slot0 HP0 전체/slot1 load/slot2 store)가 들어간 `..._prof.bin`. 보드 시험 전.
+
 ## 8. 할 일
 
-1. evta_hw 1단계(EVTA 1개) 합성·검증 → 2개 → 4개(작은 버퍼).
+1. `vtahw_..._16_16_19_18(.bin, _prof.bin)` 보드 검증 → evta_hw 2개 → 4개(작은 버퍼).
 2. `nonvtaconvolution`/`cpunonvtaconvolution` 최적화 (Resnet50 conv1 1156 ms).
 3. conv0(3채널): `convolutionFloat` NEON 최적화 또는 채널 16 패딩으로 VTA 실행 (`README.md` To do).
 4. VTA 1×1 conv(19~54 GOPS), 출력 transpose, 버퍼 alloc/free 비용.

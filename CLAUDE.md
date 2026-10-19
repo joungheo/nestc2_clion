@@ -140,6 +140,30 @@ from CLion over remote.
   CMake; its build dirs are git-ignored; see its `README.md`:
   `build_sim_bundles.sh` → `collect_hw_bundles.py` → `make` in `build/` → `hw/run_all.sh`).
 
+### EVTA bitstreams (host PC, Vivado 2020.1 in docker)
+
+The bitstream is synthesized on the x86 host PC, not on the board. Vivado 2020.1 does not install on the
+host's Ubuntu 20.04, so it lives in the docker container **`vivado2020-build`** (ubuntu:18.04, user
+`ubuntu`, `/tools/Xilinx` and the nest-compiler tree mounted at the same paths). Vivado is installed at
+**`/tools/Xilinx/v2020.1/`** (Y2K22 HLS patch applied); `/tools/Xilinx/Vivado/2018.3` and `2020.2` on the host
+are other versions (2020.2 has no `vivado_hls`). `pynq24-build`/`pynq27-build` do not have 2020.1.
+
+```bash
+docker exec -it -u ubuntu vivado2020-build bash
+source /tools/Xilinx/v2020.1/Vivado/2020.1/settings64.sh
+cd <nest-compiler>/vta-hw-zcu102-single/hardware/xilinx
+make ip && make bin                    # ~30 min; PROFILE=1 adds compute counters + AXI perf monitor
+```
+
+- Sources: [vta-hw-zcu102-single/](vta-hw-zcu102-single/) (vta-hw Xilinx flow with vtalib's 256-bit
+  `hw_spec.h`, `zcu102` target in `config/`, `config/vta_config.json` = 16/16/19/18).
+- Output: `build/hardware/xilinx/vivado/<CONF>[_prof]/export/vtahw_<CONF>[_prof].{bit,bin,hwh,xsa}` plus
+  timing/utilization reports — check WNS >= 0 in `*.timing.rpt`. The `vtahw_` prefix keeps it apart from
+  the etri bitstream of the same CONF in the board's `/lib/firmware`.
+- [vtalib-zcu102-single/](vtalib-zcu102-single/) is the vtalib copy that matches it (use with
+  `vtabundles_xcmpl` `-DVTALIB=...`; `NESTC_EVTA_PROFILE_AXI_MONITOR=ON` for a `PROFILE=1` bitstream).
+  `vtabundles_xcmpl/evta_hw/` is the older multi-EVTA (1-4 core) flow, not yet built.
+
 Useful options (full list at the top of [CMakeLists.txt](CMakeLists.txt) and per-backend CMakeLists):
 
 - `NESTC_USE_VTASIM=ON` (default) builds against the x86 EVTA simulator; `OFF` targets a real board.

@@ -188,7 +188,14 @@ void compute(
   hls::stream<bool> &g2s_dep_queue,
   bus_T inp_mem[VTA_INP_BUFF_DEPTH][INP_MAT_AXI_RATIO],
   bus_T wgt_mem[VTA_WGT_BUFF_DEPTH][WGT_MAT_AXI_RATIO],
-  bus_T out_mem[VTA_ACC_BUFF_DEPTH][OUT_MAT_AXI_RATIO]);
+  bus_T out_mem[VTA_ACC_BUFF_DEPTH][OUT_MAT_AXI_RATIO]
+//#### JO added: profiling counters (CONTROL_BUS 0x50/0x60/0x70), only with -DVTA_HW_PROFILE
+#ifdef VTA_HW_PROFILE
+  , uint32_t &load_count,
+  uint32_t &gemm_count,
+  uint32_t &alu_count
+#endif
+  );
 
 /*!
 * \brief Store module.

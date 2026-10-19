@@ -20,12 +20,14 @@
 # Arg 2: path of config param script
 #### JO added: Arg 3 (optional): 1 = run the C simulation first (default 0; the testbench in
 #### tests/hardware/common is written for vta-hw's own 128-bit ISA and may not build against the EVTA hw_spec.h)
+#### JO added: Arg 4 (optional): 1 = profiling counters in compute (-DVTA_HW_PROFILE, default 0)
 
 #if { [llength $argv] eq 4 } {
-if { [llength $argv] eq 4 || [llength $argv] eq 5 } {
+if { [llength $argv] >= 4 && [llength $argv] <= 6 } {
     set root_dir        [lindex $argv 2]
     set vta_config      [lindex $argv 3]
-    set run_csim        [expr {[llength $argv] eq 5 ? [lindex $argv 4] : 0}]
+    set run_csim        [expr {[llength $argv] >= 5 ? [lindex $argv 4] : 0}]
+    set profile         [expr {[llength $argv] >= 6 ? [lindex $argv 5] : 0}]
 } else {
     puts "Not enough arguments provided!"
     exit
@@ -41,6 +43,10 @@ source $vta_config
 
 # C define flags that we want to pass to the compiler
 set cflags $CFLAGS
+#### JO added
+if {$profile} {
+    append cflags " -DVTA_HW_PROFILE"
+}
 
 # Get the VTA configuration paramters
 set ::device $FPGA_DEVICE

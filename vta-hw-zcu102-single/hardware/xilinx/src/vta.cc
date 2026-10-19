@@ -423,8 +423,22 @@ void compute(
   hls::stream<bool> &g2s_dep_queue,
   bus_T inp_mem[VTA_INP_BUFF_DEPTH][INP_MAT_AXI_RATIO],
   bus_T wgt_mem[VTA_WGT_BUFF_DEPTH][WGT_MAT_AXI_RATIO],
-  bus_T out_mem[VTA_ACC_BUFF_DEPTH][OUT_MAT_AXI_RATIO]) {
+  bus_T out_mem[VTA_ACC_BUFF_DEPTH][OUT_MAT_AXI_RATIO]
+#ifdef VTA_HW_PROFILE
+  , uint32_t &load_count,
+  uint32_t &gemm_count,
+  uint32_t &alu_count
+#endif
+  ) {
 PRAGMA_HLS(HLS INTERFACE s_axilite port = done bundle = CONTROL_BUS offset = VTA_COMPUTE_DONE_WR_OFFSET)
+//#### JO added: profiling counters at the offsets vtalib's pynq_driver.cc reads with PROFILE_ENABLE
+//#### (COMPUTE_LOAD/GEMM/ALU_COUNT_OFFSET). Not volatile: HLS makes a volatile reference an in/out pair
+//#### (like done: done_i 0x10 / done_o 0x18), which would put the counter at offset + 8.
+#ifdef VTA_HW_PROFILE
+#pragma HLS INTERFACE s_axilite port = load_count bundle = CONTROL_BUS offset = 0x50
+#pragma HLS INTERFACE s_axilite port = gemm_count bundle = CONTROL_BUS offset = 0x60
+#pragma HLS INTERFACE s_axilite port = alu_count bundle = CONTROL_BUS offset = 0x70
+#endif
 #pragma HLS INTERFACE m_axi port = uops offset = slave bundle = uop_port
 #pragma HLS INTERFACE m_axi port = biases offset = slave bundle = data_port
 #pragma HLS INTERFACE axis port = gemm_queue
@@ -504,6 +518,36 @@ PRAGMA_HLS(HLS INTERFACE s_axilite port = done bundle = CONTROL_BUS offset = VTA
   } else if (insn.generic.opcode == VTA_OPCODE_ALU) {
     alu(raw_copy, uop_mem, acc_mem, inp_mem, wgt_mem, out_mem);
   }
+
+#ifdef VTA_HW_PROFILE
+  //#### JO added: counts since the previous FINISH, so after a run they hold that run's totals
+  //#### load: DRAM elements loaded by compute (uop: x_size, acc: x_size * y_size)
+  //#### gemm/alu: inner-loop iterations, iter_out * iter_in * (uop_end - uop_bgn), as the simulator counts
+  static uint32_t load_cnt = 0;
+  static uint32_t gemm_cnt = 0;
+  static uint32_t alu_cnt = 0;
+  if (insn.generic.opcode == VTA_OPCODE_LOAD) {
+    if (insn.mem.memory_type == VTA_MEM_ID_UOP) {
+      load_cnt += insn.mem.x_size;
+    } else if (insn.mem.memory_type == VTA_MEM_ID_ACC) {
+      load_cnt += (uint32_t) insn.mem.x_size * (uint32_t) insn.mem.y_size;
+    }
+  } else if (insn.generic.opcode == VTA_OPCODE_GEMM) {
+    gemm_cnt += (uint32_t) insn.gemm.iter_out * (uint32_t) insn.gemm.iter_in *
+               (uint32_t) (insn.gemm.uop_end - insn.gemm.uop_bgn);
+  } else if (insn.generic.opcode == VTA_OPCODE_ALU) {
+    alu_cnt += (uint32_t) insn.alu.iter_out * (uint32_t) insn.alu.iter_in *
+              (uint32_t) (insn.alu.uop_end - insn.alu.uop_bgn);
+  }
+  load_count = load_cnt;
+  gemm_count = gemm_cnt;
+  alu_count = alu_cnt;
+  if (insn.generic.opcode == VTA_OPCODE_FINISH) {
+    load_cnt = 0;
+    gemm_cnt = 0;
+    alu_cnt = 0;
+  }
+#endif
 
   // Push dependence token if instructed
   if (insn.generic.push_prev_dep) {
@@ -615,6 +659,10 @@ void vta(
 
   // Global done indicator
   uint32_t done = 0;
+#ifdef VTA_HW_PROFILE
+  //#### JO added
+  uint32_t load_count = 0, gemm_count = 0, alu_count = 0;
+#endif
 
   // Temporary instructions
   insn_T tmp_load;
@@ -670,8 +718,15 @@ void vta(
         // Push the instruction in the load queue
         gemm_queue.write(tmp_gemv);
         tmp_gemm_popped = false;
+#ifdef VTA_HW_PROFILE
+        //#### JO added
+        compute(done, uops, biases, gemm_queue, l2g_dep_queue, s2g_dep_queue,
+                g2l_dep_queue, g2s_dep_queue, inp_mem, wgt_mem, out_mem,
+                load_count, gemm_count, alu_count);
+#else
         compute(done, uops, biases, gemm_queue, l2g_dep_queue, s2g_dep_queue,
                 g2l_dep_queue, g2s_dep_queue, inp_mem, wgt_mem, out_mem);
+#endif
       } else {
         // Execution of load stage pending on completion of other stages,
         // so break here...

@@ -6,6 +6,9 @@ option(NESTC_EVTA_RUN_ON_ZCU102 "Run on ZCU102 board" OFF)
 option(NESTC_EVTA_LIB_VALIDATION "Validate EVTA library while running" OFF)
 option(NESTC_EVTA_DEBUG "Debug mode for EVTA library" OFF)
 option(NESTC_EVTA_PROFILE "Profile mode for EVTA HW" OFF)
+#### JO added: also read the AXI perf monitor at 0xA0050000 (only bitstreams that have one, e.g.
+#### vta-hw-zcu102-single PROFILE=1; on others the reads SIGBUS)
+option(NESTC_EVTA_PROFILE_AXI_MONITOR "EVTA bitstream has an AXI perf monitor (with NESTC_EVTA_PROFILE)" OFF)
 #### JO added: the ZCU102 EVTA bitstream zcu102_1x16_i8w8a32_16_16_19_18 on our board is not
 #### cache-coherent (coherent=true hangs), so the runtime must flush/invalidate CPU caches.
 #### Turn ON only for a design whose EVTA DMA is coherent with the CPU (HPC ports + CCI snoop).
@@ -148,6 +151,9 @@ endif()
 if(NESTC_EVTA_PROFILE)
     message("profile enabled")
     add_definitions(-DPROFILE_ENABLE=1)
+    if(NESTC_EVTA_PROFILE_AXI_MONITOR)
+        add_definitions(-DPROFILE_AXI_MONITOR=1)
+    endif()
 else()
     message("profile disabled")
     add_definitions(-DPROFILE_ENABLE=0)

@@ -30,6 +30,9 @@ VIVADO = vivado
 PYTHON ?= python3
 CSIM ?= 0
 JOBS ?= 8
+#### JO added: PROFILE=1 adds the compute profiling counters (HLS) and the AXI perf monitor (Vivado);
+#### built in separate <CONF>_prof dirs and exported as vtahw_<CONF>_prof
+PROFILE ?= 0
 
 # Process VTA JSON config
 VTA_CONFIG := $(VTA_HW_DIR)/config/vta_config.py
@@ -39,8 +42,12 @@ VTA_CONFIG_DEPS := $(VTA_CONFIG) $(VTA_HW_DIR)/config/pkg_config.py $(VTA_HW_DIR
 # Derive config name
 #CONF := $(shell python ${VTA_CONFIG} --cfg-str)
 CONF := $(shell $(PYTHON) ${VTA_CONFIG} --cfg-str)
-IP_BUILD_PATH := $(BUILD_DIR)/hls/$(CONF)
-HW_BUILD_PATH := $(BUILD_DIR)/vivado/$(CONF)
+#### JO changed: _prof suffix with PROFILE=1
+#IP_BUILD_PATH := $(BUILD_DIR)/hls/$(CONF)
+#HW_BUILD_PATH := $(BUILD_DIR)/vivado/$(CONF)
+BUILD_NAME := $(CONF)$(if $(filter 1,$(PROFILE)),_prof)
+IP_BUILD_PATH := $(BUILD_DIR)/hls/$(BUILD_NAME)
+HW_BUILD_PATH := $(BUILD_DIR)/vivado/$(BUILD_NAME)
 
 # Config files
 #### JO changed: one config tcl per CONF, so a different vta_config.json does not reuse a stale one
@@ -57,8 +64,8 @@ IP_ZIPS := $(foreach s,fetch load compute store,$(IP_BUILD_PATH)/vta_$(s)/soln/i
 #### JO changed: export name vtahw_<CONF>, so the .bin never overwrites the bitstream in use on the board
 #### (/lib/firmware/zcu102_1x16_i8w8a32_16_16_19_18.bin has the same CONF string)
 #BIT_PATH := $(BUILD_DIR)/vivado/$(CONF)/export/$(CONF).bit
-EXPORT_NAME ?= vtahw_$(CONF)
-BIT_PATH := $(BUILD_DIR)/vivado/$(CONF)/export/$(EXPORT_NAME).bit
+EXPORT_NAME ?= vtahw_$(BUILD_NAME)
+BIT_PATH := $(HW_BUILD_PATH)/export/$(EXPORT_NAME).bit
 #### JO added: .bin for /lib/firmware (fpga_manager)
 BIN_PATH := $(BIT_PATH:.bit=.bin)
 
@@ -90,7 +97,8 @@ $(IP_PATH): $(SRC_DIR)/* $(VTA_HW_DIR)/include/vta/hw_spec.h $(SCRIPT_DIR)/hls.t
 		-tclargs \
 			$(VTA_HW_DIR) \
 			$(CONFIG_TCL) \
-			$(CSIM)
+			$(CSIM) \
+			$(PROFILE)
 	ls $(IP_ZIPS)
 	touch $@
 
@@ -103,10 +111,11 @@ $(BIT_PATH): $(IP_PATH) $(SCRIPT_DIR)/vivado.tcl
 		-mode batch \
 		-source $(SCRIPT_DIR)/vivado.tcl \
 		-tclargs \
-			$(BUILD_DIR)/hls/$(CONF) \
+			$(IP_BUILD_PATH) \
 			$(CONFIG_TCL) \
 			$(EXPORT_NAME) \
-			$(JOBS)
+			$(JOBS) \
+			$(PROFILE)
 
 #### JO added
 $(BIN_PATH): $(BIT_PATH)

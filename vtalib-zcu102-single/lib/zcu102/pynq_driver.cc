@@ -142,7 +142,8 @@ static int log_count = 0;
 
 //#### JO added: the zcu102_1x16_i8w8a32_16_16_19_18 bitstream has no AXI perf monitor at
 //#### AXI_PERF_MONITOR (reading it -> SIGBUS), so PROFILE_ENABLE alone records only timing and
-//#### the compute-module counters. Build with -DPROFILE_AXI_MONITOR=1 for a design that has one.
+//#### the compute-module counters. Build with -DPROFILE_AXI_MONITOR=1 for a design that has one
+//#### (vta-hw-zcu102-single `make bin PROFILE=1`, cmake -DNESTC_EVTA_PROFILE_AXI_MONITOR=ON).
 #ifndef PROFILE_AXI_MONITOR
 #define PROFILE_AXI_MONITOR 0
 #endif
@@ -298,9 +299,15 @@ class VTADevice {
     VTAWriteMappedReg(vta_store_handle_, VTA_STORE_OUT_ADDR_OFFSET, 0);
 
 
-    if(PROFILE_ENABLE) {
-      //VTAWriteMappedReg(vta_axiperfmonitor_handle_, CONTROL_OFFSET, 2);
-      //VTAWriteMappedReg(vta_axiperfmonitor_handle_, CONTROL_OFFSET, 1);
+    //#### JO changed: the monitor's counters are disabled after reset; clear them (bit 1) and enable
+    //#### them (bit 0) for every run so each event holds this run's counts
+    //if(PROFILE_ENABLE) {
+    //  VTAWriteMappedReg(vta_axiperfmonitor_handle_, CONTROL_OFFSET, 2);
+    //  VTAWriteMappedReg(vta_axiperfmonitor_handle_, CONTROL_OFFSET, 1);
+    //}
+    if(PROFILE_ENABLE && PROFILE_AXI_MONITOR) {
+      VTAWriteMappedReg(vta_axiperfmonitor_handle_, CONTROL_OFFSET, 2);
+      VTAWriteMappedReg(vta_axiperfmonitor_handle_, CONTROL_OFFSET, 1);
     }
     
 

@@ -27,15 +27,17 @@ if { [string first $scripts_vivado_version $current_vivado_version] == -1 } {
 }
 
 # Parse argument list, derive the clock to utilize
-#### JO changed: optional <export name> (export/<name>.bit/.hwh/.xsa, default vta) and <jobs> (default 8)
+#### JO changed: optional <export name> (export/<name>.bit/.hwh/.xsa, default vta), <jobs> (default 8) and
+#### <profile> (1 = AXI perf monitor at 0xA0050000, default 0)
 #if { [llength $argv] eq 2 } {
-if { [llength $argv] >= 2 && [llength $argv] <= 4 } {
+if { [llength $argv] >= 2 && [llength $argv] <= 5 } {
   set ip_path     [lindex $argv 0]
   set vta_config  [lindex $argv 1]
   set export_name [expr {[llength $argv] > 2 ? [lindex $argv 2] : "vta"}]
   set num_threads [expr {[llength $argv] > 3 ? [lindex $argv 3] : 8}]
+  set profile     [expr {[llength $argv] > 4 ? [lindex $argv 4] : 0}]
 } else {
-  puts "Arg list incomplete: <path to ip dir> <path to vta_config.py> \[export name\] \[jobs\]"
+  puts "Arg list incomplete: <path to ip dir> <path to vta_config.py> \[export name\] \[jobs\] \[profile\]"
   return 1
 }
 
@@ -72,6 +74,8 @@ set fetch_base_addr   $FETCH_BASE_ADDR
 set load_base_addr    $LOAD_BASE_ADDR
 set compute_base_addr $COMPUTE_BASE_ADDR
 set store_base_addr   $STORE_BASE_ADDR
+#### JO added: vtalib pynq_driver.cc AXI_PERF_MONITOR
+set apm_base_addr     0xA0050000
 
 # Paths to IP library of VTA modules
 set proj_name vta
@@ -173,6 +177,10 @@ set_property -dict [ list \
   CONFIG.NUM_MI {4} \
   CONFIG.NUM_SI {1} \
 ] $axi_xbar
+#### JO added: one more register slave for the perf monitor
+if {$profile} {
+  set_property CONFIG.NUM_MI {5} $axi_xbar
+}
 
 # Create instance: fetch_0, and set properties
 set fetch_0 [ create_bd_cell -type ip -vlnv xilinx.com:hls:fetch:1.0 fetch_0 ]
@@ -399,7 +407,6 @@ connect_bd_net -net proc_sys_reset_peripheral_aresetn \
   [get_bd_pins axi_xbar/M01_ARESETN] \
   [get_bd_pins axi_xbar/M02_ARESETN] \
   [get_bd_pins axi_xbar/M03_ARESETN] \
-  [get_bd_pins axi_xbar/S00_ARESETN] \
   [get_bd_pins fetch_0/ap_rst_n] \
   [get_bd_pins load_0/ap_rst_n] \
   [get_bd_pins store_0/ap_rst_n] \
@@ -420,7 +427,6 @@ connect_bd_net -net processing_system_clk \
   [get_bd_pins axi_xbar/M01_ACLK] \
   [get_bd_pins axi_xbar/M02_ACLK] \
   [get_bd_pins axi_xbar/M03_ACLK] \
-  [get_bd_pins axi_xbar/S00_ACLK] \
   [get_bd_pins fetch_0/ap_clk] \
   [get_bd_pins load_0/ap_clk] \
   [get_bd_pins compute_0/ap_clk] \
@@ -432,14 +438,63 @@ connect_bd_net -net processing_system_clk \
   [get_bd_pins g2l_queue/s_aclk] \
   [get_bd_pins g2s_queue/s_aclk] \
   [get_bd_pins s2g_queue/s_aclk] \
-  $maxi_clk \
   $saxi_clk
+#### JO changed: the PS register port (M_AXI_HPM0) and the crossbar's slave side run on the PS clock
+#### (pl_clk0, 100 MHz); at 333 MHz the paths into PS8 MAXIGP0* missed timing (-0.039 ns). The crossbar
+#### inserts the clock converter; register accesses are rare, so the slower clock costs nothing.
+#  [get_bd_pins axi_xbar/S00_ACLK] \
+#  $maxi_clk \
+#  [get_bd_pins axi_xbar/S00_ARESETN] (was on proc_sys_reset/peripheral_aresetn)
+set proc_sys_reset_ps \
+  [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 proc_sys_reset_ps ]
+connect_bd_net -net ps_clk_net [get_bd_pins proc_sys_reset_ps/slowest_sync_clk] \
+  [get_bd_pins axi_xbar/S00_ACLK] $maxi_clk
+connect_bd_net -net processing_system_reset [get_bd_pins proc_sys_reset_ps/ext_reset_in]
+connect_bd_net -net proc_sys_reset_ps_peripheral_aresetn \
+  [get_bd_pins proc_sys_reset_ps/peripheral_aresetn] [get_bd_pins axi_xbar/S00_ARESETN]
+
+#### JO added: AXI perf monitor (profile mode) for vtalib's PROFILE_ENABLE + PROFILE_AXI_MONITOR build.
+#### Profile-mode counters per slot: +0x00 wr bytes, +0x10 wr transactions, +0x20 wr latency,
+#### +0x30 rd bytes, +0x40 rd transactions, +0x50 rd latency; slots at 0x100 / 0x160 / 0x500, control 0x300.
+#### slot 0 = all EVTA DRAM traffic (smartconnect -> HP0), slot 1 = load data port (inp/wgt reads),
+#### slot 2 = store data port (out writes) -- what pynq_driver.cc reports as total / read / write.
+if {$profile} {
+  set axi_perf_mon [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_perf_mon:5.0 axi_perf_mon ]
+  set_property -dict [ list \
+    CONFIG.C_ENABLE_PROFILE {1} \
+    CONFIG.C_ENABLE_ADVANCED {0} \
+    CONFIG.C_ENABLE_TRACE {0} \
+    CONFIG.C_NUM_MONITOR_SLOTS {3} \
+  ] $axi_perf_mon
+  connect_bd_intf_net -intf_net axi_xbar_M04_AXI [get_bd_intf_pins axi_xbar/M04_AXI] [get_bd_intf_pins axi_perf_mon/S_AXI]
+  connect_bd_intf_net -intf_net [get_bd_intf_nets axi_smc0_M00_AXI] [get_bd_intf_pins axi_perf_mon/SLOT_0_AXI] [get_bd_intf_pins axi_smc0/M00_AXI]
+  connect_bd_intf_net -intf_net [get_bd_intf_nets load_0_m_axi_data_port] [get_bd_intf_pins axi_perf_mon/SLOT_1_AXI] [get_bd_intf_pins load_0/m_axi_data_port]
+  connect_bd_intf_net -intf_net [get_bd_intf_nets store_0_m_axi_data_port] [get_bd_intf_pins axi_perf_mon/SLOT_2_AXI] [get_bd_intf_pins store_0/m_axi_data_port]
+  connect_bd_net [get_bd_pins pll_clk/clk_out1] \
+    [get_bd_pins axi_xbar/M04_ACLK] \
+    [get_bd_pins axi_perf_mon/s_axi_aclk] \
+    [get_bd_pins axi_perf_mon/core_aclk] \
+    [get_bd_pins axi_perf_mon/slot_0_axi_aclk] \
+    [get_bd_pins axi_perf_mon/slot_1_axi_aclk] \
+    [get_bd_pins axi_perf_mon/slot_2_axi_aclk]
+  connect_bd_net [get_bd_pins proc_sys_reset/peripheral_aresetn] \
+    [get_bd_pins axi_xbar/M04_ARESETN] \
+    [get_bd_pins axi_perf_mon/s_axi_aresetn] \
+    [get_bd_pins axi_perf_mon/core_aresetn] \
+    [get_bd_pins axi_perf_mon/slot_0_axi_aresetn] \
+    [get_bd_pins axi_perf_mon/slot_1_axi_aresetn] \
+    [get_bd_pins axi_perf_mon/slot_2_axi_aresetn]
+}
 
 # Create address segments
 create_bd_addr_seg -range $ip_reg_map_range -offset $fetch_base_addr [get_bd_addr_spaces processing_system/Data] [get_bd_addr_segs fetch_0/s_axi_CONTROL_BUS/Reg] SEG_fetch_0_Reg
 create_bd_addr_seg -range $ip_reg_map_range -offset $load_base_addr [get_bd_addr_spaces processing_system/Data] [get_bd_addr_segs load_0/s_axi_CONTROL_BUS/Reg] SEG_load_0_Reg
 create_bd_addr_seg -range $ip_reg_map_range -offset $compute_base_addr [get_bd_addr_spaces processing_system/Data] [get_bd_addr_segs compute_0/s_axi_CONTROL_BUS/Reg] SEG_compute_0_Reg
 create_bd_addr_seg -range $ip_reg_map_range -offset $store_base_addr [get_bd_addr_spaces processing_system/Data] [get_bd_addr_segs store_0/s_axi_CONTROL_BUS/Reg] SEG_store_0_Reg
+#### JO added
+if {$profile} {
+  create_bd_addr_seg -range 0x10000 -offset $apm_base_addr [get_bd_addr_spaces processing_system/Data] [get_bd_addr_segs axi_perf_mon/S_AXI/Reg] SEG_axi_perf_mon_Reg
+}
 if { $device_family eq "zynq-7000" } {
   create_bd_addr_seg -range 0x40000000 -offset 0x00000000 [get_bd_addr_spaces compute_0/Data_m_axi_uop_port] [get_bd_addr_segs processing_system/S_AXI_ACP/ACP_DDR_LOWOCM] SEG_processing_system_ACP_DDR_LOWOCM
   create_bd_addr_seg -range 0x40000000 -offset 0x00000000 [get_bd_addr_spaces compute_0/Data_m_axi_data_port] [get_bd_addr_segs processing_system/S_AXI_ACP/ACP_DDR_LOWOCM] SEG_processing_system_ACP_DDR_LOWOCM

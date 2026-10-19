@@ -17,10 +17,15 @@ Only the four stage IPs come from HLS; they do not depend on `NUM_EVTA`. Files: 
 vta-hw's `PkgConfig` formulas), `hls.tcl`, `vivado.tcl`, `Makefile`, `evta_zcu102.json` (buffers 16/16/19/18 =
 the bitstream in use), `evta_zcu102_small.json` (16/15/18/17 = vtalib's `NESTC_EVTA_MULTI` sizes).
 
+For a single EVTA, `vta-hw-zcu102-single/hardware/xilinx` (vta-hw's own Makefile/scripts, ZCU102 target) has
+been built and timing-checked (2026-10-20, see CLAUDE.md); this directory is still the path for 2-4 cores.
+
 ## Build (in the Vivado 2020.1 docker, with the nest-compiler tree mounted)
 
 ```bash
-source /tools/Xilinx/Vivado/2020.1/settings64.sh        # path inside your docker
+docker exec -it -u ubuntu vivado2020-build bash         # host PC container with Vivado 2020.1
+#source /tools/Xilinx/Vivado/2020.1/settings64.sh
+source /tools/Xilinx/v2020.1/Vivado/2020.1/settings64.sh
 cd <nest-compiler>/vtabundles_xcmpl/evta_hw
 make ip                         # HLS (once per CFG); CSIM=1 also runs vta-hw's C simulation (may not compile: 128-bit testbench)
 make bin NUM_EVTA=1             # step 1: one core, compare with the bitstream in use

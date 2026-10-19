@@ -27,7 +27,9 @@ endif()
 #### JO changed: this project now lives in nest-compiler/vtabundles_xcmpl -> NEST-C root is the parent dir
 #set(NESTC_ROOT /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler)
 get_filename_component(NESTC_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/.. ABSOLUTE)
-set(VTALIB ${NESTC_ROOT}/vta/vtalib)
+#### JO changed: -DVTALIB=<dir> picks another vtalib copy (e.g. ${NESTC_ROOT}/vtalib-zcu102-single)
+#set(VTALIB ${NESTC_ROOT}/vta/vtalib)
+set(VTALIB ${NESTC_ROOT}/vta/vtalib CACHE PATH "vtalib source dir")
 
 # same settings as the NESTC_EVTA_RUN_ON_ZCU102=ON branch (single EVTA, non-BNN, generic bundle)
 set(NESTC_EVTA_RUN_ON_ZCU102 ON CACHE BOOL "" FORCE)
