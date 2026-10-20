@@ -168,3 +168,11 @@ does the garbage move with the index? Plus rawtest + register dump of the 200 MH
 Suggestion for the host PC: a debug build with an ILA on compute's `gemm_queue`/`out_mem` port and the
 store's out_mem read port, captured over JTAG from the host PC (if the ZCU102 JTAG USB is connected to it);
 programming over JTAG also rules out the fpga_manager/.bin path.
+
+Ran (same day):
+- `GP_IDX` = 0 / 1 / 100 (gemmprobe zero, 333 MHz no-prof): the output is **byte-identical** for every index
+  (`41 0 0 54 0 0 -65 63 0 0 -1 0 0 0 0 -1`). It does not depend on the SRAM index, the input or the weights, so it
+  is not out_mem content at that index; the STORE writes a constant 16-byte pattern (the 0x5a pre-fill is gone).
+- 200 MHz rawtest 1/32/16: all four blocks idle (`0x04`) before start; after start fetch has issued its 1/2
+  instructions, load/compute/store = `0x81` (started, auto-restart) but compute never sets done (0x18 = 0),
+  even for a lone FINISH. Logs: `log/board_20261020/vtahw_clk200_rawtest.log`, `vtahw333_gemmprobe_zero_idx_0_1_100.log`.
