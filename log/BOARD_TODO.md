@@ -50,8 +50,9 @@ and `python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()"`. Reload before eve
    at 333 MHz, and read_latency / read_transactions. Widening the PL AXI to 1024 bit does not help (PS HP
    ports are max 128 bit); if load is bound, the next option is splitting load/compute/store over separate HP ports.
 4. **multi2**: `vtalib-zcu102-multi2`, `BUNDLE_SET=multievtax2` (README "multievtax2"), `hw_multievtax2/`.
-   If EVTA 1 returns zeros, check the HP1 port width: AFIFM `0xFD370000` (HP1), `0xFD380000` (HP2),
-   `0xFD390000` (HP3) — set by the boot image, not the bitstream; compare with HP0 `0xFD360000`.
+   If EVTA 1 returns zeros, check the HP1 port width: `sudo python3 vtabundles_xcmpl/hwtest/plclk.py`
+   (AFIFM i = S_AXI_GP i: HPC0 `0xFD360000`, HPC1 `0xFD370000`, HP0 `0xFD380000`, HP1 `0xFD390000`,
+   HP2 `0xFD3A0000`, HP3 `0xFD3B0000`) — set by the boot image, not the bitstream.
 5. **multi4**: vtalib tests / rawtest only for now — `vtabundles_xcmpl` has no 4-EVTA `BUNDLE_SET` yet
    (needs one, plus `VTA_MAX_XFER` small enough for 4 command handles in the 128 MB CMA pool;
    the runtime pre-allocates 64 MB per handle).
@@ -111,3 +112,34 @@ Logs/dumps on the board in `vtabundles_xcmpl/hwtest/` (`rt_vtahw*.log`, `rt2_vta
 Ruled out: `pl_clk0` = 99.999 MHz with the no-prof bitstream loaded (`PL0_REF_CTRL=0x01010f00`: IOPLL
 33.333*90/2 = 1500 MHz / 15 / 1; pynq `Clocks.fclk0_mhz` agrees). `pl_clk1..3` are disabled (9.375 MHz,
 enable=0), so the design must not use them.
+
+### 2026-10-20 host PC: the design is functionally correct in simulation — next board tests
+
+What the host PC checked (all on the bitstreams' own HLS IPs and block-design wiring; scratch files in the
+git-ignored `vta-hw-zcu102-single/build/hardware/xilinx/cosim/`):
+- Item 1 (register map / axis width): compute map is identical except 0x50-0x74 in prof; every queue port is
+  256 bit = the 32-byte FIFOs. Item 3: HLS decodes `VTAGemInsn`/`VTAAluInsn` exactly as GCC packs them
+  (`wgt_factor_in` = bits 138:128, ALU `imm` = 143:128; checked in the generated `compute.v`).
+- C simulation of the gemmprobe sequence on `vta.cc`: all 5 cases correct.
+- C/RTL co-simulation of `compute` (GEMM reset, GEMM, ALU, FINISH) and of `load` (INP/WGT -> BRAM), prof and
+  no-prof: PASS (prof counters 1/2/1, done = 1).
+- **PL simulation of the whole block design** (same HLS IPs, FIFOs, 1024-bit wgt BRAM banks, SmartConnect,
+  AXI interconnect; PS replaced by AXI VIPs; registers written in `pynq_driver.cc` order): alu / zero / ident /
+  perm / ones all **OK, prof and no-prof**; prof finishes (done = 1, no hang). BRAM byte-address bits, AXI
+  cache/prot, address map and FIFO wiring in the routed no-prof netlist are as intended; IPs are synthesized
+  out of context (no clash of the two HLS `reset_mem` modules in hardware).
+- vta-hw semantics: a reset GEMM writes out = old accumulator (not 0). Right after a bitstream load every
+  BRAM is 0, so `gemmprobe reset` should still print 0 on vtahw — the board printed garbage, i.e. compute
+  produces garbage even when every memory is 0. That points at the board, not at the design:
+  silicon timing / implementation, PS-side port settings, or the real instruction stream.
+
+**Please run on the board** (single, no-prof first; reload the bitstream before each run as before):
+1. `sudo python3 vtabundles_xcmpl/hwtest/plclk.py` with `vtahw_zcu102_1x16_i8w8a32_16_16_19_18.bin` loaded:
+   the S_AXI_HP0 read/write width must be 128 (vtahw uses HP0 = S_AXI_GP2 at 128 bit). Note the values for
+   the etri bitstream too.
+2. Same HLS IPs, EVTA clock **200 MHz** instead of 333 (WNS +0.265 ns), copy it from the host PC:
+   `vta-hw-zcu102-single/build/clk200/build/hardware/xilinx/vivado/zcu102_1x16_i8w8a32_16_16_19_18/export/vtahw_zcu102_1x16_i8w8a32_16_16_19_18_clk200.bin`
+   -> run `gemmprobe` (all 5 cases), `gemm_nc`, `add_test_nc`. Works at 200 MHz = timing/silicon at 333;
+   fails the same way = not timing.
+3. Commit the full `gemmprobe_zero.out` and `gemmprobe_ident.out` (VTA_DEBUG_DUMP_INSN / UOP output) of the
+   vtahw run, so the host PC can replay the exact instruction stream of the runtime in the PL simulation.
