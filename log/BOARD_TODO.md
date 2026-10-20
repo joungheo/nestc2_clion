@@ -66,4 +66,44 @@ and `python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()"`. Reload before eve
 
 ## Results
 
-(fill in: rawtest / bundle PASS, profile numbers, AFIFM values)
+### 2026-10-20 board session: single bitstreams — both FAIL, back to the host PC
+
+Logs/dumps on the board in `vtabundles_xcmpl/hwtest/` (`rt_vtahw*.log`, `rt2_vtahw*.log`, `gp_*.log`,
+`regs_*_after.txt`; not in git). Probe: `vtabundles_xcmpl/hwtest/gemmprobe.cpp` (`SUFFIX=_nc ./build.sh gemmprobe`,
+`run_rawtests2.sh gemmprobe_<reset|zero|ident|perm|ones>`), all 5 cases OK on the etri bitstream.
+
+**`vtahw_zcu102_1x16_i8w8a32_16_16_19_18.bin` (no prof): GEMM broken, everything else OK**
+- rawtest 1/32 DONE, 16 TIMEOUT (= etri). `add_test_nc` OK (LOAD ACC / ALU / STORE work).
+- `gemm_nc` and every gemmprobe case MISMATCH. The output is the same garbage in every case, independent of
+  inp/wgt (`41 0 0 54 0 0 -65 63 0 0 -33 0 0 0 0 -1`, a few entries vary by 1-32 between runs). STORE does write
+  (the 0x5a pre-fill is overwritten), so STORE reads out_mem[8] but the GEMM never updates it (or writes elsewhere);
+  the garbage looks like uninitialized BRAM.
+- Bundles: Conv4Test MISMATCH (5.1 ms vs 3.6), Resnet18Test wrong class 473 / 0.064 (330 ms vs 136).
+- Note: vta-hw's GEMM with `reset_reg` writes out = old accum (acc = 0); the etri HW writes out = 0
+  (gemmprobe `reset` = all 0 on etri). Not the cause here (zero/ident fail too), but a semantic difference.
+
+**`vtahw_zcu102_1x16_i8w8a32_16_16_19_18_prof.bin`: compute never reports done → every run hangs**
+- Even rawtest 1 (a single FINISH) times out; all rawtest2 cases and add_test_nc time out.
+- compute ctrl before start = `0x0e` (done|idle|ready already set; no-prof: `0x04`); after = `0x8b`.
+- Compute register dump after rawtest 1 (`dump_regs.py`):
+
+  | offset | no-prof | prof |
+  |---|---|---|
+  | 0x18 done_o | **1** | **0** |
+  | 0x40 | 0x81 (alias of ctrl: map is 0x40 wide) | 0 (map 0x80 wide) |
+  | 0x50 load_count | — | `0x68153800` (garbage for a lone FINISH) |
+  | 0x54 / 0x64 / 0x74 | — | 1 (ap_vld of the three counters) |
+  | 0x60 gemm / 0x70 alu | — | 0 |
+
+  The counters are being written (ap_vld = 1) but load_count holds garbage and done stays 0: compute looks like it
+  decodes the FINISH as something else (e.g. a LOAD with garbage x/y size) and never reaches FINISH.
+
+**For the host-PC session**
+1. Compare the compute register maps (`.../vta_compute/soln/impl/ip/drivers/compute_v1_0/src/xcompute_hw.h`)
+   of the prof and no-prof IPs, and the axis width of the compute insn port (`gemm_queue`) vs the 32-byte FIFO.
+2. C-simulate the gemmprobe sequence (GEMM reset → LOAD INP/WGT → GEMM → STORE, 10 insns, dump in
+   `gemmprobe_zero.out` on the board) on `vta.cc`; if C is right, check the inp/wgt/out BRAM wiring
+   between load/compute/store in `vivado.tcl` (wgt_mem is 2048 bit → 2 banks) and the HLS `INTERFACE bram` ports.
+3. Possibly relevant: GCC packs `VTAGemInsn` with `wgt_factor_in` moved to bit 128 (the 64-bit word would
+   overflow); check HLS's struct cast from `ap_uint<256>` packs it the same way.
+4. Multi2/multi4 not tested (single must pass first).

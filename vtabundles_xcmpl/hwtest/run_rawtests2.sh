@@ -18,6 +18,12 @@ for c in $CASES; do
   echo $BIN > /sys/class/fpga_manager/fpga0/firmware
   python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" 2>/dev/null
   case $c in
+    #### JO added: gemmprobe_<case> runs ./gemmprobe <case> (reset zero ident perm ones)
+    gemmprobe_*)
+      # line-buffered so a hung run (killed by timeout) still leaves its insn dump in $c.out
+      timeout ${TMO:-10} stdbuf -oL ./gemmprobe ${c#gemmprobe_} > $c.out 2>&1; rc=$?
+      tail -6 $c.out
+      [ $rc = 124 ] && echo "RESULT case=$c: TIMEOUT";;
     #### JO changed: any built vtalib HW test binary (add_test*, gemm*, conv13*, multi_*)
     # add_test|add_test_nc|gemm|gemm_nc|conv13|conv13_nc)
     add_test*|gemm*|conv13*|multi_*)
