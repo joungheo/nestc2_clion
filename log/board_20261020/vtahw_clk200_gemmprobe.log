@@ -1,0 +1,53 @@
+================ gemmprobe_reset ================
+	dep - pop prev: 1, pop next: 1, push prev: 0, push next: 0
+	l2g_queue = 0, g2l_queue = 0
+	s2g_queue = 0, g2s_queue = 0
+INSTRUCTION 5: FINISH
+	l2g_queue = 0, g2l_queue = 0
+	s2g_queue = 0, g2s_queue = 0
+RESULT case=gemmprobe_reset: TIMEOUT
+================ gemmprobe_zero ================
+	dep - pop prev: 1, pop next: 1, push prev: 0, push next: 0
+	l2g_queue = 0, g2l_queue = 0
+	s2g_queue = 0, g2s_queue = 0
+INSTRUCTION 9: FINISH
+	l2g_queue = 0, g2l_queue = 0
+	s2g_queue = 0, g2s_queue = 0
+RESULT case=gemmprobe_zero: TIMEOUT
+================ gemmprobe_ident ================
+	dep - pop prev: 1, pop next: 1, push prev: 0, push next: 0
+	l2g_queue = 0, g2l_queue = 0
+	s2g_queue = 0, g2s_queue = 0
+INSTRUCTION 9: FINISH
+	l2g_queue = 0, g2l_queue = 0
+	s2g_queue = 0, g2s_queue = 0
+RESULT case=gemmprobe_ident: TIMEOUT
+================ gemmprobe_perm ================
+	dep - pop prev: 1, pop next: 1, push prev: 0, push next: 0
+	l2g_queue = 0, g2l_queue = 0
+	s2g_queue = 0, g2s_queue = 0
+INSTRUCTION 9: FINISH
+	l2g_queue = 0, g2l_queue = 0
+	s2g_queue = 0, g2s_queue = 0
+RESULT case=gemmprobe_perm: TIMEOUT
+================ gemmprobe_ones ================
+	dep - pop prev: 1, pop next: 1, push prev: 0, push next: 0
+	l2g_queue = 0, g2l_queue = 0
+	s2g_queue = 0, g2s_queue = 0
+INSTRUCTION 9: FINISH
+	l2g_queue = 0, g2l_queue = 0
+	s2g_queue = 0, g2s_queue = 0
+RESULT case=gemmprobe_ones: TIMEOUT
+================ gemm_nc ================
+RESULT case=gemm_nc: TIMEOUT/FAIL (rc=124)
+================ add_test_nc ================
+RESULT case=add_test_nc: TIMEOUT/FAIL (rc=124)
+
+== summary
+RESULT case=gemmprobe_reset: TIMEOUT
+RESULT case=gemmprobe_zero: TIMEOUT
+RESULT case=gemmprobe_ident: TIMEOUT
+RESULT case=gemmprobe_perm: TIMEOUT
+RESULT case=gemmprobe_ones: TIMEOUT
+RESULT case=gemm_nc: TIMEOUT/FAIL (rc=124)
+RESULT case=add_test_nc: TIMEOUT/FAIL (rc=124)

@@ -1,0 +1,80 @@
+dump kernel
+There are 1 uops
+[0000]	 acc=8, inp=8, wgt=8
+
+dump kernel
+There are 1 uops
+[0000]	 acc=8, inp=8, wgt=8
+
+There are 10 instructions
+INSTRUCTION 0: LOAD UOP
+	dep - pop prev: 0, pop next: 0, push prev: 0, push next: 0
+	DRAM: 0x0efa0000, SRAM:0x0000
+	y: size=1, pad=[0, 0]
+	x: size=1, stride=1, pad=[0, 0]
+	l2g_queue = 0, g2l_queue = 0
+	s2g_queue = 0, g2s_queue = 0
+INSTRUCTION 1: GEMM
+	dep - pop prev: 0, pop next: 0, push prev: 1, push next: 0
+	reset_out: 1
+	range (0, 1)
+	outer loop - iter: 1, wgt: 0, inp: 0, acc: 0
+	inner loop - iter: 1, wgt: 0, inp: 0, acc: 0
+	l2g_queue = 0, g2l_queue = 1
+	s2g_queue = 0, g2s_queue = 0
+INSTRUCTION 2: LOAD INP
+	dep - pop prev: 0, pop next: 1, push prev: 0, push next: 0
+	DRAM: 0x077c4a00, SRAM:0x0008
+	y: size=1, pad=[0, 0]
+	x: size=1, stride=1, pad=[0, 0]
+	l2g_queue = 0, g2l_queue = 0
+	s2g_queue = 0, g2s_queue = 0
+INSTRUCTION 3: LOAD WGT
+	dep - pop prev: 0, pop next: 0, push prev: 0, push next: 1
+	DRAM: 0x0077c4b0, SRAM:0x0008
+	y: size=1, pad=[0, 0]
+	x: size=1, stride=1, pad=[0, 0]
+	l2g_queue = 1, g2l_queue = 0
+	s2g_queue = 0, g2s_queue = 0
+INSTRUCTION 4: LOAD UOP
+	dep - pop prev: 1, pop next: 0, push prev: 0, push next: 0
+	DRAM: 0x0efa0001, SRAM:0x0001
+	y: size=1, pad=[0, 0]
+	x: size=1, stride=1, pad=[0, 0]
+	l2g_queue = 0, g2l_queue = 0
+	s2g_queue = 0, g2s_queue = 0
+INSTRUCTION 5: GEMM
+	dep - pop prev: 0, pop next: 0, push prev: 0, push next: 1
+	reset_out: 0
+	range (1, 2)
+	outer loop - iter: 1, wgt: 0, inp: 0, acc: 0
+	inner loop - iter: 1, wgt: 0, inp: 0, acc: 0
+	l2g_queue = 0, g2l_queue = 0
+	s2g_queue = 0, g2s_queue = 1
+INSTRUCTION 6: STORE:
+	dep - pop prev: 1, pop next: 0, push prev: 1, push next: 0
+	DRAM: 0x077c4f00, SRAM:0x0008
+	y: size=1, pad=[0, 0]
+	x: size=1, stride=1, pad=[0, 0]
+	l2g_queue = 0, g2l_queue = 0
+	s2g_queue = 1, g2s_queue = 0
+INSTRUCTION 7: NOP-MEMORY-STAGE
+	dep - pop prev: 0, pop next: 0, push prev: 0, push next: 1
+	l2g_queue = 1, g2l_queue = 0
+	s2g_queue = 1, g2s_queue = 0
+INSTRUCTION 8: NOP-COMPUTE-STAGE
+	dep - pop prev: 1, pop next: 1, push prev: 0, push next: 0
+	l2g_queue = 0, g2l_queue = 0
+	s2g_queue = 0, g2s_queue = 0
+INSTRUCTION 9: FINISH
+	l2g_queue = 0, g2l_queue = 0
+	s2g_queue = 0, g2s_queue = 0
+case=zero
+  i  :    0   1   2   3   4   5   6   7   8   9  10  11  12  13  14  15
+  inp:    1   2   3   4   5   6   7   8   9  10  11  12  13  14  15  16
+  exp:    0   0   0   0   0   0   0   0   0   0   0   0   0   0   0   0
+  out:   41   0   0  54   0   0 -65  63   0   0 -33   0   0   0   0  -1
+RESULT gemmprobe zero: MISMATCH (6/16 wrong)
+event_type event_num GOPS Gbits read_latency read_bytes read_transactions write_latency write_bytes write_transactions gemm_count alu_count load_count exe_time begin_timestamp_us end_timestamp_us
+VTA_SYNC 0 0.000 0.000 0 0 0 0 0 0 0 0 0 0.017 1792495735650433 1792495735650450
+total_time : 0.017 ms, total_vta_time : 0.017 ms

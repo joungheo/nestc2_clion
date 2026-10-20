@@ -143,3 +143,28 @@ git-ignored `vta-hw-zcu102-single/build/hardware/xilinx/cosim/`):
    fails the same way = not timing.
 3. Commit the full `gemmprobe_zero.out` and `gemmprobe_ident.out` (VTA_DEBUG_DUMP_INSN / UOP output) of the
    vtahw run, so the host PC can replay the exact instruction stream of the runtime in the PL simulation.
+
+### 2026-10-20 board: answers to the host-PC requests
+
+Files: `log/board_20261020/` (plclk, register dumps, insn/uop dumps, 200 MHz log).
+1. **PS ports are as assumed.** `plclk.py` with vtahw and with the etri bitstream loaded: identical — pl_clk0 99.999 MHz,
+   pl_clk1-3 off, S_AXI_HPC0/1 and HP0-3 read/write **128 bit** (RDCTRL = WRCTRL = 0x3b0).
+2. **200 MHz (`..._clk200.bin`, md5 5d417b7d…) is worse: everything hangs** — all 5 gemmprobe cases, `gemm_nc` and
+   even `add_test_nc` (which passes on the 333 MHz no-prof bitstream). So it is not (only) timing slack; the same IPs
+   behave differently per implementation run: 333 no-prof = GEMM output garbage, 333 prof = compute never done,
+   200 = hang even for ALU.
+3. **Insn/uop dumps** of the 333 MHz no-prof run: `vtahw333_gemmprobe_{zero,ident}.out`. The stream is the same one
+   that passes on the etri bitstream (10 insns: LOAD UOP, GEMM reset, LOAD INP/WGT, LOAD UOP, GEMM, STORE,
+   NOP/NOP, FINISH; uop acc=inp=wgt=8; DRAM uop 0x0efa0000 (8-byte units), inp 0x077c4a00, wgt 0x0077c4b0,
+   out 0x077c4f00).
+- The garbage is **deterministic**: `41 0 0 54 0 0 -65 63 0 0 -33 0 0 0 0 -1` (bytes 29 00 00 36 00 00 bf 3f 00 00 df
+  00 00 00 00 ff, entries 7 and 10 vary 62/63 and -1/-33) in every case, every run, after every fresh bitstream
+  load — not random/uninitialized BRAM.
+- Prof bitstream: compute ctrl is already `0x0e` (done|idle|ready) **before** the first ap_start (no-prof: `0x04`),
+  i.e. that compute FSM does not come out of reset in its idle state.
+
+Next on the board (prepared, not yet run): `GP_IDX=<n>` makes gemmprobe use SRAM index n for inp/wgt/acc —
+does the garbage move with the index? Plus rawtest + register dump of the 200 MHz bitstream before/after start.
+Suggestion for the host PC: a debug build with an ILA on compute's `gemm_queue`/`out_mem` port and the
+store's out_mem read port, captured over JTAG from the host PC (if the ZCU102 JTAG USB is connected to it);
+programming over JTAG also rules out the fpga_manager/.bin path.

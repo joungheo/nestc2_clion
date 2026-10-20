@@ -9,6 +9,7 @@
 // usage: ./gemmprobe <case>   (built by build.sh gemmprobe; run via run_rawtests2.sh gemmprobe_<case>)
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -16,9 +17,11 @@
 #include "vta/data_buf.h"
 
 #define EVTA_ID 0
-#define INP_IDX 8
-#define WEIGHT_IDX 8
-#define ACC_IDX 8
+//#### JO changed: SRAM index of inp/wgt/acc from GP_IDX (default 8), to see whether the garbage depends on it
+//#define INP_IDX 8
+//#define WEIGHT_IDX 8
+//#define ACC_IDX 8
+static int INP_IDX = 8, WEIGHT_IDX = 8, ACC_IDX = 8;
 
 using namespace vta;
 
@@ -38,6 +41,7 @@ static int gemm_run(void *, VTACommandHandle cmdh) {
 
 int main(int argc, char **argv) {
   std::string c = argc > 1 ? argv[1] : "ident";
+  if (const char *e = getenv("GP_IDX")) INP_IDX = WEIGHT_IDX = ACC_IDX = atoi(e);
   int8_t input[16], weight[16][16], output[16];
   int expect[16];
   memset(weight, 0, sizeof(weight));
@@ -78,7 +82,7 @@ int main(int argc, char **argv) {
   VTABufferCopy(out_buf, 0, output, 0, sizeof(output), 2);  // device -> host, invalidates
 
   int bad = 0;
-  printf("case=%s\n  i  : ", c.c_str());
+  printf("case=%s idx=%d\n  i  : ", c.c_str(), ACC_IDX);
   for (int i = 0; i < 16; i++) printf("%4d", i);
   printf("\n  inp: ");
   for (int i = 0; i < 16; i++) printf("%4d", input[i]);
