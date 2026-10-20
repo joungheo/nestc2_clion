@@ -107,3 +107,7 @@ Logs/dumps on the board in `vtabundles_xcmpl/hwtest/` (`rt_vtahw*.log`, `rt2_vta
 3. Possibly relevant: GCC packs `VTAGemInsn` with `wgt_factor_in` moved to bit 128 (the 64-bit word would
    overflow); check HLS's struct cast from `ap_uint<256>` packs it the same way.
 4. Multi2/multi4 not tested (single must pass first).
+
+Ruled out: `pl_clk0` = 99.999 MHz with the no-prof bitstream loaded (`PL0_REF_CTRL=0x01010f00`: IOPLL
+33.333*90/2 = 1500 MHz / 15 / 1; pynq `Clocks.fclk0_mhz` agrees). `pl_clk1..3` are disabled (9.375 MHz,
+enable=0), so the design must not use them.
