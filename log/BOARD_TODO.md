@@ -176,3 +176,23 @@ Ran (same day):
 - 200 MHz rawtest 1/32/16: all four blocks idle (`0x04`) before start; after start fetch has issued its 1/2
   instructions, load/compute/store = `0x81` (started, auto-restart) but compute never sets done (0x18 = 0),
   even for a lone FINISH. Logs: `log/board_20261020/vtahw_clk200_rawtest.log`, `vtahw333_gemmprobe_zero_idx_0_1_100.log`.
+
+### 2026-10-21 host PC: ILA build (`bit/evta_ila_261021/vtahw_zcu102_1x16_i8w8a32_16_16_19_18_ila.bin`)
+
+333 MHz no-prof IPs + one ILA (gemm_queue, compute out_mem write port, store_queue, store out_mem read port,
+g2s queue; probes in `vta-hw-zcu102-single/build/ila/ila_impl.tcl`), JTAG from the host PC. WNS +0.030 ns.
+- With this implementation `gemmprobe zero` **hangs**. Trigger on the first gemm_queue handshake never fired:
+  compute never received an instruction.
+- Immediate capture while hung (`log/host_20261021/ila_gemmprobe_zero_hang.csv`): gemm_queue empty
+  (TVALID 0), g2s empty, **store_queue TVALID 1 / TREADY 0** with head
+  `0000020000000081 0280008818888200 4000000028003400 0408040004000401` = STORE dram 0x04020002 sram 2
+  x=10240 y=13312, no dep bits — nothing like the runtime's STORE (dram 0x077c4f00 sram 8 x=y=1).
+  So **fetch hands out garbage instructions** (opcodes wrong too: nothing went to compute); store is busy on a
+  garbage STORE. The earlier symptoms (constant STORE pattern, prof/200 MHz hangs) fit "the instruction
+  stream fetch sees is corrupt, differently per implementation run".
+
+**Please run on the board** with the ILA bitstream, while `gemmprobe zero` hangs (second terminal):
+`sudo python3 vtabundles_xcmpl/hwtest/dump_insns.py` — reads fetch's insn_count/insn_addr registers and
+dumps that DRAM region decoded. DRAM = the runtime's 10 instructions -> the PL read path (fetch m_axi 256 bit
+-> SmartConnect -> HP0) corrupts them; DRAM already garbage -> the CPU-side write of the (uncached)
+instruction buffer. Commit the output.
