@@ -196,3 +196,61 @@ g2s queue; probes in `vta-hw-zcu102-single/build/ila/ila_impl.tcl`), JTAG from t
 dumps that DRAM region decoded. DRAM = the runtime's 10 instructions -> the PL read path (fetch m_axi 256 bit
 -> SmartConnect -> HP0) corrupts them; DRAM already garbage -> the CPU-side write of the (uncached)
 instruction buffer. Commit the output.
+
+Board answer (2026-10-22, JTAG from the host PC): `dump_insns.py` while hung shows the runtime's 10 instructions
+intact in DRAM, so the earlier garbage STORE was not a DRAM problem (see the reset finding below).
+
+### 2026-10-21/22 host PC + board: ILA builds `_ila3`..`_ila6`
+
+All ILA builds are implementation-only re-runs of one synthesized design (`vta-hw-zcu102-single/build/ila3`,
+probe lists in `build/ila{3,4,5,6}/ila_impl.tcl`, arm/save scripts in `build/ila/`), programmed over JTAG.
+Captures kept in `log/host_20261022/`.
+
+**Board hangs with JTAG attached = cpuidle, not the PL.** With hw_server connected, Linux died silently a few
+minutes after programming (no oops in the kernel log read back over JTAG; A53 #2/#3 "No Power", #0 stuck at its
+ATF warm entry 0xfffea120 = RVBAR). After `sudo ./nocpuidle.sh` (new, `vtabundles_xcmpl/hwtest/`: disables
+cpuidle state1+, until reboot) the board stays up. Run it after every boot before using JTAG/ILA. Some earlier
+"board died" observations (e.g. after `plreset.py` + register read) were probably this.
+
+**Reset structure bug (fixed only in the `_ila3` copy so far).** `pl_resetn0` also reset the clk_wiz, so during a
+reset pulse the 333 MHz clock stopped and the 333 MHz proc_sys_reset could not reset the HLS blocks/FIFOs. With
+`pll_clk` `CONFIG.USE_RESET {false}`: right after programming all blocks idle and out_mem quiet (the `_ila2` build
+had compute writing out_mem constantly), and a `plreset.py` pulse gives 333 MHz aresetn low 10 cycles after
+pl_resetn0, the 100 MHz one later, `pll_clk_locked` stays 1 (`ila3_plreset_pulse.csv`); register reads after it
+no longer hang. To do: same change in single/multi2/multi4 `vivado.tcl`, then `plreset.py` after every load.
+
+**`_ila4` (load-side probes, WNS +0.008): the run completes, but load corrupts the weights.**
+(`ila4_gemmprobe_zero.csv`, `gemmprobe zero` -> 9/16 wrong)
+- fetch -> load/gemm/store queues: instructions bit-identical to the runtime dump; compute's uop reads and
+  out_mem writes, store's out_mem read and DRAM write all correct (out_mem[8] = the printed output).
+- LOAD INP: AR 0x77c4a000, RDATA 01..10, written to inp_mem[8] unchanged — correct.
+- LOAD WGT: AR 0x77c4b000 len 16, **RDATA all 16 beats 0** (zero weights), but the data written to wgt_mem_0[8]
+  is `20400000 00000000 00001006 00000010` (lane 0) and compute reads back another value
+  (`20000010 00000800 00001004 00000000`). GEMM therefore uses garbage weights; the acc reset itself works
+  (output of GEMM 2 = output of the reset GEMM >> 1 element-wise, i.e. 0 + inp*w vs. old acc + inp*w).
+- How HLS writes wgt (`hls/<CONF>/vta_load/soln/impl/verilog/load.v`): a 128-bit beat goes into a 1024-bit BRAM
+  word by **read-modify-write** (II=2: read in stage 0, `Din = (Dout & ~mask) | beat << lane` with WEN all ones
+  in stage 1, bank chosen by beat parity). inp (128-bit word, plain write) is fine. The same RTL passes the PL
+  simulation including the `ident` case, so something differs on the board (wgt_mem blk_mem_gen has
+  `C_EN_SAFETY_CKT 1`, read latency 1, WRITE_FIRST, no URAM).
+- Earlier "load never reads DRAM" (`_ila3`) was wrong: load signals were not in that capture condition.
+
+**`_ila5` (1024-bit wgt probes) missed timing (WNS -0.901 ns, 4061 endpoints in compute, 645 in wgt_mem) —
+not used.**
+
+**`_ila6` (narrow wgt probes, WNS +0.055): every run deadlocks.** (`ila6_gemmprobe_zero_deadlock.csv`)
+compute pops LOAD UOP and GEMM #1 (reset) and then nothing: no inp/wgt/out_mem access, no g2l push; load waits
+on g2l with LOAD INP, fetch done. Registers while hung: fetch 0x06, load 0x81, compute 0x83 (0x18 done = 0),
+store 0x81. So the same RTL behaves differently per implementation run (`_ila4` completes, `_ila6` deadlocks),
+as seen earlier with prof / 200 MHz — timing reports are clean, so look at what timing does not cover.
+
+**Next (host PC):** PL simulation (`build/simbd`) with the board's synthesized netlists of load and compute and
+the blk_mem_gen netlists instead of RTL, to reproduce the wgt corruption / deadlock in simulation. Depending on
+the result: remove the wgt read-modify-write in HLS (collect the 16 beats, write each 1024-bit word once) or
+change the BRAM configuration.
+
+ILA notes: probes are named `vta_i/<net>` or `u_ila_0_<net>` after opt (match by Tcl regexp, not
+`get_hw_probes -regexp`, which treats `/` as hierarchy); with BASIC capture and pulse-only qualifiers use
+`TRIGGER_POSITION 0` (otherwise it stays "pre-trigger"); qualify on queue TREADY, not TVALID (TVALID stays 1
+while the consumer waits and fills the window). After a Ctrl-C'd EVTA run, `Xlnk().xlnk_reset()` before the
+next one (CMA buffers leak: "Check failed: fpga_buff_ != nullptr").
