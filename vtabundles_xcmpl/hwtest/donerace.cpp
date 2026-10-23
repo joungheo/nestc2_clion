@@ -1,7 +1,7 @@
 // #### JO added (2026-10-23): reproduce the done race of VTASynchronize (pynq_driver.cc Run()).
 // compute's done_o register keeps the 1 written by the previous run's FINISH until compute writes done = 0,
 // which it does only after its first instruction's dependence pops. Here the first compute instruction pops
-// the load -> compute token behind a LOAD of the whole weight buffer (512 KB), so for that whole load done_o
+// the load -> compute token behind a LOAD of the whole weight buffer (512 KB; 256 KB on multi-EVTA), so for that whole load done_o
 // reads 1. A driver that trusts done_o right away returns before the run has finished: the output is still
 // the 0x5a fill (or an older value). Every iteration uses another inp one-hot, so a stale output is caught.
 // The first run after loading the bitstream starts with done_o = 0, so the race shows from iteration 1 on.
@@ -15,12 +15,15 @@
 
 #include "vta/runtime.h"
 #include "vta/data_buf.h"
+#include "vta/hw_spec.h"
 
 #define EVTA_ID 0
 
 using namespace vta;
 
-static const int WGT_DEPTH = 2048;
+//static const int WGT_DEPTH = 2048;
+// #### JO changed (2026-10-24): from hw_spec.h (multi-EVTA 16_15_18_17: 1024)
+static const int WGT_DEPTH = VTA_WGT_BUFF_DEPTH;
 static int g_reset = 0;
 
 // one GEMM: acc[0] = W[WGT_DEPTH - 1] * inp[0] (the last weight entry, i.e. after the whole load)

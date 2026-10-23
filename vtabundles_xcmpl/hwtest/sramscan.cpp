@@ -3,9 +3,11 @@
 // rows of the device (ILA _ila7, wgt16 200 MHz). This writes known patterns into every SRAM entry and reads
 // them back through GEMM + STORE, so each byte can be checked:
 //   wgt : inp[k] = e_k (k = 0..15); W[w] = pattern; GEMM acc[c*16+k] = W[base+c] * e_k = column k of W
-//         -> out row c*16+k, element oc = W[base+c][oc][k]. 8 runs of 256 weight entries cover all 2048.
+//         -> out row c*16+k, element oc = W[base+c][oc][k]. Runs of 256 weight entries cover all of them.
 //         On the 16-bank (wgt16) bitstreams, row oc of a weight entry is wgt bank oc.
-//   inp : W[0] = I; inp[i] = pattern; GEMM acc[i] = I * inp[i] -> out row i = inp row i (all 4096 entries).
+//   inp : W[0] = I; inp[i] = pattern; GEMM acc[i] = I * inp[i] -> out row i = inp row i (all entries).
+// #### JO changed (2026-10-24): depths from hw_spec.h (single 16_16_19_18: wgt 2048, inp/acc 4096; multi-EVTA
+// 16_15_18_17: 1024 / 2048), so build.sh BUFF="15 18 17" builds it for the multi-EVTA bitstreams.
 // usage: ./sramscan wgt|inp [invert] [dump]   (invert = complemented pattern, catches bits stuck at the other value;
 //        dump = also write every value read back to sramscan_<mode>[_invert].bin, analyse with sramscan_analyse.py)
 #include <cstdint>
@@ -17,12 +19,16 @@
 
 #include "vta/runtime.h"
 #include "vta/data_buf.h"
+#include "vta/hw_spec.h"
 
 #define EVTA_ID 0
 
 using namespace vta;
 
-static const int WGT_DEPTH = 2048, INP_DEPTH = 4096, ACC_DEPTH = 4096, CHUNK = 256;
+//static const int WGT_DEPTH = 2048, INP_DEPTH = 4096, ACC_DEPTH = 4096, CHUNK = 256;
+static const int WGT_DEPTH = VTA_WGT_BUFF_DEPTH, INP_DEPTH = VTA_INP_BUFF_DEPTH, ACC_DEPTH = VTA_ACC_BUFF_DEPTH;
+// one wgt run writes CHUNK * 16 acc rows (multi-EVTA acc depth 2048 -> 128 entries per run)
+static const int CHUNK = ACC_DEPTH / 16;
 static int g_base = 0, g_reset = 0;
 
 // wgt scan: iter_out over the CHUNK weight entries (dst += 16, wgt += 1), iter_in over k (dst += 1, src += 1)
@@ -35,9 +41,9 @@ static int wgt_kernel(void *, VTACommandHandle h) {
   return 0;
 }
 
-// inp scan: acc[i] = W[0] * inp[i] for all i (64 x 64 = 4096)
+// inp scan: acc[i] = W[0] * inp[i] for all i (INP_DEPTH / 64 x 64)
 static int inp_kernel(void *, VTACommandHandle h) {
-  VTAUopLoopBegin(h, 64, 64, 64, 0);
+  VTAUopLoopBegin(h, INP_DEPTH / 64, 64, 64, 0);
   VTAUopLoopBegin(h, 64, 1, 1, 0);
   VTAUopPush(h, 0, g_reset, 0, 0, 0, 0, 0, 0);
   VTAUopLoopEnd(h);

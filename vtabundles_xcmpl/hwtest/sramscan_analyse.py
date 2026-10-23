@@ -10,7 +10,7 @@
 import collections
 import sys
 
-WGT_DEPTH, CHUNK = 2048, 256
+CHUNK = 256
 
 
 def pat(a, b, c, inv):
@@ -21,7 +21,9 @@ def pat(a, b, c, inv):
 fn = sys.argv[1]
 inv = len(sys.argv) > 2 and sys.argv[2] == 'invert'
 raw = open(fn, 'rb').read()
-assert len(raw) == WGT_DEPTH * 256, 'expected %d bytes, got %d' % (WGT_DEPTH * 256, len(raw))
+# #### JO changed (2026-10-24): depth from the dump size (single 2048, multi-EVTA 1024 weight entries)
+WGT_DEPTH = len(raw) // 256
+assert WGT_DEPTH % CHUNK == 0 and len(raw) == WGT_DEPTH * 256, 'unexpected size %d' % len(raw)
 got = [[[0] * 16 for _ in range(16)] for _ in range(WGT_DEPTH)]
 for base in range(0, WGT_DEPTH, CHUNK):
     blk = raw[base * 256:(base + CHUNK) * 256]

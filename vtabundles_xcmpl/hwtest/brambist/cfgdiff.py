@@ -36,20 +36,25 @@ def fdri(path):
     return np.array(best, dtype=np.uint32)
 
 
-b, m = fdri(sys.argv[1]), fdri(sys.argv[2])
-r = np.frombuffer(open(sys.argv[3], 'rb').read(), dtype='>u4').astype(np.uint32)[RB_PAD:RB_PAD + len(b)]
-x = (r ^ b) & ~m
-idx = np.nonzero(x)[0]
-pc = lambda a: int(np.unpackbits(a.view(np.uint8)).sum())
-print('compared bits differing: %d (1->0 %d, 0->1 %d) in %d frames' % (pc(x), pc(x & b), pc(x & r), len(set(idx // FRAME_WORDS))))
-if len(idx):
-    print('frame index range %d..%d' % (idx.min() // FRAME_WORDS, idx.max() // FRAME_WORDS))
-    pos = collections.Counter()
-    for i in idx:
-        v = int(x[i])
-        for k in range(32):
-            if v >> k & 1:
-                pos[(int(i) % FRAME_WORDS, k)] += 1
-    print('frame word / bit : count')
-    for (w, k), c in sorted(pos.items()):
-        print('  %2d / %2d : %d' % (w, k, c))
+def main():
+    b, m = fdri(sys.argv[1]), fdri(sys.argv[2])
+    r = np.frombuffer(open(sys.argv[3], 'rb').read(), dtype='>u4').astype(np.uint32)[RB_PAD:RB_PAD + len(b)]
+    x = (r ^ b) & ~m
+    idx = np.nonzero(x)[0]
+    pc = lambda a: int(np.unpackbits(a.view(np.uint8)).sum())
+    print('compared bits differing: %d (1->0 %d, 0->1 %d) in %d frames' % (pc(x), pc(x & b), pc(x & r), len(set(idx // FRAME_WORDS))))
+    if len(idx):
+        print('frame index range %d..%d' % (idx.min() // FRAME_WORDS, idx.max() // FRAME_WORDS))
+        pos = collections.Counter()
+        for i in idx:
+            v = int(x[i])
+            for k in range(32):
+                if v >> k & 1:
+                    pos[(int(i) % FRAME_WORDS, k)] += 1
+        print('frame word / bit : count')
+        for (w, k), c in sorted(pos.items()):
+            print('  %2d / %2d : %d' % (w, k, c))
+
+
+if __name__ == '__main__':
+    main()
