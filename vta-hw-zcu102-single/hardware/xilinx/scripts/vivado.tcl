@@ -157,9 +157,11 @@ set proc_sys_reset \
 set pll_clk [ create_bd_cell -type ip -vlnv xilinx.com:ip:clk_wiz:6.0 pll_clk ]
 set_property -dict [ list \
   CONFIG.CLKOUT1_REQUESTED_OUT_FREQ $clock_freq \
-  CONFIG.RESET_PORT {resetn} \
-  CONFIG.RESET_TYPE {ACTIVE_LOW} \
+  CONFIG.USE_RESET {false} \
 ] $pll_clk
+#### JO changed (2026-10-23): no MMCM reset (was CONFIG.RESET_PORT resetn / RESET_TYPE ACTIVE_LOW on
+#### pl_resetn0): a pl_resetn0 pulse stopped the EVTA clock, so the 333 MHz proc_sys_reset never reset the
+#### HLS blocks and FIFOs (ILA _ila2/_ila3). Now both proc_sys_resets reset with their clocks running.
 #### JO changed: keep the design in reset until the PLL locks (locked -> proc_sys_reset/dcm_locked below)
 #  CONFIG.USE_LOCKED {false} \
 
@@ -386,8 +388,8 @@ connect_bd_intf_net -intf_net axi_smc0_M00_AXI [get_bd_intf_pins axi_smc0/M00_AX
 connect_bd_intf_net -intf_net processing_system_m_axi [get_bd_intf_pins axi_xbar/S00_AXI] $maxi
 
 # Create port connections
+#### JO changed (2026-10-23): pll_clk/resetn removed from this net (see pll_clk above)
 connect_bd_net -net processing_system_reset \
-  [get_bd_pins pll_clk/resetn] \
   [get_bd_pins proc_sys_reset/ext_reset_in] \
   $ps_rstn
 connect_bd_net -net ps_clk_net \
@@ -535,6 +537,30 @@ update_compile_order -fileset sim_1
 #### JO changed: thread count from the argument list; the default implementation strategy is used
 #### (the comment above never matched the code)
 #set num_threads 8
+#### JO added (2026-10-23): keep the HLS blocks and the queues as they are in implementation. Without this
+#### opt_design/phys_opt pulled FIFO EMPTY logic and reset replicas across the IP boundaries, and the
+#### result differed per run (board: compute stuck at the first GEMM, _ila6); with it the run completes (_ila7).
+set dt_xdc $proj_path/$proj_name.srcs/constrs_1/new/dont_touch.xdc
+file mkdir [file dirname $dt_xdc]
+set f [open $dt_xdc w]
+puts $f "set_property DONT_TOUCH true \[get_cells {vta_i/fetch_0 vta_i/load_0 vta_i/compute_0 vta_i/store_0 \
+vta_i/load_queue vta_i/gemm_queue vta_i/store_queue vta_i/l2g_queue vta_i/g2l_queue vta_i/g2s_queue vta_i/s2g_queue}\]"
+close $f
+add_files -fileset constrs_1 $dt_xdc
+set_property used_in_synthesis false [get_files $dt_xdc]
+#### JO added (2026-10-23): on the lab ZCU102 (192.168.20.2) BRAMs in the upper part of the device
+#### (RAMB36 rows Y>=36 = clock-region rows 3..6) return wrong data: sramscan shows whole wgt banks wrong
+#### when placed there, all clean when those sites are prohibited, while flip-flops there work (regtest).
+#### Keep every BRAM/FIFO below. VTA_ALLOW_UPPER_BRAM=1 in the environment turns this off (other boards).
+if {$target eq "zcu102" && ![info exists ::env(VTA_ALLOW_UPPER_BRAM)]} {
+  set pb_xdc $proj_path/$proj_name.srcs/constrs_1/new/prohibit_upper_bram.xdc
+  set f [open $pb_xdc w]
+  puts $f {set_property PROHIBIT true [get_sites -regexp {RAMB36_X\d+Y(3[6-9]|[4-8]\d)}]}
+  puts $f {set_property PROHIBIT true [get_sites -regexp {RAMB18_X\d+Y(7[2-9]|[89]\d|1[0-6]\d)}]}
+  close $f
+  add_files -fileset constrs_1 $pb_xdc
+  set_property used_in_synthesis false [get_files $pb_xdc]
+}
 launch_runs impl_1 -to_step write_bitstream -jobs $num_threads
 wait_on_run impl_1
 

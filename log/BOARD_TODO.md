@@ -254,3 +254,38 @@ ILA notes: probes are named `vta_i/<net>` or `u_ila_0_<net>` after opt (match by
 `TRIGGER_POSITION 0` (otherwise it stays "pre-trigger"); qualify on queue TREADY, not TVALID (TVALID stays 1
 while the consumer waits and fills the window). After a Ctrl-C'd EVTA run, `Xlnk().xlnk_reset()` before the
 next one (CMA buffers leak: "Check failed: fpga_buff_ != nullptr").
+
+### 2026-10-23 host PC + board: upper BRAMs fail on this board; single 333 MHz bitstream passes
+
+**The cause of the wrong weights: BRAMs in the upper part of the device** (RAMB36 rows Y>=36 = SLICE Y>=180 =
+clock-region rows 3..6). New EVTA-only test `hwtest/sramscan.cpp` (`./sramscan wgt|inp [invert] [dump]`)
+writes patterns into every wgt/inp entry and reads them back through GEMM + STORE:
+- wgt16 200 MHz build: wgt banks 0, 2, 3, 7, 8, 14 wrong in ~97% of their bytes, all others clean; the bad banks
+  are exactly the ones placed at RAMB36 Y>=36. Same build with those sites PROHIBITed (`_lowbram`): 0 bytes wrong.
+- `sramscan_analyse.py` on the dumps: the wrong bytes are not another address/byte/bank, not the previous
+  (complemented) pattern, not constant, and not acc left over from earlier runs — essentially random.
+- Clock and reset there are fine: routing complete, the EVTA clock (MMCM_X0Y3 -> BUFGCE_X0Y74, root X1Y2) has
+  small skew, BRAM reset nets routed; `hwtest/regtest.py` writes/reads and resets the HLS AXI-lite registers that
+  sit in row 3 (SLICE Y177-190) correctly.
+- PL voltages idle (PS SYSMON): VCCINT 848 mV, VCCBRAM 847 mV (nominal 850).
+
+**BRAM self-test** (`hwtest/brambist/`: `brambist.v` = all 912 RAMB36 with a common pattern controller,
+`build.tcl` LOCs instance i to the i-th site -> `sites.txt`, `brambist.py` prints an X/Y error map,
+`tb_brambist.v` testbench). v1 (all BRAMs at once, 100 MHz, WNS +0.489): **607 of 912 BRAMs with errors,
+including most of X5..X12 below Y36** — which the `_lowbram` EVTA used without a single error, and many BRAMs
+fail in the same bits (0x802). So v1 does not show a per-site defect; either the test itself misbehaves on the
+board or 912 BRAMs switching every cycle draw more than the PL supply holds. v2 (`EN_LO`/`EN_HI` range and loop
+mode; `brambist.py <sites.txt> all|columns|load`) tells these apart — built, not run yet.
+
+**Single 333 MHz bitstream that passes everything** (`bit/evta_single_lowbram_261023/`, md5 `2fa610a9...`,
+WNS +0.018 ns, no PROFILE). Changes in `vta-hw-zcu102-single` (all with `#### JO` comments):
+1. `vivado.tcl`: `pll_clk` without reset input (the `_ila3` reset fix).
+2. `vivado.tcl`: DONT_TOUCH on fetch/load/compute/store and the 7 queues (implementation only).
+3. `pkg_config.py`: on zcu102 every SRAM bank is one AXI beat wide -> wgt 16 x 128 bit, no read-modify-write.
+4. `vivado.tcl`: PROHIBIT RAMB36 Y36..Y89 / RAMB18 Y72..Y169 on zcu102 (`VTA_ALLOW_UPPER_BRAM=1` turns it off).
+Board: `sramscan` wgt / wgt invert / inp / inp invert 0 bytes wrong; `gemmprobe` zero/ident/perm/ones OK;
+`gemm_nc` Golden Matched; `add_test_nc` 16/16. Load sequence: fpga_manager, `xlnk_reset`, `plreset.py`.
+
+**Next:** done race #1 in the driver (`pynq_driver.cc`), then real bundles (Conv3Test, ResNet18) with
+`vtalib-zcu102-single`; brambist v2 on the board; the same four changes in multi2/multi4 and the `_prof` builds
+(multi4 needs 556 BRAMs, only ~390 below Y36 -> depends on brambist v2).

@@ -18,5 +18,7 @@ hwtest/*
 !hwtest/*.h
 !hwtest/*.sh
 !hwtest/*.py
+# #### JO added (2026-10-23): BRAM self-test design sources (outputs go to vta-hw-zcu102-single/build/brambist)
+!hwtest/brambist/
 # #### JO added: hw dirs of the other bundle sets (hw_multievtax2/ ...) are generated like hw/
 hw_*/

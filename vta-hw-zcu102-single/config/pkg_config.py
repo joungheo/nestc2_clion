@@ -251,6 +251,12 @@ class PkgConfig(object):
         max_bus_width = 1024
         # Bus width of a memory interface
         mem_bus_width = 1 << self.fpga_log_axi_bus_width
+        #### JO changed (2026-10-23): on zcu102 every SRAM bank is one AXI beat wide (wgt: 16 x 128 bit instead
+        #### of 2 x 1024 bit). With 1024-bit banks HLS load writes each 128-bit beat by a read-modify-write of
+        #### the whole word, which corrupted the weights on the board (ILA, _ila4/_ila7) although it passes
+        #### simulation; with beat-wide banks every write is a plain full-word write (as inp/out already are).
+        if self.TARGET == "zcu102":
+            max_bus_width = mem_bus_width
         # Input memory
         inp_mem_bus_width = 1 << (cfg["LOG_INP_WIDTH"] + \
                                   cfg["LOG_BATCH"] + \
