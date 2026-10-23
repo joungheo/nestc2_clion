@@ -298,3 +298,25 @@ instruction waits for a 512 KB weight load): old driver 13 of 16 iterations wron
 the output not written; new driver 16/16 OK at 0.105 ms (512 KB at 5.0 GB/s). `dump_regs.py` no longer reads
 compute 0x1c (reading it during a run would clear vld). Every earlier board run used the old driver: results of
 runs whose first compute instruction waits on a long load (conv bundles) are suspect.
+
+### 2026-10-23 host PC: configuration memory defect found (JTAG readback)
+
+brambist v2 read every AXI-lite register with bits 6 and 15 set (ID 0xB1A5F042 instead of 0xB1A57002, same value
+10000 times), so its results, and v1's, say nothing about the BRAMs. JTAG readback of the configuration
+(`hwtest/brambist/readback.tcl`, compared with `cfgdiff.py` against the bitstream and its `write_bitstream
+-mask_file` mask) shows the cause:
+- brambist v2: 5000 compared bits differ, **all 1 -> 0**, all in clock-region row 3 (type-0 frames 20586..27350, the
+  whole device width), all at **frame word 61 bit 18 and word 62 bits 0-3, 12-14**. Every frame with a 1 at one of
+  these 8 positions reads 0 there (100 %). The logic location file puts these bits in the tile row **SLICE Y219**
+  (= RAMB36 Y43, the row brambist v1 found bad in all 13 columns).
+- Identical bits after a second readback, after reloading with fpga_manager, and after programming over JTAG
+  (`progrb.tcl`): not the .bin conversion or the load path.
+- The lowbram EVTA build: 194 bits differ, all word 62 bit 0 in the same frames — the same cells, every one where
+  that design writes a 1. So 8 configuration cells per frame in that row are stuck at 0 on this device.
+Everything configured in tile row Y219 (LUT, FF, routing PIP, BRAM settings) may lose bits; which ones depends on
+the implementation, which explains why the same RTL failed differently per run while simulation and timing were
+clean. The lowbram EVTA still has 194 such bits (in resources it apparently does not use) and passes.
+
+**Next:** keep designs out of tile row Y219 (pblock / PROHIBIT below it, CONTAIN_ROUTING) and check whether that
+alone fixes the upper-BRAM builds; that would give back RAMB36 Y44+ for multi2/multi4 if nothing has to cross the
+row. Tell the board owner: the PL of this ZCU102 has a defective configuration row.
