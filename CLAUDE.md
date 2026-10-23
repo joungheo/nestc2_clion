@@ -170,6 +170,8 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   multi-EVTA run returns zeros. `vtabundles_xcmpl/evta_hw/` is an older multi-EVTA flow (not built).
 - Built 2026-10-20 at 333 MHz, all `_prof`: single WNS +0.054 ns, multi2 +0.004, multi4 +0.003 (BRAM 556/912).
   The PS register port (`M_AXI_HPM0`) runs on `pl_clk0` 100 MHz; at 333 MHz it missed timing.
+- The lab board's PL has a defective configuration row (tile row SLICE Y219, cells stuck at 0; `log/BOARD_TODO.md`
+  2026-10-23/24). `vivado.tcl` on zcu102 fences the design below it by default (`VTA_BRAM_FENCE=y219|upper|none`).
 
 Useful options (full list at the top of [CMakeLists.txt](CMakeLists.txt) and per-backend CMakeLists):
 

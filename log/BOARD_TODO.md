@@ -320,3 +320,19 @@ clean. The lowbram EVTA still has 194 such bits (in resources it apparently does
 **Next:** keep designs out of tile row Y219 (pblock / PROHIBIT below it, CONTAIN_ROUTING) and check whether that
 alone fixes the upper-BRAM builds; that would give back RAMB36 Y44+ for multi2/multi4 if nothing has to cross the
 row. Tell the board owner: the PL of this ZCU102 has a defective configuration row.
+
+### 2026-10-24 board: fence below tile row Y219 fixes the upper-BRAM builds
+
+`vta-hw-zcu102-single` with `VTA_BRAM_FENCE=y219` (now the zcu102 default in `vivado.tcl`; `upper` = the old
+PROHIBIT from RAMB36 Y36 up, `none` = no fence): all PL cells but the PS in pblock `SLICE_X0Y0:SLICE_X96Y218` /
+`RAMB36 ..Y42` / `RAMB18 ..Y85` / `DSP ..Y85` with CONTAIN_ROUTING, RAMB36 Y43 / RAMB18 Y86-87 / DSP Y86-87 and
+MMCM rows 3..6 prohibited (a first try without the row PROHIBIT placed a cascaded wgt BRAM pair at Y42/Y43).
+333 MHz, WNS +0.004 ns, 244 RAMB36 up to Y42 — **42 of them at Y36..42, 39 wgt** — and no net with a PIP in a
+row-Y219 tile. `bit/evta_single_y219_261023/`, md5 `62c3f9e3...`.
+Board (new driver): `sramscan` wgt / wgt invert / inp / inp invert 0 bytes wrong, `gemmprobe` 4/4, `donerace`
+16/16, `gemm_nc` Golden Matched; `hw/run_all.sh` (BIN=vtahw_single_y219.bin): all 30 bundles with a golden PASS,
+Resnet18 / Resnet18Partition / Resnet50 -> 281 on cat_285, Vgg16Cifar10 -> 0 on airplane, Resnetv10S1C0 runs;
+Conv4Test 3.504 ms (65.98 GOPS), Resnet18 134.4 ms, Resnet50 1439 ms.
+So the "upper BRAMs are bad" finding was row Y219 only; BRAMs at Y36..42 work.
+
+**Next:** multi2 (278 BRAM tiles) fits below the row; multi4 (556) does not and has to cross it.

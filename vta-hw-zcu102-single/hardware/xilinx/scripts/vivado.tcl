@@ -548,11 +548,30 @@ vta_i/load_queue vta_i/gemm_queue vta_i/store_queue vta_i/l2g_queue vta_i/g2l_qu
 close $f
 add_files -fileset constrs_1 $dt_xdc
 set_property used_in_synthesis false [get_files $dt_xdc]
-#### JO added (2026-10-23): on the lab ZCU102 (192.168.20.2) BRAMs in the upper part of the device
-#### (RAMB36 rows Y>=36 = clock-region rows 3..6) return wrong data: sramscan shows whole wgt banks wrong
-#### when placed there, all clean when those sites are prohibited, while flip-flops there work (regtest).
-#### Keep every BRAM/FIFO below. VTA_ALLOW_UPPER_BRAM=1 in the environment turns this off (other boards).
-if {$target eq "zcu102" && ![info exists ::env(VTA_ALLOW_UPPER_BRAM)]} {
+#### JO added (2026-10-23): fence for the lab ZCU102 (192.168.20.2), environment VTA_BRAM_FENCE (zcu102 only):
+####   y219 (default): its PL has one defective configuration row (JTAG readback, hwtest/brambist/cfgdiff.py):
+####          clock-region row 3, frame words 61/62 = tile row SLICE Y219 / RAMB36 Y43 / DSP Y86-87, 8 cells per
+####          frame stuck at 0, so whatever is configured in that row (LUT, FF, routing, BRAM settings) may lose bits.
+####          Keep the PL design (all but the PS) in a pblock below that row with CONTAIN_ROUTING and the MMCM out of
+####          rows 3..6. Board 2026-10-24: wgt BRAMs at RAMB36 Y36..42, sramscan clean, all 35 bundles pass.
+####   upper: the first workaround, PROHIBIT every BRAM from RAMB36 Y36 up (the "upper BRAMs return wrong data"
+####          finding that the readback later traced to row Y219)
+####   none:  no fence (other boards)
+set bram_fence [expr {[info exists ::env(VTA_BRAM_FENCE)] ? $::env(VTA_BRAM_FENCE) : "y219"}]
+if {$target eq "zcu102" && $bram_fence eq "y219"} {
+  set pb_xdc $proj_path/$proj_name.srcs/constrs_1/new/fence_y219.xdc
+  set f [open $pb_xdc w]
+  puts $f {create_pblock pb_below_y219}
+  puts $f {add_cells_to_pblock [get_pblocks pb_below_y219] [get_cells -filter {NAME !~ vta_i/processing_system && NAME !~ vta_i/pll_clk} vta_i/*]}
+  puts $f {resize_pblock [get_pblocks pb_below_y219] -add {SLICE_X0Y0:SLICE_X96Y218 RAMB36_X0Y0:RAMB36_X12Y42 RAMB18_X0Y0:RAMB18_X12Y85 DSP48E2_X0Y0:DSP48E2_X17Y85}}
+  puts $f {set_property CONTAIN_ROUTING true [get_pblocks pb_below_y219]}
+  puts $f {set_property PROHIBIT true [get_sites -regexp {MMCM_X\d+Y[3-6]}]}
+  #### the placer still put a cascaded BRAM pair across the pblock edge (ramloop[5] Y42, ramloop[6] Y43): prohibit the row
+  puts $f {set_property PROHIBIT true [get_sites -regexp {RAMB36_X\d+Y43|RAMB18_X\d+Y8[67]|DSP48E2_X\d+Y8[67]}]}
+  close $f
+  add_files -fileset constrs_1 $pb_xdc
+  set_property used_in_synthesis false [get_files $pb_xdc]
+} elseif {$target eq "zcu102" && $bram_fence eq "upper"} {
   set pb_xdc $proj_path/$proj_name.srcs/constrs_1/new/prohibit_upper_bram.xdc
   set f [open $pb_xdc w]
   puts $f {set_property PROHIBIT true [get_sites -regexp {RAMB36_X\d+Y(3[6-9]|[4-8]\d)}]}
@@ -560,6 +579,9 @@ if {$target eq "zcu102" && ![info exists ::env(VTA_ALLOW_UPPER_BRAM)]} {
   close $f
   add_files -fileset constrs_1 $pb_xdc
   set_property used_in_synthesis false [get_files $pb_xdc]
+} elseif {$target eq "zcu102" && $bram_fence ne "none"} {
+  puts "VTA_BRAM_FENCE must be y219, upper or none"
+  return 1
 }
 launch_runs impl_1 -to_step write_bitstream -jobs $num_threads
 wait_on_run impl_1
