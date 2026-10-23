@@ -148,9 +148,11 @@ set proc_sys_reset [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:
 set pll_clk [ create_bd_cell -type ip -vlnv xilinx.com:ip:clk_wiz:6.0 pll_clk ]
 set_property -dict [ list \
   CONFIG.CLKOUT1_REQUESTED_OUT_FREQ $FPGA_FREQ \
-  CONFIG.RESET_PORT {resetn} \
-  CONFIG.RESET_TYPE {ACTIVE_LOW} \
+  CONFIG.USE_RESET {false} \
 ] $pll_clk
+#### JO changed (2026-10-24, from vta-hw-zcu102-single): no MMCM reset (was CONFIG.RESET_PORT resetn / RESET_TYPE
+#### ACTIVE_LOW on pl_resetn0): a pl_resetn0 pulse stopped the EVTA clock, so proc_sys_reset never reset the HLS
+#### blocks and FIFOs (single, ILA _ila2/_ila3).
 
 # control crossbar: 4 register slaves per EVTA (+1 perf monitor per EVTA with profile)
 set n_ctrl [expr {($profile ? 5 : 4) * $num_evta}]
@@ -160,7 +162,7 @@ set_property -dict [ list CONFIG.NUM_MI $n_ctrl CONFIG.NUM_SI {1} ] $axi_xbar
 connect_bd_intf_net -intf_net processing_system_m_axi [get_bd_intf_pins axi_xbar/S00_AXI] \
   [get_bd_intf_pins processing_system/M_AXI_HPM0_FPD]
 connect_bd_net -net processing_system_reset [get_bd_pins processing_system/pl_resetn0] \
-  [get_bd_pins pll_clk/resetn] [get_bd_pins proc_sys_reset/ext_reset_in]
+  [get_bd_pins proc_sys_reset/ext_reset_in]
 connect_bd_net -net ps_clk_net [get_bd_pins processing_system/pl_clk0] [get_bd_pins pll_clk/clk_in1]
 connect_bd_net -net pll_clk_locked [get_bd_pins pll_clk/locked] [get_bd_pins proc_sys_reset/dcm_locked]
 connect_bd_net -net evta_clk [get_bd_pins pll_clk/clk_out1] [get_bd_pins proc_sys_reset/slowest_sync_clk] \
@@ -332,6 +334,78 @@ add_files -norecurse $proj_path/$proj_name.srcs/sources_1/bd/$proj_name/hdl/${pr
 update_compile_order -fileset sources_1
 update_compile_order -fileset sim_1
 
+#### JO added (2026-10-24, from vta-hw-zcu102-single): keep the HLS blocks and the queues as they are in
+#### implementation. Without this opt_design/phys_opt pulled FIFO EMPTY logic and reset replicas across the IP
+#### boundaries, and the result differed per run (single, board: compute stuck at the first GEMM, _ila6).
+set dt_xdc $proj_path/$proj_name.srcs/constrs_1/new/dont_touch.xdc
+file mkdir [file dirname $dt_xdc]
+set f [open $dt_xdc w]
+for {set i 0} {$i < $num_evta} {incr i} {
+  set cells {}
+  foreach c {fetch load compute store load_queue gemm_queue store_queue l2g_queue g2l_queue g2s_queue s2g_queue} {
+    lappend cells vta_i/${c}_$i
+  }
+  puts $f "set_property DONT_TOUCH true \[get_cells {$cells}\]"
+}
+close $f
+add_files -fileset constrs_1 $dt_xdc
+set_property used_in_synthesis false [get_files $dt_xdc]
+#### JO added (2026-10-24): fence for the lab ZCU102 (192.168.20.2), environment VTA_BRAM_FENCE. Its PL has one
+#### defective configuration row (vta-hw-zcu102-single, JTAG readback, hwtest/brambist/cfgdiff.py): clock-region
+#### row 3, tile row SLICE Y219 / RAMB36 Y43 / RAMB18 Y86-87 / DSP Y86-87, 8 cells per frame stuck at 0, so whatever
+#### is configured in that row (LUT, FF, routing, BRAM settings) may lose bits.
+####   y219 (default for 1-2 EVTAs): all PL cells but the PS and the MMCM in a pblock below the row (Y0..218) with
+####          CONTAIN_ROUTING, as in vta-hw-zcu102-single (379 RAMB36 below the row; multi2 needs 286)
+####   split (default for 3-4 EVTAs): pblock pb_fence = the device below (Y0..218) and above (Y220..419) the row;
+####          EVTA i in child pblock pb_evta_<i> (0, 1 below, 2, 3 above; multi4 needs 572 RAMB36), each with
+####          CONTAIN_ROUTING. 2026-10-24 multi2/multi4 builds: CONTAIN_ROUTING of a pblock made of two rectangles
+####          does not keep its nets out of the row between them (nets of child pblocks used row-Y219 PIPs), and
+####          nets that cross the row (PS HP2/HP3 <-> smc_2/3) are not contained by any pblock: multi4 still sets 26
+####          stuck cells (stuckchk.py), not usable on the lab board yet.
+####   The row's sites and the MMCMs of rows 3..6 are prohibited.
+####   upper: PROHIBIT every BRAM from RAMB36 Y36 up (the first workaround)
+####   none:  no fence (other boards)
+#### Check the bitstream with hwtest/brambist/stuckchk.py -b <a working bitstream>: 0 extra cells set.
+set bram_fence [expr {[info exists ::env(VTA_BRAM_FENCE)] ? $::env(VTA_BRAM_FENCE) : ($num_evta <= 2 ? "y219" : "split")}]
+set fence_lo {SLICE_X0Y0:SLICE_X96Y218 RAMB36_X0Y0:RAMB36_X12Y42 RAMB18_X0Y0:RAMB18_X12Y85 DSP48E2_X0Y0:DSP48E2_X17Y85}
+set fence_hi {SLICE_X0Y220:SLICE_X96Y419 RAMB36_X0Y44:RAMB36_X12Y83 RAMB18_X0Y88:RAMB18_X12Y167 DSP48E2_X0Y88:DSP48E2_X17Y167}
+if {$bram_fence eq "split" || $bram_fence eq "y219"} {
+  set pb_xdc $proj_path/$proj_name.srcs/constrs_1/new/fence_y219.xdc
+  set f [open $pb_xdc w]
+  puts $f "create_pblock pb_fence"
+  puts $f "resize_pblock \[get_pblocks pb_fence\] -add {$fence_lo[expr {$bram_fence eq "split" ? " $fence_hi" : ""}]}"
+  puts $f "set_property CONTAIN_ROUTING true \[get_pblocks pb_fence\]"
+  if {$bram_fence eq "split"} {
+    for {set i 0} {$i < $num_evta} {incr i} {
+      puts $f "create_pblock pb_evta_$i"
+      puts $f "resize_pblock \[get_pblocks pb_evta_$i\] -add {[expr {$i < 2 ? $fence_lo : $fence_hi}]}"
+      puts $f "set_property PARENT pb_fence \[get_pblocks pb_evta_$i\]"
+      puts $f "set_property CONTAIN_ROUTING true \[get_pblocks pb_evta_$i\]"
+      puts $f "add_cells_to_pblock \[get_pblocks pb_evta_$i\] \[get_cells -regexp {vta_i/\[a-z_\]+_${i}(_\\d+)?}\]"
+    }
+  }
+  puts $f {add_cells_to_pblock [get_pblocks pb_fence] [get_cells -filter {NAME !~ vta_i/processing_system && NAME !~ vta_i/pll_clk && PBLOCK == ""} vta_i/*]}
+  puts $f {set_property PROHIBIT true [get_sites -regexp {MMCM_X\d+Y[3-6]}]}
+  #### one line per site type: with SLICE first in one -regexp alternation get_sites returned only the SLICEs
+  #### (multi2 build 2026-10-24: 2 RAMB36 placed at Y43)
+  foreach re {{SLICE_X\d+Y219} {RAMB36_X\d+Y43} {RAMB18_X\d+Y8[67]} {DSP48E2_X\d+Y8[67]}} {
+    puts $f "set_property PROHIBIT true \[get_sites -regexp {$re}\]"
+  }
+  close $f
+  add_files -fileset constrs_1 $pb_xdc
+  set_property used_in_synthesis false [get_files $pb_xdc]
+} elseif {$bram_fence eq "upper"} {
+  set pb_xdc $proj_path/$proj_name.srcs/constrs_1/new/prohibit_upper_bram.xdc
+  set f [open $pb_xdc w]
+  puts $f {set_property PROHIBIT true [get_sites -regexp {RAMB36_X\d+Y(3[6-9]|[4-8]\d)}]}
+  puts $f {set_property PROHIBIT true [get_sites -regexp {RAMB18_X\d+Y(7[2-9]|[89]\d|1[0-6]\d)}]}
+  close $f
+  add_files -fileset constrs_1 $pb_xdc
+  set_property used_in_synthesis false [get_files $pb_xdc]
+} elseif {$bram_fence ne "none"} {
+  puts "VTA_BRAM_FENCE must be split, y219, upper or none"
+  return 1
+}
 launch_runs impl_1 -to_step write_bitstream -jobs $num_threads
 wait_on_run impl_1
 

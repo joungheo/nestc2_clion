@@ -336,3 +336,25 @@ Conv4Test 3.504 ms (65.98 GOPS), Resnet18 134.4 ms, Resnet50 1439 ms.
 So the "upper BRAMs are bad" finding was row Y219 only; BRAMs at Y36..42 work.
 
 **Next:** multi2 (278 BRAM tiles) fits below the row; multi4 (556) does not and has to cross it.
+
+### 2026-10-24 host PC + board: multi2 fenced below Y219 works; multi4 does not fit
+
+`hwtest/brambist/stuckchk.py <bit> -b <lowbram bit>` lists the stuck cells a bitstream sets beyond the 194 of
+every design (0 extra = configured as written; old `_prof` builds: multi2 +2037, multi4 +5183).
+`vta-hw-zcu102-multi{2,4}/.../vivado.tcl`: same Y219 fence as single (default `y219` for <= 2 EVTAs, `split` for
+4 = EVTA 0-1 below and 2-3 above the row in child pblocks), pll_clk without reset, per-EVTA DONT_TOUCH, zcu102
+beat-wide banks in `pkg_config.py`. Pitfalls found on the way:
+- `get_sites -regexp {A|B}` with two site types returns only the first type, so one PROHIBIT line per site type.
+- CONTAIN_ROUTING on a pblock made of two rectangles does not keep its nets out of the row between them, and
+  PS-driven nets (S_AXI_HP2/3 rdata/rvalid, smartconnect exits) are in no pblock: 69 nets of the first multi4
+  build had PIPs in row Y219. With CONTAIN_ROUTING on the child pblocks too, multi4 fails routing (DRC RTSTAT-6,
+  18 partial route conflicts, no bitstream).
+multi2 (`y219`): 333 MHz, WNS +0.049 ns, stuckchk 0 extra; `bit/evta_multi2_y219_261024/`, md5 `39b38dc2...`.
+Board (`/lib/firmware/vtahw_multi2_y219.bin`), EVTA 0 and 1 each: `sramscan` wgt / wgt invert / inp / inp invert
+0 bytes wrong (sramscan now runs ACC_DEPTH/16 weight entries per GEMM; with 256 the multi acc buffer of 2048
+rows overflowed and every byte read back wrong), `gemmprobe` 4/4, `donerace` 16/16; `multi_gemm_gemm_2evta_m`
+Golden Matched on both EVTAs; `hw_multievtax2/run_all.sh`: MultiEVTAx2ConvTest PASS (2 x 10000 runs 4405 ms),
+multievtax2Resnet18Bundle 2 x 100 runs all 281 (15179 ms), multievtax2SingleResnet18Bundle 100 runs 281 (13624 ms).
+
+**Next:** multi4 needs 572 RAMB36, only 379 are below the row, and the PS nets to EVTA 2/3 must cross it. Vivado
+cannot block routing in one row: RapidWright (block the Y219 nodes, reroute), smaller buffers, or another board.
