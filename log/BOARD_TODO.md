@@ -289,3 +289,12 @@ Board: `sramscan` wgt / wgt invert / inp / inp invert 0 bytes wrong; `gemmprobe`
 **Next:** done race #1 in the driver (`pynq_driver.cc`), then real bundles (Conv3Test, ResNet18) with
 `vtalib-zcu102-single`; brambist v2 on the board; the same four changes in multi2/multi4 and the `_prof` builds
 (multi4 needs 556 BRAMs, only ~390 below Y36 -> depends on brambist v2).
+
+**Done race in the driver fixed (2026-10-23).** `Run()` in `pynq_driver.cc` (vta/vtalib and the three
+vtalib-zcu102-* copies) broke on `done_o == 1`, but done_o still holds the previous run's FINISH until compute's
+first instruction has passed its dependence pops. It now clears `done_o_ap_vld` (compute 0x1c, clear on read)
+before the start and accepts done only after vld has been seen. New `hwtest/donerace.cpp` (first compute
+instruction waits for a 512 KB weight load): old driver 13 of 16 iterations wrong, returning after 0.022 ms with
+the output not written; new driver 16/16 OK at 0.105 ms (512 KB at 5.0 GB/s). `dump_regs.py` no longer reads
+compute 0x1c (reading it during a run would clear vld). Every earlier board run used the old driver: results of
+runs whose first compute instruction waits on a long load (conv bundles) are suspect.

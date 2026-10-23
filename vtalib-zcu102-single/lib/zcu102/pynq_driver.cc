@@ -311,6 +311,9 @@ class VTADevice {
     }
     
 
+    //#### JO added (2026-10-23): clear done_o_ap_vld (clear on read) before the start; see the done poll below
+    VTAReadMappedReg(vta_compute_handle_, VTA_COMPUTE_DONE_RD_OFFSET + 4);
+
     // VTA start
     VTAWriteMappedReg(vta_fetch_handle_, 0x0, VTA_START);
     VTAWriteMappedReg(vta_load_handle_, 0x0, VTA_AUTORESTART);
@@ -321,10 +324,29 @@ class VTADevice {
 
     gettimeofday(&start_time, nullptr);
     // Loop until the VTA is done
+    //#### JO changed (2026-10-23): done race. compute's done_o register (0x18) keeps the 1 of the previous
+    //#### run's FINISH: compute (vta.cc) pops the instruction, then blocks on the l2g/s2g dependence pops, and
+    //#### only then writes done = 0. So right after the start done_o still reads 1 while compute waits for
+    //#### load (e.g. the first GEMM of a conv waits for the weights), and the old loop returned before the
+    //#### run had finished (the original upstream loop breaks on the first read; `t > 10` only delayed it a
+    //#### few reads). HLS keeps done_o_ap_vld (0x1c, clear on read, cleared before the start above), set by
+    //#### every write of done: once it has been seen, done_o holds a value of this run, and 1 can only come
+    //#### from this run's FINISH.
+    //unsigned t, flag = 0;
+    //for (t = 0; t < wait_cycles; ++t) {
+    //  flag = VTAReadMappedReg(vta_compute_handle_, VTA_COMPUTE_DONE_RD_OFFSET);
+    //  if (t > 10 && flag == VTA_DONE) break;
+    //  std::this_thread::yield();
+    //}
     unsigned t, flag = 0;
+    bool written = false;
     for (t = 0; t < wait_cycles; ++t) {
-      flag = VTAReadMappedReg(vta_compute_handle_, VTA_COMPUTE_DONE_RD_OFFSET);
-      if (t > 10 && flag == VTA_DONE) break;
+      if (!written)
+        written = VTAReadMappedReg(vta_compute_handle_, VTA_COMPUTE_DONE_RD_OFFSET + 4) & 1;
+      if (written) {
+        flag = VTAReadMappedReg(vta_compute_handle_, VTA_COMPUTE_DONE_RD_OFFSET);
+        if (flag == VTA_DONE) break;
+      }
       std::this_thread::yield();
     }
     gettimeofday(&stop_time, nullptr);

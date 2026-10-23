@@ -27,6 +27,11 @@ for name, base in BLOCKS:
     print(f'--- {name} @ {base:#x}  ctrl={ctrl:#x} [{flags}]')
     row = []
     for off in range(0x04, 0x80, 4):
+        #### JO added (2026-10-23): compute 0x1c (done_o_ap_vld) is clear on read and the driver waits for it
+        #### (done race fix in pynq_driver.cc): reading it during a run could make the run wait forever
+        if name.endswith('compute') and off == 0x1c:
+            row.append(f'{off:#04x}=(skipped)')
+            continue
         v = m.read(off)
         row.append(f'{off:#04x}={v:#010x}')
         if len(row) == 4:
