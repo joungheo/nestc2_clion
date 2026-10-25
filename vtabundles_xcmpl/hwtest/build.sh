@@ -7,6 +7,7 @@
 # usage: [VTA_COHERENT=false] [SUFFIX=_nc] ./build.sh [test ...]   (default: add_test gemm)
 #### JO added: other bitstreams / EVTAs (2026-10-17)
 #   BUFF="15 18 17"   log2 INP/WGT/ACC buffer sizes (default "16 19 18"; 2-EVTA bitstream: "15 18 17")
+#   UOP=15            log2 UOP buffer size (default 16)
 #   XFER=8388608      VTA_MAX_XFER (per-handle CMA queues; default 32 MB)
 #   ISA="3 3"         memory_type / alu_opcode bit widths (default from hw_spec.h: 2 2, the 16_16_19_18 bitstream)
 #   OLDRT=<libvta_runtime.a>  link a prebuilt etri/nest-data runtime instead (TVM 0.7 API, via old_api_shim.h)
@@ -35,7 +36,7 @@ JOBS=${JOBS:-2}
 
 DEFS="-DNESTC_USE_VTASIM=0 -DDMLC_USE_FOPEN64=0 -DVTA_TARGET=zcu102 -DVTA_HW_VER=0.0.1
  -DVTA_LOG_INP_WIDTH=3 -DVTA_LOG_WGT_WIDTH=3 -DVTA_LOG_ACC_WIDTH=5 -DVTA_LOG_BATCH=0
- -DVTA_LOG_BLOCK=4 -DVTA_LOG_UOP_BUFF_SIZE=16 -DVTA_LOG_BLOCK_IN=4 -DVTA_LOG_BLOCK_OUT=4
+ -DVTA_LOG_BLOCK=4 -DVTA_LOG_UOP_BUFF_SIZE=${UOP:-16} -DVTA_LOG_BLOCK_IN=4 -DVTA_LOG_BLOCK_OUT=4
  -DVTA_LOG_OUT_WIDTH=3 -DVTA_LOG_OUT_BUFF_SIZE=16 -DVTA_LOG_BUS_WIDTH=7 -DVTA_DEVICE_NUM=4
  -DVTA_IP_REG_MAP_RANGE=0x1000
  -DVTA_FETCH_ADDR=0xA0000000 -DVTA_LOAD_ADDR=0xA0001000 -DVTA_COMPUTE_ADDR=0xA0002000 -DVTA_STORE_ADDR=0xA0003000

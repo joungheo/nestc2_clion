@@ -358,3 +358,42 @@ multievtax2Resnet18Bundle 2 x 100 runs all 281 (15179 ms), multievtax2SingleResn
 
 **Next:** multi4 needs 572 RAMB36, only 379 are below the row, and the PS nets to EVTA 2/3 must cross it. Vivado
 cannot block routing in one row: RapidWright (block the Y219 nodes, reroute), smaller buffers, or another board.
+
+### 2026-10-25 host PC + board: nets that cross row Y219 fail even without a stuck cell; multi4 with small buffers
+
+RapidWright route of multi4 (`vta-hw-zcu102-multi4/hardware/xilinx/scripts/y219route/`, work dir `build/y219/`):
+the stuck cells hit only the INT PIPs that set a bit at one of the 8 stuck offsets (606 of 3778 PIP types, from
+Project U-Ray `segbits_int.db`: `stuckpips.py` -> `stuck_int_pips.txt`; it predicted all 85 extra cells of blk_f).
+Y219RWRoute reroutes the nets that use them (timing-driven with `-Dcrit=0.95`), Vivado finishes; rs_m = rs_h with
+the MMCM at 321.7 MHz (`mmcm_set.tcl`): WNS +0.009, 0 stuck PIPs, stuckchk 0 extra. Board (`bit/evta_multi4_y219_261025/`):
+- EVTA 1 `gemmprobe ident` OK; EVTA 0 hangs; `gemmprobe` on EVTA 2, EVTA 3, and a register write/read on EVTA 3
+  freeze the whole board (no ping; power cycle; three times today). rs_h (333 MHz) the same, so not the clock.
+- JTAG readback of the loaded PL (board hung) = the bitstream except the 193 base cells: configured as written.
+- Register write/read patterns (`regpat.py`, no ap_start): 8 wrong bits, every one on a net that crosses row Y219:
+  compute_0 RDATA[28] reads 1; store_1 RDATA[2,4,9,22,26,30] read 0; fetch_3 bit 14 (its WDATA[14] branch that
+  crosses the row; the same net's branches to EVTA 0/1 below are fine). These nets use Vivado routes (same as the
+  pure-Vivado blk_f), no stuck PIP, setup slack > 1.3 ns, hold > 0.27 ns. Other crossing nets on the same wire
+  types work, so the bad wires cannot be told from their names; 0 errors on nets that stay below the row.
+So the row's defect is more than the stuck configuration cells: nothing may cross it on this board. PS ports
+(S_AXI_HP0-3, M_AXI_HPM0) all sit below it (INT rows <= 138).
+
+multi4 with smaller buffers below the row (uop/inp/wgt/acc 15/15/17/16, fence `y219`) was started and dropped
+when the pass-over wires proved good (below); hwtest `build.sh` keeps a `UOP=` option for such builds.
+
+### 2026-10-25 later: the bad part of row Y219 is its PIPs; multi4 with no PIP in the row works (280 MHz)
+
+Wire test designs (`y219route/WireTest.java`, `WireTestBit.tcl`, `wiretest_run.sh`, `wiretest.py`; at-speed:
+`-Dspeed=1`, `wirespeed_run.sh`, `wirespeed.py`, `hwtest/plclkset.py`; work dir `build/wiretest/`): one net per INT
+node, source and sink SRLs read back over JTAG (no capture on this device; SRL stage k = .ll Ram bit 2k+1). Loaded
+with fpga_manager; run `hwtest/nocpuidle.sh` after boot before any JTAG access (forgetting it froze the board twice).
+- Nodes passing over the row (begin below, end above or the reverse; no PIP in the row): 20207 of 20328 tested,
+  static 0/1 and at 100/300/500/750 MHz: all good (one miss at 750 MHz).
+- Nets that cross on PIPs inside the row that set no stuck cell (`-Dinrow=1`, 300 nets): 28 fail at every
+  frequency. The configuration reads back as written, so some routing muxes of the row are broken although their
+  cells hold the right value. Bits set by the failing PIPs: 22_03, 21_00, 33_15 (every net), 50_03, 59_01, 58_27,
+  57_31, ... (offsets next to the stuck ones). rs_m's compute_0 RDATA[28] (always wrong) used such PIPs.
+multi4 rs_zm (`build/y219/`): blk_f -> Y219RWRoute.java -Dcrit=0.95 without -Dpips (every PIP in the row banned:
+168 nets rerouted) -> route_s.tcl (0 nets with any PIP in the row) -> mmcm_set.tcl MULT 40.25 (280.0 MHz; at 333 MHz
+WNS -0.488): WNS +0.057, WHS -0.002 (1 path), stuckchk 0 extra. Board, EVTA 0-3: regpat all bits right (3 loads),
+gemmprobe 4/4, sramscan wgt/inp (+invert) 0 bytes wrong, donerace 16/16, multi_gemm_gemm_4evta_m Golden Matched.
+**Next:** get closer to 333 MHz (fewer nets across the row: crossbar below, register slices on the crossing nets).
