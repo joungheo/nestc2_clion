@@ -174,7 +174,7 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   2026-10-23/24). `vivado.tcl` on zcu102 fences the design below it by default (`VTA_BRAM_FENCE=y219|upper|none`).
   multi2 fits below it and works (2026-10-24); multi4 needs more BRAM than the rows below, so it crosses the row with
   no PIP inside it (PIPs in the row fail even without a stuck cell; the wires passing over it work): RapidWright flow
-  in `vta-hw-zcu102-multi4/hardware/xilinx/scripts/y219route/README.md`, works at 280 MHz (2026-10-25).
+  in `vta-hw-zcu102-multi4/hardware/xilinx/scripts/y219route/README.md`, works at 333 MHz with register slices before the HP ports and one reset block per EVTA (2026-10-26).
 
 Useful options (full list at the top of [CMakeLists.txt](CMakeLists.txt) and per-backend CMakeLists):
 

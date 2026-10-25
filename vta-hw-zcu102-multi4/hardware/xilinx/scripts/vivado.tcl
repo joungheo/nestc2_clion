@@ -244,8 +244,17 @@ proc add_evta {i} {
     connect_bd_intf_net -intf_net [string map {/ _} $m] [get_bd_intf_pins $m] [get_bd_intf_pins smc_$i/S0${k}_AXI]
     incr k
   }
-  connect_bd_intf_net -intf_net smc_${i}_M00_AXI [get_bd_intf_pins smc_$i/M00_AXI] \
+  #### JO changed (2026-10-25): an AXI register slice (every channel registered) between smc_i and the HP port,
+  #### placed below row Y219 by the split fence: at 333 MHz the paths smc_2/3 (above the row) -> S_AXI_HP2/3 (PS
+  #### pins at Y99-118) missed by up to 0.49 ns once they had to avoid every PIP in the row (y219route/README.md).
+  #### The name hpslice<i> keeps it out of the pb_evta_<i> regexp.
+  set hps [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_register_slice:2.1 hpslice$i ]
+  set_property -dict [ list CONFIG.REG_AW {1} CONFIG.REG_AR {1} CONFIG.REG_W {1} CONFIG.REG_R {1} CONFIG.REG_B {1} ] $hps
+  connect_bd_intf_net -intf_net smc_${i}_M00_AXI [get_bd_intf_pins smc_$i/M00_AXI] [get_bd_intf_pins hpslice$i/S_AXI]
+  connect_bd_intf_net -intf_net hpslice${i}_M_AXI [get_bd_intf_pins hpslice$i/M_AXI] \
     [get_bd_intf_pins processing_system/S_AXI_HP${i}_FPD]
+  connect_bd_net -net evta_clk [get_bd_pins hpslice$i/aclk]
+  connect_bd_net -net evta_rstn [get_bd_pins hpslice$i/aresetn]
 
   # control: crossbar M(4i+0..3) -> fetch/load/compute/store
   set k 0
@@ -255,16 +264,24 @@ proc add_evta {i} {
   }
 
   # clocks / resets of this core
+  #### JO changed (2026-10-26): a reset block per core (proc_sys_reset_<i>, in pb_evta_<i> by its name): with the
+  #### one proc_sys_reset the reset of EVTA 3 crossed row Y219 and missed 333 MHz by 0.2 ns (rs_hp, 97 % route).
+  #### Its inputs (pl_resetn0, the MMCM's locked) are asynchronous and synchronized inside.
+  set rst [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 proc_sys_reset_$i ]
+  connect_bd_net -net processing_system_reset [get_bd_pins proc_sys_reset_$i/ext_reset_in]
+  connect_bd_net -net pll_clk_locked [get_bd_pins proc_sys_reset_$i/dcm_locked]
+  connect_bd_net -net evta_clk [get_bd_pins proc_sys_reset_$i/slowest_sync_clk]
+  connect_bd_net -net evta_rstn_$i [get_bd_pins proc_sys_reset_$i/peripheral_aresetn]
   foreach s [list fetch_$i load_$i compute_$i store_$i] {
     connect_bd_net -net evta_clk [get_bd_pins $s/ap_clk]
-    connect_bd_net -net evta_rstn [get_bd_pins $s/ap_rst_n]
+    connect_bd_net -net evta_rstn_$i [get_bd_pins $s/ap_rst_n]
   }
   foreach q {load_queue gemm_queue store_queue l2g_queue g2l_queue g2s_queue s2g_queue} {
     connect_bd_net -net evta_clk [get_bd_pins ${q}_$i/s_aclk]
-    connect_bd_net -net evta_rstn [get_bd_pins ${q}_$i/s_aresetn]
+    connect_bd_net -net evta_rstn_$i [get_bd_pins ${q}_$i/s_aresetn]
   }
   connect_bd_net -net evta_clk [get_bd_pins smc_$i/aclk] [get_bd_pins processing_system/saxihp${i}_fpd_aclk]
-  connect_bd_net -net evta_rstn [get_bd_pins smc_$i/aresetn]
+  connect_bd_net -net evta_rstn_$i [get_bd_pins smc_$i/aresetn]
 
   # address map: control registers of EVTA i, and the low 2 GB of DDR through HP<i>
   foreach {s base} [list fetch_$i $FETCH_BASE_ADDR load_$i $LOAD_BASE_ADDR \
@@ -383,6 +400,11 @@ if {$bram_fence eq "split" || $bram_fence eq "y219"} {
       puts $f "set_property CONTAIN_ROUTING true \[get_pblocks pb_evta_$i\]"
       puts $f "add_cells_to_pblock \[get_pblocks pb_evta_$i\] \[get_cells -regexp {vta_i/\[a-z_\]+_${i}(_\\d+)?}\]"
     }
+    #### JO added (2026-10-25): the HP register slices below the row, next to the PS ports
+    puts $f "create_pblock pb_hpslice"
+    puts $f "resize_pblock \[get_pblocks pb_hpslice\] -add {$fence_lo}"
+    puts $f "set_property PARENT pb_fence \[get_pblocks pb_hpslice\]"
+    puts $f "add_cells_to_pblock \[get_pblocks pb_hpslice\] \[get_cells {vta_i/hpslice*}\]"
   }
   puts $f {add_cells_to_pblock [get_pblocks pb_fence] [get_cells -filter {NAME !~ vta_i/processing_system && NAME !~ vta_i/pll_clk && PBLOCK == ""} vta_i/*]}
   puts $f {set_property PROHIBIT true [get_sites -regexp {MMCM_X\d+Y[3-6]}]}

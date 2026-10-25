@@ -12,13 +12,12 @@
 |---|---|---|---|
 | single (EVTA 1개, 16/16/19/18) | `vta-hw-zcu102-single` + `vtalib-zcu102-single` | **동작**: 30개 번들 golden PASS. 커밋 `6fa74ee1` | `bit/evta_single_y219_261023/` |
 | multi2 (EVTA 2개, 16/15/18/17) | `vta-hw-zcu102-multi2` + `vtalib-zcu102-multi2` | **동작**: 전 테스트와 Resnet18 x2 PASS. 커밋 `50201ac5` | `bit/evta_multi2_y219_261024/`, `/lib/firmware/vtahw_multi2_y219.bin` |
-| multi4 (EVTA 4개, 16/15/18/17) | `vta-hw-zcu102-multi4` + `vtalib-zcu102-multi4` | **280 MHz로 동작**: Y219 안의 PIP를 하나도 쓰지 않게 재배선(§3.3). hwtest 전부 PASS, 번들 미검증 | `bit/evta_multi4_y219_261025/rs_zm.bin` |
+| multi4 (EVTA 4개, 16/15/18/17) | `vta-hw-zcu102-multi4` + `vtalib-zcu102-multi4` | **333 MHz로 동작** (2026-10-26): Y219 안의 PIP를 하나도 쓰지 않게 재배선, HP 포트 앞 register slice, EVTA별 proc_sys_reset(§3.3). hwtest 전부 PASS, Conv4 4-EVTA 489.6 GOPS. 변경분 미커밋 | `bit/evta_multi4_y219_261026/rs_rst.bin` (309.6 MHz판 `bit/evta_multi4_y219_261025/rs_hpm.bin`) |
 
 남은 일의 순서:
-1. multi4를 333 MHz에 가깝게: 행을 넘는 net 줄이기(xbar를 아래에), 넘는 경로에 register slice
-2. multi4 번들(4-EVTA `BUNDLE_SET`) 보드 검증
-3. `_prof` 빌드(single/multi2/multi4)를 새 fence로 다시 생성
-4. 보드 소유자에게 PL 결함 통보
+1. multi4 333 MHz: EVTA마다 리셋 블록(`proc_sys_reset_<i>`)
+2. `_prof` 빌드(single/multi2/multi4)를 새 fence로 다시 생성
+3. 보드 소유자에게 PL 결함 통보
 
 ## 1. 환경
 
@@ -193,7 +192,7 @@ python3 vtabundles_xcmpl/hwtest/brambist/stuckchk.py <design.bit> \
 | 6 | `hw_spec.h` (vtalib + vta-hw) | 3비트 `memory_type`/`alu_opcode`로 모든 LOAD/STORE 주소가 1비트 어긋남 | 보드 비트스트림은 2비트 | `VTA_MEMOP_ID_BIT_WIDTH 2`, `VTA_ALU_OPCODE_BIT_WIDTH 2` (`//#### JO`). 그 결과 ALU `MUL`(4)과 `MEM_ID_MOVE`(5)는 인코딩할 수 없다(BNN/XP-GEMM 경로 불가) |
 | 7 | vtalib coherent | `VTA_COHERENT_ACCESSES=true`면 보드에서 hang | HP 포트가 non-coherent | `NESTC_EVTA_COHERENT_ACCESSES` 기본 OFF. 번들이 `VTABufferFlush/Invalidate`를 호출(`VTASave.cpp`가 생성) |
 
-### 3.3 multi4: Y219를 넘는 배선 (해결, 280 MHz)
+### 3.3 multi4: Y219를 넘는 배선 (해결, 309.6 MHz)
 
 #### Y219 행과 pblock의 위치
 
@@ -270,6 +269,9 @@ python3 vtabundles_xcmpl/hwtest/brambist/stuckchk.py <design.bit> \
 | wire 검사 설계(정적/속도/행 안 PIP) | 지나가는 wire 정상, 행 안 PIP 5.6% 고장(§3.1) |
 | **Y219 PIP 전부 금지**: `Y219RWRoute.java -Dcrit=0.95`(`-Dpips` 없음) → `flow/route_s.tcl` → rs_z | Y219 PIP net 0, 333 MHz WNS −0.488 |
 | rs_z + `flow/mmcm_set.tcl` MULT 40.25 → **rs_zm (280 MHz)** | WNS +0.057, WHS −0.002(1 path). 보드: EVTA 0-3 regpat, gemmprobe, sramscan, donerace, `multi_gemm_gemm_4evta_m` 모두 PASS |
+| rs_z의 333 MHz 위반은 대부분 smc_2/3(Y221-225) → PS SAXIGP4/5 WDATA. `vivado.tcl`에서 smc와 `S_AXI_HP<i>_FPD` 사이에 `axi_register_slice`(`hpslice<i>`, 전 채널 REG=1)를 넣고 `pb_hpslice`(fence 아래쪽)에 둠 → `flow/run_flow.sh hp`(place_d → Y219RWRoute → route_s) → rs_hp | Y219 PIP net 0, 333 MHz WNS −0.199. 남은 위반은 `proc_sys_reset` → compute_3 리셋 fan-out(지연의 97%가 배선) |
+| rs_hp + `mmcm_set.tcl` MULT 44.5 → **rs_hpm (309.6 MHz)** | WNS +0.019, WHS +0.008. stuckchk: multi2와 같은 194개, 0 extra. 보드: regpat(3회 로드), gemmprobe 4/4, sramscan, donerace 16/16(EVTA 0-3), `multi_gemm_gemm_4evta_m` 3회 모두 Golden Matched. 같은 묶음을 두 번 돌려 모두 PASS |
+| + EVTA별 `proc_sys_reset_<i>` (각 EVTA pblock 안) → **rs_rst (333 MHz)** | WNS +0.008, WHS +0.010, Y219 PIP 0. stuckchk 194, 0 extra. 보드: gemmprobe, sramscan, donerace, mg4 3회 PASS. Conv4 EVTA 시간 1.864 ms(124 GOPS/EVTA) |
 
 - 재현 순서는 `vta-hw-zcu102-multi4/hardware/xilinx/scripts/y219route/README.md`에 있다(작업 dir `build/y219`).
 - 버퍼를 줄여 4개를 모두 아래에 넣는 안은 시작했다가 중단했다.
@@ -411,9 +413,29 @@ python3 vtabundles_xcmpl/hwtest/brambist/stuckchk.py <design.bit> \
 4. `hw_spec.h`(두 복사본): ISA 폭(memory_type/alu_opcode 2비트, 256비트 insn).
 5. **`VTABundle.cpp conv_kernel`의 하드코딩 상수**: `ACC_MEM_ENTRY=2048`, `INP_MEM_ENTRY=2048`, `WGT_MEM_ENTRY=1024`(379-381, 783-785, 1193-1195, 1589-1591).
    - 이 값은 multi 깊이다. **single 비트스트림에서도 커널은 버퍼의 절반만 쓴다.**
-   - 버퍼를 multi보다 더 줄이면(§3.3 대안 b) 여기를 반드시 고쳐야 한다. 그렇지 않으면 SRAM 범위를 넘는다.
+   - 버퍼를 multi보다 더 줄이면 여기를 반드시 고쳐야 한다. 그렇지 않으면 SRAM 범위를 넘는다.
+     (2026-10-25: 15/15/17/16 축소안을 준비하면서 2·3번만 맞추고 이곳을 빠뜨렸다. 그 안은 중단했다.)
+   - 할 일(multi4 작업 뒤): `hw_spec.h`의 `VTA_INP_BUFF_DEPTH` / `VTA_WGT_BUFF_DEPTH` / `VTA_ACC_BUFF_DEPTH`로 바꾼다.
+     wgt 깊이 매크로에는 `VTA_BUFFER_NTIMES`가 곱해져 있으니 값을 먼저 확인한다. single에서는 타일이 2배가 되므로
+     single 번들을 다시 검증해야 한다.
 6. `hw_spec.h` `VTA_LOG_OUT_BUFF_SIZE`는 vtalib CMake에 16으로 하드코딩되어 있다(HANDOFF.md 발견 #10).
-7. 컴파일러가 VTA conv를 고르는 조건(`VTASave.cpp:3093`): group==1, 입력 C % 16 == 0, KN % 16 == 0, 모든 offset 0, `scale > 1`이고 2의 거듭제곱 shift ≥ 0, `biasScale == inScale*filterScale`. 하나라도 어기면 CPU(`nonvtaconvolution`)로 간다.
+7. uop 버퍼(`VTA_LOG_UOP_BUFF_SIZE`): vtalib CMake에 16으로 하드코딩, hwtest는 `UOP=`(기본 16).
+8. 컴파일러가 VTA conv를 고르는 조건(`VTASave.cpp:3093`): group==1, 입력 C % 16 == 0, KN % 16 == 0, 모든 offset 0, `scale > 1`이고 2의 거듭제곱 shift ≥ 0, `biasScale == inScale*filterScale`. 하나라도 어기면 CPU(`nonvtaconvolution`)로 간다.
+
+**비트스트림과 런타임 중 어디에 들어가나**
+
+| 항목 | 비트스트림(HLS/Vivado) | 런타임(vtalib, 번들, hwtest) |
+|---|---|---|
+| 1 `vta_config.json` | **여기서 결정**: HLS `-D`, BRAM 뱅크 크기, CONF 이름 | — |
+| 2 vtalib CMake `-DVTA_LOG_*_BUFF_SIZE` | — | 런타임과 번들이 쓰는 `hw_spec.h` 매크로 값 |
+| 3 hwtest `BUFF=` / `UOP=` | — | hwtest 바이너리 |
+| 4 `hw_spec.h` ISA 폭 | **양쪽 모두**(vta-hw 복사본은 HLS, vtalib 복사본은 런타임) | 〃 |
+| 5 `VTABundle.cpp` 상수 | — | 번들의 conv 타일링 |
+
+- 5번을 매크로로 바꾸는 것은 **런타임만의 변경이라 비트스트림을 다시 만들 필요가 없다.** 다만 매크로 값은 2번에서 오므로,
+  2번이 그 비트스트림의 1번과 같아야 한다.
+- 버퍼 크기 자체를 바꿀 때는 1번(비트스트림 재빌드)과 2·3·5번(런타임 재빌드)을 함께 바꾼다.
+- 런타임이 비트스트림의 크기를 확인하는 장치는 없다. 맞지 않으면 SRAM 범위를 넘거나 결과가 틀릴 뿐 오류는 나지 않는다.
 
 ## 6. 유용한 경로 모음
 

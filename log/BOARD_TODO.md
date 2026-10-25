@@ -396,4 +396,29 @@ multi4 rs_zm (`build/y219/`): blk_f -> Y219RWRoute.java -Dcrit=0.95 without -Dpi
 168 nets rerouted) -> route_s.tcl (0 nets with any PIP in the row) -> mmcm_set.tcl MULT 40.25 (280.0 MHz; at 333 MHz
 WNS -0.488): WNS +0.057, WHS -0.002 (1 path), stuckchk 0 extra. Board, EVTA 0-3: regpat all bits right (3 loads),
 gemmprobe 4/4, sramscan wgt/inp (+invert) 0 bytes wrong, donerace 16/16, multi_gemm_gemm_4evta_m Golden Matched.
-**Next:** get closer to 333 MHz (fewer nets across the row: crossbar below, register slices on the crossing nets).
+Then 309.6 MHz: rs_z's 333 MHz failures were mostly smc_2/3 (Y221-225) -> PS SAXIGP4/5 WDATA, so `vivado.tcl` puts
+an axi_register_slice (`hpslice<i>`, all channels REG=1) before each `S_AXI_HP<i>_FPD`, in pblock `pb_hpslice`
+below the row (the fence xdc's `-regexp {vta_i/hpslice\d}` matched nothing: now a glob; place_d.tcl re-adds them).
+`flow/run_flow.sh hp` -> rs_hp: 0 nets with a PIP in the row, WNS -0.199 at 333 MHz (left: proc_sys_reset ->
+compute_3, 97 % route). mmcm_set.tcl MULT 44.5 -> rs_hpm 309.6 MHz: WNS +0.019, WHS +0.008, stuckchk 0 extra over
+multi2. Board (`bit/evta_multi4_y219_261025/rs_hpm.bin`), twice: regpat all bits right (3 loads), gemmprobe 4/4,
+sramscan 0 wrong, donerace 16/16 on EVTA 0-3, multi_gemm_gemm_4evta_m Golden Matched (3 runs).
+Bundles on rs_hpm (2026-10-26, `vtabundles_xcmpl` set `multievtax4`, vtalib-zcu102-multi4, README): MultiEVTAConvTest
+(4 EVTAs x 10000 runs) outputs 0-3 = golden; multivtaMxnetResnet18Bundle (4 copies, 100 inferences shared) and
+singlevtaMxnetResnet18Bundle all 281. Time for 100 inferences, 4 threads / single: OMP_NUM_THREADS=1 11.0 / 43.3 s,
+2: 12.1 / 23.5 s, 4: 14.1 / 13.5 s (CPU-bound; the 4 threads' OpenMP teams oversubscribe the 4 cores).
+Conv4Test (3x3, 56x56x64 -> 64, 231.2 Mops) on 1-4 EVTAs at once (`vtabundles_xcmpl/multi4conv4/`, rs_hpm 309.6 MHz,
+all outputs = golden):
+- EVTA run time (VTA_SYNC, _prof vtalib): 1.909 ms per conv = 121.1 GOPS per EVTA, the same alone and with 4 at
+  once (no HP/DDR contention) -> 484 GOPS for 4. Peak 512 ops/cycle = 158.5 GOPS per EVTA (634 for 4): 76 %.
+  Pure GEMM time = 451584 GEMM / 309.6 MHz = 1.459 ms; the rest is load/store not hidden behind GEMM.
+- conv only (convolution_wo_tr in a loop incl. instruction generation, OMP_NUM_THREADS=1): 114.6 GOPS on 1, 229.0 on
+  2, **457.3 GOPS on 4** (2.02 ms per conv each).
+- whole bundle (CPU transposes + buffer allocation every run): 64 GOPS on 1, 108 on 4 (OMP=4) / 117 (OMP=1): CPU-bound.
+
+2026-10-26: **multi4 at 333 MHz** (rs_rst, `bit/evta_multi4_y219_261026/rs_rst.bin`): one proc_sys_reset per EVTA
+in its pblock (`vivado.tcl` add_evta; the rs_hp failure was the global reset -> compute_3), then `run_flow.sh rst`:
+0 nets with a PIP in row Y219, WNS +0.008, WHS +0.010; stuckchk 194, 0 beyond multi2. Board: gemmprobe 4/4,
+sramscan, donerace 16/16 (EVTA 0-3), `multi_gemm_gemm_4evta_m` 3 runs all Golden Matched. Conv4 (all = golden):
+EVTA time 1.864 ms per conv = 124.0 GOPS per EVTA (309.6 MHz: 1.909 ms; only 2.4 % faster for 7.7 % more clock:
+load/store bound), 496 GOPS for 4; conv only OMP=1 122.6 / 245.1 / **489.6 GOPS** on 1 / 2 / 4 EVTAs.

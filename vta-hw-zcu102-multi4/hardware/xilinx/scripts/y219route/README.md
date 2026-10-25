@@ -21,6 +21,14 @@ multi4 does not fit and crosses the row on pass-over wires only.
 5. `stuckchk.py rs_zm.bit -b <single lowbram bit>`: 0 beyond the base. Board 2026-10-25: all hwtest tests pass on
    EVTA 0-3 (`bit/evta_multi4_y219_261025/rs_zm.bin`).
 
+Since the HP register slices (`hpslice<i>` in `vivado.tcl`, 2026-10-25) steps 1-4 are `flow/run_flow.sh <tag>` (run in
+`build/y219`; step 2 is skipped, Y219RWRoute starts from routed_<tag>): rs_hp, WNS -0.199 at 333 MHz (left: the
+reset fan-out to compute_3), then `flow/mmcm_set.tcl -tclargs rs_hp.dcp rs_hpm 44.5` (309.6 MHz, WNS +0.019).
+stuckchk `-b` the multi2 bit: 0 extra. Board: all hwtest tests and multi_gemm_gemm_4evta_m pass (`rs_hpm.bin`).
+With one `proc_sys_reset_<i>` per EVTA inside its pblock (2026-10-26), `run_flow.sh rst` meets 333 MHz with no
+MMCM change: rs_rst, WNS +0.008, WHS +0.010, stuckchk 0 extra, all board tests pass
+(`bit/evta_multi4_y219_261026/rs_rst.bin` = `/lib/firmware/vtahw_multi4_y219.bin`).
+
 ## Tools
 - `Y219RWRoute.java` reroute the nets with a PIP in the row (`-Dpips=stuck_int_pips.txt`: only stuck-cell PIPs,
   not enough on this board); `stuckpips.py` makes that list from Project U-Ray `segbits_int.db`.
