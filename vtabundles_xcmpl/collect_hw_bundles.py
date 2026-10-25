@@ -12,7 +12,7 @@ Compiling is done by CMake in this directory (CMakeLists.txt; vtalib is built on
 Output: hw/<Dir>/ data + sources, and hw/run_all.sh (sudo) which reloads the bitstream,
 runs each bundle and compares with the golden where the CMake test does (USE_DIFF).
 
-usage: ./collect_hw_bundles.py [--set multievtax2] [Dir ...]
+usage: ./collect_hw_bundles.py [--set multievtax2|multievtax4] [Dir ...]
 
 #### JO added: --set picks a bundle set (source dir, hw dir, bitstream). The default "single" is vta/bundles ->
 #### hw/ for zcu102_1x16_*_16_16_19_18 (one executable per Dir). "multievtax2" is vta/multievtax2_bundles ->
@@ -32,6 +32,8 @@ R = os.path.dirname(HERE)
 SETS = {  # name: (bundle dir under the NEST-C root, hw dir here, bitstream in /lib/firmware, all test executables)
     'single': ('vta/bundles', 'hw', 'zcu102_1x16_i8w8a32_16_16_19_18.bin', False),
     'multievtax2': ('vta/multievtax2_bundles', 'hw_multievtax2', 'zcu102_2_1x16_i8w8a32_16_15_18_17.bin', True),
+    #### JO added: 4 EVTAs (vta-hw-zcu102-multi4 on the lab board: the Y219 build, /lib/firmware/vtahw_multi4_y219.bin)
+    'multievtax4': ('vta/multievta_bundles', 'hw_multievtax4', 'vtahw_multi4_y219.bin', True),
 }
 SET = 'single'
 if sys.argv[1:2] == ['--set']:

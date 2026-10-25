@@ -34,6 +34,7 @@ Bundle sources are generated in the simulator build, then compiled for the board
 |---|---|---|---|---|
 | `single` (default) | `zcu102_1x16_i8w8a32_16_16_19_18.bin` | `vta/bundles` | `hw/` | `build*/` |
 | `multievtax2` | `zcu102_2_1x16_i8w8a32_16_15_18_17.bin` | `vta/multievtax2_bundles` | `hw_multievtax2/` | `build_multievtax2/` |
+| `multievtax4` | `vtahw_multi4_y219.bin` (vta-hw-zcu102-multi4, Y219 build `rs_rst`, 333 MHz) | `vta/multievta_bundles` | `hw_multievtax4/` | `build_multievtax4/` |
 
 - Generate (simulator build, configured once with `-DNESTC_EVTA_MULTI_BUNDLES=ON`):
   `Debug2_remote/build_sim_bundles.sh multievtax2ConvTestBundle multievtax2SingleResnet18Bundle multievtax2Resnet18Bundle`
@@ -43,6 +44,19 @@ Bundle sources are generated in the simulator build, then compiled for the board
   (vtalib with `NESTC_EVTA_MULTI=ON` -> buffers 16/15/18/17, and `VTA_MAX_XFER` 8 MB so two command handles fit in
   the 128 MB CMA).
 - Bitstream: `hwtest/bit2bin.py <x>.bit` then `sudo cp <x>.bin /lib/firmware/`.
+- `multievtax4` (2026-10-26) uses the upstream 4-EVTA sources. They were generated without a cmake re-run of
+  Debug2_remote (that rebuilds all of Glow): the ConvTest bundles 0-3 are the ones VTASaverTest wrote into
+  `vta/multievtax2_bundles/MultiEVTAx2ConvTest`, Resnet18 copies 0/1 those of `MultiEVTAx2Resnet18Test`, and copies
+  2/3 come from `Debug2_remote/glow/bin/model-compiler` with the flags of `MultiEVTAResnet18Test/CMakeLists.txt`
+  (`-index-multi-evta=4/8 -network-name=mxnet_exported_resnet18_2/_3`), all copied into
+  `Debug2_remote/vta/multievta_bundles/<Dir>`. Build: `cmake -DBUNDLE_SET=multievtax4
+  -DVTALIB=<root>/vtalib-zcu102-multi4 ..` (`VTA_MAX_XFER` 4 MB for four handles). `run_all.sh` compares only
+  ConvTest output 0; outputs 1-3 are `multievtaConvTestOutput<i>.bin` vs `multievtaConvTestGolden<i>.bin`.
+  Resnet18 is CPU-bound: `multivtaMxnetResnet18Bundle` (4 threads share 100 inferences) is fastest with
+  `OMP_NUM_THREADS=1` (11.0 s vs 14.1 s with 4; single EVTA 13.5 s with 4).
+- `multi4conv4/make_multi4conv4.py hw/Conv4Test hw_multievtax4/MultiEVTAConv4Test` makes Conv4Test copies for
+  EVTA 0-3 (renamed from the EVTA0 bundle) and a `_convonly` entry; `multi4conv4Bundle <mask> [iters] [conv]` runs
+  them at once and prints the wall time and GOPS (target in the `multievtax4` build dirs; results in BOARD_TODO).
 - Each bundle is pinned to one EVTA at code generation (`-index-multi-evta` mask 1/2/4/8 -> EVTA 0..3,
   `VTASave.cpp` ~line 4958); a multi-EVTA executable runs one bundle per thread.
 - The conv tile schedules (`include/Backends/VTA/VTASchedules.h`) were tuned for the single-EVTA buffers;

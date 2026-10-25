@@ -38,8 +38,9 @@ set(NESTC_EVTA_COHERENT_ACCESSES OFF CACHE BOOL "board/bitstream is not cache-co
 #### JO added: bundle set = which bitstream the build targets.
 ####   single      (default) hw/            zcu102_1x16_i8w8a32_16_16_19_18: vtalib buffers 16/19/18
 ####   multievtax2           hw_multievtax2/ zcu102_2_1x16_i8w8a32_16_15_18_17: NESTC_EVTA_MULTI -> buffers 15/18/17
+####   multievtax4           hw_multievtax4/ vta-hw-zcu102-multi4 (4 EVTAs, same buffers; -DVTALIB=.../vtalib-zcu102-multi4)
 #### Use one build dir per set, e.g. mkdir build_multievtax2 && cd build_multievtax2 && cmake -DBUNDLE_SET=multievtax2 ..
-set(BUNDLE_SET single CACHE STRING "bundle set: single or multievtax2")
+set(BUNDLE_SET single CACHE STRING "bundle set: single, multievtax2 or multievtax4")
 if(BUNDLE_SET STREQUAL "single")
   set(NESTC_EVTA_MULTI OFF CACHE BOOL "" FORCE)
 elseif(BUNDLE_SET STREQUAL "multievtax2")
@@ -49,6 +50,10 @@ elseif(BUNDLE_SET STREQUAL "multievtax2")
   # of CMA, so two handles would take all of it. 8 MB queues: 2 x 16 MB + 2 Resnet18 copies (~13 MB weights
   # each) fit. A full instruction queue auto-syncs, so smaller queues only mean more frequent syncs.
   add_definitions(-DVTA_MAX_XFER=8388608)
+elseif(BUNDLE_SET STREQUAL "multievtax4")
+  set(NESTC_EVTA_MULTI ON CACHE BOOL "" FORCE)
+  # four command handles: 4 MB queues -> 4 x 8 MB of CMA, and four Resnet18 copies
+  add_definitions(-DVTA_MAX_XFER=4194304)
 else()
   message(FATAL_ERROR "unknown BUNDLE_SET ${BUNDLE_SET}")
 endif()
@@ -143,6 +148,19 @@ add_bundle_if_present(MultiEVTAx2Resnet18Test multievtax2SingleResnet18Bundle si
   mxnet_exported_resnet18.cpp)
 add_bundle_if_present(MultiEVTAx2Resnet18Test multievtax2Resnet18Bundle multi_threads_main.cpp
   mxnet_exported_resnet18.cpp mxnet_exported_resnet18_1.cpp)
+#### JO added: 4-EVTA bundles (vta/multievta_bundles, the upstream set); only present in hw_multievtax4/
+add_bundle_if_present(MultiEVTAConvTest multievtaConvTestBundle multievtaConvTestBundleMain.cpp
+  multievtaConvTestBundle0.cpp multievtaConvTestBundle1.cpp multievtaConvTestBundle2.cpp multievtaConvTestBundle3.cpp)
+add_bundle_if_present(MultiEVTAResnet18Test singlevtaMxnetResnet18Bundle single_thread_main.cpp
+  mxnet_exported_resnet18.cpp)
+add_bundle_if_present(MultiEVTAResnet18Test multivtaMxnetResnet18Bundle multi_threads_main.cpp
+  mxnet_exported_resnet18.cpp mxnet_exported_resnet18_1.cpp mxnet_exported_resnet18_2.cpp mxnet_exported_resnet18_3.cpp)
+#### JO added: Conv4Test on 1-4 EVTAs at once (multi4conv4/make_multi4conv4.py writes hw_multievtax4/MultiEVTAConv4Test)
+add_bundle_if_present(MultiEVTAConv4Test multi4conv4Bundle multi4conv4Main.cpp
+  vtaConv4TestBundle0.cpp vtaConv4TestBundle1.cpp vtaConv4TestBundle2.cpp vtaConv4TestBundle3.cpp)
+if(TARGET multi4conv4Bundle)
+  target_link_libraries(multi4conv4Bundle pthread)
+endif()
 # p*.cpp are VTA partition bundles, p*.o partitions the CPU (LLVM) backend emitted as objects
 #### JO changed: p0 is a VTA partition now (nest-compiler NESTOptimalFusedPlan_p0VTA.yaml) -> p0.cpp
 #add_bundle_if_present(Resnet18PartitionTest vtaMxnetResnet18PartitionBundle main.cpp
