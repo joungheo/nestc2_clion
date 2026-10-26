@@ -450,8 +450,15 @@ PRAGMA_HLS(HLS INTERFACE s_axilite port = done bundle = CONTROL_BUS offset = VTA
 #pragma HLS INTERFACE bram port = wgt_mem
 #pragma HLS INTERFACE bram port = out_mem
 #pragma HLS INTERFACE s_axilite port = return bundle = CONTROL_BUS
+//#### JO changed (2026-10-27, systolic Phase A): with VTA_MEM_OREG the inp/wgt BRAMs register port B
+//#### (vivado.tcl), so compute reads them with latency 2
+#ifdef VTA_MEM_OREG
+#pragma HLS RESOURCE variable = inp_mem core = RAM_1P latency = 2
+#pragma HLS RESOURCE variable = wgt_mem core = RAM_1P latency = 2
+#else
 #pragma HLS RESOURCE variable = inp_mem core = RAM_1P
 #pragma HLS RESOURCE variable = wgt_mem core = RAM_1P
+#endif
 #pragma HLS RESOURCE variable = out_mem core = RAM_1P
 
   // Micro-op storage

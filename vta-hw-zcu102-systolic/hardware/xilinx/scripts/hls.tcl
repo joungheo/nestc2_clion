@@ -47,6 +47,10 @@ set cflags $CFLAGS
 if {$profile} {
     append cflags " -DVTA_HW_PROFILE"
 }
+#### JO added (2026-10-27, systolic Phase A): Makefile MEM_OREG=1 -> inp/wgt read latency 2 in compute
+if {[info exists ::env(VTA_MEM_OREG)] && $::env(VTA_MEM_OREG) eq "1"} {
+    append cflags " -DVTA_MEM_OREG"
+}
 
 # Get the VTA configuration paramters
 set ::device $FPGA_DEVICE

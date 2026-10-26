@@ -45,8 +45,17 @@ CONF := $(shell $(PYTHON) ${VTA_CONFIG} --cfg-str)
 #### JO changed: _prof suffix with PROFILE=1
 #IP_BUILD_PATH := $(BUILD_DIR)/hls/$(CONF)
 #HW_BUILD_PATH := $(BUILD_DIR)/vivado/$(CONF)
-BUILD_NAME := $(CONF)$(if $(filter 1,$(PROFILE)),_prof)
-IP_BUILD_PATH := $(BUILD_DIR)/hls/$(BUILD_NAME)
+#### JO changed (2026-10-27, systolic Phase A): MEM_OREG=1 registers compute's inp/wgt BRAM reads
+#### (HLS latency 2, _oreg IP dir), FREQ=<MHz> overrides the PLL (_<FREQ>mhz vivado dir, same IP)
+#BUILD_NAME := $(CONF)$(if $(filter 1,$(PROFILE)),_prof)
+#IP_BUILD_PATH := $(BUILD_DIR)/hls/$(BUILD_NAME)
+MEM_OREG ?= 0
+FREQ ?=
+IP_NAME := $(CONF)$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(MEM_OREG)),_oreg)
+BUILD_NAME := $(IP_NAME)$(if $(FREQ),_$(FREQ)mhz)
+IP_BUILD_PATH := $(BUILD_DIR)/hls/$(IP_NAME)
+export VTA_MEM_OREG := $(MEM_OREG)
+export VTA_FREQ := $(FREQ)
 HW_BUILD_PATH := $(BUILD_DIR)/vivado/$(BUILD_NAME)
 
 # Config files

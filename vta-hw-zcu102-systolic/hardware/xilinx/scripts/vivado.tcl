@@ -49,6 +49,13 @@ set target            $TARGET
 set device            $FPGA_DEVICE
 set device_family     $FPGA_FAMILY
 set clock_freq        $FPGA_FREQ
+#### JO added (2026-10-27, systolic Phase A): Makefile FREQ=<MHz> overrides the PLL frequency,
+#### MEM_OREG=1 registers port B (compute's read port) of inp_mem/wgt_mem
+if {[info exists ::env(VTA_FREQ)] && $::env(VTA_FREQ) ne ""} {
+  set clock_freq $::env(VTA_FREQ)
+}
+set mem_oreg [expr {[info exists ::env(VTA_MEM_OREG)] && $::env(VTA_MEM_OREG) eq "1"}]
+puts "PLL $clock_freq MHz, inp/wgt port B output register $mem_oreg"
 set board             $FPGA_BOARD
 set board_rev         $FPGA_BOARD_REV
 
@@ -128,7 +135,9 @@ proc init_fifo_property {fifo width_bytes depth} {
 }
 
 # Procedure to initialize BRAM
-proc init_bram_property {bram width depth} {
+#### JO changed (2026-10-27): regb = Register_PortB_Output_of_Memory_Primitives
+#proc init_bram_property {bram width depth} {
+proc init_bram_property {bram width depth {regb false}} {
   set_property -dict [ list \
     CONFIG.use_bram_block {Stand_Alone} \
     CONFIG.Assume_Synchronous_Clk {true} \
@@ -139,7 +148,7 @@ proc init_bram_property {bram width depth} {
     CONFIG.Read_Width_A $width \
     CONFIG.Read_Width_B $width \
     CONFIG.Register_PortA_Output_of_Memory_Primitives {false} \
-    CONFIG.Register_PortB_Output_of_Memory_Primitives {false} \
+    CONFIG.Register_PortB_Output_of_Memory_Primitives $regb \
     CONFIG.Use_Byte_Write_Enable {true} \
     CONFIG.Use_RSTA_Pin {true} \
     CONFIG.Use_RSTB_Pin {true} \
@@ -238,7 +247,7 @@ foreach dep_queue $dep_queue_list {
 for {set i 0} {$i < $inp_part} {incr i} {
   # Create instance: inp_mem, and set properties
   set inp_mem [ create_bd_cell -type ip -vlnv xilinx.com:ip:blk_mem_gen:8.4 inp_mem_${i} ]
-  [ init_bram_property $inp_mem $inp_mem_width $inp_mem_depth ]
+  [ init_bram_property $inp_mem $inp_mem_width $inp_mem_depth [expr {$mem_oreg ? "true" : "false"}] ]
   # If module has more than 1 mem port, the naming convention changes
   if {$inp_part > 1} {
     set porta [get_bd_intf_pins load_0/inp_mem_${i}_V_PORTA]
@@ -260,7 +269,7 @@ for {set i 0} {$i < $inp_part} {incr i} {
 for {set i 0} {$i < $wgt_part} {incr i} {
   # Create instance: wgt_mem, and set properties
   set wgt_mem [ create_bd_cell -type ip -vlnv xilinx.com:ip:blk_mem_gen:8.4 wgt_mem_${i} ]
-  [ init_bram_property $wgt_mem $wgt_mem_width $wgt_mem_depth ]
+  [ init_bram_property $wgt_mem $wgt_mem_width $wgt_mem_depth [expr {$mem_oreg ? "true" : "false"}] ]
   # If module has more than 1 mem port, the naming convention changes
   if {$wgt_part > 1} {
     set porta [get_bd_intf_pins load_0/wgt_mem_${i}_V_PORTA]
