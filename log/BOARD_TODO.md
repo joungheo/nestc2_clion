@@ -447,3 +447,12 @@ multi2 sets). conv only, OMP_NUM_THREADS=1, 400 runs, all = golden, rs_rst 333 M
 - Without OMP_NUM_THREADS=1 (OpenMP teams of 4 threads on 4 cores) the same runs gave ResConv10 558-579 and Conv4
   412-476 on 4: CPU-side instruction generation, not the EVTAs. End-to-end (CPU transposes every run, OMP default):
   ResConv10 296.6 GOPS on 4, Conv4 111.3.
+
+2026-10-26: VTA_SYNC of the 609.7 GOPS run (`build_multievtax4_prof`, `multi4resconv10Bundle_prof <mask> 400 conv`,
+OMP_NUM_THREADS=1, 609.17 GOPS with profiling): EVTA time per conv 1.4473 ms alone (min 1.446, max 1.449) and 1.4491 ms
+with 4 at once (1.447-1.453): +0.12 %, no HP/DDR contention at 1.66 GB/s per EVTA (2.36 MB weights + 50 KB in/out per
+conv). Gap between two runs on one EVTA (CPU: instruction generation, start, done) 66-67 us = 4.4 % of 1.516 ms.
+Over the 606.4 ms all 4 EVTAs run 82.8 % of the time, 3 for 16.7 %, 2 for 0.4 % (mean 3.82); first starts within 160 us.
+GEMM bound 451584 / 333.3 MHz = 1.3548 ms -> 93.5 % GEMM utilization (Conv4: 73 %, 7 tiles of 8x56 with 4 input
+channel blocks each vs ResConv10's one 7x7 tile with 32). Single bitstream: ResConv10 EVTA time also 1.449 ms (the
+conv_kernel constants are the multi depths). Report: `docs/evta_multi4_609gops_report.md`.

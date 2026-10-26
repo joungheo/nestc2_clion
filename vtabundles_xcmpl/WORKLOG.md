@@ -101,3 +101,11 @@ PC docker `vivado2020-build`, Vivado `/tools/Xilinx/v2020.1`. `vtahw_zcu102_1x16
 - 2026-10-02 커밋에 이미 들어간 것: `lib/Backends/VTA`, `cmake/glow/CMakeLists.txt`, vtalib `CMakeLists.txt`·simulator 쪽 등
   (보드 최초 이식). 2026-10-19 커밋: vtalib 6개(§2, §6 hw_spec, profiling/flush), nest-compiler 71개(§1, §4~§7).
 - push: `git -C vta/vtalib push` → `git push` (HTTPS, 사용자 이름 joungheo + 토큰. 토큰은 저장하지 않음).
+
+## 10. 이후 (2026-10-20 ~ 2026-10-26)
+
+비트스트림 합성·보드 디버깅(Y219 결함, multi4 재배선)은 `docs/vta_synth_notes.md`, 시간순 기록은 `log/BOARD_TODO.md`.
+- 기본 비트스트림: single `vtahw_single_y219.bin`, multi2 `vtahw_multi2_y219.bin`, multi4 `vtahw_multi4_y219.bin`(333 MHz).
+- `--set multievtax4`(EVTA 4개), `build_<set>_prof`/`_timed`, 실행 lock `/tmp/evta_run.lock`.
+- 속도 측정(2026-10-26): ResConv10(7x7x512→512 3x3) conv 반복이 EVTA 1개 152.6 GOPS, 4개 동시 **609.7 GOPS**
+  (`OMP_NUM_THREADS=1`). 보고서 `docs/evta_multi4_609gops_report.md`.

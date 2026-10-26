@@ -175,6 +175,9 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   multi2 fits below it and works (2026-10-24); multi4 needs more BRAM than the rows below, so it crosses the row with
   no PIP inside it (PIPs in the row fail even without a stuck cell; the wires passing over it work): RapidWright flow
   in `vta-hw-zcu102-multi4/hardware/xilinx/scripts/y219route/README.md`, works at 333 MHz with register slices before the HP ports and one reset block per EVTA (2026-10-26).
+- Speed (2026-10-26, `docs/evta_multi4_609gops_report.md`): ResConv10 (3x3, 7x7x512 -> 512) repeated on each EVTA,
+  152.6 GOPS on one, **609.7 GOPS on four at once** (89 % of 4 x 170.7; EVTA time unchanged, no DDR contention).
+  Measure multi-EVTA runs with `OMP_NUM_THREADS=1` (the default OpenMP teams oversubscribe the 4 cores).
 
 Useful options (full list at the top of [CMakeLists.txt](CMakeLists.txt) and per-backend CMakeLists):
 

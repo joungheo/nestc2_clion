@@ -68,6 +68,11 @@ Bundle sources are generated in the simulator build, then compiled for the board
   `multi4resconv10Bundle 15 100` / `3 100`. Measure GOPS with `OMP_NUM_THREADS=1 ./<exe> <mask> 400 conv` (with the
   default OpenMP teams, the 4 threads oversubscribe the 4 cores and the slowest EVTA sets the wall time).
 - git keeps `hw_<set>/run_all.sh`, `run_prof.sh` and `*Src/` dirs; the bundle dirs and run outputs are ignored.
+- Results (2026-10-26, 333 MHz, `OMP_NUM_THREADS=1 ./<exe> <mask> 400 conv`, all = golden): ResConv10 152.6 GOPS on 1
+  EVTA, **609.7 on 4** (multi4), 305.5 on 2 (multi2); Conv4 123.5 / 491.6-493.4 / 247.1. With `build_multievtax4_prof`
+  the VTA_SYNC table shows EVTA time per conv 1.447 ms alone and 1.449 ms with 4 at once (no HP/DDR contention) and a
+  66 us CPU gap between runs. Report with the ResConv10 structure and the command stream:
+  `../docs/evta_multi4_609gops_report.md`.
 - Per VTA run / per statement for the multi sets, as for `hw/`: build dirs `build_<set>_prof`
   (`-DBUNDLE_SET=<set> -DNESTC_EVTA_PROFILE=ON -DBUNDLE_EXE_SUFFIX=_prof`) and `build_<set>_timed`
   (`-DBUNDLE_SET=<set> -DBUNDLE_TIMED=ON -DBUNDLE_EXE_SUFFIX=_timed`), multievtax4 also `-DVTALIB=<root>/vtalib-zcu102-multi4`;

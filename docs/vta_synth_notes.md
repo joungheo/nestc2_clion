@@ -1,9 +1,10 @@
 # vta_synth_notes — EVTA 비트스트림 합성/보드 디버깅 핸드오프
 
-최종 갱신: 2026-10-25. 이 문서는 다음 세션이 바로 이어서 작업할 수 있도록, 명령·경로·함정·코드 위치를 모은 것이다.
+최종 갱신: 2026-10-26. 이 문서는 다음 세션이 바로 이어서 작업할 수 있도록, 명령·경로·함정·코드 위치를 모은 것이다.
 
 - 실험 경위와 상세 근거는 `log/BOARD_TODO.md`(시간순 기록)에 있다.
 - 디버깅 보고서는 https://claude.ai/artifact/4KvtghuqpzV1GKunEyTRdf (Claude Docs)에 있다.
+- 속도 측정 보고서(EVTA 4개 609.7 GOPS, ResConv10 구조와 동작): `docs/evta_multi4_609gops_report.md`. 요약은 §6.
 - 이 문서는 "지금 무엇이 되고, 어떻게 돌리며, 어디가 위험한가"만 다룬다.
 
 ## 0. 현재 상태 한눈에
@@ -12,12 +13,18 @@
 |---|---|---|---|
 | single (EVTA 1개, 16/16/19/18) | `vta-hw-zcu102-single` + `vtalib-zcu102-single` | **동작**: 30개 번들 golden PASS. 커밋 `6fa74ee1` | `bit/evta_single_y219_333MHz_pass_261023/` |
 | multi2 (EVTA 2개, 16/15/18/17) | `vta-hw-zcu102-multi2` + `vtalib-zcu102-multi2` | **동작**: 전 테스트와 Resnet18 x2 PASS. 커밋 `50201ac5` | `bit/evta_multi2_y219_333MHz_pass_261024/`, `/lib/firmware/vtahw_multi2_y219.bin` |
-| multi4 (EVTA 4개, 16/15/18/17) | `vta-hw-zcu102-multi4` + `vtalib-zcu102-multi4` | **333 MHz로 동작** (2026-10-26): Y219 안의 PIP를 하나도 쓰지 않게 재배선, HP 포트 앞 register slice, EVTA별 proc_sys_reset(§3.3). hwtest 전부 PASS, Conv4 4-EVTA 489.6 GOPS. 커밋 `dfec80f7` | `bit/evta_multi4_y219_333MHz_pass_261026/vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta.bin` (309.6 MHz판 `bit/evta_multi4_y219_261025/rs_hpm.bin`) |
+| multi4 (EVTA 4개, 16/15/18/17) | `vta-hw-zcu102-multi4` + `vtalib-zcu102-multi4` | **333 MHz로 동작** (2026-10-26): Y219 안의 PIP를 하나도 쓰지 않게 재배선, HP 포트 앞 register slice, EVTA별 proc_sys_reset(§3.3). hwtest 전부 PASS, 번들 run_all 전부 PASS. **ResConv10 4-EVTA 동시 609.7 GOPS**(§6), Conv4 4-EVTA 491.6 GOPS. 커밋 `dfec80f7` | `bit/evta_multi4_y219_333MHz_pass_261026/vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta.bin` (309.6 MHz판 `bit/evta_multi4_y219_261025/rs_hpm.bin`) |
+
+- 기본 비트스트림(2026-10-26): single `vtahw_single_y219.bin`, multi2 `vtahw_multi2_y219.bin`, multi4 `vtahw_multi4_y219.bin`(= rs_rst).
+  `vtabundles_xcmpl/collect_hw_bundles.py`의 `SETS`와 각 `run_all.sh`의 `BIN=${BIN:-...}` 기본값이다.
+- 비트스트림 dir마다 `README.md`가 있다(보드에만 있고 git에는 없음): 파일, md5, WNS, 소스 커밋, 런타임 설정.
 
 남은 일의 순서:
-1. multi4 333 MHz: EVTA마다 리셋 블록(`proc_sys_reset_<i>`)
-2. `_prof` 빌드(single/multi2/multi4)를 새 fence로 다시 생성
+1. ~~multi4 333 MHz: EVTA마다 리셋 블록(`proc_sys_reset_<i>`)~~ 완료(rs_rst, §3.3)
+2. `_prof` 비트스트림(PROFILE=1: compute 카운터, AXI perf monitor)을 새 fence로 다시 생성. 필요해질 때까지 미룬다
+   (VTA_SYNC의 EVTA 시간은 SW 오버헤드가 약 1%뿐이어서 지금은 그것으로 충분하다, §6.1).
 3. 보드 소유자에게 PL 결함 통보
+4. 성능: conv 사이 CPU 간격(66 µs, 4.4%)을 명령 버퍼 두 개로 숨기기, 실제 네트워크를 EVTA 여러 개에 나누기(§6.5)
 
 ## 1. 환경
 
@@ -144,10 +151,21 @@ python3 vtabundles_xcmpl/hwtest/brambist/stuckchk.py <design.bit> \
   2. `collect_hw_bundles.py`
   3. `build/`에서 `make -j2 hw_bundles`
   4. `sudo hw/run_all.sh`
-  - `hw/run_all.sh`의 `BIN=`은 하드코딩되어 있다. 새 비트스트림 이름으로 바꿔야 한다.
-  - multi2: `cmake -DBUNDLE_SET=multievtax2`, 실행 dir은 `hw_multievtax2/`
+  - `run_all.sh`/`run_prof.sh`는 `BIN=${BIN:-<set 기본값>}`이다. 다른 비트스트림은 `sudo BIN=<x>.bin ./run_all.sh`.
+    `run_prof.sh`는 `run_all.sh`에서 BIN 기본값을 읽고, `/lib/firmware/$BIN`이 없으면 멈춘다(2026-10-26 `a37e3e0b`, §3.4 #3).
+  - 두 스크립트 모두 `/tmp/evta_run.lock`을 `flock -n`으로 잡는다. 다른 EVTA 실행이 있으면 바로 끝난다(§3.4 #4).
+    직접 스크립트를 쓸 때도 `exec 9>/tmp/evta_run.lock; flock -n 9 || exit 1`을 넣는다.
+  - set: `single`(`hw/`, `build*/`), `multievtax2`(`hw_multievtax2/`, `cmake -DBUNDLE_SET=multievtax2`),
+    `multievtax4`(`hw_multievtax4/`, `-DBUNDLE_SET=multievtax4 -DVTALIB=<root>/vtalib-zcu102-multi4`).
+    `_prof`/`_timed` 빌드는 `build_<set>_prof`, `build_<set>_timed`.
   - 새 비트스트림에는 `-DVTALIB=$PWD/../../vtalib-zcu102-<single|multi2|multi4>`로 짝이 맞는 vtalib 복사본을 쓴다.
+    지금은 원본 `vta/vtalib`와 복사본 3개가 주석까지 같다(`config.mk` 제외). 복사본은 런타임 실험용으로 남겨 둔다.
+  - `VTA_MAX_XFER`는 vtalib CMake의 `NESTC_EVTA_MAX_XFER`다(2026-10-26 `e119fac9`, vtalib `f716ed3`).
+    비우면 `NESTC_EVTA_MULTI`일 때 4 MB, 아니면 `driver.h` 기본 32 MB. xcmpl은 multievtax2 8 MB, multievtax4 4 MB를 넘긴다.
   - PROFILE=1 비트스트림에서는 `-DNESTC_EVTA_PROFILE=ON -DNESTC_EVTA_PROFILE_AXI_MONITOR=ON`을 켠다. APM이 없는 비트스트림에서 이것을 켜면 SIGBUS가 난다.
+    `NESTC_EVTA_PROFILE=ON`만 켜면(APM 없음) 일반 비트스트림에서도 VTA_SYNC(EVTA run 시작부터 done까지)가 기록된다.
+  - 생성기가 만드는 multi dir(`MultiEVTAConv4Test`, `MultiEVTAResConv10Test`)은 `hw_multievtax4/MultiEVTAConv4TestSrc/make_multi4conv4.py`가
+    `hw/<Name>Test`에서 만든다. single set을 먼저 collect해야 한다.
 - **보드 위 NEST-C 빌드**(필요할 때만): `Debug2_remote/`에서 `make -j2`. 새 build dir을 만들면 메모리가 부족하다(CLAUDE.md 참고).
 
 ## 3. 찾은 버그, 원인, 해결
@@ -192,7 +210,7 @@ python3 vtabundles_xcmpl/hwtest/brambist/stuckchk.py <design.bit> \
 | 6 | `hw_spec.h` (vtalib + vta-hw) | 3비트 `memory_type`/`alu_opcode`로 모든 LOAD/STORE 주소가 1비트 어긋남 | 보드 비트스트림은 2비트 | `VTA_MEMOP_ID_BIT_WIDTH 2`, `VTA_ALU_OPCODE_BIT_WIDTH 2` (`//#### JO`). 그 결과 ALU `MUL`(4)과 `MEM_ID_MOVE`(5)는 인코딩할 수 없다(BNN/XP-GEMM 경로 불가) |
 | 7 | vtalib coherent | `VTA_COHERENT_ACCESSES=true`면 보드에서 hang | HP 포트가 non-coherent | `NESTC_EVTA_COHERENT_ACCESSES` 기본 OFF. 번들이 `VTABufferFlush/Invalidate`를 호출(`VTASave.cpp`가 생성) |
 
-### 3.3 multi4: Y219를 넘는 배선 (해결, 309.6 MHz)
+### 3.3 multi4: Y219를 넘는 배선 (해결, 309.6 MHz → 333 MHz)
 
 #### Y219 행과 pblock의 위치
 
@@ -277,6 +295,45 @@ python3 vtabundles_xcmpl/hwtest/brambist/stuckchk.py <design.bit> \
 - 버퍼를 줄여 4개를 모두 아래에 넣는 안은 시작했다가 중단했다.
 - 타이밍: 333 MHz에서 배치 단계부터 −0.1 ns 수준이다. DONT_TOUCH를 풀고 다시 배치하는 `build/y219/place_f.tcl`이 준비되어 있다. 300 MHz로 내리려면 `pkg_config.py`의 zcu102 `fpga_freq`/`fpga_per`.
 
+#### 333 MHz까지 간 과정 (rs_hpm → rs_rst, 2026-10-25~26)
+
+1. **rs_z**(Y219 PIP 0개)의 333 MHz 위반은 대부분 위쪽 smartconnect `smc_2/3`(Y221-225)에서 아래쪽 PS `SAXIGP4/5`(HP2/HP3)
+   WDATA로 가는 경로였다. 이 경로는 Y219를 반드시 건너고, 건널 때 행 안에서 방향을 바꿀 수 없어 길게 돈다.
+   - 수정: `vivado.tcl`에서 smc와 `S_AXI_HP<i>_FPD` 사이에 `axi_register_slice`(`hpslice<i>`, 모든 채널 REG=1)를 넣었다.
+   - 이것을 fence 아래쪽 pblock `pb_hpslice`에 두었다. 건너는 구간이 레지스터 사이 한 단계가 된다.
+   - 함정: fence xdc의 `-regexp {vta_i/hpslice\d}`가 아무것도 잡지 못했다. glob으로 바꾸고, `place_d.tcl`이 다시 추가한다.
+   - 결과 **rs_hp**: 333 MHz WNS −0.199.
+2. rs_hp의 남은 위반은 전역 `proc_sys_reset` 하나에서 compute_3(위쪽 맨 끝)으로 가는 리셋 fan-out이었다.
+   지연의 97%가 배선이었다.
+   - 우선 MMCM을 309.6 MHz(MULT 44.5, `flow/mmcm_set.tcl`)로 내린 **rs_hpm**으로 보드를 확인했다(WNS +0.019).
+3. **rs_rst**: `vivado.tcl` `add_evta`가 EVTA마다 `proc_sys_reset_<i>`를 만들고 그 EVTA의 pblock 안에 둔다.
+   - 리셋 net이 Y219를 건너지 않게 됐다.
+   - `flow/run_flow.sh rst`(place_d → Y219RWRoute → route_s) 결과: WNS +0.008, WHS +0.010, Y219 PIP 0, stuckchk 194(0 extra).
+   - 보드: gemmprobe 4/4, sramscan 0 wrong, donerace 16/16(EVTA 0-3), mg4 3회 Golden Matched.
+   - 번들(`hw_multievtax4/run_all.sh`)은 MultiEVTAConvTest와 MultiEVTAConv4Test가 PASS, Resnet18 4 copy와 single이 281.
+     MultiEVTAResConv10Test는 직접 실행(§6)에서 4개 출력 모두 golden이었다(`run_all.sh`로는 아직 안 돌림).
+   - 비트스트림: `bit/evta_multi4_y219_333MHz_pass_261026/`, 커밋 `dfec80f7`.
+   - 309.6 → 333 MHz(+7.7%)로 Conv4 EVTA 시간은 1.909 → 1.864 ms(−2.4%)만 줄었다. load/store가 GEMM 뒤에 숨지 않는 비율이 크기 때문이다.
+     ResConv10은 GEMM 가동률 93.5%라 클럭에 거의 비례한다(§6.2).
+
+### 3.4 2026-10-26: 런타임·번들 흐름에서 찾은 문제 (비트스트림과 별개)
+
+| # | 증상 | 원인 | 수정 |
+|---|---|---|---|
+| 1 | 보드의 `vtalib-zcu102-single/multi2`에 done race 수정(§3.2 #4)이 없었다. 그 전의 일부 결과는 수정 없는 런타임으로 잰 것이다 | PC에서 고치고 push했지만 보드가 pull하지 않았다. 반대 방향으로 파일을 옮겨 맞추다 엇갈렸다 | 보드에서 `git pull --ff-only`. vtalib 서브모듈은 보드에서 init되지 않았으므로 `vta/vtalib` 안에서 pull한다. 바뀐 런타임으로 다시 실험해 single Conv4/ResConv1, multi2/multi4 run_all 모두 PASS, Resnet18 281. 이후 규칙: 보드에서 고치고 보드에서 push, PC는 pull. 복사본을 맞추기 전에는 (1) 보드의 원본과 복사본, (2) 보드와 PC(주석 포함)를 비교해 어느 쪽이 새것인지 먼저 정한다 |
+| 2 | `build_*_timed`에서 cmake 실패: 같은 `mxnet_exported_resnet18.cpp`에 custom command가 두 개 | multi set에서 한 Dir의 실행 파일 두 개(single/multi thread)가 같은 .cpp를 쓰는데, timed 사본 경로가 같았다 | timed 사본 경로를 `timed/<Dir>/<target>/<file>`로 바꿨다. 실행 파일 하나에 timed .cpp가 여러 개면 `timing_<stem>.csv`로 따로 쓴다(`8002aeab`) |
+| 3 | `run_prof.sh`가 비트스트림을 다시 로드하지 않았다(이전 실행의 PL에 그대로 돎) | `run_all.sh`의 `BIN=${BIN:-x.bin}` 줄을 그대로 읽어 `BIN`이 리터럴 `${BIN:-x.bin}`이 됐다. firmware 쓰기가 실패했지만 계속 진행했다 | sed로 기본값만 뽑고, `/lib/firmware/$BIN`이 없으면 멈춘다(`a37e3e0b`) |
+| 4 | 사용자의 `run_prof.sh -s _timed`(multi4)와 내 single `_prof` 실행이 겹쳤다: `Internal error: Oops: 9600014e`(SError), bus error(exit 135), MISMATCH, 중간에 "writing ... to Xilinx ZynqMP FPGA Manager", EVTA별 시간 표가 안 나옴 | 실행마다 PL을 다시 로드하므로, 한 실행이 다른 실행이 쓰는 중인 PL을 바꿔 넣었다 | 혼자 다시 돌려 모두 PASS. `run_all.sh`/`run_prof.sh`가 `/tmp/evta_run.lock`을 잡는다(`68a51f05`). 공유 보드이므로 실행 전 `ps`/`dmesg`도 확인한다 |
+| 5 | `build_multievtax2`에 새 타깃(`multi4conv4Bundle`)이 없음 | `add_bundle_if_present`는 configure할 때 hw dir에 소스가 있어야 타깃을 만든다. collect 전에 configure했다 | collect 뒤 `cmake .` 다시 실행 |
+| 6 | multi set의 `VTA_MAX_XFER`가 xcmpl `CMakeLists.txt`에만 있었다. vtalib만 가져가는 사람은 32 MB 기본값으로 CMA가 모자란다 | — | vtalib CMake 옵션 `NESTC_EVTA_MAX_XFER`(`e119fac9`, vtalib `f716ed3`) |
+| 7 | 4-EVTA conv 측정이 412~579 GOPS로 실행마다 달랐다 | 스레드 4개가 각자 OpenMP 4개(기본값)를 띄워 4코어에 16개가 됐다. conv 사이 CPU 명령어 생성이 늦어지고, 가장 늦은 EVTA가 wall을 정한다 | conv 반복 측정은 `OMP_NUM_THREADS=1`. ResConv10 609.7, Conv4 491.6~493.4로 3회 모두 같다(§6) |
+| 8 | 측정 도중 보드 ssh가 몇 분씩 끊겼다. 보드에서 `git push`가 github.com:22 타임아웃 | 보드 쪽 네트워크(재부팅은 없었음, `uptime -s` 그대로). 인터넷은 되고 22번 포트만 막혔다 | 긴 측정은 `nohup`으로 보드에서 돌리고 결과 파일을 나중에 읽는다. push는 연결이 돌아온 뒤 다시 한다. `pkill -f "git push"`를 ssh 명령 안에서 쓰면 그 ssh 셸 자신도 죽는다 |
+
+- single 기본 비트스트림을 etri `zcu102_1x16_i8w8a32_16_16_19_18.bin`에서 `vtahw_single_y219.bin`으로 바꿨다(`50cdfe85`).
+  - 둘 다 35개 번들이 돌고 golden 30개가 PASS다. stuckchk도 같다(194, 0 extra).
+  - EVTA 시간 비율(etri/Y219)은 큰 conv와 Resnet18 1.01, Resnet50 1.07, ResConv5/8·Vgg16Cifar10·Conv_inception_5b_5x5 1.10~1.21이다.
+    Y219판이 그만큼 빠르다.
+
 ## 4. 빠지기 쉬운 함정
 
 **툴과 버전**
@@ -302,8 +359,8 @@ python3 vtabundles_xcmpl/hwtest/brambist/stuckchk.py <design.bit> \
 **보드와 런타임**
 - `.bin` 이름은 `vtahw_` 접두사를 붙인다. etri 비트스트림(`zcu102_1x16_i8w8a32_16_16_19_18.bin`)과 CONF 문자열이 같아서 덮어쓸 위험이 있다.
 - HP1-3 포트 폭은 비트스트림이 아니라 **부트 이미지**(AFIFM 레지스터)가 정한다. multi에서 0이 나오면 `plclk.py`로 확인한다. 현재 보드는 모두 128비트다.
-- CMA 풀은 128 MB이고 런타임은 핸들당 64 MB를 미리 잡는다.
-  - multi에서는 `VTA_MAX_XFER=8388608`(`XFER=`)로 줄인다.
+- CMA 풀은 128 MB이고 런타임은 핸들당 2 x `VTA_MAX_XFER`(기본 32 MB → 64 MB)를 미리 잡는다.
+  - multi에서는 vtalib CMake `NESTC_EVTA_MAX_XFER`(multi2 8 MB, multi4 4 MB)로 줄인다. hwtest는 `XFER=`.
   - 4-EVTA 테스트를 2-EVTA 비트스트림에서 돌리면 안 된다. EVTA2/3 레지스터가 없다.
 - 레지스터 맵:
   - EVTA i: `0xA0000000 + i*0x10000`. fetch/load/compute/store는 +0x0000/0x1000/0x2000/0x3000.
@@ -437,11 +494,63 @@ python3 vtabundles_xcmpl/hwtest/brambist/stuckchk.py <design.bit> \
 - 버퍼 크기 자체를 바꿀 때는 1번(비트스트림 재빌드)과 2·3·5번(런타임 재빌드)을 함께 바꾼다.
 - 런타임이 비트스트림의 크기를 확인하는 장치는 없다. 맞지 않으면 SRAM 범위를 넘거나 결과가 틀릴 뿐 오류는 나지 않는다.
 
-## 6. 유용한 경로 모음
+## 6. 속도 측정
+
+자세한 내용(ResConv10 구조, 명령 흐름, 측정 프로그램, 원자료)은 `docs/evta_multi4_609gops_report.md`에 있다.
+
+### 6.1 측정 방법 (무엇을 재는가)
+
+| 방법 | 빌드 / 명령 | 재는 것 | 주의 |
+|---|---|---|---|
+| 번들 전체 시간 | `build*/`, `run_all.sh` | 번들 main의 2번째 실행 시간(`CLOCK_MONOTONIC`) | CPU 연산 포함 |
+| VTA_SYNC | `build*_prof/`(`-DNESTC_EVTA_PROFILE=ON -DBUNDLE_EXE_SUFFIX=_prof`), `run_prof.sh` → `prof.log` | `VTASynchronize`마다 EVTA run 시작부터 done까지(`exe_time`)와 타임스탬프, `total_vta_time` | SW 오버헤드 약 1%. PROFILE=1 비트스트림 없이도 됨. compute 카운터 값(`gemm_count` 등)은 PROFILE=1 비트스트림에서만 의미가 있고, 사이클이 아니라 명령에서 센 수다 |
+| 문장별 시간 | `build*_timed/`(`-DBUNDLE_TIMED=ON -DBUNDLE_EXE_SUFFIX=_timed`), `run_prof.sh -s _timed` → `timed.log`, `timing*.csv` | `timed_bundle.py`가 번들 .cpp의 문장마다 시간 측정을 넣는다. conv/FC는 GOPS도 | `convolution_wo_tr` 시간 = CPU 명령어 생성 + EVTA + 완료 대기 |
+| 여러 EVTA 동시 | `hw_multievtax{2,4}/MultiEVTA<Name>Test/multi4<name>Bundle <mask> <iters> [conv]` | barrier로 같이 출발해 마지막 EVTA가 끝날 때까지의 wall, EVTA별 시간, golden 비교 | `conv`는 `convolution_wo_tr`만 반복. **`OMP_NUM_THREADS=1`로 잰다** |
+
+### 6.2 결과 (2026-10-26, 333 MHz, 모두 golden 일치)
+
+| 측정 | EVTA 1개 | 2개 | 4개 |
+|---|---|---|---|
+| ResConv10(7x7x512→512) conv 반복, multi4 | 152.6 GOPS | — | **609.7 GOPS** (3회 609.6~609.7) |
+| ResConv10, multi2 | 152.8 | 305.5 | — |
+| Conv4(56x56x64→64) conv 반복, multi4 | 123.5 | — | 491.6~493.4 |
+| Conv4, multi2 | 123.6 | 247.1 | — |
+| ResConv10 EVTA 시간(VTA_SYNC) | 1.4473 ms | — | 1.4491 ms |
+| ResConv10 번들 그대로 반복(CPU transpose 포함) | — | — | 296.6 GOPS |
+
+- 이론 최대는 EVTA당 256 MAC x 2 x 333.3 MHz = 170.7 GOPS(4개 682.7)다. 609.7은 그 89.3%다.
+- ResConv10 GEMM 451,584회 = 1.3548 ms, EVTA 시간 1.449 ms → GEMM 가동률 93.5%. Conv4는 1.864 ms로 73%다.
+- 4개를 동시에 돌려도 EVTA 시간이 0.12%만 늘었다. EVTA당 1.66 GB/s, 4개 6.65 GB/s를 써도 HP 포트·DDR 경쟁은 없다.
+- conv 사이 CPU 간격은 66 µs(4.4%)다. 측정 구간의 82.8%에서 4개가 모두 돌고 있었다.
+- single `_timed` 전체 순위(보고서 §5.1): 상위는 모두 231.2 Mops 3x3 conv(7x7x512, 14x14x256)로 146~152.5 GOPS,
+  stage1 모양(56x56x64)은 122~124 GOPS. 출력이 tile 하나에 들어가고 입력 채널 반복이 긴 conv가 빠르다.
+
+### 6.3 함정
+
+- 기본 OpenMP 설정(스레드마다 4개)에서는 4-EVTA conv가 558~579(ResConv10), 412~476(Conv4) GOPS로 낮고 실행마다 달랐다.
+- MultiEVTAResnet18의 layer별 GOPS(149)는 동시 값이 아니다. copy 4개의 같은 layer가 최대 120 ms 어긋나 돌았다.
+- 실행마다 비트스트림 재로드, 실행 lock(§2.4). 다른 사람의 실행과 겹치면 SError가 나고 결과도 틀린다(§3.4 #4).
+
+### 6.4 이전 측정과의 관계
+
+- 309.6 MHz rs_hpm: Conv4 EVTA 1.909 ms, conv 반복 457.3 GOPS(4개).
+- 333 MHz rs_rst: Conv4 EVTA 1.864 ms, 489.6~493.4 GOPS(4개).
+- single 비트스트림(16/16/19/18)의 ResConv10 EVTA 시간도 1.449 ms다. 커널 상수(`ACC/INP/WGT_MEM_ENTRY`)가 multi 깊이라
+  타일링이 같다(§5.4 #5).
+
+### 6.5 다음에 할 수 있는 것
+
+- conv 사이 CPU 간격 숨기기: 명령 버퍼를 둘로 나눠 EVTA가 도는 동안 다음 conv의 명령을 만든다. 4개 합계 약 638 GOPS까지 가능.
+- 실제 네트워크에서 EVTA 여러 개 쓰기: layer 안에서 출력 채널을 나누거나(intra-layer split), 여러 입력을 EVTA마다 나눈다.
+  Resnet18 4 copy 동시 실행은 CPU(conv0, transpose)가 병목이다(WORKLOG, README To do).
+
+## 7. 유용한 경로 모음
 
 - 기록:
   - `log/BOARD_TODO.md`: 시간순 결과. 새 결과는 여기에 절을 추가한다.
   - `log/board_20261020/`, `log/host_2026102{1,2}/`: 덤프, ILA csv
+- 속도 측정: `docs/evta_multi4_609gops_report.md`, 측정 프로그램 `vtabundles_xcmpl/hw_multievtax4/MultiEVTAConv4TestSrc/`,
+  결과 `vtabundles_xcmpl/hw*/*/timing*.csv`, `prof.log`, `*_summary.txt`(git 제외)
 - 이전 리뷰 핸드오프: `HANDOFF.md`(vta-hw vs upstream 비교, 발견 사항 #1-#22)
 - 결함 도구: `vtabundles_xcmpl/hwtest/brambist/`(`readback.tcl`, `cfgdiff.py`, `stuckchk.py`, `progrb.tcl`, brambist v1/v2)
 - multi4 작업 dir: `vta-hw-zcu102-multi4/build/y219/`
