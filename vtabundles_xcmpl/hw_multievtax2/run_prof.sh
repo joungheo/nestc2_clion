@@ -21,6 +21,9 @@ HWD=$(basename "$PWD"); BLD=../build${HWD#hw}
 BIN=${BIN:-$(sed -n 's/^BIN=\${BIN:-\(.*\)}$/\1/p; s/^BIN=\([^$].*\)$/\1/p' run_all.sh)}
 [ -f /lib/firmware/$BIN ] || { echo "bitstream /lib/firmware/$BIN not found"; exit 1; }
 [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
+#### JO added (2026-10-26): one EVTA run at a time on the board (the same lock as run_all.sh): each run reloads the
+#### PL, and two runs swap bitstreams under each other (SError, bus errors, mismatches)
+exec 9>/tmp/evta_run.lock; flock -n 9 || { echo "another EVTA run is active (/tmp/evta_run.lock)"; exit 1; }
 SUFFIX=_prof
 [ "${1:-}" = -s ] && { SUFFIX=$2; shift 2; }
 LOG=${SUFFIX#_}.log
@@ -67,7 +70,8 @@ for D in "$@"; do
   t=$(awk '/^==== timing/ {n++} /^run #[0-9]+: total/ {r[n]=$2; ms[n]=$4}
            END {if (n == 1) print "run " r[1] " total " ms[1] " ms";
                 else if (n > 1) {l = ""; for (i = 1; i <= n; i++) {s += ms[i]; l = l (i > 1 ? " / " : "") ms[i]}
-                                 printf "%d timed .cpp, last run: %s ms (sum %.3f; partitions run one after another, multi-EVTA copies at once)\n", n, l, s}}' $D/$LOG)
+                                 printf "%d timed .cpp, last run: %s ms (sum %.3f)\n", n, l, s}}' $D/$LOG)
+  #### JO added: VTA partitions run one after another (sum = the run), multi-EVTA copies at once (max = the run)
   [ -n "$t" ] || t=$(grep -m1 total_time $D/$LOG)
   #### JO changed: executable column, end of the per-line loop
   # printf "%-30s exit=%-3s %-10s %s\n" $D $rc "$res" "$t" >> $SUM

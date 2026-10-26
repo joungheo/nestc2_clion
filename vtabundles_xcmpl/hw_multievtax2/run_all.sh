@@ -4,6 +4,7 @@ set -u
 cd "$(dirname "$0")"
 BIN=${BIN:-vtahw_multi2_y219.bin}
 [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
+exec 9>/tmp/evta_run.lock; flock -n 9 || { echo "another EVTA run is active (/tmp/evta_run.lock)"; exit 1; }
 ONLY="$*"
 : > results.txt
 LOG() { echo $1.log; }  # log name for executable $1
