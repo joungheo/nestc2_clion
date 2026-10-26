@@ -62,6 +62,11 @@ Bundle sources are generated in the simulator build, then compiled for the board
   and adds the run line (`multi4conv4Bundle 15 100` / `3 100`: one thread per EVTA, the same bundle on every EVTA at
   once). `multi4conv4Bundle <mask> [iters] [conv]` prints per-EVTA and wall time and GOPS, writes the lowest EVTA's
   output to `output.bin` (golden check of run_all.sh) and exits 1 if any EVTA's output is wrong. Results in BOARD_TODO.
+- `MultiEVTAResConv10Test` (both multi sets, 2026-10-26): the same generator and main for `hw/ResConv10Test`
+  (3x3, 7x7x512 -> 512, the conv shape with the highest GOPS on one EVTA): `make_multi4conv4.py hw/<Name>Test` takes
+  any single-conv bundle of `hw/` and writes `MultiEVTA<Name>Test` (names and op count in `multiconv.h`); run line
+  `multi4resconv10Bundle 15 100` / `3 100`. Measure GOPS with `OMP_NUM_THREADS=1 ./<exe> <mask> 400 conv` (with the
+  default OpenMP teams, the 4 threads oversubscribe the 4 cores and the slowest EVTA sets the wall time).
 - git keeps `hw_<set>/run_all.sh`, `run_prof.sh` and `*Src/` dirs; the bundle dirs and run outputs are ignored.
 - Per VTA run / per statement for the multi sets, as for `hw/`: build dirs `build_<set>_prof`
   (`-DBUNDLE_SET=<set> -DNESTC_EVTA_PROFILE=ON -DBUNDLE_EXE_SUFFIX=_prof`) and `build_<set>_timed`

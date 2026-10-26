@@ -20,6 +20,7 @@ usage: ./collect_hw_bundles.py [--set multievtax2|multievtax4] [Dir ...]
 #### is copied there. Build those with a build dir configured with -DBUNDLE_SET=multievtax2.
 #### JO added (2026-10-26): EXTRA dirs are not in the NEST-C bundle sets; their generator script makes them here
 #### (MultiEVTAConv4Test from hw/Conv4Test, so collect the single set first) and they get a run line too.
+#### JO added (2026-10-26): MultiEVTAResConv10Test from hw/ResConv10Test (same generator).
 """
 import filecmp, os, re, shlex, shutil, subprocess, sys
 
@@ -43,10 +44,19 @@ SETS = {  # name: (bundle dir under the NEST-C root, hw dir here, bitstream in /
     'multievtax4': ('vta/multievta_bundles', 'hw_multievtax4', 'vtahw_multi4_y219.bin', True),
 }
 #### JO added: per set, dirs made by a script here: (dir, executable, arguments, golden, generator command)
+#### JO changed (2026-10-26): + the hw/ dir the generator copies from (ResConv10Test: the fastest conv shape)
 CONV4_GEN = 'hw_multievtax4/MultiEVTAConv4TestSrc/make_multi4conv4.py'
+# EXTRA = {
+#     'multievtax2': [('MultiEVTAConv4Test', 'multi4conv4Bundle', '3 100', 'vtaConv4TestGolden.bin', CONV4_GEN)],
+#     'multievtax4': [('MultiEVTAConv4Test', 'multi4conv4Bundle', '15 100', 'vtaConv4TestGolden.bin', CONV4_GEN)],
+# }
 EXTRA = {
-    'multievtax2': [('MultiEVTAConv4Test', 'multi4conv4Bundle', '3 100', 'vtaConv4TestGolden.bin', CONV4_GEN)],
-    'multievtax4': [('MultiEVTAConv4Test', 'multi4conv4Bundle', '15 100', 'vtaConv4TestGolden.bin', CONV4_GEN)],
+    'multievtax2': [('MultiEVTAConv4Test', 'multi4conv4Bundle', '3 100', 'vtaConv4TestGolden.bin', CONV4_GEN, 'Conv4Test'),
+                    ('MultiEVTAResConv10Test', 'multi4resconv10Bundle', '3 100', 'vtaResConv10TestGolden.bin', CONV4_GEN,
+                     'ResConv10Test')],
+    'multievtax4': [('MultiEVTAConv4Test', 'multi4conv4Bundle', '15 100', 'vtaConv4TestGolden.bin', CONV4_GEN, 'Conv4Test'),
+                    ('MultiEVTAResConv10Test', 'multi4resconv10Bundle', '15 100', 'vtaResConv10TestGolden.bin', CONV4_GEN,
+                     'ResConv10Test')],
 }
 SET = 'single'
 if sys.argv[1:2] == ['--set']:
@@ -143,8 +153,10 @@ def main():
                 runs.append((d, exe, resolve(params, d) if params else '', resolve(golden, d) if golden else ''))
             print(report[-1], flush=True)
     #### JO added: EXTRA dirs: run the generator, then a run line like the others
-    for d, exe, args, golden, gen in extra:
-        r = subprocess.run([sys.executable, f'{HERE}/{gen}', f'{HERE}/hw/Conv4Test', f'{HW}/{d}'],
+    # for d, exe, args, golden, gen in extra:
+    #     r = subprocess.run([sys.executable, f'{HERE}/{gen}', f'{HERE}/hw/Conv4Test', f'{HW}/{d}'],
+    for d, exe, args, golden, gen, gsrc in extra:
+        r = subprocess.run([sys.executable, f'{HERE}/{gen}', f'{HERE}/hw/{gsrc}', f'{HW}/{d}'],
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
         if r.returncode:
             report.append(f'{d:30s} MISSING (generator {gen} failed: {r.stdout.strip().splitlines()[-1:]})')

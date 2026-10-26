@@ -6,47 +6,70 @@
 # #### JO changed (2026-10-26): lives in hw_multievtax4/MultiEVTAConv4TestSrc (was vtabundles_xcmpl/multi4conv4);
 # collect_hw_bundles.py --set multievtax4 (or multievtax2) runs it and adds the run line to run_all.sh. Also for
 # the 2-EVTA bitstream: the same binary with mask 3 uses EVTA 0-1 only.
-# usage: make_multi4conv4.py [<hw/Conv4Test dir> [<out dir>]]   (default: ../../hw/Conv4Test -> ../MultiEVTAConv4Test)
+# #### JO changed (2026-10-26): any single-conv bundle of hw/ (one convolution_wo_tr), named after the source dir:
+# hw/<Name>Test -> ../MultiEVTA<Name>Test with vta<Name>TestBundle0-3.cpp, e.g. ResConv10Test (3x3, 7x7x512 -> 512,
+# 231 Mops, the fastest layer shape on one EVTA). The shape for the _convonly entry and the op count for the GOPS
+# come from the convolution_wo_tr call; multi4conv4Main.cpp gets the names from multiconv.h written here.
+# usage: make_multi4conv4.py [<hw/<Name>Test dir> [<out dir>]]   (default: ../../hw/Conv4Test -> ../MultiEVTAConv4Test)
 import os, re, shutil, sys
 
 here = os.path.dirname(os.path.abspath(__file__))
 #src, out = sys.argv[1], sys.argv[2]
 src = sys.argv[1] if len(sys.argv) > 1 else os.path.join(here, '..', '..', 'hw', 'Conv4Test')
-out = sys.argv[2] if len(sys.argv) > 2 else os.path.join(here, '..', 'MultiEVTAConv4Test')
+name = os.path.basename(os.path.normpath(src))          # e.g. Conv4Test
+#out = sys.argv[2] if len(sys.argv) > 2 else os.path.join(here, '..', 'MultiEVTAConv4Test')
+out = sys.argv[2] if len(sys.argv) > 2 else os.path.join(here, '..', f'MultiEVTA{name}')
+B, E = f'vta{name}Bundle', f'vta{name}MainEntry'
 os.makedirs(out, exist_ok=True)
-cpp = open(f'{src}/vtaConv4TestBundle.cpp').read()
-hdr = open(f'{src}/vtaConv4TestMainEntry.h').read()
+#cpp = open(f'{src}/vtaConv4TestBundle.cpp').read()
+#hdr = open(f'{src}/vtaConv4TestMainEntry.h').read()
+cpp = open(f'{src}/{B}.cpp').read()
+hdr = open(f'{src}/{E}.h').read()
+# <entry>_convonly(n): the body of <entry>() with convolution_wo_tr run n times: the input transposed once, then
+# n x convolution_wo_tr only (no CPU transposes)
+body = re.search(r'^int %s\(uint8_t \*constantWeight, uint8_t \*mutableWeight, uint8_t \*activations\)\{\n'
+                 r'(.*?)\n  return 0;\n\}' % E, cpp, re.M | re.S).group(1)
+convs = re.findall(r'^  convolution_wo_tr\((.*)\);$', body, re.M)
+assert len(convs) == 1 and 'constantWeight' not in body and 'activations' not in body, f'{B}: not a single-conv bundle'
+# convolution_wo_tr(in, kernel, bias, out, N, H, W, C, KN, KH, KW, pad, stride, relu, bias, shift, out_h, out_w, ...)
+a = [x.strip() for x in convs[0].split(',')]
+N, C, KN, KH, KW, OH, OW = (int(a[k]) for k in (4, 7, 8, 9, 10, 16, 17))
+ops = 2 * N * OH * OW * KN * C * KH * KW
+body = re.sub(r'^(  convolution_wo_tr\(.*\);)$', r'  for (int k = 0; k < n; k++) {\n  \1\n  }', body, flags=re.M)
 for i in range(4):
-    c = cpp.replace('vtaConv4TestBundle', f'vtaConv4TestBundle{i}').replace('vtaConv4TestMainEntry', f'vtaConv4TestMainEntry{i}')
+    #c = cpp.replace('vtaConv4TestBundle', f'vtaConv4TestBundle{i}').replace('vtaConv4TestMainEntry', f'vtaConv4TestMainEntry{i}')
+    c = cpp.replace(B, f'{B}{i}').replace(E, f'{E}{i}')
+    cb = body
     if i:
         c = c.replace('extern VTACommandHandle vtaCmdH;', f'extern VTACommandHandle vtaCmdH{i};')
         c, n = re.subn(r'(convolution_wo_tr\(.*), vtaCmdH, (.*), 0\);', rf'\1, vtaCmdH{i}, \2, {i});', c)
         assert n == 1, n
-    # <entry>_convonly(n): the input transposed once, then n x convolution_wo_tr only (no CPU transposes)
-    conv = re.search(r'^  convolution_wo_tr\(.*\);$', c, re.M).group(0)
+        cb = re.sub(r'(convolution_wo_tr\(.*), vtaCmdH, (.*), 0\);', rf'\1, vtaCmdH{i}, \2, {i});', cb)
     c += f'''
-extern "C" void vtaConv4TestMainEntry{i}_convonly(uint8_t *mutableWeight, int n) {{
-  int8_t* inputP = (int8_t*)mutableWeight + 0;
-  int8_t* outP = (int8_t*)mutableWeight + 200704;
-  int8_t* conv_input_transpose = (int8_t *)VTABufferAlloc(200704);
-  transpose_nhwc2vtaio(inputP, (int8_t* )VTABufferGetVirtAddr(conv_input_transpose), 1, 56, 56, 64);
-  VTABufferFlush(conv_input_transpose, 0, 200704);
-  int8_t* conv_output_bef_transpose = (int8_t *)VTABufferAlloc(200704);
-  for (int k = 0; k < n; k++) {{
-{conv}
-  }}
-  VTABufferInvalidate(conv_output_bef_transpose, 0, 200704);
-  transpose_vtaio2nhwc((int8_t* )VTABufferGetVirtAddr(conv_output_bef_transpose), outP, 1, 56, 56, 64 );
-  VTABufferFree(conv_input_transpose);
-  VTABufferFree(conv_output_bef_transpose);
+extern "C" void {E}{i}_convonly(uint8_t *mutableWeight, int n) {{
+{cb}
 }}
 '''
-    open(f'{out}/vtaConv4TestBundle{i}.cpp', 'w').write(c)
-    h = hdr.replace('VTA_BUNDLE_VTACONV4TESTBUNDLE', f'VTA_BUNDLE_VTACONV4TESTBUNDLE{i}')
-    h = h.replace('vtaConv4TestBundle', f'vtaConv4TestBundle{i}').replace('vtaConv4TestMainEntry', f'vtaConv4TestMainEntry{i}')
-    h = h.replace('#ifdef __cplusplus\n}\n#endif', f'void vtaConv4TestMainEntry{i}_convonly(uint8_t *mutableWeight, int n);\n#ifdef __cplusplus\n}}\n#endif')
-    open(f'{out}/vtaConv4TestMainEntry{i}.h', 'w').write(h)
-for f in ('vtaConv4TestBundle.weights.bin', 'vtaConv4TestInput.bin', 'vtaConv4TestGolden.bin', 'VTARuntime.h'):
+    open(f'{out}/{B}{i}.cpp', 'w').write(c)
+    #h = hdr.replace('VTA_BUNDLE_VTACONV4TESTBUNDLE', f'VTA_BUNDLE_VTACONV4TESTBUNDLE{i}')
+    #h = h.replace('vtaConv4TestBundle', f'vtaConv4TestBundle{i}').replace('vtaConv4TestMainEntry', f'vtaConv4TestMainEntry{i}')
+    h = hdr.replace(f'VTA_BUNDLE_{B.upper()}', f'VTA_BUNDLE_{B.upper()}{i}')
+    h = h.replace(B, f'{B}{i}').replace(E, f'{E}{i}')
+    h = h.replace('#ifdef __cplusplus\n}\n#endif', f'void {E}{i}_convonly(uint8_t *mutableWeight, int n);\n#ifdef __cplusplus\n}}\n#endif')
+    open(f'{out}/{E}{i}.h', 'w').write(h)
+# names and op count for multi4conv4Main.cpp
+short = name[:-4] if name.endswith('Test') else name
+evtas = ',\n'.join(f'    {{&{B}{i}_config, {E}{i}_load_module, {E}{i}, {E}{i}_destroy_module, {E}{i}_convonly, '
+                   f'initVTARuntime{i or ""}, destroyVTARuntime{i or ""}}}' for i in range(4))
+open(f'{out}/multiconv.h', 'w').write(
+    f'// generated by make_multi4conv4.py from {name}: convolution_wo_tr {N}x?x?x{C} -> {OH}x{OW}x{KN}, {KH}x{KW}\n'
+    + ''.join(f'#include "{E}{i}.h"\n' for i in range(4)) +
+    f'#define MC_NAME "{short}"\n'
+    f'#define MC_OPS {ops}.0\n'
+    f'#define MC_WEIGHTS "{B}.weights.bin"\n#define MC_INPUT "vta{name}Input.bin"\n#define MC_GOLDEN "vta{name}Golden.bin"\n'
+    '#define MC_EVTAS {\\\n' + evtas.replace('\n', ' \\\n') + ' \\\n}\n')
+#for f in ('vtaConv4TestBundle.weights.bin', 'vtaConv4TestInput.bin', 'vtaConv4TestGolden.bin', 'VTARuntime.h'):
+for f in (f'{B}.weights.bin', f'vta{name}Input.bin', f'vta{name}Golden.bin', 'VTARuntime.h'):
     shutil.copy(f'{src}/{f}', out)
 shutil.copy(os.path.join(here, 'multi4conv4Main.cpp'), out)
-print('written', out)
+print('written', out, f'({ops} ops per conv)')

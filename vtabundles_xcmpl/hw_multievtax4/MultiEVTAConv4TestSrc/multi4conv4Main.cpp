@@ -8,11 +8,14 @@
 // transposes and buffer allocation per run.
 // #### JO added: the output of the lowest EVTA in the mask is written to output.bin (run_all.sh compares it with
 // vtaConv4TestGolden.bin; the exit code is 1 if any EVTA's output differs from the golden).
+// #### JO changed (2026-10-26): any single-conv bundle: the bundle names, file names and op count come from
+// multiconv.h (make_multi4conv4.py), the tensor sizes from the bundle's symbol table; e.g. MultiEVTAResConv10Test.
 // usage: multi4conv4Bundle <evta mask, e.g. 15 or 1> [iters=100] [conv]   (run in its dir: reads the *.bin files here)
-#include "vtaConv4TestMainEntry0.h"
-#include "vtaConv4TestMainEntry1.h"
-#include "vtaConv4TestMainEntry2.h"
-#include "vtaConv4TestMainEntry3.h"
+//#include "vtaConv4TestMainEntry0.h"
+//#include "vtaConv4TestMainEntry1.h"
+//#include "vtaConv4TestMainEntry2.h"
+//#include "vtaConv4TestMainEntry3.h"
+#include "multiconv.h"
 #include "VTARuntime.h"
 #include "vta/runtime.h"
 #include <pthread.h>
@@ -22,8 +25,9 @@
 #include <time.h>
 #include <vector>
 
-static const double kConvOps = 2.0 * 56 * 56 * 64 * 64 * 3 * 3;
-static const size_t kTensorBytes = 56 * 56 * 64;
+//static const double kConvOps = 2.0 * 56 * 56 * 64 * 64 * 3 * 3;
+//static const size_t kTensorBytes = 56 * 56 * 64;
+static const double kConvOps = MC_OPS;
 
 typedef int (*EntryFn)(uint8_t *, uint8_t *, uint8_t *);
 typedef void (*LoadFn)(uint8_t *);
@@ -38,16 +42,17 @@ struct Evta {
   void (*init)();
   void (*shutdown)();
 };
-static Evta evtas[4] = {
-    {&vtaConv4TestBundle0_config, vtaConv4TestMainEntry0_load_module, vtaConv4TestMainEntry0,
-     vtaConv4TestMainEntry0_destroy_module, vtaConv4TestMainEntry0_convonly, initVTARuntime, destroyVTARuntime},
-    {&vtaConv4TestBundle1_config, vtaConv4TestMainEntry1_load_module, vtaConv4TestMainEntry1,
-     vtaConv4TestMainEntry1_destroy_module, vtaConv4TestMainEntry1_convonly, initVTARuntime1, destroyVTARuntime1},
-    {&vtaConv4TestBundle2_config, vtaConv4TestMainEntry2_load_module, vtaConv4TestMainEntry2,
-     vtaConv4TestMainEntry2_destroy_module, vtaConv4TestMainEntry2_convonly, initVTARuntime2, destroyVTARuntime2},
-    {&vtaConv4TestBundle3_config, vtaConv4TestMainEntry3_load_module, vtaConv4TestMainEntry3,
-     vtaConv4TestMainEntry3_destroy_module, vtaConv4TestMainEntry3_convonly, initVTARuntime3, destroyVTARuntime3},
-};
+//static Evta evtas[4] = {
+//    {&vtaConv4TestBundle0_config, vtaConv4TestMainEntry0_load_module, vtaConv4TestMainEntry0,
+//     vtaConv4TestMainEntry0_destroy_module, vtaConv4TestMainEntry0_convonly, initVTARuntime, destroyVTARuntime},
+//    {&vtaConv4TestBundle1_config, vtaConv4TestMainEntry1_load_module, vtaConv4TestMainEntry1,
+//     vtaConv4TestMainEntry1_destroy_module, vtaConv4TestMainEntry1_convonly, initVTARuntime1, destroyVTARuntime1},
+//    {&vtaConv4TestBundle2_config, vtaConv4TestMainEntry2_load_module, vtaConv4TestMainEntry2,
+//     vtaConv4TestMainEntry2_destroy_module, vtaConv4TestMainEntry2_convonly, initVTARuntime2, destroyVTARuntime2},
+//    {&vtaConv4TestBundle3_config, vtaConv4TestMainEntry3_load_module, vtaConv4TestMainEntry3,
+//     vtaConv4TestMainEntry3_destroy_module, vtaConv4TestMainEntry3_convonly, initVTARuntime3, destroyVTARuntime3},
+//};
+static Evta evtas[4] = MC_EVTAS;
 
 static pthread_barrier_t start_barrier, end_barrier;
 static int iters = 100;
@@ -85,12 +90,14 @@ static void *run_evta(void *arg) {
   int i = (int)(intptr_t)arg;
   Evta &e = evtas[i];
   e.init();
-  uint8_t *cw = read_file("vtaConv4TestBundle.weights.bin", e.config->constantWeightVarsMemSize);
+  // inputP / outP: int8, size = bytes
+  size_t in_bytes = e.config->symbolTable[0].size, out_bytes = e.config->symbolTable[1].size;
+  uint8_t *cw = read_file(MC_WEIGHTS, e.config->constantWeightVarsMemSize);
   uint8_t *mw = zalloc(e.config->mutableWeightVarsMemSize);
   uint8_t *act = zalloc(e.config->activationsMemSize);
-  uint8_t *in = read_file("vtaConv4TestInput.bin", kTensorBytes);
+  uint8_t *in = read_file(MC_INPUT, in_bytes);
   // symbol table: inputP at offset 0, outP after it (vtaConv4TestBundle.cpp)
-  memcpy(mw + e.config->symbolTable[0].offset, in, kTensorBytes);
+  memcpy(mw + e.config->symbolTable[0].offset, in, in_bytes);
   e.load(cw);
   e.entry(cw, mw, act);  // warm-up
 
@@ -106,12 +113,12 @@ static void *run_evta(void *arg) {
   evta_ms[i] = ms_between(t0, t1);
   pthread_barrier_wait(&end_barrier);
 
-  // output: vtaConv4TestGolden.bin is the NHWC int8 output (= outP)
-  uint8_t *golden = read_file("vtaConv4TestGolden.bin", kTensorBytes);
-  evta_ok[i] = !memcmp(mw + e.config->symbolTable[1].offset, golden, kTensorBytes);
+  // output: <golden>.bin is the NHWC int8 output (= outP)
+  uint8_t *golden = read_file(MC_GOLDEN, out_bytes);
+  evta_ok[i] = !memcmp(mw + e.config->symbolTable[1].offset, golden, out_bytes);
   if (i == first_id) {
     FILE *f = fopen("output.bin", "wb");
-    if (f) { fwrite(mw + e.config->symbolTable[1].offset, kTensorBytes, 1, f); fclose(f); }
+    if (f) { fwrite(mw + e.config->symbolTable[1].offset, out_bytes, 1, f); fclose(f); }
   }
   e.destroy();
   e.shutdown();
@@ -142,7 +149,7 @@ int main(int argc, char **argv) {
   double wall = ms_between(t_start, t_end);
   int ok = 1;
   for (int i : ids) {
-    printf("EVTA%d: %d x Conv4%s %.3f ms (%.3f ms each, %.2f GOPS) output %s\n", i, iters, conv_only ? " conv only" : "",
+    printf("EVTA%d: %d x %s%s %.3f ms (%.3f ms each, %.2f GOPS) output %s\n", i, iters, MC_NAME, conv_only ? " conv only" : "",
            evta_ms[i], evta_ms[i] / iters, kConvOps * iters / (evta_ms[i] * 1e6), evta_ok[i] ? "= golden" : "WRONG");
     ok &= evta_ok[i];
   }

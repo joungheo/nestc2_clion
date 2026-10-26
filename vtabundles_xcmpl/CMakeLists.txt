@@ -181,6 +181,12 @@ add_bundle_if_present(MultiEVTAConv4Test multi4conv4Bundle multi4conv4Main.cpp
 if(TARGET multi4conv4Bundle)
   target_link_libraries(multi4conv4Bundle pthread)
 endif()
+#### JO added (2026-10-26): ResConv10Test (3x3, 7x7x512 -> 512) the same way (same generator and main)
+add_bundle_if_present(MultiEVTAResConv10Test multi4resconv10Bundle multi4conv4Main.cpp
+  vtaResConv10TestBundle0.cpp vtaResConv10TestBundle1.cpp vtaResConv10TestBundle2.cpp vtaResConv10TestBundle3.cpp)
+if(TARGET multi4resconv10Bundle)
+  target_link_libraries(multi4resconv10Bundle pthread)
+endif()
 # p*.cpp are VTA partition bundles, p*.o partitions the CPU (LLVM) backend emitted as objects
 #### JO changed: p0 is a VTA partition now (nest-compiler NESTOptimalFusedPlan_p0VTA.yaml) -> p0.cpp
 #add_bundle_if_present(Resnet18PartitionTest vtaMxnetResnet18PartitionBundle main.cpp

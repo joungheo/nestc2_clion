@@ -22,6 +22,7 @@ run() {  # dir exe input golden
   tail -3 $1/$(LOG $2); printf "%-30s %-34s %s\n" $1 $2 "$res" | tee -a results.txt
 }
 run MultiEVTAConv4Test multi4conv4Bundle '3 100' vtaConv4TestGolden.bin
+run MultiEVTAResConv10Test multi4resconv10Bundle '3 100' vtaResConv10TestGolden.bin
 run MultiEVTAx2ConvTest multievtax2ConvTestBundle multievtaConvTestInput0.bin multievtaConvTestGolden0.bin
 run MultiEVTAx2Resnet18Test multievtax2Resnet18Bundle /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler/glow/tests/images/imagenet/cat_285.png ''
 run MultiEVTAx2Resnet18Test multievtax2SingleResnet18Bundle /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler/glow/tests/images/imagenet/cat_285.png ''

@@ -433,3 +433,17 @@ convolution_wo_tr 1.87-1.89 ms = 122-123 GOPS on each EVTA in both sets; whole b
 pass all 35 single bundles (_prof, 30 golden PASS) and have no stuck cells beyond multi2 (stuckchk 194, 0 extra);
 EVTA time (total_vta_time) etri / Y219: 1.01 for the large convs and Resnet18, 1.07 Resnet50, 1.10-1.21 for
 ResConv5/8, Vgg16Cifar10, Conv_inception_5b_5x5.
+
+2026-10-26: **the fastest conv shape on 4 EVTAs at once: 609.7 GOPS.** All single `_timed` tables ranked by GOPS:
+the top layers are the 231.2 Mops 3x3 convs with many channels: ResConv10Test (7x7x512 -> 512) 152.5 GOPS,
+Resnet50 res5_x_branch2b 150.8, Resnet18 stage4_conv1/3/4 149-150, res4_x / stage3 (14x14x256) 146; stage1 shapes
+(Conv4Test, 56x56x64) 123. The 149 GOPS in MultiEVTAResnet18Test is not a concurrent number: the 4 copies drift
+apart by up to 120 ms. `make_multi4conv4.py` now takes any single-conv bundle -> MultiEVTAResConv10Test (multi4 +
+multi2 sets). conv only, OMP_NUM_THREADS=1, 400 runs, all = golden, rs_rst 333 MHz:
+- multi4: ResConv10 152.6 GOPS on 1 EVTA, **609.7 on 4** (3 runs 609.6-609.7) = 4 x 152.4, 89.3 % of the 4 x 170.7
+  GOPS peak (256 MAC x 2 x 333.3 MHz): no HP/DDR contention even with 2.36 MB weights per conv per EVTA.
+  Conv4 123.5 / 491.6-493.4.
+- multi2 (vtahw_multi2_y219.bin): ResConv10 152.8 / 305.5 on 2, Conv4 123.6 / 247.1.
+- Without OMP_NUM_THREADS=1 (OpenMP teams of 4 threads on 4 cores) the same runs gave ResConv10 558-579 and Conv4
+  412-476 on 4: CPU-side instruction generation, not the EVTAs. End-to-end (CPU transposes every run, OMP default):
+  ResConv10 296.6 GOPS on 4, Conv4 111.3.
