@@ -122,7 +122,8 @@ struct ProfileEvent {
 
 static int log_count = 0;
 #define AXI_PERF_MONITOR 0xA0050000
-//#### JO added
+//#### JO added: one monitor per EVTA in vta-hw-zcu102-multi2/multi4 PROFILE=1 (EVTA i at AXI_PERF_MONITOR + i * 0x10000);
+//#### the single EVTA (index 0) of vta-hw-zcu102-single PROFILE=1 has its monitor at AXI_PERF_MONITOR
 #define AXI_PERF_MONITOR_STRIDE 0x10000
 #define CONTROL_OFFSET 0x300
 #define SLOT0_OFFSET 0x100
@@ -145,7 +146,7 @@ static int log_count = 0;
 //#### JO added: the zcu102_1x16_i8w8a32_16_16_19_18 bitstream has no AXI perf monitor at
 //#### AXI_PERF_MONITOR (reading it -> SIGBUS), so PROFILE_ENABLE alone records only timing and
 //#### the compute-module counters. Build with -DPROFILE_AXI_MONITOR=1 for a design that has one
-//#### (vta-hw-zcu102-single `make bin PROFILE=1`, cmake -DNESTC_EVTA_PROFILE_AXI_MONITOR=ON).
+//#### (vta-hw-zcu102-single/multi2/multi4 `make bin PROFILE=1`, cmake -DNESTC_EVTA_PROFILE_AXI_MONITOR=ON).
 #ifndef PROFILE_AXI_MONITOR
 #define PROFILE_AXI_MONITOR 0
 #endif

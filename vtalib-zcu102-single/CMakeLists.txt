@@ -6,8 +6,9 @@ option(NESTC_EVTA_RUN_ON_ZCU102 "Run on ZCU102 board" OFF)
 option(NESTC_EVTA_LIB_VALIDATION "Validate EVTA library while running" OFF)
 option(NESTC_EVTA_DEBUG "Debug mode for EVTA library" OFF)
 option(NESTC_EVTA_PROFILE "Profile mode for EVTA HW" OFF)
-#### JO added: also read the AXI perf monitor at 0xA0050000 (only bitstreams that have one, e.g.
-#### vta-hw-zcu102-single PROFILE=1; on others the reads SIGBUS)
+#### JO added: also read the AXI perf monitor of EVTA i at 0xA0050000 + i * 0x10000 (only bitstreams that have one:
+#### vta-hw-zcu102-single/multi2/multi4 `make bin PROFILE=1`; on others the reads SIGBUS). The copies
+#### vtalib-zcu102-single/multi2/multi4 in nest-compiler have the same option; they are kept apart for experiments.
 option(NESTC_EVTA_PROFILE_AXI_MONITOR "EVTA bitstream has an AXI perf monitor (with NESTC_EVTA_PROFILE)" OFF)
 #### JO added: the ZCU102 EVTA bitstream zcu102_1x16_i8w8a32_16_16_19_18 on our board is not
 #### cache-coherent (coherent=true hangs), so the runtime must flush/invalidate CPU caches.
