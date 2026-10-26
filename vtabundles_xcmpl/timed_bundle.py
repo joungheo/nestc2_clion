@@ -9,7 +9,9 @@ working directory; every run is kept (first = warm-up in the stock mains) and pr
 one line per statement in execution order with one time/GOPS column per run.
 Files without //Run blocks (mains, helpers) are copied unchanged.
 
-usage: timed_bundle.py <in.cpp> <out.cpp>
+usage: timed_bundle.py <in.cpp> <out.cpp> [<csv name>]
+#### JO added (2026-10-26): <csv name> (default timing.csv) for executables with several timed .cpp (multi-EVTA
+#### copies, VTA partitions), which would otherwise overwrite one file; the table header names the .cpp.
 """
 import re, sys
 
@@ -24,6 +26,12 @@ PRELUDE = r'''
 #include <stdlib.h>
 #include <map>
 #include <string>
+#ifndef PT_CSV
+#define PT_CSV "timing.csv"
+#endif
+#ifndef PT_NAME
+#define PT_NAME ""
+#endif
 namespace {
 struct PtEntry { const char *kind, *node, *call; double ms, start, ops; };
 extern PtEntry __pt_tab[];
@@ -43,7 +51,9 @@ inline void __pt_add(int i, double t0) {
 // every statement in execution order, one ms column per run (first = warm-up), GOPS of each run
 void __pt_summary() {
   int nc = __pt_runs < PT_MAXRUNS ? __pt_runs : PT_MAXRUNS;
-  printf("\n==== timing per statement, %d run(s) ====\n", __pt_runs);
+  //#### JO changed: name of the timed .cpp in the header (several tables in one executable)
+  //printf("\n==== timing per statement, %d run(s) ====\n", __pt_runs);
+  printf("\n==== timing per statement %s, %d run(s) ====\n", PT_NAME, __pt_runs);
   for (int r = 0; r < nc; r++) {
     double sum = 0;
     for (int i = 0; i < __pt_n; i++) sum += __pt_ms[r][i];
@@ -71,7 +81,7 @@ void __pt_summary() {
       printf("run #%d ops (conv/fc): %.1f Mops in %.3f ms of those calls = %.2f GOPS; over the whole run %.3f ms = %.2f GOPS\n",
              __pt_runno[r], convOps * 1e-6, convMs, convOps / (convMs * 1e6), __pt_tot[r], convOps / (__pt_tot[r] * 1e6));
   }
-  printf("per statement and run: timing.csv (start_ms column above is from the last run)\n");
+  printf("per statement and run: %s (start_ms column above is from the last run)\n", PT_CSV);
 }
 void __pt_begin() {
   for (int i = 0; i < __pt_n; i++) __pt_tab[i].ms = __pt_tab[i].start = 0;
@@ -86,7 +96,7 @@ void __pt_end() {
   __pt_runno[r] = ++__pt_runs;
   if (__pt_runs == 1) atexit(__pt_summary);
   // timing.csv: all runs, one row per (run, statement)
-  FILE *f = fopen("timing.csv", __pt_runs == 1 ? "w" : "a");
+  FILE *f = fopen(PT_CSV, __pt_runs == 1 ? "w" : "a");
   if (!f) return;
   if (__pt_runs == 1) fprintf(f, "run,idx,start_ms,kind,node,call,ms,ops,gops\n");
   for (int i = 0; i < __pt_n; i++)
@@ -153,6 +163,7 @@ def call_name(stmt):
 
 def main():
     src, dst = sys.argv[1], sys.argv[2]
+    csv = sys.argv[3] if len(sys.argv) > 3 else 'timing.csv'
     lines = open(src).read().split('\n')
     if not any(RUN.match(l) for l in lines):
         open(dst, 'w').write('\n'.join(lines))
@@ -192,7 +203,8 @@ def main():
         out.append(l)
     # prelude after the last leading #include, table at the end of the file
     last_inc = max(i for i, l in enumerate(out[:50]) if l.startswith('#include'))
-    out[last_inc + 1:last_inc + 1] = PRELUDE.split('\n')
+    #out[last_inc + 1:last_inc + 1] = PRELUDE.split('\n')
+    out[last_inc + 1:last_inc + 1] = [f'#define PT_CSV "{csv}"', f'#define PT_NAME "{src.split("/")[-1]}"'] + PRELUDE.split('\n')
     out.append('namespace {')
     out.append('PtEntry __pt_tab[] = {')
     out += [f'  {{"{k}", "{n}", "{c}", 0, 0, {o}}},' for k, n, c, o in tab]

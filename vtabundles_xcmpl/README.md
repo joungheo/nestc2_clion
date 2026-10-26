@@ -35,7 +35,7 @@ Bundle sources are generated in the simulator build, then compiled for the board
 | Set | Bitstream (`/lib/firmware`) | Sources | hw dir | Build dir |
 |---|---|---|---|---|
 | `single` (default) | `zcu102_1x16_i8w8a32_16_16_19_18.bin` | `vta/bundles` | `hw/` | `build*/` |
-| `multievtax2` | `zcu102_2_1x16_i8w8a32_16_15_18_17.bin` | `vta/multievtax2_bundles` | `hw_multievtax2/` | `build_multievtax2/` |
+| `multievtax2` | `vtahw_multi2_y219.bin` (vta-hw-zcu102-multi2, Y219 fence, 333 MHz; was the etri `zcu102_2_1x16_i8w8a32_16_15_18_17.bin`) | `vta/multievtax2_bundles` | `hw_multievtax2/` | `build_multievtax2/` |
 | `multievtax4` | `vtahw_multi4_y219.bin` (vta-hw-zcu102-multi4, Y219 build `rs_rst`, 333 MHz) | `vta/multievta_bundles` | `hw_multievtax4/` | `build_multievtax4/` |
 
 - Generate (simulator build, configured once with `-DNESTC_EVTA_MULTI_BUNDLES=ON`):
@@ -56,9 +56,18 @@ Bundle sources are generated in the simulator build, then compiled for the board
   ConvTest output 0; outputs 1-3 are `multievtaConvTestOutput<i>.bin` vs `multievtaConvTestGolden<i>.bin`.
   Resnet18 is CPU-bound: `multivtaMxnetResnet18Bundle` (4 threads share 100 inferences) is fastest with
   `OMP_NUM_THREADS=1` (11.0 s vs 14.1 s with 4; single EVTA 13.5 s with 4).
-- `multi4conv4/make_multi4conv4.py hw/Conv4Test hw_multievtax4/MultiEVTAConv4Test` makes Conv4Test copies for
-  EVTA 0-3 (renamed from the EVTA0 bundle) and a `_convonly` entry; `multi4conv4Bundle <mask> [iters] [conv]` runs
-  them at once and prints the wall time and GOPS (target in the `multievtax4` build dirs; results in BOARD_TODO).
+- `MultiEVTAConv4Test` (both multi sets): `hw_multievtax4/MultiEVTAConv4TestSrc/make_multi4conv4.py` makes Conv4Test
+  copies for EVTA 0-3 from `hw/Conv4Test` (renamed from the EVTA0 bundle; collect the single set first) plus a
+  `_convonly` entry; `collect_hw_bundles.py --set multievtax4|multievtax2` runs it into `hw_<set>/MultiEVTAConv4Test`
+  and adds the run line (`multi4conv4Bundle 15 100` / `3 100`: one thread per EVTA, the same bundle on every EVTA at
+  once). `multi4conv4Bundle <mask> [iters] [conv]` prints per-EVTA and wall time and GOPS, writes the lowest EVTA's
+  output to `output.bin` (golden check of run_all.sh) and exits 1 if any EVTA's output is wrong. Results in BOARD_TODO.
+- git keeps `hw_<set>/run_all.sh`, `run_prof.sh` and `*Src/` dirs; the bundle dirs and run outputs are ignored.
+- Per VTA run / per statement for the multi sets, as for `hw/`: build dirs `build_<set>_prof`
+  (`-DBUNDLE_SET=<set> -DNESTC_EVTA_PROFILE=ON -DBUNDLE_EXE_SUFFIX=_prof`) and `build_<set>_timed`
+  (`-DBUNDLE_SET=<set> -DBUNDLE_TIMED=ON -DBUNDLE_EXE_SUFFIX=_timed`), multievtax4 also `-DVTALIB=<root>/vtalib-zcu102-multi4`;
+  then `sudo hw_<set>/run_prof.sh [-s _timed] [Dir ...]`. Each timed .cpp (one per EVTA copy) prints its own table
+  and writes `timing_<cpp>.csv` (a single timed .cpp still writes `timing.csv`).
 - Each bundle is pinned to one EVTA at code generation (`-index-multi-evta` mask 1/2/4/8 -> EVTA 0..3,
   `VTASave.cpp` ~line 4958); a multi-EVTA executable runs one bundle per thread.
 - The conv tile schedules (`include/Backends/VTA/VTASchedules.h`) were tuned for the single-EVTA buffers;

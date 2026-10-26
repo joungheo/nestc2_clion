@@ -6,6 +6,8 @@
 // With "conv" as the third argument each thread runs only convolution_wo_tr <iters> times on an input transposed
 // once (<entry>_convonly, added by make_multi4conv4.py): EVTA plus the runtime's instruction generation, no CPU
 // transposes and buffer allocation per run.
+// #### JO added: the output of the lowest EVTA in the mask is written to output.bin (run_all.sh compares it with
+// vtaConv4TestGolden.bin; the exit code is 1 if any EVTA's output differs from the golden).
 // usage: multi4conv4Bundle <evta mask, e.g. 15 or 1> [iters=100] [conv]   (run in its dir: reads the *.bin files here)
 #include "vtaConv4TestMainEntry0.h"
 #include "vtaConv4TestMainEntry1.h"
@@ -53,6 +55,7 @@ static bool conv_only = false;
 static timespec t_start, t_end;
 static double evta_ms[4];
 static int evta_ok[4];
+static int first_id;
 
 static double ms_between(const timespec &a, const timespec &b) {
   return (b.tv_sec - a.tv_sec) * 1e3 + (b.tv_nsec - a.tv_nsec) * 1e-6;
@@ -106,6 +109,10 @@ static void *run_evta(void *arg) {
   // output: vtaConv4TestGolden.bin is the NHWC int8 output (= outP)
   uint8_t *golden = read_file("vtaConv4TestGolden.bin", kTensorBytes);
   evta_ok[i] = !memcmp(mw + e.config->symbolTable[1].offset, golden, kTensorBytes);
+  if (i == first_id) {
+    FILE *f = fopen("output.bin", "wb");
+    if (f) { fwrite(mw + e.config->symbolTable[1].offset, kTensorBytes, 1, f); fclose(f); }
+  }
   e.destroy();
   e.shutdown();
   free(cw); free(mw); free(act); free(in); free(golden);
@@ -119,6 +126,7 @@ int main(int argc, char **argv) {
   std::vector<int> ids;
   for (int i = 0; i < 4; i++) if (mask >> i & 1) ids.push_back(i);
   if (ids.empty()) { fprintf(stderr, "usage: %s <evta mask 1..15> [iters]\n", argv[0]); return 2; }
+  first_id = ids[0];
   // +1: main takes the wall time of the concurrent part between the barriers
   pthread_barrier_init(&start_barrier, nullptr, ids.size() + 1);
   pthread_barrier_init(&end_barrier, nullptr, ids.size() + 1);

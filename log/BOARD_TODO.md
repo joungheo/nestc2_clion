@@ -422,3 +422,9 @@ in its pblock (`vivado.tcl` add_evta; the rs_hp failure was the global reset -> 
 sramscan, donerace 16/16 (EVTA 0-3), `multi_gemm_gemm_4evta_m` 3 runs all Golden Matched. Conv4 (all = golden):
 EVTA time 1.864 ms per conv = 124.0 GOPS per EVTA (309.6 MHz: 1.909 ms; only 2.4 % faster for 7.7 % more clock:
 load/store bound), 496 GOPS for 4; conv only OMP=1 122.6 / 245.1 / **489.6 GOPS** on 1 / 2 / 4 EVTAs.
+
+2026-10-26: Conv4 on the multi sets through the normal flow (`collect_hw_bundles.py --set multievtax4|multievtax2`
+runs `hw_multievtax4/MultiEVTAConv4TestSrc/make_multi4conv4.py`; `run_all.sh MultiEVTAConv4Test`, `run_prof.sh`,
+`run_prof.sh -s _timed`): PASS on both (multi4 mask 15, multi2 mask 3). Per statement (`_timed`, last of 100 runs):
+convolution_wo_tr 1.87-1.89 ms = 122-123 GOPS on each EVTA in both sets; whole bundle 8.3-9.0 ms with 4 EVTAs vs
+5.0-5.2 ms with 2 (the CPU transposes of 4 threads share the 4 cores).

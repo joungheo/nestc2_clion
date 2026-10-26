@@ -3,10 +3,16 @@
 # bitstream (vta-hw-zcu102-multi4). VTASaverTest emits Conv4Test for EVTA 0 only, and rebuilding it means
 # rebuilding Glow; the generated bundle differs per EVTA only in its names, the command handle (vtaCmdH<i>) and
 # the last argument of convolution_wo_tr (the EVTA index), so the copies for EVTA 1-3 are made here by renaming.
-# usage: make_multi4conv4.py <hw/Conv4Test dir> <out dir>   (then build with BUNDLE_SET=multievtax4, see README)
+# #### JO changed (2026-10-26): lives in hw_multievtax4/MultiEVTAConv4TestSrc (was vtabundles_xcmpl/multi4conv4);
+# collect_hw_bundles.py --set multievtax4 (or multievtax2) runs it and adds the run line to run_all.sh. Also for
+# the 2-EVTA bitstream: the same binary with mask 3 uses EVTA 0-1 only.
+# usage: make_multi4conv4.py [<hw/Conv4Test dir> [<out dir>]]   (default: ../../hw/Conv4Test -> ../MultiEVTAConv4Test)
 import os, re, shutil, sys
 
-src, out = sys.argv[1], sys.argv[2]
+here = os.path.dirname(os.path.abspath(__file__))
+#src, out = sys.argv[1], sys.argv[2]
+src = sys.argv[1] if len(sys.argv) > 1 else os.path.join(here, '..', '..', 'hw', 'Conv4Test')
+out = sys.argv[2] if len(sys.argv) > 2 else os.path.join(here, '..', 'MultiEVTAConv4Test')
 os.makedirs(out, exist_ok=True)
 cpp = open(f'{src}/vtaConv4TestBundle.cpp').read()
 hdr = open(f'{src}/vtaConv4TestMainEntry.h').read()
@@ -42,5 +48,5 @@ extern "C" void vtaConv4TestMainEntry{i}_convonly(uint8_t *mutableWeight, int n)
     open(f'{out}/vtaConv4TestMainEntry{i}.h', 'w').write(h)
 for f in ('vtaConv4TestBundle.weights.bin', 'vtaConv4TestInput.bin', 'vtaConv4TestGolden.bin', 'VTARuntime.h'):
     shutil.copy(f'{src}/{f}', out)
-shutil.copy(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'multi4conv4Main.cpp'), out)
+shutil.copy(os.path.join(here, 'multi4conv4Main.cpp'), out)
 print('written', out)

@@ -7,8 +7,13 @@
 # usage (from hw/): sudo ./run_prof.sh [-s _timed] Dir [Dir ...]
 #                   sudo ./run_prof.sh [-s _timed] [all|hw_bundles]   (no Dir = every run line of run_all.sh)
 # One line per Dir (exit, golden check, total time) is also written to <suffix>_summary.txt, printed at the end.
+#### JO added (2026-10-26): also in hw_multievtax2/ and hw_multievtax4/ (copied there by collect_hw_bundles.py):
+#### build dirs build_<set>_prof / build_<set>_timed. An executable with several timed .cpp (one per EVTA or VTA
+#### partition) prints one table each (header names the .cpp) and writes timing_<cpp>.csv each.
 set -u
 cd "$(dirname "$0")"
+#### JO added: build dir prefix of this hw dir (hw/ -> ../build, hw_<set>/ -> ../build_<set>)
+HWD=$(basename "$PWD"); BLD=../build${HWD#hw}
 #### JO changed: bitstream from run_all.sh of this hw dir (hw/: single EVTA, hw_multievtax2/: 2 EVTAs)
 #BIN=zcu102_1x16_i8w8a32_16_16_19_18.bin
 BIN=$(sed -n "s/^BIN=//p" run_all.sh)
@@ -33,7 +38,7 @@ for D in "$@"; do
   echo "================ $D ($EXE)"
   #### JO changed: also record it in the summary
   # [ -x $D/$EXE ] || { echo "$D/$EXE not built (cd ../build${SUFFIX} && make $3)"; continue; }
-  [ -x $D/$EXE ] || { echo "$D/$EXE not built (cd ../build${SUFFIX} && make $3)"
+  [ -x $D/$EXE ] || { echo "$D/$EXE not built (cd ${BLD}${SUFFIX} && make $3)"
                       printf "%-30s %-34s NOT BUILT\n" $D $EXE >> $SUM; continue; }
   echo 0 > /sys/class/fpga_manager/fpga0/flags; echo $BIN > /sys/class/fpga_manager/fpga0/firmware
   python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" 2>/dev/null
@@ -52,9 +57,14 @@ for D in "$@"; do
   # summary: total of the last run (_timed) or the VTA total_time line (_prof)
   #### JO changed: a partitioned bundle prints one timing table per VTA partition .cpp -> sum the last run of each
   # t=$(grep -E "^run #[0-9]+: total" $D/$LOG | tail -1 | sed "s/, statements.*//"); [ -n "$t" ] || t=$(grep -m1 total_time $D/$LOG)
+  #### JO changed: several tables are also the per-EVTA copies of a multi-EVTA run (concurrent): list each
+  # t=$(awk '/^==== timing/ {n++} /^run #[0-9]+: total/ {r[n]=$2; ms[n]=$4}
+  #          END {if (n == 1) print "run " r[1] " total " ms[1] " ms";
+  #               else if (n > 1) {for (i = 1; i <= n; i++) s += ms[i]; printf "%d timed partitions: sum %.3f ms (CPU .o partitions not timed)\n", n, s}}' $D/$LOG)
   t=$(awk '/^==== timing/ {n++} /^run #[0-9]+: total/ {r[n]=$2; ms[n]=$4}
            END {if (n == 1) print "run " r[1] " total " ms[1] " ms";
-                else if (n > 1) {for (i = 1; i <= n; i++) s += ms[i]; printf "%d timed partitions: sum %.3f ms (CPU .o partitions not timed)\n", n, s}}' $D/$LOG)
+                else if (n > 1) {l = ""; for (i = 1; i <= n; i++) {s += ms[i]; l = l (i > 1 ? " / " : "") ms[i]}
+                                 printf "%d timed .cpp, last run: %s ms (sum %.3f; partitions run one after another, multi-EVTA copies at once)\n", n, l, s}}' $D/$LOG)
   [ -n "$t" ] || t=$(grep -m1 total_time $D/$LOG)
   #### JO changed: executable column, end of the per-line loop
   # printf "%-30s exit=%-3s %-10s %s\n" $D $rc "$res" "$t" >> $SUM

@@ -96,12 +96,28 @@ find_package(PythonInterp 3 REQUIRED)
 add_custom_target(hw_bundles)
 function(add_bundle dir target)
   set(srcs)
+  #### JO added (2026-10-26): several timed .cpp in one executable (multi-EVTA copies, VTA partitions) write
+  #### timing_<name>.csv each instead of all overwriting timing.csv
+  set(ntimed 0)
+  foreach(f ${ARGN})
+    if(f MATCHES "\\.cpp$" AND NOT f MATCHES "([Mm]ain)[^/]*\\.cpp$")
+      math(EXPR ntimed "${ntimed} + 1")
+    endif()
+  endforeach()
   foreach(f ${ARGN})
     if(BUNDLE_TIMED AND f MATCHES "\\.cpp$" AND NOT f MATCHES "([Mm]ain)[^/]*\\.cpp$")
-      set(timed ${CMAKE_CURRENT_BINARY_DIR}/timed/${dir}/${f})
+      #### JO changed (2026-10-26): per target (MultiEVTAResnet18Test: mxnet_exported_resnet18.cpp is in two targets)
+      #set(timed ${CMAKE_CURRENT_BINARY_DIR}/timed/${dir}/${f})
+      set(timed ${CMAKE_CURRENT_BINARY_DIR}/timed/${dir}/${target}/${f})
+      set(csv timing.csv)
+      if(ntimed GREATER 1)
+        get_filename_component(stem ${f} NAME_WE)
+        set(csv timing_${stem}.csv)
+      endif()
       add_custom_command(OUTPUT ${timed}
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/timed/${dir}
-        COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/timed_bundle.py ${HW_DIR}/${dir}/${f} ${timed}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/timed/${dir}/${target}
+        #COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/timed_bundle.py ${HW_DIR}/${dir}/${f} ${timed}
+        COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/timed_bundle.py ${HW_DIR}/${dir}/${f} ${timed} ${csv}
         DEPENDS ${HW_DIR}/${dir}/${f} ${CMAKE_CURRENT_SOURCE_DIR}/timed_bundle.py)
       list(APPEND srcs ${timed})
     else()
@@ -155,7 +171,8 @@ add_bundle_if_present(MultiEVTAResnet18Test singlevtaMxnetResnet18Bundle single_
   mxnet_exported_resnet18.cpp)
 add_bundle_if_present(MultiEVTAResnet18Test multivtaMxnetResnet18Bundle multi_threads_main.cpp
   mxnet_exported_resnet18.cpp mxnet_exported_resnet18_1.cpp mxnet_exported_resnet18_2.cpp mxnet_exported_resnet18_3.cpp)
-#### JO added: Conv4Test on 1-4 EVTAs at once (multi4conv4/make_multi4conv4.py writes hw_multievtax4/MultiEVTAConv4Test)
+#### JO added: Conv4Test on 1-4 EVTAs at once (hw_multievtax4/MultiEVTAConv4TestSrc/make_multi4conv4.py, run by
+#### collect_hw_bundles.py, writes hw_multievtax4/ and hw_multievtax2/MultiEVTAConv4Test)
 add_bundle_if_present(MultiEVTAConv4Test multi4conv4Bundle multi4conv4Main.cpp
   vtaConv4TestBundle0.cpp vtaConv4TestBundle1.cpp vtaConv4TestBundle2.cpp vtaConv4TestBundle3.cpp)
 if(TARGET multi4conv4Bundle)
