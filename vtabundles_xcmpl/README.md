@@ -23,7 +23,9 @@ Bundle sources are generated in the simulator build, then compiled for the board
   First configure: `mkdir build && cd build && cmake ..` (clang-8 is the default compiler);
   profiling: `mkdir build_prof && cd build_prof && cmake -DNESTC_EVTA_PROFILE=ON -DBUNDLE_EXE_SUFFIX=_prof ..`.
   With a `vta-hw-zcu102-single` `PROFILE=1` bitstream (compute counters + AXI perf monitor), use its vtalib copy:
-  `cmake -DVTALIB=$PWD/../../vtalib-zcu102-single -DNESTC_EVTA_PROFILE=ON -DNESTC_EVTA_PROFILE_AXI_MONITOR=ON -DBUNDLE_EXE_SUFFIX=_prof ..`.
+  `cmake -DVTALIB=$PWD/../../vtalib-zcu102-single -DNESTC_EVTA_PROFILE=ON -DNESTC_EVTA_PROFILE_AXI_MONITOR=ON -DBUNDLE_EXE_SUFFIX=_prof ..`
+  (multi2/multi4 `PROFILE=1`: `vtalib-zcu102-multi2/4`, one monitor per EVTA at 0xA0050000 + i * 0x10000; `vta/vtalib`
+  has the same option and addresses since 2026-10-26, the copies are kept apart for runtime experiments).
 - Step 4 reloads the bitstream before each bundle (a hung run leaves the EVTA deadlocked).
 - `hwtest/` holds raw ISA probes and vtalib HW tests (`build.sh` has the vtalib ZCU102 `-D` set inline);
   it is not part of the flow above. Re-run its `rawtest*` probes first if a different bitstream is used.

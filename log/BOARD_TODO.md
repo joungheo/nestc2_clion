@@ -328,7 +328,7 @@ PROHIBIT from RAMB36 Y36 up, `none` = no fence): all PL cells but the PS in pblo
 `RAMB36 ..Y42` / `RAMB18 ..Y85` / `DSP ..Y85` with CONTAIN_ROUTING, RAMB36 Y43 / RAMB18 Y86-87 / DSP Y86-87 and
 MMCM rows 3..6 prohibited (a first try without the row PROHIBIT placed a cascaded wgt BRAM pair at Y42/Y43).
 333 MHz, WNS +0.004 ns, 244 RAMB36 up to Y42 — **42 of them at Y36..42, 39 wgt** — and no net with a PIP in a
-row-Y219 tile. `bit/evta_single_y219_261023/`, md5 `62c3f9e3...`.
+row-Y219 tile. `bit/evta_single_y219_333MHz_pass_261023/`, md5 `62c3f9e3...`.
 Board (new driver): `sramscan` wgt / wgt invert / inp / inp invert 0 bytes wrong, `gemmprobe` 4/4, `donerace`
 16/16, `gemm_nc` Golden Matched; `hw/run_all.sh` (BIN=vtahw_single_y219.bin): all 30 bundles with a golden PASS,
 Resnet18 / Resnet18Partition / Resnet50 -> 281 on cat_285, Vgg16Cifar10 -> 0 on airplane, Resnetv10S1C0 runs;
@@ -349,7 +349,7 @@ beat-wide banks in `pkg_config.py`. Pitfalls found on the way:
   PS-driven nets (S_AXI_HP2/3 rdata/rvalid, smartconnect exits) are in no pblock: 69 nets of the first multi4
   build had PIPs in row Y219. With CONTAIN_ROUTING on the child pblocks too, multi4 fails routing (DRC RTSTAT-6,
   18 partial route conflicts, no bitstream).
-multi2 (`y219`): 333 MHz, WNS +0.049 ns, stuckchk 0 extra; `bit/evta_multi2_y219_261024/`, md5 `39b38dc2...`.
+multi2 (`y219`): 333 MHz, WNS +0.049 ns, stuckchk 0 extra; `bit/evta_multi2_y219_333MHz_pass_261024/`, md5 `39b38dc2...`.
 Board (`/lib/firmware/vtahw_multi2_y219.bin`), EVTA 0 and 1 each: `sramscan` wgt / wgt invert / inp / inp invert
 0 bytes wrong (sramscan now runs ACC_DEPTH/16 weight entries per GEMM; with 256 the multi acc buffer of 2048
 rows overflowed and every byte read back wrong), `gemmprobe` 4/4, `donerace` 16/16; `multi_gemm_gemm_2evta_m`
@@ -416,7 +416,7 @@ all outputs = golden):
   2, **457.3 GOPS on 4** (2.02 ms per conv each).
 - whole bundle (CPU transposes + buffer allocation every run): 64 GOPS on 1, 108 on 4 (OMP=4) / 117 (OMP=1): CPU-bound.
 
-2026-10-26: **multi4 at 333 MHz** (rs_rst, `bit/evta_multi4_y219_261026/rs_rst.bin`): one proc_sys_reset per EVTA
+2026-10-26: **multi4 at 333 MHz** (rs_rst, `bit/evta_multi4_y219_333MHz_pass_261026/vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta.bin`): one proc_sys_reset per EVTA
 in its pblock (`vivado.tcl` add_evta; the rs_hp failure was the global reset -> compute_3), then `run_flow.sh rst`:
 0 nets with a PIP in row Y219, WNS +0.008, WHS +0.010; stuckchk 194, 0 beyond multi2. Board: gemmprobe 4/4,
 sramscan, donerace 16/16 (EVTA 0-3), `multi_gemm_gemm_4evta_m` 3 runs all Golden Matched. Conv4 (all = golden):

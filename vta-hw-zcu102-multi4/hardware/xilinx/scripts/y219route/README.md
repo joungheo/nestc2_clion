@@ -27,7 +27,7 @@ reset fan-out to compute_3), then `flow/mmcm_set.tcl -tclargs rs_hp.dcp rs_hpm 4
 stuckchk `-b` the multi2 bit: 0 extra. Board: all hwtest tests and multi_gemm_gemm_4evta_m pass (`rs_hpm.bin`).
 With one `proc_sys_reset_<i>` per EVTA inside its pblock (2026-10-26), `run_flow.sh rst` meets 333 MHz with no
 MMCM change: rs_rst, WNS +0.008, WHS +0.010, stuckchk 0 extra, all board tests pass
-(`bit/evta_multi4_y219_261026/rs_rst.bin` = `/lib/firmware/vtahw_multi4_y219.bin`).
+(`bit/evta_multi4_y219_333MHz_pass_261026/vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta.bin` = `/lib/firmware/vtahw_multi4_y219.bin`).
 
 ## Tools
 - `Y219RWRoute.java` reroute the nets with a PIP in the row (`-Dpips=stuck_int_pips.txt`: only stuck-cell PIPs,
