@@ -18,6 +18,12 @@ INCLUDE_DIRECTORIES(include 3rdparty/dlpack/include)
 INCLUDE_DIRECTORIES(include 3rdparty/dmlc-core/include)
 option(VTALIB_WITHOUT_NESTC "use VTALIB_ONLY running without nest-c" OFF)
 option(NESTC_EVTA_MULTI "use Multi-EVTA" OFF)
+#### JO added (2026-10-26): size of each command handle's uop and instruction queue (VTA_MAX_XFER, driver.h default
+#### 1<<25 = 32 MB). Every handle (one per EVTA) takes 2 x VTA_MAX_XFER of CMA, and the ZCU102 has 128 MB of CMA, so
+#### a multi-EVTA build needs smaller queues; a full instruction queue syncs early, so smaller only means more syncs.
+#### Empty: 4 MB with NESTC_EVTA_MULTI on the ZCU102 (2-4 handles + model weights fit), else the driver.h default.
+#### (vtabundles_xcmpl uses 8 MB for 2 EVTAs.) Same in vtalib-zcu102-single/multi2/multi4.
+set(NESTC_EVTA_MAX_XFER "" CACHE STRING "VTA_MAX_XFER in bytes (empty: 4 MB with NESTC_EVTA_MULTI on the ZCU102)")
 
 #use VTALIB_ONLY running without nest-c
 if(VTALIB_WITHOUT_NESTC)
@@ -102,6 +108,12 @@ else()
                 -DVTA_LOG_WGT_BUFF_SIZE=18
                 -DVTA_LOG_ACC_BUFF_SIZE=17)
         endif()
+    endif()
+    #### JO added: command queue size (see NESTC_EVTA_MAX_XFER above)
+    if(NESTC_EVTA_MAX_XFER)
+        add_definitions(-DVTA_MAX_XFER=${NESTC_EVTA_MAX_XFER})
+    elseif(NESTC_EVTA_MULTI)
+        add_definitions(-DVTA_MAX_XFER=4194304)
     endif()
 
     if ("${CMAKE_BUILD_TYPE}" STREQUAL "Debug")

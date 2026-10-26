@@ -36,8 +36,8 @@ set(NESTC_EVTA_RUN_ON_ZCU102 ON CACHE BOOL "" FORCE)
 set(NESTC_EVTA_RUN_WITH_GENERIC_BUNDLE ON CACHE BOOL "" FORCE)
 set(NESTC_EVTA_COHERENT_ACCESSES OFF CACHE BOOL "board/bitstream is not cache-coherent")
 #### JO added: bundle set = which bitstream the build targets.
-####   single      (default) hw/            zcu102_1x16_i8w8a32_16_16_19_18: vtalib buffers 16/19/18
-####   multievtax2           hw_multievtax2/ zcu102_2_1x16_i8w8a32_16_15_18_17: NESTC_EVTA_MULTI -> buffers 15/18/17
+####   single      (default) hw/            vta-hw-zcu102-single (or the etri zcu102_1x16_i8w8a32_16_16_19_18): buffers 16/19/18
+####   multievtax2           hw_multievtax2/ vta-hw-zcu102-multi2 (or the etri zcu102_2_1x16_*): NESTC_EVTA_MULTI -> buffers 15/18/17
 ####   multievtax4           hw_multievtax4/ vta-hw-zcu102-multi4 (4 EVTAs, same buffers; -DVTALIB=.../vtalib-zcu102-multi4)
 #### Use one build dir per set, e.g. mkdir build_multievtax2 && cd build_multievtax2 && cmake -DBUNDLE_SET=multievtax2 ..
 set(BUNDLE_SET single CACHE STRING "bundle set: single, multievtax2 or multievtax4")
@@ -49,11 +49,14 @@ elseif(BUNDLE_SET STREQUAL "multievtax2")
   # (vta/vtalib/include/zcu102/vta/driver.h, default 1<<25 = 32 MB -> 64 MB per handle); the board has 128 MB
   # of CMA, so two handles would take all of it. 8 MB queues: 2 x 16 MB + 2 Resnet18 copies (~13 MB weights
   # each) fit. A full instruction queue auto-syncs, so smaller queues only mean more frequent syncs.
-  add_definitions(-DVTA_MAX_XFER=8388608)
+  #### JO changed (2026-10-26): vtalib's NESTC_EVTA_MAX_XFER (its multi-EVTA default is 4 MB)
+  #add_definitions(-DVTA_MAX_XFER=8388608)
+  set(NESTC_EVTA_MAX_XFER 8388608 CACHE STRING "" FORCE)
 elseif(BUNDLE_SET STREQUAL "multievtax4")
   set(NESTC_EVTA_MULTI ON CACHE BOOL "" FORCE)
   # four command handles: 4 MB queues -> 4 x 8 MB of CMA, and four Resnet18 copies
-  add_definitions(-DVTA_MAX_XFER=4194304)
+  #add_definitions(-DVTA_MAX_XFER=4194304)
+  set(NESTC_EVTA_MAX_XFER 4194304 CACHE STRING "" FORCE)
 else()
   message(FATAL_ERROR "unknown BUNDLE_SET ${BUNDLE_SET}")
 endif()
