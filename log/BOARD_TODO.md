@@ -428,3 +428,8 @@ runs `hw_multievtax4/MultiEVTAConv4TestSrc/make_multi4conv4.py`; `run_all.sh Mul
 `run_prof.sh -s _timed`): PASS on both (multi4 mask 15, multi2 mask 3). Per statement (`_timed`, last of 100 runs):
 convolution_wo_tr 1.87-1.89 ms = 122-123 GOPS on each EVTA in both sets; whole bundle 8.3-9.0 ms with 4 EVTAs vs
 5.0-5.2 ms with 2 (the CPU transposes of 4 threads share the 4 cores).
+
+2026-10-26: single bitstream default -> vtahw_single_y219.bin. Both it and the etri zcu102_1x16_i8w8a32_16_16_19_18.bin
+pass all 35 single bundles (_prof, 30 golden PASS) and have no stuck cells beyond multi2 (stuckchk 194, 0 extra);
+EVTA time (total_vta_time) etri / Y219: 1.01 for the large convs and Resnet18, 1.07 Resnet50, 1.10-1.21 for
+ResConv5/8, Vgg16Cifar10, Conv_inception_5b_5x5.

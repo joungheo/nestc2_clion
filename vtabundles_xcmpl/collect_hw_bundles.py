@@ -32,7 +32,10 @@ R = os.path.dirname(HERE)
 # BLD = f'{R}/Debug2_remote/vta/bundles'
 # HW = f'{HERE}/hw'
 SETS = {  # name: (bundle dir under the NEST-C root, hw dir here, bitstream in /lib/firmware, all test executables)
-    'single': ('vta/bundles', 'hw', 'zcu102_1x16_i8w8a32_16_16_19_18.bin', False),
+    #### JO changed (2026-10-26): the Y219 build of vta-hw-zcu102-single (same results as the etri bitstream,
+    #### EVTA time 1-21 % shorter); the etri one stays usable with BIN=zcu102_1x16_i8w8a32_16_16_19_18.bin
+    # 'single': ('vta/bundles', 'hw', 'zcu102_1x16_i8w8a32_16_16_19_18.bin', False),
+    'single': ('vta/bundles', 'hw', 'vtahw_single_y219.bin', False),
     #### JO changed (2026-10-26): the lab board's Y219 build of vta-hw-zcu102-multi2 (etri bitstream: stuck cells)
     # 'multievtax2': ('vta/multievtax2_bundles', 'hw_multievtax2', 'zcu102_2_1x16_i8w8a32_16_15_18_17.bin', True),
     'multievtax2': ('vta/multievtax2_bundles', 'hw_multievtax2', 'vtahw_multi2_y219.bin', True),

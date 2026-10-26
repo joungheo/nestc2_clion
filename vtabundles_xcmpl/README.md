@@ -34,7 +34,7 @@ Bundle sources are generated in the simulator build, then compiled for the board
 
 | Set | Bitstream (`/lib/firmware`) | Sources | hw dir | Build dir |
 |---|---|---|---|---|
-| `single` (default) | `zcu102_1x16_i8w8a32_16_16_19_18.bin` | `vta/bundles` | `hw/` | `build*/` |
+| `single` (default) | `vtahw_single_y219.bin` (vta-hw-zcu102-single, Y219 fence, 333 MHz; the etri `zcu102_1x16_i8w8a32_16_16_19_18.bin` gives the same results, EVTA time 1-21 % longer) | `vta/bundles` | `hw/` | `build*/` |
 | `multievtax2` | `vtahw_multi2_y219.bin` (vta-hw-zcu102-multi2, Y219 fence, 333 MHz; was the etri `zcu102_2_1x16_i8w8a32_16_15_18_17.bin`) | `vta/multievtax2_bundles` | `hw_multievtax2/` | `build_multievtax2/` |
 | `multievtax4` | `vtahw_multi4_y219.bin` (vta-hw-zcu102-multi4, Y219 build `rs_rst`, 333 MHz) | `vta/multievta_bundles` | `hw_multievtax4/` | `build_multievtax4/` |
 
