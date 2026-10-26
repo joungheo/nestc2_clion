@@ -25,6 +25,7 @@
    (VTA_SYNC의 EVTA 시간은 SW 오버헤드가 약 1%뿐이어서 지금은 그것으로 충분하다, §6.1).
 3. 보드 소유자에게 PL 결함 통보
 4. 성능: conv 사이 CPU 간격(66 µs, 4.4%)을 명령 버퍼 두 개로 숨기기, 실제 네트워크를 EVTA 여러 개에 나누기(§6.5)
+5. 설계 검토 중: GEMM을 systolic(weight-stationary)으로 바꾸기. 영향 범위와 순서는 §8(다른 세션에서 여기서 시작)
 
 ## 1. 환경
 
@@ -561,3 +562,141 @@ python3 vtabundles_xcmpl/hwtest/brambist/stuckchk.py <design.bit> \
 - 커밋 규칙:
   - `git commit -s`(DCO)
   - 커밋은 요청이 있을 때만 한다. 지금까지는 보드 검증 뒤에 커밋했다.
+
+## 8. 설계 검토: GEMM을 systolic(weight-stationary) 구조로 (2026-10-27, 시작 전)
+
+다른 세션이 여기서 이어 시작할 수 있게 정리한 검토다. 아직 코드는 하나도 바꾸지 않았다.
+
+### 8.1 제안된 구조
+
+사용자 제안(16x16 어레이, PE(ic, oc)):
+- **입력**: 1x16 입력 벡터를 길이가 다른 shift register로 넣는다. 위 행부터 한 클럭씩 늦게 들어간다(skew).
+- **weight**: double register를 쓴다. 다음 16x16 블록을 위에서부터 한 행(16 x int8 = 128비트)씩 shift해 16클럭에 채운다.
+  채워지면 한 클럭에 전체가 계산용 레지스터로 넘어간다.
+- **출력**: 열(oc)마다 결과가 나오는 시각이 다르다. 열마다 다른 acc bank로 들어가게 한다.
+
+### 8.2 결론 요약
+
+- **ISA와 컴파일러(NEST-C)는 바꿀 필요가 없다.** GEMM 명령의 의미("uop 하나 = `acc[dst] += inp[src](1x16) · wgt[wgt](16x16)ᵀ`",
+  `vta-hw-zcu102-*/hardware/xilinx/src/vta.cc` `gemm()` 236행)를 HW가 그대로 지키면 된다.
+  - 바뀌지 않는 것: `hw_spec.h`, 명령·uop 포맷, `VTASave.cpp`/`VTA.cpp`(NEST-C는 `convolution_wo_tr(...)` 호출과 tile 인자만 만든다),
+    vtalib 시뮬레이터(golden 기준으로 그대로 씀).
+  - tile 스케줄(`include/Backends/VTA/VTASchedules.h`)은 성능 때문에 다시 맞출 수 있다(필수 아님).
+- **런타임은 uop 순서를 반드시 바꿔야 한다**(성능). vtalib `lib/Bundle/VTABundle.cpp`의 `gemmop_mxn`(132행), `gemmop_1x1`(156행) 두 함수다.
+- **HW가 큰 일이다**: deskew와 acc bank, acc hazard, 명령 경계의 파이프라인 비우기, HLS가 아닌 RTL.
+
+### 8.3 지금 HW가 GEMM을 하는 방식
+
+- `vta.cc` `gemm()`: `iter_out` x `iter_in` x uop(`uop_bgn..uop_end`) 루프에 `#pragma HLS PIPELINE II = 1`.
+  - 사이클마다 `wgt_mem`에서 16x16 블록 전체(2048비트), `inp_mem`에서 1x16, `acc_mem`에서 1x16 int32를 읽는다.
+  - 256개 곱과 열마다 16입력 합을 계산해 acc와 out에 쓴다.
+  - 주소는 uop의 dst/src/wgt + 루프 factor(`dst/src/wgt_factor_out/in`)다.
+- 그래서 사이클마다 weight 블록이 바뀌어도 속도가 같다. 지금 ResConv10의 GEMM 가동률은 93.5%다(§6.2).
+- zcu102 SRAM bank(`pkg_config.py`): 모든 bank가 128비트다. wgt 원소 하나 = 16 bank x 128비트, acc = 4 x 128비트.
+
+### 8.4 런타임: uop 순서 (vtalib `gemmop_mxn`, `gemmop_1x1`)
+
+**지금 순서** (`gemmop_mxn`, 빠르게 도는 것이 아래):
+
+```
+it_out (VTAUopLoopBegin(tile_w, dst 1, src stride_w, wgt 0)) : 출력 x
+  it_in (VTAUopLoopBegin(KW, dst 0, src 1, wgt 1))           : 커널 kx
+    uop: for ky(KH) for kernelIdx(n_kernel_) for y(tile_h)    : 출력 y가 가장 안쪽
+         dst = out_base + (kernelIdx·tile_h + y)·tile_w
+         src = in_base + (y·stride + ky)·in_tile_w
+         wgt = wgt_base + ky·KW + kernelIdx·KH·KW
+```
+
+- 같은 weight가 연속으로 쓰이는 사이클 수 = `tile_h`다. ResConv10은 7, Conv4는 8이다.
+  - weight 블록 하나는 conv 전체에서 49번(7x7 출력) 쓰이지만 7사이클씩 끊겨 7번 나뉜다.
+- weight-stationary에서는 weight를 채우는 데 16클럭이 든다. 그래서 **같은 weight로 16사이클 이상 계산해야 다음 weight 채우기가 숨겨진다.**
+  지금 순서 그대로면 7사이클 계산 후 9사이클을 기다리므로 가동률이 약 7/16 = 44%다.
+- `gemmop_1x1`도 같다: `it_out` = x, `it_in` = n_kernel(wgt +1, dst +tile_w·tile_h), uop = y. 연속 = `tile_h`.
+
+**바꿀 순서** (weight 고정, 출력 픽셀 전체가 안쪽):
+
+```
+it_out (VTAUopLoopBegin(n_kernel_, dst tile_h·tile_w, src 0, wgt KH·KW)) : 출력블록(kernelIdx)
+  it_in (VTAUopLoopBegin(KW, dst 0, src 1, wgt 1))                       : 커널 kx
+    uop: for ky(KH) for y(tile_h) for x(tile_w)                           : 픽셀이 가장 안쪽
+         dst = out_base + y·tile_w + x
+         src = in_base + (y·stride + ky)·in_tile_w + x·stride
+         wgt = wgt_base + ky·KW
+```
+
+- 같은 weight가 `tile_h·tile_w` 사이클 연속으로 쓰인다. ResConv10은 49, Conv4(8x56)는 448이다.
+- uop 수는 KH·tile_h·tile_w다. ResConv10은 147, Conv4는 1,344로 uop 버퍼(8192)에 충분히 들어간다.
+  - 다만 uop을 DRAM에서 읽어 오는 양이 늘어난다. `VTAPushGEMMOp`의 uop 캐시(`vGemmUOpHandle`)로 두 번째 호출부터 다시 만들지는 않지만,
+    uop SRAM으로 load되는 양이 tile마다 늘어나는지는 확인해야 한다.
+- 같은 `dst`가 다시 오는 간격은 `tile_h·tile_w` 사이클(≥ 49, 최소 tile 7x7)이다. 이것이 §8.5 hazard 조건과 맞물린다.
+- **정확성 검증은 지금 비트스트림에서 먼저 할 수 있다.** 정수 누산의 순서만 바뀌므로 출력이 비트 단위로 같아야 한다.
+  - 시뮬레이터 빌드 → 지금 보드(single, multi4)에서 `run_all.sh` → ResConv10/Conv4 시간이 거의 같은지 본다.
+  - 지금 HW는 순서와 상관없이 사이클당 1 GEMM이므로 시간이 거의 같아야 한다.
+- 같은 함수를 쓰는 곳: `conv_kernel`(548/550행)과 `conv_kernel_scale`(933/935행)이 `gemmop_mxn`/`gemmop_1x1`을 쓴다.
+  - `reset_acc`(89행, GEMM `reset_reg`)는 weight를 쓰지 않으므로 영향이 없다. HW에서 reset 경로는 따로 두면 된다.
+  - XP-GEMM/BNN 경로는 이 비트스트림에서 이미 쓸 수 없다(§3.2 #6).
+
+### 8.5 HW에서 할 일
+
+1. **출력 deskew = 열별 acc bank.**
+   - 열 j의 합은 j클럭 늦게 나온다. acc를 열마다 bank로 나누고(16 bank x 32비트), bank j의 주소 파이프라인을 j클럭 늦춘다.
+     이렇게 하면 deskew 레지스터 없이 된다.
+   - acc는 읽고-더하고-쓰기이므로 **읽기 주소도 같은 식으로 늦춘다.**
+   - int8 `out_mem` 쓰기(GEMM이 acc 하위 8비트를 같이 씀)도 같은 bank 구조를 따른다.
+   - ALU와 STORE는 acc 행 전체를 한 번에 읽는다. bank가 같은 주소로 동시에 읽히기만 하면 된다.
+     지금 acc bank 구성(4 x 128비트)은 바뀐다(`pkg_config.py`, `vivado.tcl`의 SRAM bank 생성).
+2. **acc hazard.**
+   - 파이프라인 깊이 = skew 16 + 열 누산 16 + deskew. 같은 `dst`가 그보다 빨리 다시 오면 덧셈이 빠진다.
+   - 지금 HLS는 II=1로 사이클마다 끝나는 것을 전제로 한다.
+   - HW에서 in-flight `dst`를 비교해 stall하는 것이 안전하다. 정확성을 런타임 순서에만 맡기지 않는다.
+   - §8.4의 순서라면 같은 dst의 간격이 ≥ 49사이클이라 stall은 거의 나지 않는다.
+3. **명령 경계.**
+   - GEMM 명령이 끝날 때 파이프라인을 비워야 뒤의 ALU가 맞는 acc를 읽는다. 명령마다 약 40~50사이클이다.
+   - ResConv10: conv당 GEMM 명령 64개(채널 32 x 가상 스레드 2) → 약 3천 사이클(9 µs, 0.6%).
+   - 첫 weight 채우기 16클럭도 명령마다 생긴다. 다음 명령의 첫 weight를 미리 채우면 숨길 수 있다(선택).
+4. **weight SRAM 읽기 폭.**
+   - 사이클마다 128비트(한 행)만 읽으면 되므로 wgt 16 bank x 128비트 구조를 줄일 수 있다.
+   - BRAM 수는 폭보다 용량(multi 256 KB)이 정하므로 크게 줄지는 않는다(multi4에서 EVTA당 RAMB36 143, §3.3).
+5. **HLS vs RTL.**
+   - skew 레지스터, 열별 bank 주소 지연, weight double buffer swap은 HLS로 의도대로 나오게 하기 어렵다.
+   - compute 모듈의 GEMM 부분만 RTL로 바꾸는 것이 확실하다. 큐, uop 디코드, ALU, 의존성 토큰 처리는 HLS 그대로 둔다.
+6. **검증.**
+   - `hwtest/gemmprobe`(4패턴), `sramscan`, ISA 프로브 `rawtest*`와 cosim(`build/hardware/xilinx/cosim/`, §2.3)을 쓴다.
+   - 번들 golden(`run_all.sh`)으로 확인한다.
+   - 보드는 Y219 결함이 있다. fence/재배선 흐름(§3.1, §3.3)과 stuckchk를 그대로 거친다.
+
+### 8.6 얻는 것과 잃는 것
+
+- **MAC 수는 그대로다.** 사이클당 256 MAC(16x16)은 지금과 같다. ResConv10은 이미 GEMM 가동률 93.5%다.
+  그러니 이득은 거의 **클럭(타이밍)**에서만 나온다.
+  - 입력 broadcast(1x16을 16열 DSP 모두로)와 16입력 덧셈 트리가 이웃 PE 연결로 바뀐다. 배선이 짧아진다.
+  - 어레이를 32x32로 키울 때(MAC 4배) 확장이 훨씬 쉽다. 그때는 ISA의 BLOCK 크기, `hw_spec.h`, 레이아웃, 컴파일러까지 바뀐다(별도 작업).
+- **타이밍 근거 (확인한 것)**: multi4 rs_rst(333 MHz, `vta-hw-zcu102-multi4/build/y219/rs_rst.timing.rpt`)의 worst setup 경로다.
+  - `inp_mem_3_0` BRAM → `compute_3/inst/add_ln700_42_reg` DSP 입력
+  - slack +0.008 ns, 데이터 경로 2.500 ns(배선 65%), logic level 0
+  - 즉 **입력 SRAM에서 GEMM DSP로 가는 broadcast 경로가 critical**이다. systolic의 skew shift register가 정확히 이 경로를 끊는다.
+  - 이 리포트는 그룹마다 최악 경로 하나만 담고 있다. 할 일: `report_timing -max_paths 100 -group clk_out1_vta_pll_clk_0`로
+    상위 경로 중 GEMM(compute 안 DSP/덧셈 트리) 비율을 본다. single(`vta-hw-zcu102-single/build/.../export/*.timing.rpt`)도 본다.
+- **잃는 것**: weight 재사용이 적은 연산은 느려진다.
+  - weight 블록마다 픽셀이 16개보다 적은 연산(GEMV, 출력이 아주 작은 1x1 conv)은 16클럭을 채우고 몇 사이클만 계산한다. 최악이면 1/16이다.
+  - 지금 번들에서 FC는 VTA를 쓰지 않는다. `fullyconnected()`는 CPU 함수다(`CPUBundle_aarch64.cpp` 4098행).
+    vtalib에서 GEMM을 내는 곳은 `conv_kernel`/`conv_kernel_scale`뿐이다(`VTAPushGEMMOp` 6곳).
+    conv는 최소 tile 7x7(`MIN_H_SIZE/MIN_W_SIZE`, 작으면 더미로 채움)이므로 weight당 ≥ 49사이클이 보장된다.
+  - 나중에 FC를 VTA로 보낼 때는 broadcast 경로를 남기거나 batch를 모아야 한다.
+
+### 8.7 다음 세션의 시작 순서
+
+1. **타이밍 근거 확인 (HW 작업 전에)**
+   - rs_rst DCP(`build/y219/`)를 열어 `report_timing -max_paths 100`을 본다.
+   - 333 MHz에서 GEMM 경로가 상위를 차지하는지, systolic으로 몇 MHz를 기대할 수 있는지 판단한다.
+   - GEMM이 병목이 아니면 클럭 이득이 작다. 그때는 이 작업의 가치를 다시 판단한다.
+2. **런타임 uop 순서 변경**
+   - `gemmop_mxn`/`gemmop_1x1`을 §8.4 순서로 바꾼다. `#### JO` 표시를 달고 원래 코드는 주석으로 남긴다.
+     원본 `vta/vtalib`와 복사본 3개를 같이 맞춘다(§3.4 #1의 비교 규칙).
+   - 지금 비트스트림에서 golden과 시간을 확인한다: `run_all.sh`(single, multi2, multi4)와 ResConv10/Conv4 `_prof` VTA_SYNC.
+   - 이 단계만으로도 HW 교체 전에 런타임 쪽 검증이 끝난다.
+3. **HW GEMM 교체**
+   - HLS C 모델(`vta.cc` `gemm()`과 같은 결과를 내는 사이클 모델)을 먼저 만든다.
+   - 그다음 RTL과 cosim, single 비트스트림(fence `y219`)에서 시작해 multi2, multi4(재배선 흐름) 순서로 간다.
+4. 성능 비교
+   - 같은 측정(§6.1, `OMP_NUM_THREADS=1`, conv 반복, VTA_SYNC)으로 클럭과 GOPS를 비교한다.
