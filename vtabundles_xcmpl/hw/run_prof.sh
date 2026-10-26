@@ -16,7 +16,10 @@ cd "$(dirname "$0")"
 HWD=$(basename "$PWD"); BLD=../build${HWD#hw}
 #### JO changed: bitstream from run_all.sh of this hw dir (hw/: single EVTA, hw_multievtax2/: 2 EVTAs)
 #BIN=zcu102_1x16_i8w8a32_16_16_19_18.bin
-BIN=$(sed -n "s/^BIN=//p" run_all.sh)
+#### JO changed (2026-10-26): run_all.sh has BIN=${BIN:-<file>} -> take <file>; BIN=<file> in the environment wins
+#BIN=$(sed -n "s/^BIN=//p" run_all.sh)
+BIN=${BIN:-$(sed -n 's/^BIN=\${BIN:-\(.*\)}$/\1/p; s/^BIN=\([^$].*\)$/\1/p' run_all.sh)}
+[ -f /lib/firmware/$BIN ] || { echo "bitstream /lib/firmware/$BIN not found"; exit 1; }
 [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
 SUFFIX=_prof
 [ "${1:-}" = -s ] && { SUFFIX=$2; shift 2; }
