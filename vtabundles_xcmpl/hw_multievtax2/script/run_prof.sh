@@ -6,7 +6,7 @@
 # Executable, input and golden come from the "run <dir> <exe> <input> <golden>" lines of run_all.sh. Reloads the bitstream before each run.
 # usage: sudo hw/script/run_prof.sh [-s _timed] Dir [Dir ...]     (or hw_<set>/script/run_prof.sh)
 #        sudo hw/script/run_prof.sh [-s _timed] [all|hw_bundles]   (no Dir = every run line of run_all.sh)
-# One line per Dir (exit, golden check, total time) is also written to <suffix>_summary.txt, printed at the end.
+# One line per Dir (exit, golden check, total time) is also written to result/<suffix>_summary.txt, printed at the end.
 #### JO added (2026-10-26): also in hw_multievtax2/ and hw_multievtax4/ (copied there by collect_hw_bundles.py):
 #### build dirs build_<set>_prof / build_<set>_timed. An executable with several timed .cpp (one per EVTA or VTA
 #### partition) prints one table each (header names the .cpp) and writes timing_<cpp>.csv each.
@@ -34,7 +34,9 @@ LOG=${SUFFIX#_}.log
 if [ $# = 0 ] || [ "$1" = all ] || [ "$1" = hw_bundles ]; then
   set -- $(sed -n "s/^run \([^ ]*\) .*/\1/p" $RUN_ALL | uniq)
 fi
-SUM=${SUFFIX#_}_summary.txt; : > $SUM
+#### JO changed (2026-10-27): summaries in result/
+#SUM=${SUFFIX#_}_summary.txt; : > $SUM
+mkdir -p result; chown --reference=. result; SUM=result/${SUFFIX#_}_summary.txt; : > $SUM
 
 for D in "$@"; do
   #### JO changed: a Dir can have several run lines (multi-EVTA: threaded + single-thread executable)

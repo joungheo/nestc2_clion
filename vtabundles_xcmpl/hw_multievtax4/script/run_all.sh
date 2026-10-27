@@ -6,7 +6,7 @@ BIN=${BIN:-vtahw_multi4_y219.bin}
 [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
 exec 9>/tmp/evta_run.lock; flock -n 9 || { echo "another EVTA run is active (/tmp/evta_run.lock)"; exit 1; }
 ONLY="$*"
-: > results.txt
+mkdir -p result; : > result/results.txt
 LOG() { echo $1.log; }  # log name for executable $1
 run() {  # dir exe input golden
   [ -n "$ONLY" ] && [[ " $ONLY " != *" $1 "* ]] && return
@@ -19,11 +19,11 @@ run() {  # dir exe input golden
   elif [ $rc != 0 ]; then res="FAIL(rc=$rc)"
   elif [ -n "$4" ]; then cmp -s $1/output.bin $1/$4 && res=PASS || res=MISMATCH
   else res="RAN (no golden; see $1/$(LOG $2))"; fi
-  tail -3 $1/$(LOG $2); printf "%-30s %-34s %s\n" $1 $2 "$res" | tee -a results.txt
+  tail -3 $1/$(LOG $2); printf "%-30s %-34s %s\n" $1 $2 "$res" | tee -a result/results.txt
 }
 run MultiEVTAConv4Test multi4conv4Bundle '15 100' vtaConv4TestGolden.bin
 run MultiEVTAConvTest multievtaConvTestBundle multievtaConvTestInput.bin multievtaConvTestGolden0.bin
 run MultiEVTAResConv10Test multi4resconv10Bundle '15 100' vtaResConv10TestGolden.bin
 run MultiEVTAResnet18Test multivtaMxnetResnet18Bundle /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler/glow/tests/images/imagenet/cat_285.png ''
 run MultiEVTAResnet18Test singlevtaMxnetResnet18Bundle /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler/glow/tests/images/imagenet/cat_285.png ''
-echo; echo "== summary"; cat results.txt
+echo; echo "== summary"; cat result/results.txt

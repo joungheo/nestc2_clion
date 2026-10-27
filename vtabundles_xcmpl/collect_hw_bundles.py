@@ -68,6 +68,7 @@ SRC = f'{R}/{SETS[SET][0]}'
 BLD = f'{R}/Debug2_remote/{SETS[SET][0]}'
 HW = f'{HERE}/{SETS[SET][1]}'
 SCRIPT = f'{HW}/script'   #### JO added (2026-10-27): run_all.sh, run_prof.sh (in git)
+RESULT = f'{HW}/result'   #### JO added (2026-10-27): results.txt, *_summary.txt, collect_report.txt (not in git)
 BIN = SETS[SET][2]
 ALL_EXES = SETS[SET][3]
 SKIP = {'BinaryNet', 'BiRealNet', 'Resnet18RelayEVTAPartitionTest'}   # BNN / Relay(TVM)
@@ -190,7 +191,9 @@ def main():
                 #### JO added (2026-10-26): one EVTA run at a time on the board (each run reloads the PL; two runs
                 #### swap bitstreams under each other -> SError / bus errors); run_prof.sh takes the same lock
                 'exec 9>/tmp/evta_run.lock; flock -n 9 || { echo "another EVTA run is active (/tmp/evta_run.lock)"; exit 1; }\n'
-                'ONLY="$*"\n: > results.txt\n'
+                #### JO changed (2026-10-27): results.txt in result/
+                # 'ONLY="$*"\n: > results.txt\n'
+                'ONLY="$*"\nmkdir -p result; : > result/results.txt\n'
                 #### JO changed: multi-EVTA sets have several executables per Dir -> one log/rc per executable
                 f'LOG() {{ echo {"$1.log" if ALL_EXES else "run.log"}; }}  # log name for executable $1\n'
                 'run() {  # dir exe input golden\n'
@@ -204,19 +207,21 @@ def main():
                 '  elif [ $rc != 0 ]; then res="FAIL(rc=$rc)"\n'
                 '  elif [ -n "$4" ]; then cmp -s $1/output.bin $1/$4 && res=PASS || res=MISMATCH\n'
                 '  else res="RAN (no golden; see $1/$(LOG $2))"; fi\n'
-                '  tail -3 $1/$(LOG $2); printf "%-30s %-34s %s\\n" $1 $2 "$res" | tee -a results.txt\n}\n')
+                '  tail -3 $1/$(LOG $2); printf "%-30s %-34s %s\\n" $1 $2 "$res" | tee -a result/results.txt\n}\n')
         #### JO changed: write the merged lines, sorted by dir
         # for d, exe, inp, gold in runs:
         #     f.write(f'run {d} {exe} {shlex.quote(inp)} {shlex.quote(gold)}\n')
         for d in sorted(lines):
             f.write(lines[d] + '\n')
-        f.write('echo; echo "== summary"; cat results.txt\n')
+        f.write('echo; echo "== summary"; cat result/results.txt\n')
     os.chmod(f'{SCRIPT}/run_all.sh', 0o755)
     #### JO added: the profiling runner works from any hw dir (it reads BIN and the run lines from run_all.sh)
     if HW != f'{HERE}/hw':
         # copy(f'{HERE}/hw/run_prof.sh', HW)
         copy(f'{HERE}/hw/script/run_prof.sh', SCRIPT)
-    open(f'{HW}/collect_report.txt', 'w').write('\n'.join(report) + '\n')
+    # open(f'{HW}/collect_report.txt', 'w').write('\n'.join(report) + '\n')
+    os.makedirs(RESULT, exist_ok=True)
+    open(f'{RESULT}/collect_report.txt', 'w').write('\n'.join(report) + '\n')
     print('\n== collect report'); print('\n'.join(report))
 
 

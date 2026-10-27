@@ -12,14 +12,15 @@ Bundle sources are generated in the simulator build, then compiled for the board
 | 2. Copy them into `hw/<Dir>/` (no compile) | `vtabundles_xcmpl/` | `./collect_hw_bundles.py [Dir ...]` |
 | 3a. Compile for the board | `vtabundles_xcmpl/build/` | `make -j2 hw_bundles` or `make -j2 <target>` |
 | 3b. Compile with HW profiling | `vtabundles_xcmpl/build_prof/` | `make -j2 <target>` → `hw/<Dir>/<target>_prof` |
-| 4a. Run all + compare with golden | `vtabundles_xcmpl/` | `sudo hw/script/run_all.sh [Dir ...]` → `hw/results.txt` |
-| 4b. Run profiling bundles | `vtabundles_xcmpl/` | `sudo hw/script/run_prof.sh [-s _timed] [Dir ...]` (no Dir, `all` or `hw_bundles` = every bundle) → `hw/<Dir>/prof.log` (`timed.log`, `timing.csv`), one line per Dir in `hw/prof_summary.txt` (`timed_summary.txt`) |
+| 4a. Run all + compare with golden | `vtabundles_xcmpl/` | `sudo hw/script/run_all.sh [Dir ...]` → `hw/result/results.txt` |
+| 4b. Run profiling bundles | `vtabundles_xcmpl/` | `sudo hw/script/run_prof.sh [-s _timed] [Dir ...]` (no Dir, `all` or `hw_bundles` = every bundle) → `hw/<Dir>/prof.log` (`timed.log`, `timing.csv`), one line per Dir in `hw/result/prof_summary.txt` (`timed_summary.txt`) |
 
 - Step 1 runs `make <target>` in the existing Debug2_remote build (no new cmake); outputs go to
   `Debug2_remote/vta/bundles/<Dir>/`, logs to `Debug2_remote/bundle_logs/`.
 - Step 2 keeps what is already in `hw/<Dir>` (executables, `*_prof`, logs) and regenerates `hw/script/run_all.sh`.
 - git keeps only `hw/script/` (`run_all.sh`, kept so the run lines are versioned, and `run_prof.sh`) of `hw/`; the
-  bundle dirs and run outputs (`results.txt`, `*_summary.txt`, logs) stay in `hw/` and are ignored. The scripts `cd`
+  bundle dirs (with their logs) stay in `hw/`, the summaries (`results.txt`, `*_summary.txt`, `collect_report.txt`)
+  are in `hw/result/`; both are ignored (each run overwrites them; the numbers worth keeping go into the docs). The scripts `cd`
   to `hw/` themselves (call them from anywhere). Same for `hw_<set>/script/` (2026-10-27).
 - Step 3 uses `CMakeLists.txt` here: vtalib (`libvta_runtime.a`, `libVTABundle.a`) is built once per build
   directory with its own ZCU102 settings, and every bundle is compiled with the same `-D` macros.
