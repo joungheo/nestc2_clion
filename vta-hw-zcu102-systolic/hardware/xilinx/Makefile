@@ -51,10 +51,14 @@ CONF := $(shell $(PYTHON) ${VTA_CONFIG} --cfg-str)
 #IP_BUILD_PATH := $(BUILD_DIR)/hls/$(BUILD_NAME)
 MEM_OREG ?= 0
 FREQ ?=
-IP_NAME := $(CONF)$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(MEM_OREG)),_oreg)
+#### JO changed (2026-10-27, systolic Phase D): SYSTOLIC=1 -> GEMM in the RTL unit gemm_sa (-DVTA_SYSTOLIC, _sa dirs)
+SYSTOLIC ?= 0
+#IP_NAME := $(CONF)$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(MEM_OREG)),_oreg)
+IP_NAME := $(CONF)$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(MEM_OREG)),_oreg)$(if $(filter 1,$(SYSTOLIC)),_sa)
 BUILD_NAME := $(IP_NAME)$(if $(FREQ),_$(FREQ)mhz)
 IP_BUILD_PATH := $(BUILD_DIR)/hls/$(IP_NAME)
 export VTA_MEM_OREG := $(MEM_OREG)
+export VTA_SYSTOLIC := $(SYSTOLIC)
 export VTA_FREQ := $(FREQ)
 HW_BUILD_PATH := $(BUILD_DIR)/vivado/$(BUILD_NAME)
 

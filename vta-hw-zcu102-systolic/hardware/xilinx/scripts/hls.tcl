@@ -51,6 +51,10 @@ if {$profile} {
 if {[info exists ::env(VTA_MEM_OREG)] && $::env(VTA_MEM_OREG) eq "1"} {
     append cflags " -DVTA_MEM_OREG"
 }
+#### JO added (2026-10-27, systolic Phase D): Makefile SYSTOLIC=1 -> GEMM steps streamed to the RTL unit gemm_sa
+if {[info exists ::env(VTA_SYSTOLIC)] && $::env(VTA_SYSTOLIC) eq "1"} {
+    append cflags " -DVTA_SYSTOLIC"
+}
 
 # Get the VTA configuration paramters
 set ::device $FPGA_DEVICE
