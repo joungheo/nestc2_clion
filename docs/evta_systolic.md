@@ -554,6 +554,8 @@ for v in prof_360mhz prof_380mhz prof_400mhz prof_oreg_360mhz prof_oreg_380mhz p
     golden 30개 PASS, Resnet18/Resnet18Partition/Resnet50 → 281, Vgg16 → 0. overflow는 그대로 5번 나지만 결과가 맞다.
     VTA 시간: Resnet18 48.378 → 48.535 ms(+0.3%), Resnet50 245.63 → 246.03 ms(+0.2%), 나머지 ±0.5%(uop load가 늘어난 만큼).
   - **Phase B 완료: 새 uop 순서는 지금 비트스트림에서 결과가 같고 시간도 거의 같다.**
+  - **검증 범위**: HW는 바꾸지 않았다. 지금 HLS GEMM(16열 덧셈 트리, 열마다 시각 차이 없음)에서 런타임의 uop 순서만 바꿔 돌렸다.
+    즉 "새 순서가 같은 누산을 만든다"와 "uop cache 수정"을 보드로 확인한 것이고, systolic HW의 정확성은 아직 확인하지 않았다(Phase D).
 
 **Phase C — 사이클 모델** (`vta-hw-zcu102-systolic/hardware/xilinx/sim/systolic_model.cc`, `g++ -O2 -std=c++14`)
 - 실행(호스트, 아무 dir): `g++ -O2 -std=c++14 -Wall -o /tmp/systolic_model $N/vta-hw-zcu102-systolic/hardware/xilinx/sim/systolic_model.cc && /tmp/systolic_model 300 1`(인자: 무작위 테스트 수, seed).
@@ -562,6 +564,11 @@ for v in prof_360mhz prof_380mhz prof_400mhz prof_oreg_360mhz prof_oreg_380mhz p
   - RMW(forwarding 포함)와 issue 제어기(LOOKAHEAD 깊이 uop FIFO에서 다음 weight를 미리 읽음, 주기 16).
 - 기준: `vta.cc` `gemm()`과 같은 순차 계산. 단 `reset_reg`일 때 out = 0이다(HLS는 acc+dot의 하위 8비트, §5).
 - 무작위 300개(명령 1~4개, 임의 uop/factor/reset, drain on/off, LOOKAHEAD 1~64): **모두 비트 단위로 일치**(forwarding 68회).
+- **열마다 다른 출력 시각과 acc 주소 맞추기(모델에서)**: 열 j의 합은 열 0보다 j클럭 늦게 나온다. 열 j를 15−j단 deskew FF로 늦춰 16열이 같은 클럭에 한 행으로 모이게 하고,
+  dst와 reset은 issue부터 RMW까지 같은 깊이(`OUT_OFS`)의 태그 pipe로 보낸다. 그래서 RMW는 열마다 따로가 아니라 `acc[dst]` 512비트 한 행을 한 번에 읽고 더해 쓴다.
+  - 이것은 C++ 레지스터 모델(`systolic_model.cc`)에서만 확인했다. RTL은 아직 없다.
+  - 모델은 PE당 지연 1클럭, BRAM 2클럭, RMW 3클럭으로 두었다. DSP48E2의 실제 파이프 단(AREG/BREG/MREG/PREG)은 모든 열에 같은 상수 지연을 더하므로 `OUT_OFS`(태그 pipe 깊이)만 바뀐다.
+    Phase D에서 RTL 시뮬레이션으로 이 상수를 맞추고, 같은 무작위 테스트를 RTL과 모델 양쪽에 돌려 비교한다.
 - 가동률(GEMM / 사이클, LOOKAHEAD 32, RMW 3, 명령 사이 handshake 4):
 
 | 경우 | 원래 순서 | 새 순서, 명령마다 drain | 새 순서, drain 없음 |
