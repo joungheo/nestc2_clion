@@ -636,34 +636,58 @@ it_out (VTAUopLoopBegin(n_kernel_, dst tile_h·tile_w, src 0, wgt KH·KW)) : 출
   - `reset_acc`(89행, GEMM `reset_reg`)는 weight를 쓰지 않으므로 영향이 없다. HW에서 reset 경로는 따로 두면 된다.
   - XP-GEMM/BNN 경로는 이 비트스트림에서 이미 쓸 수 없다(§3.2 #6).
 
-### 8.5 HW에서 할 일
+### 8.5 HW 세부 설계 (2026-10-27 개정, §8.8 Phase A·§8.9 조사 반영)
 
-1. **출력 deskew = 열별 acc bank.**
-   - 열 j의 합은 j클럭 늦게 나온다. acc를 열마다 bank로 나누고(16 bank x 32비트), bank j의 주소 파이프라인을 j클럭 늦춘다.
-     이렇게 하면 deskew 레지스터 없이 된다.
-   - acc는 읽고-더하고-쓰기이므로 **읽기 주소도 같은 식으로 늦춘다.**
-   - int8 `out_mem` 쓰기(GEMM이 acc 하위 8비트를 같이 씀)도 같은 bank 구조를 따른다.
-   - ALU와 STORE는 acc 행 전체를 한 번에 읽는다. bank가 같은 주소로 동시에 읽히기만 하면 된다.
-     지금 acc bank 구성(4 x 128비트)은 바뀐다(`pkg_config.py`, `vivado.tcl`의 SRAM bank 생성).
-2. **acc hazard.**
-   - 파이프라인 깊이 = skew 16 + 열 누산 16 + deskew. 같은 `dst`가 그보다 빨리 다시 오면 덧셈이 빠진다.
-   - 지금 HLS는 II=1로 사이클마다 끝나는 것을 전제로 한다.
-   - HW에서 in-flight `dst`를 비교해 stall하는 것이 안전하다. 정확성을 런타임 순서에만 맡기지 않는다.
-   - §8.4의 순서라면 같은 dst의 간격이 ≥ 49사이클이라 stall은 거의 나지 않는다.
-3. **명령 경계.**
-   - GEMM 명령이 끝날 때 파이프라인을 비워야 뒤의 ALU가 맞는 acc를 읽는다. 명령마다 약 40~50사이클이다.
-   - ResConv10: conv당 GEMM 명령 64개(채널 32 x 가상 스레드 2) → 약 3천 사이클(9 µs, 0.6%).
-   - 첫 weight 채우기 16클럭도 명령마다 생긴다. 다음 명령의 첫 weight를 미리 채우면 숨길 수 있다(선택).
-4. **weight SRAM 읽기 폭.**
-   - 사이클마다 128비트(한 행)만 읽으면 되므로 wgt 16 bank x 128비트 구조를 줄일 수 있다.
-   - BRAM 수는 폭보다 용량(multi 256 KB)이 정하므로 크게 줄지는 않는다(multi4에서 EVTA당 RAMB36 143, §3.3).
-5. **HLS vs RTL.**
-   - skew 레지스터, 열별 bank 주소 지연, weight double buffer swap은 HLS로 의도대로 나오게 하기 어렵다.
-   - compute 모듈의 GEMM 부분만 RTL로 바꾸는 것이 확실하다. 큐, uop 디코드, ALU, 의존성 토큰 처리는 HLS 그대로 둔다.
-6. **검증.**
-   - `hwtest/gemmprobe`(4패턴), `sramscan`, ISA 프로브 `rawtest*`와 cosim(`build/hardware/xilinx/cosim/`, §2.3)을 쓴다.
-   - 번들 golden(`run_all.sh`)으로 확인한다.
-   - 보드는 Y219 결함이 있다. fence/재배선 흐름(§3.1, §3.3)과 stuckchk를 그대로 거친다.
+처음 안(열별 acc bank, BCIN shift로 16클럭 채우기)을 조사 뒤 아래처럼 바꿨다. 바뀐 이유는 항목마다 적었다.
+
+**배치** — PE(i, j): i = ic(행), j = oc(열). 열 j = DSP48E2 16개를 PCIN/PCOUT로 cascade한 한 DSP 열.
+- 부분합 Σ_i x[i]·w[j][i]는 열 안에서 P cascade로 흐른다. 지금 HLS의 16입력 덧셈 트리(400 MHz에서 최악, §8.8)가 없어진다.
+- ZU9EG의 DSP cascade는 한 DSP 열 안에서 세로로만 된다(ACIN/BCIN/PCIN 모두 세로). y219 fence 안에 DSP48E2_X0..X17 x Y0..Y85가 있어 16개 cascade 열 16개가 들어간다.
+- 곱셈 int8 x int8, P는 48비트. 16항 합은 int21이면 충분하다. INT8 2-MAC packing(DSP 반)은 나중 선택.
+
+**입력 x (A 포트)** — fanout 1 경로로 바꾸는 것이 핵심(§8.6, §8.8).
+- inp_mem 한 행(128비트) → 행 i는 i클럭 지연(skew FF) → 행 i 안에서 열 0→15로 FF 한 칸씩(가로, fabric FF, fanout 1).
+  열 j의 행 i는 픽셀을 t+i+j에 받는다. A cascade는 세로라 가로 전달에 쓸 수 없다.
+- FF: skew 8x(0+…+15)=960 + 가로 16x16x8=2048. AREG=1이면 가로 한 칸을 DSP A 레지스터가 대신한다.
+
+**weight (B 포트)** — UG579로 확인(§8.9 #2): BREG=2, BCASCREG=1이면 BCOUT은 B1에서 나가고 곱셈기는 B2를 쓴다(INMODE[4]=0). CEB1/CEB2는 따로다.
+- B1 = prefetch chain(BCIN으로 위 행에서 한 칸씩), B2 = 계산 중 고정. 2409.03508의 "DSP-Fetch"가 정확히 이 구조다(ZU3EG 14x14, 666 MHz).
+- **CE는 wavefront로 늦춘다.** PE(i, j)는 픽셀을 t+i+j에 받으므로 weight 교체(CEB2)도 PE(i, j)에서 T+i+j에 일어나야 한다.
+  - CEB1을 한꺼번에 켜면 아래 행이 B2로 넘기기 전에 B1이 덮인다. 그러면 다음 채우기를 T+15 이후에야 시작할 수 있어 주기가 31클럭이 된다.
+  - CEB1을 **PE(i, j)에서 T+i+j부터 T+15+j까지** 켠다. 시작은 wavefront로 늦추고, 끝은 열 안의 모든 행이 같다.
+    PISO는 T+j부터 깊은 행의 값부터 넣는다. 그러면 **weight 주기 16클럭**이 된다.
+    - 시작만 늦추고 끝도 늦추면 모든 행이 같은 값을 받는다.
+    - 확인: 한 열의 비트 정확 모델로 주기 16, 17, 20은 오류 0/128, 15는 7/128이었다(2026-10-27).
+  - CE 신호는 대각선 shift register(행 +1, 열 +1)로 만든다. Gemmini가 propagate 비트를 데이터와 같이 skew하는 것과 같다.
+- chain 입구: 열 j 맨 위에 128비트 PISO(병렬 로드, 8비트씩 16클럭 shift). wgt_mem bank j(128비트) = w[j][0..15]다.
+  2048비트 wgt 읽기는 weight마다 한 번(≥16클럭에 한 번)이다. BRAM→PISO는 fanout 1이라 레지스터를 더 넣어도 된다.
+- 대안(B 포트 병렬 로드, chain 없음)도 주기 16이 되지만 BRAM→DSP 256개 거리 경로(지금 wgt→DSP 0.06~0.16 ns)가 남는다. chain을 기본으로 한다.
+- weight 주소 비교: RTL이 uop의 wgt 주소를 지금 채운 것과 비교한다. 바뀌었는데 16클럭이 안 지났으면 uop 스트림을 멈춘다(AXIS backpressure).
+
+**출력 deskew와 acc** — 열별 acc bank 안을 버리고 Gemmini 방식(출력 쪽 RMW)으로 바꿨다.
+- 열 j의 합은 열 위쪽에서 t+15+j+(DSP 지연)에 나온다. 열 j를 15−j클럭 늦추는 deskew FF(약 120x24비트)로 행을 맞춘다.
+- 맞춰진 16 x int32 행 + dst 태그(같은 지연의 태그 pipe) → **RMW 단계**: acc[dst] 읽기 → 16 덧셈 → acc[dst], out_mem[dst](하위 8비트) 쓰기.
+- 이유:
+  1. acc를 512비트 한 행 그대로 둘 수 있다. ALU·STORE·bias load의 접근 방식이 지금과 같다.
+  2. hazard 창이 systolic 깊이(~50)가 아니라 RMW 깊이(BRAM 2 + 덧셈 1 + 쓰기, 약 4클럭)다.
+- hazard: RMW 안 in-flight dst(≤4개)와 비교해 forwarding한다. 어레이는 멈출 수 없으므로 Gemmini처럼 stall하지 않는다.
+  §8.4 순서면 같은 dst 간격이 ≥49라 forwarding이 쓰일 일은 없지만 정확성을 순서에 맡기지 않는다.
+- `reset_reg` GEMM: 태그에 reset 비트를 싣고 같은 pipe로 보낸다. RMW가 0을 쓴다. 순서는 자동으로 지켜진다.
+
+**HLS와 RTL의 경계** (§8.9 #1)
+- 지금 `acc_mem`은 HLS compute 안의 4096 x 512 true dual-port RAM(BRAM36 114개, 두 포트 모두 HLS가 씀)이다. 이것을 compute 밖으로 꺼낸다.
+  - BD에 512비트 2포트 RAM. 포트 0, 1 모두 `gemm_busy`로 RTL(RMW 읽기/쓰기)과 HLS(ALU, bias load, 지금 그대로) 사이를 mux한다.
+  - GEMM과 ALU는 compute 안에서 명령 단위로 순서대로 돌므로 동시 접근은 없다. HLS는 GEMM 명령을 내고 done을 받을 때까지 acc를 건드리지 않는다.
+  - HLS 쪽은 `INTERFACE bram port = acc_mem` + `RESOURCE core = RAM_T2P latency = 2`. 모양은 inp_mem과 같다. 확인할 것: 2포트 외부 bram 인터페이스와 `DEPENDENCE` pragma가 HLS 2020.1에서 같이 되는지.
+- out_mem 포트 A: RTL(GEMM 결과)과 HLS(ALU 결과)를 같은 `gemm_busy`로 mux한다.
+- inp_mem·wgt_mem 포트 B: RTL만 쓴다(ALU는 inp/wgt를 읽지 않음).
+- HLS → RTL: 지금 GEMM 루프(II=1)가 계산 대신 uop 스트림 {dst, src, wgt, reset, last}를 AXIS로 내보낸다. RTL → HLS: done 1개.
+- 명령 경계: RMW가 순서대로라 연속한 GEMM 명령 사이에는 drain이 필요 없다.
+  - 처음 구현은 단순하게 GEMM 명령마다 done을 기다린다(약 50클럭 x 64명령 = 0.6%, §8.5 이전 추정과 같음).
+  - 그다음 ALU/STORE 토큰 앞에서만 기다리게 줄인다.
+
+**HLS vs RTL**: 어레이, skew/deskew, CE wavefront, PISO, RMW, mux는 RTL. 큐, uop decode, ALU, 토큰은 HLS 그대로.
+**검증**: §8.7 3단계 그대로(C 사이클 모델 → RTL 단위 TB → cosim → `gemmprobe`/`rawtest*` → `run_all.sh`).
 
 ### 8.6 얻는 것과 잃는 것
 
@@ -700,3 +724,105 @@ it_out (VTAUopLoopBegin(n_kernel_, dst tile_h·tile_w, src 0, wgt KH·KW)) : 출
    - 그다음 RTL과 cosim, single 비트스트림(fence `y219`)에서 시작해 multi2, multi4(재배선 흐름) 순서로 간다.
 4. 성능 비교
    - 같은 측정(§6.1, `OMP_NUM_THREADS=1`, conv 반복, VTA_SYNC)으로 클럭과 GOPS를 비교한다.
+
+### 8.8 Phase A: 타이밍 근거와 파이프라인만으로 갈 수 있는 클럭 (2026-10-27)
+
+작업 위치: 브랜치 `systolic`, `vta-hw-zcu102-systolic`(single 복사본). 스크립트와 결과: `vta-hw-zcu102-systolic/build/timing/`(`top.tcl`, `*.paths.csv`), 빌드 로그 `build/phaseA/`.
+
+**1) 지금 333 MHz의 critical path** (`report_timing -max_paths 1000 -nworst 1`, routed DCP)
+- single(10-23 y219 pass)과 multi4(rs_rst) 모두 상위 1000 경로가 slack 0.23 ns 안에 몰려 있다(slack wall).
+- 상위 100개: single 100/100, multi4 96/100이 `inp_mem` BRAM → GEMM DSP A 입력이다.
+  - logic 0, BRAM 출력 레지스터 없음, **fanout 346**, 데이터 경로 2.35 ns(배선 61%). §8.6의 가설이 맞다.
+- 그 밖의 경로 종류별 최악 slack:
+
+| 경로 | single | multi4 |
+|---|---|---|
+| inp_mem → DSP | 0.004 | 0.008 |
+| load → inp/wgt BRAM 쓰기 | 0.150 | 0.017 |
+| wgt_mem → DSP B | 0.161 | — |
+| compute 덧셈 트리 (8 level) | 0.172 | 0.119 |
+| reset fanout | — | 0.097 |
+
+**2) 빌드 옵션** (커밋 `ab32e110`, 기본값이면 빌드는 이전과 같다)
+- `make ... MEM_OREG=1`: inp/wgt BRAM 포트 B(compute 읽기)에 출력 레지스터를 켜고, HLS에 read latency 2를 알린다(`vta.cc` `#ifdef VTA_MEM_OREG`).
+  - GEMM 루프는 II=1, 깊이 12다. acc read→write 거리는 약 3사이클 그대로라(ST_45 load, ST_47~48 store) 새 hazard는 없다.
+- `make ... FREQ=<MHz>`: PLL만 바꾼다. IP는 그대로 쓴다. 빌드 dir 이름은 `<CONF>_prof[_oreg][_<FREQ>mhz]`.
+
+**3) 클럭 sweep** (single, y219 fence, `PROFILE=1`, 기본 implementation strategy)
+
+| 변형 | 333 | 360 | 380 | 400 |
+|---|---|---|---|---|
+| base (지금 구조) | +0.004 (10-23판) | **+0.011** | (빌드 중) | (빌드 중) |
+| oreg | +0.026 | **+0.041** | −0.007 (12 실패) | −0.162 (653 실패) |
+
+- **base도 360 MHz를 통과한다.** slack wall은 placer가 목표에 맞춰 멈춘 모양이지 구조적 한계가 아니다.
+- oreg 380 실패: reset fanout(`proc_sys_reset` → fetch regslice) 73/200, inp broadcast 71/200, acc_mem 쓰기, load → inp_mem.
+- oreg 400 실패의 종류(상위 200 중 개수, 그룹 최악 slack):
+
+| 경로 | 개수 | 최악 slack | systolic으로 없어지나 |
+|---|---|---|---|
+| inp_mem → DSP (출력 레지스터를 켜도 배선 88%, 1.88 ns) | 80 | −0.130 | **예** (fanout 1) |
+| compute 덧셈 트리 (DSP_OUTPUT → FDRE, 8 level) | 42 | −0.162 | **예** (P cascade) |
+| compute → out_mem 쓰기 | 10 | −0.151 | 아니오 (RTL RMW로 옮기면 손볼 수 있음) |
+| load → wgt/inp BRAM 쓰기 | 7 | −0.146 | 아니오 |
+| fetch → axi_xbar FIFO, axi_xbar 내부 | — | −0.137 | 아니오 |
+| reset fanout | 17 | — | 아니오 |
+
+- 해석:
+  - BRAM 출력 레지스터는 BRAM Tco만 줄인다. fanout 346 배선은 그대로라 inp broadcast가 400 MHz에서도 상위에 남는다. 구조(fanout)를 바꿔야 끊긴다.
+  - systolic은 400 MHz 실패 경로 중 가장 많은 두 종류(상위 200 중 122개, 최악 −0.162)를 없앤다.
+  - 400 MHz를 맞추려면 load 쓰기, out_mem 쓰기, fetch/AXI FIFO, reset 복제도 같이 고쳐야 한다(HLS pipeline/regslice, `proc_sys_reset` 복제).
+- 기대 이득: 파이프라인만으로 약 360~375 MHz(지금 333 대비 +8~12%). systolic과 주변 정리로 400 MHz(+20%). 그 위는 어레이만 2배 클럭(§8.9 #4).
+- 보드 검증은 아직 안 했다: oreg 360, base 360 비트스트림(`build/hardware/xilinx/vivado/*_360mhz/export/*.bin`)을 `run_all.sh`와 stuckchk로 확인해야 한다.
+
+### 8.9 조사: Gemmini, Tensil, UG579, AutoSA 등 (2026-10-27)
+
+**#1 acc를 compute 밖으로 꺼내는 경계 — Gemmini**
+- Gemmini의 accumulator는 별도 모듈이다(`AccumulatorMem.scala`).
+  - 어레이 쓰기는 주소 비트로 accumulate/overwrite를 고른다. 읽기(mvout)에 scale/activation을 붙인다.
+  - accumulate는 메모리 쪽 RMW다. 쓰기 요청이 `acc_latency` 깊이 pipe에 들어가고 같은 주소의 옛 값을 읽어 더한다.
+- hazard는 **forwarding 없이 stall**한다.
+  - 같은 주소가 pipe에 있으면 `io.write.ready`를 내린다. 같은 주소의 pending 쓰기가 있으면 읽기도 받지 않는다.
+  - 파일 안에 작은 행렬의 read-after-write가 낡은 값을 읽을 수 있다는 TODO가 남아 있다.
+- 어레이 출력(`MeshWithDelays.scala`)은 deskew shift register로 행을 맞춘 뒤 accumulator로 간다. 어레이는 acc 주소를 모르고, 호출자가 준 태그만 데이터와 같이 흘린다.
+- 컨트롤러 사이의 hazard는 ROB가 막는다. 같은 컨트롤러 안의 hazard는 각 컨트롤러가 책임진다.
+- 우리 설계에 반영(§8.5):
+  - 출력 쪽 RMW, 태그 pipe, deskew FF로 바꿨다. 열별 acc bank 안은 버렸다.
+  - 우리 어레이는 멈출 수 없으므로 stall 대신 forwarding으로 한다.
+  - GEMM/ALU 순서는 compute 명령 순서가 지켜 준다(ROB 역할).
+
+**#2 B1/B2와 BCIN으로 weight 채우기 — UG579 (v1.11)**
+- BREG=2이면 BCASCREG는 1이나 2일 수 있다. BREG=1이면 B2를 쓴다. INMODE[4]=0이면 곱셈기는 B2(BREG에 따름)를 쓴다.
+  CEB1/CEB2는 따로 있다(UG579 Table 3-2 핀, Table 3-3 속성, Figure 2-6 dual B register).
+- BCASCREG=1이면 BCOUT은 B1 뒤에서 나온다. 그래서 B1 = prefetch chain, B2 = 계산 중 고정이 된다.
+  arXiv 2409.03508 "DSP-Fetch"가 이 구조를 쓴다. 문장도 같다: "B1 registers serve as the operand prefetching path, while B2 registers remain static".
+- 겹치기 조건(우리가 확인): CEB2는 PE(i, j)에서 T+i+j, CEB1은 [T+i+j, T+15+j]. 주기 16에서 비트 정확 모델 오류 0이었다(§8.5).
+
+**#3 PE 사이 입력 레지스터(fanout 1)**
+- §8.8 결과로 근거가 강해졌다. 출력 레지스터를 켜도 inp broadcast는 400 MHz에서 −0.130 ns(배선 88%)다. 문제는 fanout이지 BRAM Tco가 아니다.
+- 2409.03508: TPUv1형 어레이에서 activation을 가로 CLB FF로 전달하고(DSP cascade는 세로뿐), 부분합은 세로 P cascade를 쓴다. 우리 배치와 같다.
+
+**#4 ZU+에서 현실적인 클럭**
+- arXiv 2409.03508 (XCZU3EG, Vivado OOC, speed grade 미기재):
+  - INT8 14x14 TPUv1형: tinyTPU 400 MHz, Libano/CLB-Fetch/DSP-Fetch 666 MHz.
+  - DPU B1024 재현 666 MHz.
+  - 어레이만 단독(OOC) 측정한 값이다. 큐, AXI, HLS 제어가 붙은 전체 설계 값이 아니다.
+- Xilinx DPU (PG338): 데이터/제어 325 MHz, DSP 계산 `dpu_2x_clk` 650 MHz(Matched Routing 2클럭).
+  상용 설계도 fabric 제어는 ~325 MHz, DSP 어레이만 2배다.
+- arXiv 2510.08137 (Alveo U50): 시스템 300 MHz, SA와 on-chip 메모리 600 MHz. activation은 DSP 입력 cascade로 세로, 부분합은 C 포트로 가로.
+- Tensil: ZU+ 아키텍처 파일만 확인했다(ultra96v2 16x16, zcu104 32x32, FP16BP8). 공개 자료에서 클럭 수치는 찾지 못했다(hackster 글은 403).
+- AutoSA (UCLA, FPGA'21): polyhedral 컴파일러로 HLS C systolic을 생성한다. I/O 모듈 daisy-chain(L1/L2/L3), double buffering, SIMD를 지원한다.
+  - U250에서 MM int8 6.95 TOPs, int16 3.41 TOPs, fp32 934 GFLOPs.
+  - 클럭은 논문 본문을 받지 못해 확인하지 못했다(par.nsf.gov 접속 실패).
+  - HLS 생성물이라 우리 경우(HLS가 333 MHz에서 막힘)에 RTL보다 나을 근거는 없다.
+- SPCL `gemm_hls`(HLS systolic, VCU1525): half/single/double 462/301/132 GFLOP/s. 클럭 목표가 낮은 HLS 설계라 참고만 한다.
+- 결론:
+  - fabric 전체(HLS 큐/AXI 포함)는 ~400 MHz가 현실적인 상한이다.
+  - DSP 어레이만은 650~666 MHz까지 사례가 있다.
+  - 큰 이득은 "어레이를 2배 클럭(666 MHz), 나머지는 333 MHz"(DPU 방식)에서 나온다. 같은 256 MAC으로 2배다.
+  - §8.5 구조(fanout 1, 모두 레지스터 경계)는 그 방향과 맞는다. 2배 클럭은 어레이 입출력에 2:1 폭 변환만 더하면 되므로 다음 단계로 둔다.
+
+출처: [Gemmini](https://github.com/ucb-bar/gemmini) (`PE.scala`, `AccumulatorMem.scala`, `MeshWithDelays.scala`),
+UG579 v1.11 (UltraScale DSP48E2), [arXiv 2409.03508](https://arxiv.org/abs/2409.03508), [arXiv 2510.08137](https://arxiv.org/abs/2510.08137),
+[PG338 Clocking](https://docs.amd.com/r/3.4-English/pg338-dpu/Clocking), [Tensil arch](https://github.com/tensil-ai/tensil/tree/main/arch),
+[AutoSA](https://github.com/UCLA-VAST/AutoSA), [spcl/gemm_hls](https://github.com/spcl/gemm_hls).
