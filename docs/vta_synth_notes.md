@@ -822,7 +822,28 @@ it_out (VTAUopLoopBegin(n_kernel_, dst tile_h·tile_w, src 0, wgt KH·KW)) : 출
   EVTA 쪽 클럭과 AXI clock converter로 잇는다. HP 128 bit x 333 MHz = 5.3 GB/s라 EVTA 대역폭은 충분할 것이다.
   §8 systolic의 400 MHz 목표도 같은 분리가 필요하다.
 
-**6) multi4 360 MHz** (진행 중): `make bin FREQ=360`(fence `split`) 뒤 `run_flow.sh m360`.
+**6) multi4 360 MHz** (2026-10-27): `make bin FREQ=360`(fence `split`) 뒤 `run_flow.sh m360`.
+- `make bin`은 기본 impl의 write_bitstream DRC(RTSTAT-6 partial conflict 2개)로 실패하지만, flow는 `vta_wrapper_opt.dcp`에서 다시 시작하므로 상관없다.
+- rs_m360: WNS +0.018 / WHS +0.009, WPWS −0.222(위 HP 포트). Y219 행 PIP net 0. 행 Y219의 모든 tile(CLE, BRAM, DSP, INT_INTF 포함)에서 PIP 0.
+- stuckchk: **1 extra**(frame 24215, word 62 bit 14).
+  - RapidWright `bitstream` API로 frame을 tile에 매핑하면 `INT_X35Y219` minor 23이다.
+  - U-Ray segbits로는 PIP `INT_NODE_SDQ_77_INT_OUT0 -> NN4_W_BEG4`에 해당한다.
+  - DCP에서는 이 PIP와 두 node에 net이 없다(reroute 전 routed_m360도 같다). DCP로 bit를 다시 써도 같은 bit가 1이다.
+  - Vivado가 net 없는 node에 쓰는 설정으로 보인다(base 194개와 같은 종류). 보드에서 0으로 읽혀도 쓰지 않는 PIP가 꺼질 뿐이다.
+- 보드 `bit/evta_multi4_phaseA_261027/vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_360mhz.bin`(md5 `4347a2d6…`, `/lib/firmware`에 같은 이름).
+- HW 프로브: EVTA 0~3 모두 gemmprobe 5개, sramscan 4개, donerace 16/16 통과.
+- `hw_multievtax4/script/run_all.sh`(`OMP_NUM_THREADS=1`): Conv4, Conv, ResConv10 PASS. Resnet18 multi/single 100회 모두 281.
+- 속도(`run_prof.sh`, total_vta_time, 333 = `vtahw_multi4_y219`):
+
+| 번들 | 333 | 360 |
+|---|---|---|
+| ResConv10 | 146.42 ms | 135.56 ms (−7.4%) |
+| Conv4 | 194.39 ms | 166.35 ms (−14.4%, 1회 측정이라 편차일 수 있음) |
+| Conv | 54.18 ms | 50.90 ms (−6.0%) |
+| Resnet18 multi | 582.09 ms | 539.29 ms (−7.4%) |
+| Resnet18 single | 1303.72 ms | 1208.40 ms (−7.3%) |
+
+- **multi4도 360 MHz에서 보드에서 동작한다.** 380은 HP 포트 규격 문제(위 주의)를 먼저 풀고 시도한다.
 - `flow/place_d.tcl`의 입력 impl dir을 `VTA_IMPL_DIR`로 바꿀 수 있게 했다. `run_flow.sh`가 이 변수를 docker에 넘긴다.
   build/y219 기준 상대 경로: `VTA_IMPL_DIR=../hardware/xilinx/vivado/zcu102_1x16_i8w8a32_16_15_18_17_4evta_360mhz/vta.runs/impl_1`.
 
