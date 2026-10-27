@@ -351,6 +351,38 @@ for v in prof_360mhz prof_380mhz prof_400mhz prof_oreg_360mhz prof_oreg_380mhz p
 - `flow/place_d.tcl`의 입력 impl dir을 `VTA_IMPL_DIR`로 바꿀 수 있게 했다. `run_flow.sh`가 이 변수를 docker에 넘긴다.
   build/y219 기준 상대 경로: `VTA_IMPL_DIR=../hardware/xilinx/vivado/zcu102_1x16_i8w8a32_16_15_18_17_4evta_360mhz/vta.runs/impl_1`.
 
+**7) multi4 380 MHz, HP 포트 333 MHz 분리** (2026-10-27, `vivado.tcl` `70ccf2f7`)
+- 구조: EVTA 클럭(380)과 별도 MMCM `hp_pll`(333.0 MHz)을 두고, SmartConnect(`NUM_CLKS 2`)가 둘 사이를 넘긴다. `hpslice<i>`, `S_AXI_HP<i>_FPD`, APM slot 0은 HP 클럭.
+  333 MHz 이하로 빌드하면(`FREQ`가 없거나 ≤ 333) 분리하지 않아 이전과 같다. `VTA_HP_FREQ`로 HP 클럭을 바꿀 수 있다.
+- 흐름과 명령(작업 dir `$N/vta-hw-zcu102-multi4/build/y219`, `viv()`는 `vta_synth_notes` §3.3):
+  1. `make bin FREQ=380 JOBS=8`(vta_synth_notes §2.5 1)). 360 때처럼 기본 impl의 write_bitstream DRC(RTSTAT-6)로 `make_rc=2`, 상관없다.
+  2. `VTA_IMPL_DIR=../hardware/xilinx/vivado/zcu102_1x16_i8w8a32_16_15_18_17_4evta_380mhz/vta.runs/impl_1 ../../hardware/xilinx/scripts/y219route/flow/run_flow.sh m380`
+     → rs_m380: WNS −0.046(2, `axi_xbar` → `fetch_2` 레지스터, 배선 91%), WHS −0.001(16), WPWS +0.001.
+  3. `viv route_s_m380o ../../hardware/xilinx/scripts/y219route/flow/route_s.tcl rws_m380.dcp rs_m380o opt`(배선 뒤 phys_opt 3회) → WNS +0.021, WHS −0.001(16).
+     `phys_opt_design -hold_fix`(rs_m380h)는 바뀐 것이 없었다.
+  4. `viv holdnets_m380 ../../hardware/xilinx/scripts/y219route/flow/holdnets.tcl rs_m380o.dcp rs_m380n`: hold 위반 16개가 모두 `smc_2` FIFO의 같은 net 하나였다.
+     그 net만 풀고 다시 배선 → **rs_m380n: WNS +0.021, WHS +0.001, WPWS +0.001**. Y219 행 PIP 0, 미배선 0.
+  5. `python3 $N/vta-hw-zcu102-multi4/hardware/xilinx/scripts/bit2bin.py rs_m380n.bit rs_m380n.bin`, stuckchk 194 / **0 extra**.
+- 클럭: EVTA 379.96 MHz(2.632 ns), HP 333.01 MHz(3.003 ns). 두 클럭 사이 168 경로씩은 setup만(datapath-only max delay, SmartConnect CDC) 여유 1.5 ns.
+- 보드 `bit/evta_multi4_phaseA_261027/vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_380mhz.bin`(md5 `91212da9…`, `/lib/firmware`에 같은 이름).
+- HW 프로브(`probes_m4.sh`, EVTA 0~3): 40/40 통과(gemmprobe 5, sramscan 4, donerace 16/16 각각).
+- `hw_multievtax4/script/run_all.sh`(`OMP_NUM_THREADS=1`): Conv4, Conv, ResConv10 PASS. Resnet18 multi(4 copy)/single 100회 모두 281(틀리면 "The maxIdx should be 281"을 찍는데 0줄).
+- 속도(`run_prof.sh`, total_vta_time, 같은 날 333 MHz `vtahw_multi4_y219.bin`도 다시 잼):
+
+| 번들 | 333 | 380 (HP 333) | 변화 |
+|---|---|---|---|
+| ResConv10 | 146.41 ms | 129.58 ms | −11.5% |
+| Conv4 | 179.60 ms | 158.77 ms | −11.6% |
+| Conv | 54.32 ms | 54.35 ms | 0% |
+| Resnet18 multi | 582.03 ms | 516.57 ms | −11.2% |
+| Resnet18 single | 1303.82 ms | 1157.39 ms | −11.2% |
+
+  - 클럭 비율 기대치는 −12.4%다. 큰 conv와 Resnet18은 거의 클럭만큼 빨라졌다.
+  - **Conv(MultiEVTAConvTest)는 그대로다.** 360 MHz(HP도 360) 때는 −6.0%였다. 이 번들은 load/store 몫이 커서, DMA가 HP 클럭(333)에 묶이면 EVTA 클럭을 올려도 줄지 않는 것으로 보인다.
+    HP 포트를 규격 안에 두는 대가다. 확인하려면 VTA_SYNC 안 load/store 시간을 따로 봐야 한다(PROFILE=1 비트스트림).
+  - 6)의 Conv4 333 값 194.39 ms는 한 번 잰 값이었고 오늘은 179.60 ms다. 360 MHz의 −14.4%는 그 편차 때문이다(오늘 기준이면 −7.4%).
+- **multi4는 380 MHz에서 HP 규격을 지키면서 보드에서 동작한다.** 기본 비트스트림으로 바꿀지는 single, multi2도 HP 분리로 다시 만든 뒤 정한다.
+
 ## 9. 조사 보고서: 외부 설계·논문·문서 분석 (2026-10-27)
 
 받은 원문은 `docs/ref/`에 있다(목록·라이선스·git 포함 여부는 `docs/ref/README.md`). 각 소스를 같은 틀로 정리했다:
