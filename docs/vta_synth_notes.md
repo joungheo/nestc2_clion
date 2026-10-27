@@ -1,6 +1,6 @@
 # vta_synth_notes — EVTA 비트스트림 합성/보드 디버깅 핸드오프
 
-최종 갱신: 2026-10-26. 이 문서는 다음 세션이 바로 이어서 작업할 수 있도록, 명령·경로·함정·코드 위치를 모은 것이다.
+최종 갱신: 2026-10-27 (§8 systolic 검토, Phase A). 이 문서는 다음 세션이 바로 이어서 작업할 수 있도록, 명령·경로·함정·코드 위치를 모은 것이다.
 
 - 실험 경위와 상세 근거는 `log/BOARD_TODO.md`(시간순 기록)에 있다.
 - 디버깅 보고서는 https://claude.ai/artifact/4KvtghuqpzV1GKunEyTRdf (Claude Docs)에 있다.
@@ -710,7 +710,7 @@ it_out (VTAUopLoopBegin(n_kernel_, dst tile_h·tile_w, src 0, wgt KH·KW)) : 출
 
 ### 8.7 다음 세션의 시작 순서
 
-1. **타이밍 근거 확인 (HW 작업 전에)**
+1. **타이밍 근거 확인 (HW 작업 전에)** — 2026-10-27 완료, Phase A 클럭 sweep과 360 MHz 보드 검증까지 §8.8
    - rs_rst DCP(`build/y219/`)를 열어 `report_timing -max_paths 100`을 본다.
    - 333 MHz에서 GEMM 경로가 상위를 차지하는지, systolic으로 몇 MHz를 기대할 수 있는지 판단한다.
    - GEMM이 병목이 아니면 클럭 이득이 작다. 그때는 이 작업의 가치를 다시 판단한다.
@@ -727,7 +727,7 @@ it_out (VTAUopLoopBegin(n_kernel_, dst tile_h·tile_w, src 0, wgt KH·KW)) : 출
 
 ### 8.8 Phase A: 타이밍 근거와 파이프라인만으로 갈 수 있는 클럭 (2026-10-27)
 
-작업 위치: 브랜치 `systolic`, `vta-hw-zcu102-systolic`(single 복사본). 스크립트와 결과: `vta-hw-zcu102-systolic/build/timing/`(`top.tcl`, `*.paths.csv`), 빌드 로그 `build/phaseA/`.
+작업 위치: 브랜치 `systolic`, `vta-hw-zcu102-systolic`(single 복사본). 스크립트와 결과: `vta-hw-zcu102-systolic/hardware/xilinx/scripts/timing/`(`top_paths.tcl`, `y219pips.tcl`), 결과 `build/timing/*.paths.csv`, 빌드 로그 `build/phaseA/`.
 
 **1) 지금 333 MHz의 critical path** (`report_timing -max_paths 1000 -nworst 1`, routed DCP)
 - single(10-23 y219 pass)과 multi4(rs_rst) 모두 상위 1000 경로가 slack 0.23 ns 안에 몰려 있다(slack wall).
@@ -745,17 +745,23 @@ it_out (VTAUopLoopBegin(n_kernel_, dst tile_h·tile_w, src 0, wgt KH·KW)) : 출
 
 **2) 빌드 옵션** (커밋 `ab32e110`, 기본값이면 빌드는 이전과 같다)
 - `make ... MEM_OREG=1`: inp/wgt BRAM 포트 B(compute 읽기)에 출력 레지스터를 켜고, HLS에 read latency 2를 알린다(`vta.cc` `#ifdef VTA_MEM_OREG`).
-  - GEMM 루프는 II=1, 깊이 12다. acc read→write 거리는 약 3사이클 그대로라(ST_45 load, ST_47~48 store) 새 hazard는 없다.
+  - GEMM 루프는 II=1, 깊이 12다. 기준은 깊이 11이다(보드의 10-23 single IP `hls/<CONF>`와 오늘 base `_prof` IP 모두 wgt 16 bank x 128비트).
+    acc read→write 거리는 약 3사이클 그대로라(ST_45 load, ST_47~48 store) 새 hazard는 없다.
+    - 주의: single `hls/<CONF>_prof`(10-20)는 wgt 2 x 1024비트인 옛 구성이라 비교 기준이 아니다.
 - `make ... FREQ=<MHz>`: PLL만 바꾼다. IP는 그대로 쓴다. 빌드 dir 이름은 `<CONF>_prof[_oreg][_<FREQ>mhz]`.
 
 **3) 클럭 sweep** (single, y219 fence, `PROFILE=1`, 기본 implementation strategy)
 
 | 변형 | 333 | 360 | 380 | 400 |
 |---|---|---|---|---|
-| base (지금 구조) | +0.004 (10-23판) | **+0.011** | (빌드 중) | (빌드 중) |
+| base (지금 구조) | +0.004 (10-23판) | **+0.011** | **+0.007** | −0.106 (852 실패) |
 | oreg | +0.026 | **+0.041** | −0.007 (12 실패) | −0.162 (653 실패) |
 
-- **base도 360 MHz를 통과한다.** slack wall은 placer가 목표에 맞춰 멈춘 모양이지 구조적 한계가 아니다.
+- **base도 360, 380 MHz를 통과한다.** slack wall은 placer가 목표에 맞춰 멈춘 모양이지 구조적 한계가 아니다.
+- 이 범위에서는 oreg 효과보다 P&R 편차(±0.05 ns 정도)가 크다. 380에서 base +0.007, oreg −0.007이다. 출력 레지스터만으로는 이득이 없다.
+- base 400 실패(상위 200): wgt_mem → DSP B 99, 덧셈 트리(DSP_OUTPUT → FDRE) 45, inp_mem → DSP A 25, compute 내부 FF 17, load → inp_mem 5.
+  - **GEMM 어레이 경로가 169/200이고, 셋 다 §8.5 구조에서 없어진다**(wgt는 PISO + B1 chain, inp는 fanout 1, 합은 P cascade).
+  - 그룹 최악: load → inp_mem −0.106(6 level), compute FF −0.102, wgt → DSP −0.098, axi_xbar → store −0.083, g2l_queue → compute −0.080, reset −0.068.
 - oreg 380 실패: reset fanout(`proc_sys_reset` → fetch regslice) 73/200, inp broadcast 71/200, acc_mem 쓰기, load → inp_mem.
 - oreg 400 실패의 종류(상위 200 중 개수, 그룹 최악 slack):
 
@@ -772,8 +778,24 @@ it_out (VTAUopLoopBegin(n_kernel_, dst tile_h·tile_w, src 0, wgt KH·KW)) : 출
   - BRAM 출력 레지스터는 BRAM Tco만 줄인다. fanout 346 배선은 그대로라 inp broadcast가 400 MHz에서도 상위에 남는다. 구조(fanout)를 바꿔야 끊긴다.
   - systolic은 400 MHz 실패 경로 중 가장 많은 두 종류(상위 200 중 122개, 최악 −0.162)를 없앤다.
   - 400 MHz를 맞추려면 load 쓰기, out_mem 쓰기, fetch/AXI FIFO, reset 복제도 같이 고쳐야 한다(HLS pipeline/regslice, `proc_sys_reset` 복제).
-- 기대 이득: 파이프라인만으로 약 360~375 MHz(지금 333 대비 +8~12%). systolic과 주변 정리로 400 MHz(+20%). 그 위는 어레이만 2배 클럭(§8.9 #4).
-- 보드 검증은 아직 안 했다: oreg 360, base 360 비트스트림(`build/hardware/xilinx/vivado/*_360mhz/export/*.bin`)을 `run_all.sh`와 stuckchk로 확인해야 한다.
+- 기대 이득: 지금 구조로 360~380 MHz(333 대비 +8~14%, 360은 보드 확인). systolic과 주변 정리(load 쓰기, out_mem, 큐/AXI, reset)로 400 MHz(+20%). 그 위는 어레이만 2배 클럭(§8.9 #4).
+**4) 360 MHz 보드 검증** (2026-10-27, `bit/evta_single_phaseA_261027/`, `/lib/firmware`에 같은 이름)
+- 비트스트림: `vtahw_zcu102_1x16_i8w8a32_16_16_19_18_prof_360mhz`(base, md5 `15768d7c…`), `..._prof_oreg_360mhz`(oreg, md5 `b7a69d41…`).
+- 호스트(§2.2): 두 판 모두 stuckchk 194, 0 extra. Y219 행 PIP net 0(`scripts/timing/y219pips.tcl`).
+- HW 프로브(`hwtest/*_nc`, 케이스마다 bitstream 재로드): 기준 `vtahw_single_y219.bin`과 두 360 판 모두 통과.
+  gemmprobe reset/zero/ident/perm/ones 0/16 wrong, sramscan wgt/inp(+invert) 0 bytes wrong, donerace 16/16.
+- 번들 golden(`hw/run_all.sh`, `BIN=<위>.bin`): 두 판 모두 30 PASS + golden 없는 5개 정상 실행(Resnet18/Partition/50 → 281, Vgg16 → 0, 이전과 같음).
+- 속도(`hw/run_prof.sh`, `_prof` 번들 = `vta/vtalib` + `NESTC_EVTA_PROFILE`, total_vta_time, 2회 반복 편차 0.1% 이내):
+
+| 번들 | 333 (`vtahw_single_y219`) | base 360 | oreg 360 |
+|---|---|---|---|
+| ResConv10 | 2.895 ms | 2.686 ms (−7.2%) | 2.683~2.686 ms (−7.3%) |
+| Conv4 | 3.547 ms | 3.292~3.295 ms (−7.2%) | 3.293~3.294 ms (−7.2%) |
+
+  - 클럭 비율 기대치는 −7.5%다. 시간이 클럭에 비례한다(DDR 병목 아님). oreg의 latency +1은 차이가 없다.
+  - **360 MHz는 지금 구조(base)로 바로 쓸 수 있다.** single 기본 비트스트림으로 바꿀지는 multi2/multi4 360도 본 뒤 정한다.
+- 보드 sudo: `xilinx`는 `/bin/sh`, `hwtest/*`, `hw/*`, `cp * /lib/firmware/*`만 비밀번호 없이 된다.
+  환경 변수를 넘기려면 `sudo -n /bin/sh -c 'BIN=... ./run_all.sh'`.
 
 ### 8.9 조사: Gemmini, Tensil, UG579, AutoSA 등 (2026-10-27)
 
