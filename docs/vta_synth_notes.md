@@ -814,6 +814,14 @@ it_out (VTAUopLoopBegin(n_kernel_, dst tile_h·tile_w, src 0, wgt KH·KW)) : 출
   run_all의 ResConv10 end-to-end(CPU transpose 포함, EVTA 2개 x 100회): 360 210.3 GOPS, 380 215.5 GOPS.
 - **multi2도 380 MHz까지 보드에서 동작한다.**
 
+**주의: 333 MHz 위의 판은 모두 PS8 HP 포트 규격을 벗어난다** (2026-10-27, 위 4)·5)를 확인할 때 WNS/WHS만 보고 놓쳤다)
+- `report_timing_summary`의 Pulse Width: `PS8/SAXIGP<i>RCLK`, `WCLK` Min Period 요구 3.000 ns(333 MHz)다.
+  360은 slack −0.222(2.778 ns), 380은 −0.368이다. single, multi2, multi4 판 모두 WPWS < 0이고, 333 판(3.003 ns)만 통과한다.
+- 보드에서는 위 결과대로 동작했지만 규격 밖이다(온도, 칩마다 보장 안 됨). 기본 비트스트림으로 쓰면 안 된다.
+- 고치는 방법: HP 포트(`saxihp<i>_fpd_aclk`)와 그 앞 register slice/SmartConnect를 333 MHz 이하의 별도 클럭으로 두고,
+  EVTA 쪽 클럭과 AXI clock converter로 잇는다. HP 128 bit x 333 MHz = 5.3 GB/s라 EVTA 대역폭은 충분할 것이다.
+  §8 systolic의 400 MHz 목표도 같은 분리가 필요하다.
+
 **6) multi4 360 MHz** (진행 중): `make bin FREQ=360`(fence `split`) 뒤 `run_flow.sh m360`.
 - `flow/place_d.tcl`의 입력 impl dir을 `VTA_IMPL_DIR`로 바꿀 수 있게 했다. `run_flow.sh`가 이 변수를 docker에 넘긴다.
   build/y219 기준 상대 경로: `VTA_IMPL_DIR=../hardware/xilinx/vivado/zcu102_1x16_i8w8a32_16_15_18_17_4evta_360mhz/vta.runs/impl_1`.
