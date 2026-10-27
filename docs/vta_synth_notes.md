@@ -113,6 +113,8 @@ Makefile 옵션(모두 `#### JO`):
 
 ### 2.2 비트스트림 검증 (호스트) — 보드에 올리기 전 필수
 
+복사해서 쓰는 명령은 §2.5 3)에 있다.
+
 ```bash
 # 1) 타이밍: *.timing.rpt의 WNS >= 0
 # 2) 결함 행 사용 여부: 0 extra여야 함
@@ -170,6 +172,219 @@ python3 vtabundles_xcmpl/hwtest/brambist/stuckchk.py <design.bit> \
   - 생성기가 만드는 multi dir(`MultiEVTAConv4Test`, `MultiEVTAResConv10Test`)은 `hw_multievtax4/MultiEVTAConv4TestSrc/make_multi4conv4.py`가
     `hw/<Name>Test`에서 만든다. single set을 먼저 collect해야 한다.
 - **보드 위 NEST-C 빌드**(필요할 때만): `Debug2_remote/`에서 `make -j2`. 새 build dir을 만들면 메모리가 부족하다(CLAUDE.md 참고).
+
+### 2.5 명령 모음: 빌드부터 보드 측정까지 (2026-10-27 §8.8의 실행 그대로)
+
+셸에 그대로 붙여 넣으면 된다. `<...>` 부분과 맨 앞 변수만 바꾼다. 경로는 모두 절대 경로다.
+호스트 명령은 호스트 셸에서 실행한다(docker 안이 아님, `docker exec`를 명령 안에 넣었다). 보드 명령은 `ssh xilinx@192.168.20.2` 안에서 실행한다.
+- 단계마다 **실행 위치**(어느 기계, 어느 dir)를 적었다. 코드 블록 첫 줄의 `cd`가 그 dir이다. `cd`를 건너뛰면 상대 경로(`rs_$TAG.bit`, `script/run_all.sh`, `result/...`)가 맞지 않는다.
+- 변수(`N`, `VIV`, `T`, `F`, `X`, ...)는 같은 셸에서 이어 쓴다. 새 터미널이나 새 ssh에서는 0)부터 다시 설정한다. 보드의 `B`, `X`는 보드 셸에서 따로 설정한다.
+
+**0) 공통 변수와 이름**
+
+```bash
+# 호스트
+N=/home/ubuntu/npuprg/nestc2_clion/nest-compiler
+VIV="source /tools/Xilinx/v2020.1/Vivado/2020.1/settings64.sh"
+BASEBIT=$N/vta-hw-zcu102-single/build/wgt16_clk200/export/vtahw_zcu102_1x16_i8w8a32_16_16_19_18_wgt16_clk200_lowbram.bit
+# 보드
+B=/home/xilinx/JO/npuprg/nestc2_clion/nest-compiler
+```
+
+| 트리 `T` | `<CONF>` | fence | 보드 번들 dir |
+|---|---|---|---|
+| `single`, `systolic` | `zcu102_1x16_i8w8a32_16_16_19_18` | `y219` | `vtabundles_xcmpl/hw` |
+| `multi2` | `zcu102_1x16_i8w8a32_16_15_18_17_2evta` | `y219` | `vtabundles_xcmpl/hw_multievtax2` |
+| `multi4` | `zcu102_1x16_i8w8a32_16_15_18_17_4evta` | `split` + 재배선(아래 2) | `vtabundles_xcmpl/hw_multievtax4` |
+
+- `<BUILD>` = `<CONF>` + `_prof`(PROFILE=1) + `_oreg`(MEM_OREG=1, systolic 트리만) + `_<FREQ>mhz`(FREQ를 줄 때).
+  예: `zcu102_1x16_i8w8a32_16_15_18_17_2evta_360mhz`, `zcu102_1x16_i8w8a32_16_16_19_18_prof_oreg_360mhz`.
+- 출력 이름 `<X>` = `vtahw_<BUILD>`.
+
+**1) 비트스트림 빌드 (호스트, single/multi2/systolic, multi4는 2)도 이어서)**
+
+실행 위치: 호스트, `$N`. Vivado는 docker 안에서 `-w`로 준 `$N/vta-hw-zcu102-$T/hardware/xilinx`(Makefile이 있는 dir)에서 돈다.
+docker 셸에서 직접 할 때는 `cd $N/vta-hw-zcu102-$T/hardware/xilinx` 뒤 `make ip && make bin FREQ=$F JOBS=8`.
+
+```bash
+cd $N
+T=multi2; F=380                    # F= 를 비우면 config의 333 MHz
+X=vtahw_zcu102_1x16_i8w8a32_16_15_18_17_2evta_${F}mhz     # 위 표대로
+L=$N/vta-hw-zcu102-$T/build/logs; mkdir -p $L
+docker exec -d -u ubuntu -w $N/vta-hw-zcu102-$T/hardware/xilinx vivado2020-build bash -c \
+  "$VIV >/dev/null && { make ip && make bin FREQ=$F JOBS=8; } > $L/bin_$F.log 2>&1; echo rc=\$? >> $L/bin_$F.log"
+tail -2 $L/bin_$F.log              # 끝에 rc=0이 붙으면 끝(30분~1시간 남짓)
+```
+
+- `make ip`는 HLS IP가 이미 있으면(`build/hardware/xilinx/hls/<IP>/.done`) 바로 끝난다. FREQ는 PLL만 바꾸므로 IP를 다시 만들지 않는다.
+- 옵션은 `make bin` 뒤에 붙인다: `PROFILE=1`(make ip에도 같이), `MEM_OREG=1`(systolic, make ip에도 같이).
+  예: `make ip PROFILE=1 MEM_OREG=1 && make bin PROFILE=1 MEM_OREG=1 FREQ=360 JOBS=8`.
+- 같은 트리에서 FREQ만 다른 빌드는 동시에 돌려도 된다(빌드 dir이 다르다). HLS가 같은 IP를 동시에 만들면 안 되므로 `make ip`를 먼저 한 번 끝낸다.
+- 결과: `$N/vta-hw-zcu102-$T/build/hardware/xilinx/vivado/<BUILD>/export/<X>.{bit,bin,hwh,xsa,timing.rpt,utilization.rpt}`.
+- 333 MHz를 넘으면 HP 포트는 333 MHz 별도 클럭으로 간다(multi4 `vivado.tcl`, `70ccf2f7`). 로그에 `HP ports on their own clock` 줄이 나온다.
+
+**2) multi4만: Y219 재배선 (호스트, 1)의 `make bin` 뒤)**
+
+실행 위치: 호스트, **`$N/vta-hw-zcu102-multi4/build/y219`**(필수). `run_flow.sh`가 이 dir에 결과를 쓰고, `VTA_IMPL_DIR`은 이 dir 기준 상대 경로다.
+
+- multi4의 `make bin`은 기본 impl의 write_bitstream DRC(RTSTAT-6)로 `rc=2`로 끝날 수 있다(360 MHz에서 그랬다). 상관없다. 아래 흐름은 `vta_wrapper_opt.dcp`에서 다시 시작한다.
+
+```bash
+F=380; TAG=m$F
+cd $N/vta-hw-zcu102-multi4/build/y219
+VTA_IMPL_DIR=../hardware/xilinx/vivado/zcu102_1x16_i8w8a32_16_15_18_17_4evta_${F}mhz/vta.runs/impl_1 \
+  nohup ../../hardware/xilinx/scripts/y219route/flow/run_flow.sh $TAG > flow_$TAG.log 2>&1 &
+# 몇 시간 걸린다. flow_$TAG.log 끝에 최종 timing 줄이 나오면 끝:
+cat flow_$TAG.log                  # place 뒤 WNS 줄, RapidWright "nets with a PIP", route_s의 CHK, 최종 timing 줄
+grep '^CHK' route_s_$TAG.log       # "CHK nets with any PIP in row Y219: 0", "CHK nets not fully routed: 0" 이어야 한다
+python3 $N/vta-hw-zcu102-multi4/hardware/xilinx/scripts/bit2bin.py rs_$TAG.bit rs_$TAG.bin
+```
+
+- FREQ 없이(333 MHz) 빌드했으면 `VTA_IMPL_DIR`를 주지 않는다(기본값이 `<CONF>` dir이다). TAG는 아무 이름이나 쓴다(예: `rst`).
+- 결과: `routed_$TAG.*`(재배치), `rws_$TAG.*`(RapidWright), `rs_$TAG.{dcp,bit,bin,timing.rpt}`(최종).
+
+**3) 호스트 검증 (보드에 올리기 전, 셋 다 통과해야 한다)**
+
+실행 위치: 호스트, 비트스트림이 있는 dir. single/multi2/systolic은 export dir, multi4는 `build/y219`.
+
+```bash
+# 둘 중 하나만 실행한다
+# (가) single/multi2/systolic
+cd $N/vta-hw-zcu102-$T/build/hardware/xilinx/vivado/<BUILD>/export
+R=$X.timing.rpt; BIT=$X.bit
+# (나) multi4
+cd $N/vta-hw-zcu102-multi4/build/y219
+R=rs_$TAG.timing.rpt; BIT=rs_$TAG.bit
+
+# 공통 (위 dir에서)
+grep -A3 'WNS(ns)' $R | sed -n 3p | awk '{print "WNS",$1," WHS",$5," WPWS",$9}'      # 셋 다 >= 0
+python3 $N/vtabundles_xcmpl/hwtest/brambist/stuckchk.py $BIT -b $BASEBIT | tail -1      # "... 0 extra"
+```
+
+- WPWS(pulse width)가 음수면 333 MHz를 넘는 클럭이 HP 포트에 들어간 것이다(§8.8 주의). WNS/WHS만 보면 놓친다.
+- Y219 행 PIP 수: multi4는 위 `route_s_$TAG.log`의 CHK가 이미 그 값이다. single/multi2는(실행 위치: 호스트 아무 dir, docker는 `$V`에서 돈다):
+  ```bash
+  V=$N/vta-hw-zcu102-$T/build/hardware/xilinx/vivado/<BUILD>
+  docker exec -u ubuntu -w $V vivado2020-build bash -c "$VIV >/dev/null; vivado -mode batch -nojournal -log y219pips.log \
+    -source $N/vta-hw-zcu102-systolic/hardware/xilinx/scripts/timing/y219pips.tcl -tclargs vta.runs/impl_1/vta_wrapper_routed.dcp > /dev/null 2>&1"
+  grep '^CHK' $V/y219pips.log        # "CHK nets with any PIP in row Y219: 0"
+  ```
+- stuckchk에 extra가 있으면 어느 tile인지 본다(§8.8 6). 실행 위치는 위와 같다(`$BIT`가 있는 dir):
+  ```bash
+  RW=$HOME/tools/rapidwright
+  RAPIDWRIGHT_PATH=$RW/d2025.2 java -Xmx16g -cp $RW/rapidwright-2025.2.2-standalone-lin64.jar \
+    $N/vta-hw-zcu102-multi4/hardware/xilinx/scripts/y219route/StuckLoc.java $BIT $BASEBIT | grep 'cr X.Y3'
+  ```
+- critical path 목록(§8.8 1)): 실행 위치 `cd $N/vta-hw-zcu102-systolic/build/timing`(결과도 여기에 생긴다), 그다음
+  `docker exec -u ubuntu -w $PWD vivado2020-build bash -c "$VIV >/dev/null; vivado -mode batch -nojournal -log t_<name>.log -source ../../hardware/xilinx/scripts/timing/top_paths.tcl -tclargs <routed dcp> <name> > /dev/null 2>&1"`.
+  결과는 `<name>.paths.rpt`, `<name>.paths.csv`(slack, logic level, 배선 비율, start/end).
+
+**4) 보드로 복사 (호스트)**
+
+실행 위치: 호스트, `$N`(모든 경로가 절대 경로라 어디서 해도 같다). `X`, `T`, `TAG`, `<BUILD>`는 1)~3)과 같은 값.
+
+```bash
+cd $N
+# 둘 중 하나만 실행한다
+# (가) single/multi2/systolic: export dir 그대로
+E=$N/vta-hw-zcu102-$T/build/hardware/xilinx/vivado/<BUILD>/export
+# (나) multi4: rs_$TAG.* 를 <X> 이름으로 모은다
+E=$N/vta-hw-zcu102-multi4/build/y219/export_$TAG; Y=$N/vta-hw-zcu102-multi4/build/y219; mkdir -p $E
+cp $Y/rs_$TAG.bin $E/$X.bin; cp $Y/rs_$TAG.bit $E/$X.bit; cp $Y/rs_$TAG.timing.rpt $E/$X.timing.rpt
+cp $Y/routed_$TAG.util.rpt $E/$X.utilization.rpt
+cp $N/vta-hw-zcu102-multi4/build/hardware/xilinx/vivado/<BUILD>/vta.srcs/sources_1/bd/vta/hw_handoff/vta.hwh $E/$X.hwh
+
+# 공통
+D=/home/xilinx/JO/npuprg/bit/<목적>_<YYMMDD>          # 예: evta_multi4_phaseA_261027
+ssh xilinx@192.168.20.2 "mkdir -p $D"
+scp $E/$X.{bin,bit,hwh,timing.rpt,utilization.rpt} xilinx@192.168.20.2:$D/
+ssh xilinx@192.168.20.2 "sudo -n cp $D/$X.bin /lib/firmware/$X.bin && md5sum $D/$X.bin /lib/firmware/$X.bin"
+md5sum $E/$X.bin                    # 세 md5가 같아야 한다
+```
+
+**5) 보드: 실행 전 확인과 HW 프로브**
+
+실행 위치: 보드(`ssh xilinx@192.168.20.2`), `$B/vtabundles_xcmpl/hwtest`. `probes.sh`는 스스로 자기 dir(또는 `HWTEST`)로 `cd`한다.
+
+```bash
+B=/home/xilinx/JO/npuprg/nestc2_clion/nest-compiler
+cd $B/vtabundles_xcmpl/hwtest
+ps -eo user,etime,args | grep -E 'run_all|run_prof|Bundle|_nc |_m ' | grep -v grep   # 다른 사람의 EVTA 실행이 없어야 한다
+X=<X>.bin                          # /lib/firmware 안의 이름
+sudo -n /bin/sh -c "NUM_EVTA=0 /bin/sh $B/vtabundles_xcmpl/hwtest/probes.sh $X"      # single. multi2는 NUM_EVTA=2, multi4는 4
+```
+
+- 모든 줄이 `rc=0`이고 gemmprobe `0/16 wrong`, sramscan `0 bytes wrong`, donerace `16/16`이어야 한다. 비트스트림 여러 개를 뒤에 늘어놓아도 된다.
+- 기준판과 같이 돌려 비교한다: single `vtahw_single_y219.bin`, multi2 `vtahw_multi2_y219.bin`, multi4 `vtahw_multi4_y219.bin`.
+- 보드 트리(main 브랜치)에 아직 `probes.sh`가 없으면(systolic 브랜치에서 추가, 2026-10-27), 꺼내서 쓴다:
+  `cd $B && git fetch origin && git show origin/systolic:vtabundles_xcmpl/hwtest/probes.sh > /tmp/probes.sh`, 그리고
+  `sudo -n /bin/sh -c "HWTEST=$B/vtabundles_xcmpl/hwtest NUM_EVTA=4 /bin/sh /tmp/probes.sh $X"`.
+- 프로브 실행 파일(`gemmprobe_nc`, `gemmprobe_evta<e>_m` 등)은 보드 `hwtest/`에 있다(10-23, 10-26 빌드). 다시 만들 때는 `probes.sh` 머리말의 `build.sh` 줄을 쓴다.
+
+**6) 보드: 번들 golden과 속도**
+
+실행 위치: 보드, 비트스트림 종류에 맞는 hw dir: single `$B/vtabundles_xcmpl/hw`, multi2 `$B/vtabundles_xcmpl/hw_multievtax2`, multi4 `$B/vtabundles_xcmpl/hw_multievtax4`.
+`script/run_all.sh`, `result/`가 그 dir 기준 상대 경로다. 결과를 읽을 때도 같은 dir로 간다.
+
+```bash
+B=/home/xilinx/JO/npuprg/nestc2_clion/nest-compiler; X=<X>.bin
+# 둘 중 하나만 실행한다
+# (가) single (hw/)
+cd $B/vtabundles_xcmpl/hw
+nohup sudo -n /bin/sh -c "BIN=$X script/run_all.sh > /tmp/ra_$X.log 2>&1; \
+  for r in 1 2; do BIN=$X script/run_prof.sh ResConv10Test Conv4Test > /tmp/pf_${X}_\$r.log 2>&1; done; echo ALLDONE >> /tmp/ra_$X.log" > /dev/null 2>&1 &
+
+# (나) multi2 / multi4: OMP_NUM_THREADS=1 필수. multi2는 dir만 hw_multievtax2
+cd $B/vtabundles_xcmpl/hw_multievtax4
+nohup sudo -n /bin/sh -c "export OMP_NUM_THREADS=1; BIN=$X script/run_all.sh > /tmp/ra_$X.log 2>&1; \
+  BIN=$X script/run_prof.sh > /tmp/pf_$X.log 2>&1; echo ALLDONE >> /tmp/ra_$X.log" > /dev/null 2>&1 &
+
+# 끝났는지 보고 결과 읽기 (ssh가 끊겨도 nohup이라 계속 돈다). /tmp 로그는 dir 상관없음, result/는 실행한 hw dir에서
+cd $B/vtabundles_xcmpl/hw_multievtax4             # 실행한 hw dir (single이면 hw, multi2면 hw_multievtax2)
+tail -1 /tmp/ra_$X.log                            # ALLDONE
+sed -n '/== summary/,$p' /tmp/ra_$X.log           # PASS / RAN (no golden) 표
+sed -n '/== summary/,$p' /tmp/pf_$X*.log          # Dir마다 exit, golden, total_time, total_vta_time
+cat result/results.txt result/prof_summary.txt   # 같은 표의 파일(hw dir 안, 다음 실행이 덮어쓴다)
+```
+
+- 비교 기준(333 MHz)도 같은 명령에 `X=vtahw_<single|multi2|multi4>_y219.bin`을 넣어 같은 날 다시 잰다.
+- 속도 비교는 `total_vta_time`(EVTA 시간)으로 한다. `total_time`은 CPU 연산을 포함한다.
+- `run_prof.sh`에 Dir를 주지 않으면 run_all.sh의 모든 번들을 돈다. `_prof` 번들이 빌드되지 않은 Dir는 `NOT BUILT`으로 나온다.
+- 번들을 다시 만들어야 하면 `vtabundles_xcmpl/README.md` 순서(Debug2_remote `build_sim_bundles.sh` → `collect_hw_bundles.py [--set <set>]` → `build*/`에서 `make -j2 hw_bundles`)를 따른다.
+
+**7) Phase B: systolic 런타임으로 번들 (보드)**
+
+실행 위치: 보드. 풀기는 `$B`(git 명령), 빌드는 `$B/vtabundles_xcmpl/build_sysprof`, 실행과 결과는 `$B/vtabundles_xcmpl/hw`. 블록 안 `cd`대로 간다.
+
+```bash
+B=/home/xilinx/JO/npuprg/nestc2_clion/nest-compiler
+# vtalib-zcu102-systolic을 보드 main 트리 밖에 푼다
+cd $B && git fetch origin && mkdir -p /home/xilinx/JO/npuprg/systolic && \
+  git archive origin/systolic vtalib-zcu102-systolic | tar -x -C /home/xilinx/JO/npuprg/systolic
+# 번들 빌드 (make.log 끝에 rc=0)
+cd $B/vtabundles_xcmpl && mkdir -p build_sysprof && cd build_sysprof && \
+  cmake -DVTALIB=/home/xilinx/JO/npuprg/systolic/vtalib-zcu102-systolic -DNESTC_EVTA_PROFILE=ON -DBUNDLE_EXE_SUFFIX=_sysprof .. > cmake.log 2>&1 && \
+  nohup sh -c "make -j2 hw_bundles > make.log 2>&1; echo rc=\$? >> make.log" > /dev/null 2>&1 &
+# 실행: build_sysprof/make.log 끝이 rc=0이 된 뒤에. 원래 런타임(_prof)과 새 런타임(_sysprof)
+tail -1 $B/vtabundles_xcmpl/build_sysprof/make.log      # rc=0
+cd $B/vtabundles_xcmpl/hw
+nohup sudo -n /bin/sh -c "BIN=vtahw_single_y219.bin script/run_prof.sh all > /tmp/pf_prof.log 2>&1; \
+  BIN=vtahw_single_y219.bin script/run_prof.sh -s _sysprof all > /tmp/pf_sysprof.log 2>&1" > /dev/null 2>&1 &
+# 두 실행이 끝난 뒤(/tmp/pf_sysprof.log 끝에 표가 나옴), 같은 hw dir에서
+cat result/prof_summary.txt result/sysprof_summary.txt     # 두 표를 나란히 비교
+```
+
+- vtalib를 고친 뒤에는 위 `git archive` 줄로 다시 풀고, `build_sysprof`에서 `make -j2 hw_bundles`만 다시 한다.
+
+**8) Phase C: 사이클 모델 (호스트)**
+
+실행 위치: 호스트, 아무 dir(소스와 실행 파일 모두 절대 경로).
+
+```bash
+cd $N
+g++ -O2 -std=c++14 -Wall -o /tmp/systolic_model $N/vta-hw-zcu102-systolic/hardware/xilinx/sim/systolic_model.cc
+/tmp/systolic_model 300 1          # 인자: 무작위 테스트 수, seed. 모두 일치하면 끝에 가동률 표를 찍는다
+```
 
 ## 3. 찾은 버그, 원인, 해결
 
@@ -729,7 +944,7 @@ it_out (VTAUopLoopBegin(n_kernel_, dst tile_h·tile_w, src 0, wgt KH·KW)) : 출
 
 ### 8.8 Phase A: 타이밍 근거와 파이프라인만으로 갈 수 있는 클럭 (2026-10-27)
 
-작업 위치: 브랜치 `systolic`, `vta-hw-zcu102-systolic`(single 복사본). 스크립트와 결과: `vta-hw-zcu102-systolic/hardware/xilinx/scripts/timing/`(`top_paths.tcl`, `y219pips.tcl`), 결과 `build/timing/*.paths.csv`, 빌드 로그 `build/phaseA/`.
+작업 위치: 브랜치 `systolic`, `vta-hw-zcu102-systolic`(single 복사본). 아래 결과를 다시 내는 명령은 §2.5에 있다. 스크립트와 결과: `vta-hw-zcu102-systolic/hardware/xilinx/scripts/timing/`(`top_paths.tcl`, `y219pips.tcl`), 결과 `build/timing/*.paths.csv`, 빌드 로그 `build/phaseA/`.
 
 **1) 지금 333 MHz의 critical path** (`report_timing -max_paths 1000 -nworst 1`, routed DCP)
 - single(10-23 y219 pass)과 multi4(rs_rst) 모두 상위 1000 경로가 slack 0.23 ns 안에 몰려 있다(slack wall).
