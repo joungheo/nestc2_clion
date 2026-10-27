@@ -6,6 +6,19 @@
 - 디버깅 보고서는 https://claude.ai/artifact/4KvtghuqpzV1GKunEyTRdf (Claude Docs)에 있다.
 - 속도 측정 보고서(EVTA 4개 609.7 GOPS, ResConv10 구조와 동작): `docs/evta_multi4_609gops_report.md`. 요약은 §6.
 - 이 문서는 "지금 무엇이 되고, 어떻게 돌리며, 어디가 위험한가"만 다룬다.
+- **명령 표기**: 실행하는 것이 나오는 곳마다 그대로 붙여 넣을 명령과 실행 위치(호스트/보드, dir)를 적었다.
+  명령 안의 변수는 아래 값이다. 새 셸마다 먼저 설정한다(§2.5 0)과 같다).
+  ```bash
+  # 호스트 PC
+  N=/home/ubuntu/npuprg/nestc2_clion/nest-compiler
+  VIV="source /tools/Xilinx/v2020.1/Vivado/2020.1/settings64.sh"
+  RW=$HOME/tools/rapidwright
+  BASEBIT=$N/vta-hw-zcu102-single/build/wgt16_clk200/export/vtahw_zcu102_1x16_i8w8a32_16_16_19_18_wgt16_clk200_lowbram.bit
+  # 보드 (ssh xilinx@192.168.20.2)
+  B=/home/xilinx/JO/npuprg/nestc2_clion/nest-compiler
+  ```
+  - 호스트의 Vivado 명령은 호스트 셸에서 `docker exec -u ubuntu -w <dir> vivado2020-build bash -c "$VIV >/dev/null; ..."`로 돌린다. `-w <dir>`가 실행 위치다.
+  - 보드의 root 명령은 `sudo -n /bin/sh -c "..."` 형태로만 된다(§1.2).
 
 ## 0. 현재 상태 한눈에
 
@@ -58,6 +71,11 @@
     - 클래스 이름이 jar 안의 난독화 클래스와 겹치면 안 된다(예: `M`).
   - `Design.readCheckpoint(x.dcp)`는 옆에 **암호화되지 않은 `x.edf`**가 있어야 한다. Vivado에서 `write_edif`로 만든다.
   - RapidWright가 쓴 DCP는 Vivado 2020.1에서 그대로 열린다.
+  - 실행 형태(호스트, DCP가 있는 dir에서. 2025.2 jar는 데이터 dir `d2025.2`와 짝):
+    ```bash
+    RAPIDWRIGHT_PATH=$RW/d2025.2 java -Xmx64g -cp $RW/rapidwright-2025.2.2-standalone-lin64.jar <File.java> <args>
+    RAPIDWRIGHT_PATH=$RW/d2020.1 java -Xmx64g -cp $RW/rapidwright-2020.1.7-standalone-lin64.jar <File.java> <args>
+    ```
 
 ### 1.2 보드 (ZCU102, PYNQ 2.4 / Ubuntu 18.04, aarch64)
 
@@ -69,19 +87,21 @@
   - 등록된 명령: `/usr/bin/python3`, `/bin/cp * /lib/firmware/*`, `/bin/sh`, `hwtest/*`, `hw/*`
   - 스크립트는 `sudo -n /bin/sh -c "bash /tmp/x.sh"`처럼 통째로 sudo로 돌리고, 안에서는 sudo를 쓰지 않는다.
   - `sudo ./prog`는 실패한다("a password is required").
-- **비트스트림 로드 순서(매 실행 전)**:
+- **비트스트림 로드 순서(매 실행 전)**. 실행 위치: 보드, `$B`. root가 필요해서 `sudo -n /bin/sh -c`로 감싼다:
   ```bash
-  cp <x>.bin /lib/firmware/
-  echo 0 > /sys/class/fpga_manager/fpga0/flags
-  echo <x>.bin > /sys/class/fpga_manager/fpga0/firmware
-  python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()"
-  python3 vtabundles_xcmpl/hwtest/plreset.py     # pl_resetn0 펄스 (EMIO GPIO 95)
+  cd $B
+  X=<x>.bin                                   # 예: vtahw_multi4_y219.bin
+  sudo -n cp /home/xilinx/JO/npuprg/bit/<dir>/$X /lib/firmware/$X     # /lib/firmware에 없을 때만
+  sudo -n /bin/sh -c "echo 0 > /sys/class/fpga_manager/fpga0/flags; echo $X > /sys/class/fpga_manager/fpga0/firmware; \
+    cd /tmp && python3 -c 'from pynq import Xlnk; Xlnk().xlnk_reset()'; \
+    python3 $B/vtabundles_xcmpl/hwtest/plreset.py"     # 마지막 줄: pl_resetn0 펄스 (EMIO GPIO 95)
+  cat /sys/class/fpga_manager/fpga0/state      # operating
   ```
-  - 위 1-3줄은 `sudo vtabundles_xcmpl/hw/script/load_bit.sh <x>.bin`과 같다(2026-10-27).
+  - 위 firmware 쓰기와 `xlnk_reset`은 `sudo -n /bin/sh -c "$B/vtabundles_xcmpl/hw/script/load_bit.sh $X"`와 같다(2026-10-27, plreset은 안 함).
     `xlnk_reset`을 `hw/trace/`에서 실행하므로 `sds_trace_data.dat`(PYNQ `libcma.so`가 종료 시 현재 dir에 씀)가 거기에만 생긴다.
   - 멈춘 실행은 auto-restart 블록을 deadlock 상태로 남긴다. 그래서 매번 다시 로드한다.
-  - Ctrl-C로 중단한 뒤에는 `xlnk_reset`이 필요하다. CMA 누수가 생기면 "fpga_buff_ != nullptr" 에러가 난다.
-- **JTAG/ILA를 쓸 때**: 부팅 후 `sudo vtabundles_xcmpl/hwtest/nocpuidle.sh`를 먼저 실행한다.
+  - Ctrl-C로 중단한 뒤에는 `xlnk_reset`이 필요하다(보드: `sudo -n /bin/sh -c "cd /tmp && python3 -c 'from pynq import Xlnk; Xlnk().xlnk_reset()'"`). CMA 누수가 생기면 "fpga_buff_ != nullptr" 에러가 난다.
+- **JTAG/ILA를 쓸 때**: 부팅 후 먼저 실행한다(보드): `cd $B/vtabundles_xcmpl/hwtest && sudo -n /bin/sh -c ./nocpuidle.sh`.
   - 하지 않으면 hw_server 연결 몇 분 뒤 Linux가 조용히 죽는다(cpuidle 문제).
   - JTAG 케이블은 호스트 PC의 hw_server에 붙어 있다.
 
@@ -89,11 +109,18 @@
 
 ### 2.1 비트스트림 (호스트, docker 안)
 
+실행 위치: docker 안, `$N/vta-hw-zcu102-<single|multi2|multi4|systolic>/hardware/xilinx`(Makefile이 있는 dir).
+
 ```bash
-cd <nest-compiler>/vta-hw-zcu102-{single,multi2,multi4}/hardware/xilinx
+# 호스트에서 docker 셸로 들어가서
+docker exec -it -u ubuntu vivado2020-build bash
+source /tools/Xilinx/v2020.1/Vivado/2020.1/settings64.sh
+cd /home/ubuntu/npuprg/nestc2_clion/nest-compiler/vta-hw-zcu102-single/hardware/xilinx
 make ip            # HLS 4블록 (fetch/load/compute/store) → build/hardware/xilinx/hls/<CONF>[_prof]/.done
-make bin           # Vivado 블록디자인+구현 → .bit → bit2bin.py → .bin   (전체 약 30분~1시간+)
+make bin JOBS=8    # Vivado 블록디자인+구현 → .bit → bit2bin.py → .bin   (전체 약 30분~1시간+)
 ```
+
+docker 셸 없이 호스트에서 백그라운드로 돌리는 형태는 §2.5 1)에 있다.
 
 Makefile 옵션(모두 `#### JO`):
 
@@ -106,7 +133,7 @@ Makefile 옵션(모두 `#### JO`):
 | 환경변수 `VTA_BRAM_FENCE` | zcu102 전용. `y219`(기본, EVTA 2개 이하) / `split`(EVTA 3개 이상 기본값, 현재 실패) / `upper` / `none` |
 
 - 출력: `build/hardware/xilinx/vivado/<CONF>[_prof]/export/vtahw_<CONF>[_prof].{bit,bin,hwh,xsa}`와 timing/utilization 리포트.
-- `<CONF>` 문자열은 `python3 config/vta_config.py --cfg-str`로 확인한다.
+- `<CONF>` 문자열은 확인한다(호스트, 트리 루트): `cd $N/vta-hw-zcu102-single && python3 config/vta_config.py --cfg-str`.
   - single은 `zcu102_1x16_i8w8a32_16_16_19_18`이다. 숫자 순서는 uop/inp/wgt/acc log2 바이트다.
   - multi는 뒤에 `_<N>evta`가 붙는다.
 - 다른 설정으로 빌드할 때는 트리를 복사해 별도 build dir을 쓴 예가 있다(`build/clk200`, `build/wgt16_clk200` 등).
@@ -115,54 +142,95 @@ Makefile 옵션(모두 `#### JO`):
 
 복사해서 쓰는 명령은 §2.5 3)에 있다.
 
+실행 위치: 호스트, 비트스트림의 export dir(`$N/vta-hw-zcu102-<T>/build/hardware/xilinx/vivado/<BUILD>/export`).
+
 ```bash
-# 1) 타이밍: *.timing.rpt의 WNS >= 0
-# 2) 결함 행 사용 여부: 0 extra여야 함
-python3 vtabundles_xcmpl/hwtest/brambist/stuckchk.py <design.bit> \
-  -b vta-hw-zcu102-single/build/wgt16_clk200/export/vtahw_zcu102_1x16_i8w8a32_16_16_19_18_wgt16_clk200_lowbram.bit
-# 3) (Vivado) Y219 INT 타일에 PIP가 있는 net 수 = 0 : y219route/flow/route_s.tcl 이 출력
+cd $N/vta-hw-zcu102-single/build/hardware/xilinx/vivado/zcu102_1x16_i8w8a32_16_16_19_18/export    # 예
+X=vtahw_zcu102_1x16_i8w8a32_16_16_19_18
+# 1) 타이밍: WNS, WHS, WPWS 모두 >= 0
+grep -A3 'WNS(ns)' $X.timing.rpt | sed -n 3p | awk '{print "WNS",$1," WHS",$5," WPWS",$9}'
+# 2) 결함 행 사용 여부: 마지막 줄이 "0 extra"여야 함 (extra가 있으면 exit 1)
+python3 $N/vtabundles_xcmpl/hwtest/brambist/stuckchk.py $X.bit -b $BASEBIT | tail -1
+# 3) Y219 INT 타일에 PIP가 있는 net 수 = 0  (multi4는 run_flow.sh의 route_s 로그가 같은 값을 찍는다, §2.5 2))
 #    stuckchk 0 extra만으로는 부족하다: 결함 셀을 안 쓰는 Y219 PIP도 5% 정도 동작하지 않는다(§3.1)
+docker exec -u ubuntu -w $PWD/.. vivado2020-build bash -c "$VIV >/dev/null; vivado -mode batch -nojournal -log y219pips.log \
+  -source $N/vta-hw-zcu102-systolic/hardware/xilinx/scripts/timing/y219pips.tcl -tclargs vta.runs/impl_1/vta_wrapper_routed.dcp > /dev/null 2>&1"
+grep '^CHK' ../y219pips.log        # "CHK nets with any PIP in row Y219: 0"
 ```
 
 ### 2.3 시뮬레이션
 
-- **HLS C sim**: `make ip CSIM=1`. 테스트벤치는 `hardware/xilinx/sim/vta_test.cc`다.
+- **HLS C sim**: docker 안 `$N/vta-hw-zcu102-single/hardware/xilinx`에서 `make ip CSIM=1`. 테스트벤치는 `hardware/xilinx/sim/vta_test.cc`다.
 - **C/RTL cosim, PL 전체 시뮬레이션**: 스크립트가 git-ignore된 scratch dir에만 있다.
   - cosim: `vta-hw-zcu102-single/build/hardware/xilinx/cosim/`(`cosim.tcl`, `cosim_load.tcl`, `compute_tb.cc`)
   - PL 블록디자인 시뮬레이션(PS 대신 AXI VIP): `build/simbd`
   - 결과 요약은 BOARD_TODO 2026-10-20 "host PC" 절에 있다.
+  - compute C/RTL cosim. 실행 위치: 호스트, `cosim` dir. 인자 끝 숫자는 profile(0/1). 결과는 `cosim_p<p>.log`:
+    ```bash
+    cd $N/vta-hw-zcu102-single/build/hardware/xilinx/cosim
+    C=../include/zcu102_1x16_i8w8a32_16_16_19_18/vta_config.tcl
+    for p in 0 1; do docker exec -u ubuntu -w $PWD vivado2020-build bash -c "$VIV >/dev/null; vivado_hls -f cosim.tcl -tclargs $C $p > cosim_p$p.log 2>&1" & done; wait
+    grep -E "RESULT|ERROR|C/RTL co-simulation finished" cosim_p0.log cosim_p1.log
+    # load 블록: vivado_hls -f cosim_load.tcl -tclargs $C 0 > cosim_load.log
+    ```
+  - PL 블록디자인 시뮬레이션. 실행 위치: 호스트, `cosim/simbd`. 인자는 HLS IP dir, vta_config.tcl, profile.
+    `prog_<case>.hex`(gen_prog.cc가 만든 명령 이미지)를 `tb.sv`가 돌린다. 결과는 `sim_p<p>.log`:
+    ```bash
+    H=$N/vta-hw-zcu102-single/build/hardware/xilinx; cd $H/cosim/simbd
+    for p in 0 1; do S=$([ $p = 1 ] && echo _prof); docker exec -u ubuntu -w $PWD vivado2020-build bash -c "$VIV >/dev/null; \
+      vivado -mode batch -nojournal -log simbd_p$p.log -source simbd.tcl -tclargs $H/hls/zcu102_1x16_i8w8a32_16_16_19_18$S \
+      $H/include/zcu102_1x16_i8w8a32_16_16_19_18/vta_config.tcl $p > /dev/null 2>&1" & done; wait
+    # 프로젝트를 만든 뒤 시뮬레이션만 다시:
+    for p in 0 1; do docker exec -u ubuntu -w $PWD vivado2020-build bash -c "$VIV >/dev/null; vivado -mode batch -nojournal -log sim_p$p.log -source rerun.tcl -tclargs vtasim_p$p/vtasim.xpr > /dev/null 2>&1" & done; wait
+    grep -E "^ERROR|out:|SIMDONE|FATAL" sim_p0.log sim_p1.log
+    ```
 - **설계는 시뮬레이션에서 모두 맞았다.** 보드 문제는 전부 실리콘 결함 때문이었다(§3.1). 시뮬레이션이 PASS라고 보드가 맞는 것은 아니다.
 
 ### 2.4 런타임 / 테스트 (보드)
 
-- **ISA 프로브와 HW 테스트**(`vtabundles_xcmpl/hwtest/`, NEST-C/Glow 없이 vtalib만 링크):
+- **ISA 프로브와 HW 테스트**(`vtabundles_xcmpl/hwtest/`, NEST-C/Glow 없이 vtalib만 링크). 빌드 위치: 보드, `$B/vtabundles_xcmpl/hwtest`(sudo 없이):
   ```bash
-  cd vtabundles_xcmpl/hwtest
-  VTA_COHERENT=false SUFFIX=_nc ./build.sh gemmprobe sramscan donerace          # single
-  VTA_COHERENT=false SUFFIX=_m BUFF="15 18 17" XFER=8388608 EVTA=$e ./build.sh sramscan   # multi, EVTA e
+  cd $B/vtabundles_xcmpl/hwtest
+  VTA_COHERENT=false SUFFIX=_nc ./build.sh gemmprobe sramscan donerace          # single → gemmprobe_nc, sramscan_nc, donerace_nc
+  for e in 0 1 2 3; do VTA_COHERENT=false SUFFIX=_m BUFF="15 18 17" XFER=8388608 EVTA=$e ./build.sh gemmprobe sramscan donerace; done
+                                                                                 # multi → gemmprobe_evta<e>_m, ... (multi2는 e = 0 1)
+  BUFF="15 18 17" XFER=8388608 NUM_EVTA=4 SUFFIX=_m ./build.sh multi_gemm_gemm   # → multi_gemm_gemm_4evta_m
   ```
+  - 실행 위치: 보드, 같은 dir. 테스트 하나마다 비트스트림을 다시 로드한다. `X`는 `/lib/firmware` 안의 이름:
+    ```bash
+    cd $B/vtabundles_xcmpl/hwtest; X=vtahw_single_y219.bin
+    sudo -n /bin/sh -c "$B/vtabundles_xcmpl/hw/script/load_bit.sh $X && ./gemmprobe_nc reset"     # 테스트 하나
+    sudo -n /bin/sh -c "NUM_EVTA=0 /bin/sh ./probes.sh $X"      # 프로브 전체(gemmprobe 5, sramscan 4, donerace). multi는 NUM_EVTA=2|4
+    ```
   - `sramscan wgt|inp [invert] [dump]`: SRAM 전체에 패턴을 쓰고 GEMM+STORE로 읽어 비교한다. 0 bytes wrong이어야 한다.
+    `dump`로 쓴 `sramscan_wgt.bin`은 `python3 sramscan_analyse.py sramscan_wgt.bin [invert]`로 뱅크별로 본다.
   - `gemmprobe_<reset|zero|ident|perm|ones>`: 10개 명령짜리 GEMM. `GP_IDX=n`으로 SRAM 인덱스를 바꾼다.
   - `donerace`: 드라이버 done race 회귀 테스트. 16/16이어야 한다.
-  - `gemm_nc`, `add_test_nc`, `rawtest*`: vtalib 기본 테스트와 raw ISA 프로브.
-  - `multi_gemm_gemm` (+`NUM_EVTA=2`): multi-EVTA 동시 실행.
-  - 보조 도구:
-    - `dump_regs.py`: 블록 레지스터 덤프
-    - `dump_insns.py`: fetch가 가리키는 DRAM 명령 디코드
-    - `plclk.py`: pl_clk, HP 포트 폭(AFIFM)
+  - `gemm_nc`, `add_test_nc`, `rawtest*`: vtalib 기본 테스트와 raw ISA 프로브(`sudo -n /bin/sh -c "cd $B/vtabundles_xcmpl/hwtest && ./run_rawtests.sh"`, `./run_rawtests2.sh [case ...]`).
+  - `multi_gemm_gemm_4evta_m`(`NUM_EVTA=4`로 빌드, multi2는 `NUM_EVTA=2` → `_2evta_m`): multi-EVTA 동시 실행. 모든 EVTA가 "Golden Matched"여야 한다:
+    `sudo -n /bin/sh -c "$B/vtabundles_xcmpl/hw/script/load_bit.sh vtahw_multi4_y219.bin && cd $B/vtabundles_xcmpl/hwtest && timeout 120 ./multi_gemm_gemm_4evta_m"`
+  - 보조 도구(보드, `$B/vtabundles_xcmpl/hwtest`에서, 비트스트림을 로드한 뒤 `sudo -n /bin/sh -c "python3 <도구> <인자>"`):
+    - `dump_regs.py [EVTA ...]`: 블록 레지스터 덤프. 예 `python3 dump_regs.py 0 1`
+    - `dump_insns.py [EVTA] [count]`: fetch가 가리키는 DRAM 명령 디코드
+    - `plclk.py`: pl_clk, HP 포트 폭(AFIFM). 인자 없음
+    - `plclkset.py <MHz>|stop|start|show`: pl_clk0 변경
+    - `regpat.py <EVTA ...>`: 레지스터 비트 패턴 쓰기/읽기. 예 `python3 regpat.py 0 1 2 3`
     - `regtest.py`
 - **번들**: 순서는 `vtabundles_xcmpl/README.md`를 따른다.
-  1. Debug2_remote에서 `build_sim_bundles.sh`
-  2. `collect_hw_bundles.py`
-  3. `build/`에서 `make -j2 hw_bundles`
-  4. `sudo hw/run_all.sh`
-  - `run_all.sh`/`run_prof.sh`는 `BIN=${BIN:-<set 기본값>}`이다. 다른 비트스트림은 `sudo BIN=<x>.bin ./run_all.sh`.
+  1. 번들 소스 생성. 실행 위치: 보드, `$B/Debug2_remote`(시뮬레이터 빌드): `./build_sim_bundles.sh [target ...]`
+  2. hw dir로 복사. 실행 위치: 보드, `$B/vtabundles_xcmpl`: `./collect_hw_bundles.py [--set multievtax2|multievtax4] [Dir ...]`
+  3. 빌드. 실행 위치: 보드, `$B/vtabundles_xcmpl/build`(single) 또는 `build_<set>`: `make -j2 hw_bundles`
+     (새 build dir: `mkdir build_multievtax4 && cd build_multievtax4 && cmake -DBUNDLE_SET=multievtax4 -DVTALIB=$B/vtalib-zcu102-multi4 .. && make -j2 hw_bundles`)
+  4. 실행. 실행 위치: 보드, hw dir(`$B/vtabundles_xcmpl/hw`, `hw_multievtax2`, `hw_multievtax4`):
+     `sudo -n /bin/sh -c "BIN=<x>.bin script/run_all.sh [Dir ...]"`. 결과 표는 로그 끝 `== summary`와 `result/results.txt`(§2.5 6))
+  - `run_all.sh`/`run_prof.sh`는 `BIN=${BIN:-<set 기본값>}`이다. 다른 비트스트림은 hw dir에서 `sudo -n /bin/sh -c "BIN=<x>.bin script/run_all.sh"`.
     `run_prof.sh`는 `run_all.sh`에서 BIN 기본값을 읽고, `/lib/firmware/$BIN`이 없으면 멈춘다(2026-10-26 `a37e3e0b`, §3.4 #3).
   - 두 스크립트 모두 `/tmp/evta_run.lock`을 `flock -n`으로 잡는다. 다른 EVTA 실행이 있으면 바로 끝난다(§3.4 #4).
     직접 스크립트를 쓸 때도 `exec 9>/tmp/evta_run.lock; flock -n 9 || exit 1`을 넣는다.
   - set: `single`(`hw/`, `build*/`), `multievtax2`(`hw_multievtax2/`, `cmake -DBUNDLE_SET=multievtax2`),
     `multievtax4`(`hw_multievtax4/`, `-DBUNDLE_SET=multievtax4 -DVTALIB=<root>/vtalib-zcu102-multi4`).
     `_prof`/`_timed` 빌드는 `build_<set>_prof`, `build_<set>_timed`.
+    새 build dir은 보드 `$B/vtabundles_xcmpl`에서 `mkdir build_<set>[_prof] && cd build_<set>[_prof] && cmake -DBUNDLE_SET=<set> [-DVTALIB=$B/vtalib-zcu102-multi4] [-DNESTC_EVTA_PROFILE=ON -DBUNDLE_EXE_SUFFIX=_prof] .. && make -j2 hw_bundles`(대괄호는 필요할 때만 넣는다). single은 `-DBUNDLE_SET`를 빼고 dir 이름은 `build`/`build_prof`.
   - 새 비트스트림에는 `-DVTALIB=$PWD/../../vtalib-zcu102-<single|multi2|multi4>`로 짝이 맞는 vtalib 복사본을 쓴다.
     지금은 원본 `vta/vtalib`와 복사본 3개가 주석까지 같다(`config.mk` 제외). 복사본은 런타임 실험용으로 남겨 둔다.
   - `VTA_MAX_XFER`는 vtalib CMake의 `NESTC_EVTA_MAX_XFER`다(2026-10-26 `e119fac9`, vtalib `f716ed3`).
@@ -171,7 +239,8 @@ python3 vtabundles_xcmpl/hwtest/brambist/stuckchk.py <design.bit> \
     `NESTC_EVTA_PROFILE=ON`만 켜면(APM 없음) 일반 비트스트림에서도 VTA_SYNC(EVTA run 시작부터 done까지)가 기록된다.
   - 생성기가 만드는 multi dir(`MultiEVTAConv4Test`, `MultiEVTAResConv10Test`)은 `hw_multievtax4/MultiEVTAConv4TestSrc/make_multi4conv4.py`가
     `hw/<Name>Test`에서 만든다. single set을 먼저 collect해야 한다.
-- **보드 위 NEST-C 빌드**(필요할 때만): `Debug2_remote/`에서 `make -j2`. 새 build dir을 만들면 메모리가 부족하다(CLAUDE.md 참고).
+    보드 `$B/vtabundles_xcmpl`에서 `./collect_hw_bundles.py --set multievtax4 MultiEVTAResConv10Test`가 이것을 부른다.
+- **보드 위 NEST-C 빌드**(필요할 때만): 보드 `cd $B/Debug2_remote && make -j2 <target>`. 새 build dir을 만들면 메모리가 부족하다(CLAUDE.md 참고).
 
 ### 2.5 명령 모음: 빌드부터 보드 측정까지 (2026-10-27 §8.8의 실행 그대로)
 
@@ -186,6 +255,7 @@ python3 vtabundles_xcmpl/hwtest/brambist/stuckchk.py <design.bit> \
 # 호스트
 N=/home/ubuntu/npuprg/nestc2_clion/nest-compiler
 VIV="source /tools/Xilinx/v2020.1/Vivado/2020.1/settings64.sh"
+RW=$HOME/tools/rapidwright
 BASEBIT=$N/vta-hw-zcu102-single/build/wgt16_clk200/export/vtahw_zcu102_1x16_i8w8a32_16_16_19_18_wgt16_clk200_lowbram.bit
 # 보드
 B=/home/xilinx/JO/npuprg/nestc2_clion/nest-compiler
@@ -403,13 +473,38 @@ g++ -O2 -std=c++14 -Wall -o /tmp/systolic_model $N/vta-hw-zcu102-systolic/hardwa
   - 위치: clock-region row 3, type-0 frame 20586..27350, frame word 61 bit 18과 word 62 bit 0-3·12-14
   - 이것은 tile row **SLICE Y219**에 해당한다(RAMB36 Y43 / RAMB18 Y86-87 / DSP Y86-87).
   - 다시 readback, fpga_manager 재로드, JTAG 프로그래밍 모두 같은 결과였다. 장치 자체의 결함이다.
+  - readback 명령. 실행 위치: 호스트, `<BUILD>/verify`(없으면 만든다). 먼저 보드에서 `nocpuidle.sh`(§1.2)를 하고 그 bit를 로드한다(§1.2, mask와 같이 만든 `vta.bit`를 bit2bin한 것):
+    ```bash
+    E=$N/vta-hw-zcu102-single/build/hardware/xilinx/vivado/zcu102_1x16_i8w8a32_16_16_19_18_lowbram/verify; mkdir -p $E; cd $E
+    # mask와 같은 설정의 bit (routed DCP에서)
+    docker exec -u ubuntu -w $E vivado2020-build bash -c "$VIV >/dev/null; vivado -mode batch -nojournal -log msk.log \
+      -source $N/vtabundles_xcmpl/hwtest/brambist/msk.tcl -tclargs ../vta.runs/impl_1/vta_wrapper_routed.dcp vta > /dev/null 2>&1"   # → vta.bit, vta.msk
+    python3 $N/vtabundles_xcmpl/hwtest/bit2bin.py vta.bit vta.bin      # 이것을 보드에 올려 로드한다
+    docker exec -u ubuntu -w $E vivado2020-build bash -c "$VIV >/dev/null; vivado -mode batch -nojournal -log rb.log \
+      -source $N/vtabundles_xcmpl/hwtest/brambist/readback.tcl -tclargs rbE > rb.out 2>&1"      # → rbE.bin (JTAG, 프로그래밍 안 함)
+    python3 $N/vtabundles_xcmpl/hwtest/brambist/cfgdiff.py vta.bit vta.msk rbE.bin | head      # 틀린 비트의 frame/word/bit
+    # JTAG로 프로그래밍한 뒤 readback: ... -source $N/vtabundles_xcmpl/hwtest/brambist/progrb.tcl -tclargs <x>.bit rbJ
+    ```
+    `readback.tcl`/`progrb.tcl`은 docker에서 호스트의 hw_server(`172.17.0.1:3121`)에 붙는다.
 - **해결**: 설계를 Y219 행 밖에 두는 pblock fence(`vivado.tcl`의 `VTA_BRAM_FENCE`).
   - `y219` 모드에서는 PS를 뺀 모든 셀을 pblock `SLICE_X0Y0:SLICE_X96Y218`(+ RAMB36 ..Y42, RAMB18 ..Y85, DSP ..Y85)에 넣는다.
   - 이 pblock에 CONTAIN_ROUTING을 건다.
   - Y219 행의 사이트와 MMCM row 3..6에는 PROHIBIT를 건다.
-  - 검증은 `stuckchk.py`로 0 extra를 확인하는 것이다.
+  - 검증은 `stuckchk.py`로 0 extra를 확인하는 것이다(호스트: `python3 $N/vtabundles_xcmpl/hwtest/brambist/stuckchk.py <x>.bit -b $BASEBIT`).
   - 모든 설계가 공통으로 쓰는 194비트(word 62 bit 0, 미사용 타일 설정)는 기준선이라 제외한다.
 - **2026-10-25 추가: 행 안의 PIP 자체도 일부 고장이다.** wire 검사 설계(`y219route/WireTest.java`, README 참고)로 확인했다.
+  - 실행 위치: 호스트, `$N/vta-hw-zcu102-multi4/build/wiretest`. 설계 생성(RapidWright) → bit 생성·보드 로드·JTAG readback·판정(`wiretest_run.sh`가 전부 함):
+    ```bash
+    Y=$N/vta-hw-zcu102-multi4/hardware/xilinx/scripts/y219route; cd $N/vta-hw-zcu102-multi4/build/wiretest
+    # 정적 검사: 행 위를 지나가는 wire. 인자: <out> [row=219] [max nets=0 (전부)] [x 범위]
+    RAPIDWRIGHT_PATH=$RW/d2025.2 java -Xmx24g -cp $RW/rapidwright-2025.2.2-standalone-lin64.jar $Y/WireTest.java $PWD/wt_a 219 0 0-999 > wt_a.log 2>&1
+    bash $Y/wiretest_run.sh . wt_a wtb_a            # → 고장 node 목록, bad/wrong 수
+    # 속도 검사(-Dspeed=1)와 행 안 PIP 검사(-Dinrow=1)
+    RAPIDWRIGHT_PATH=$RW/d2025.2 java -Dspeed=1 -Dinrow=1 -Dpips=$Y/stuck_int_pips.txt -Xmx24g -cp $RW/rapidwright-2025.2.2-standalone-lin64.jar \
+      $Y/WireTest.java $PWD/wr_a 219 0 0-999 > wr_a.log 2>&1
+    bash $Y/wirespeed_run.sh . wr_a wrb_a 100 300 500 750     # MHz마다 결과
+    ```
+    `wiretest_run.sh`는 보드 `nocpuidle.sh`도 먼저 실행한다. 설계는 PS에 연결되지 않아 AXI로 보드가 멈출 일은 없다.
   - 행 위를 지나가기만 하는 wire(NN/SS 2·4·12): 20,207개 모두 정상, 750 MHz까지.
   - 결함 셀을 쓰지 않는 Y219 PIP를 거친 net: 6,850개 중 382개(5.6%)가 정적으로 실패. readback은 bitstream과 같다. 열마다 고장 PIP가 다르다.
   - 그래서 규칙은 "Y219 INT 타일의 PIP 0개"다. stuckchk 0 extra인 rs_m은 레지스터 비트가 틀리고 EVTA 접근 시 보드가 멈췄다.
@@ -420,10 +515,10 @@ g++ -O2 -std=c++14 -Wall -o /tmp/systolic_model $N/vta-hw-zcu102-systolic/hardwa
 
 | # | 위치 | 버그 | 원인 | 수정 |
 |---|---|---|---|---|
-| 1 | `vivado.tcl` `pll_clk` | `pl_resetn0`가 clk_wiz까지 리셋해서, 리셋 펄스 동안 333 MHz 클럭이 멈추고 HLS 블록과 FIFO가 리셋되지 않음 | clk_wiz `RESET_PORT` | `CONFIG.USE_RESET {false}`. locked → proc_sys_reset `dcm_locked`. 로드 후 `plreset.py` |
+| 1 | `vivado.tcl` `pll_clk` | `pl_resetn0`가 clk_wiz까지 리셋해서, 리셋 펄스 동안 333 MHz 클럭이 멈추고 HLS 블록과 FIFO가 리셋되지 않음 | clk_wiz `RESET_PORT` | `CONFIG.USE_RESET {false}`. locked → proc_sys_reset `dcm_locked`. 로드 후 `plreset.py`(보드 `sudo -n /bin/sh -c "python3 $B/vtabundles_xcmpl/hwtest/plreset.py"`) |
 | 2 | `pkg_config.py` (zcu102) | 1024비트 wgt 뱅크에 128비트 beat를 read-modify-write로 씀(II=2) | HLS load의 wide BRAM 쓰기 | zcu102에서는 모든 SRAM 뱅크를 AXI beat 폭(128비트)으로. wgt는 16 x 128비트. 결함 행이 주원인이었지만 이 수정은 유지 |
 | 3 | `vivado.tcl` | 구현 중 HLS 블록과 큐가 재최적화되어 구현마다 달라짐 | — | fetch/load/compute/store와 7개 큐에 DONT_TOUCH |
-| 4 | `pynq_driver.cc` `Run()` (vta/vtalib와 vtalib-zcu102-* 3개) | **done race**: compute `done_o`(0x18)에 이전 FINISH의 1이 남아 있어 바로 리턴함 | HLS s_axilite 출력 레지스터의 유지 동작 | 시작 전에 `done_o_ap_vld`(0x1c, clear-on-read)를 비우고, vld를 본 뒤에만 done을 인정. `hwtest/donerace` 16/16. **이전의 보드 결과(특히 conv 번들)는 의심해야 한다** |
+| 4 | `pynq_driver.cc` `Run()` (vta/vtalib와 vtalib-zcu102-* 3개) | **done race**: compute `done_o`(0x18)에 이전 FINISH의 1이 남아 있어 바로 리턴함 | HLS s_axilite 출력 레지스터의 유지 동작 | 시작 전에 `done_o_ap_vld`(0x1c, clear-on-read)를 비우고, vld를 본 뒤에만 done을 인정. `hwtest/donerace` 16/16(보드 hwtest dir: `sudo -n /bin/sh -c "$B/vtabundles_xcmpl/hw/script/load_bit.sh <x>.bin && ./donerace_nc 16"`). **이전의 보드 결과(특히 conv 번들)는 의심해야 한다** |
 | 5 | `hwtest/sramscan.cpp` | multi 비트스트림에서 바이트 전부 틀림 | 테스트 버그: CHUNK=256 → acc 4096행을 썼는데 multi의 acc 깊이는 2048 | `CHUNK = ACC_DEPTH / 16`, 깊이는 hw_spec.h에서 가져옴 (`3091bd8f`) |
 | 6 | `hw_spec.h` (vtalib + vta-hw) | 3비트 `memory_type`/`alu_opcode`로 모든 LOAD/STORE 주소가 1비트 어긋남 | 보드 비트스트림은 2비트 | `VTA_MEMOP_ID_BIT_WIDTH 2`, `VTA_ALU_OPCODE_BIT_WIDTH 2` (`//#### JO`). 그 결과 ALU `MUL`(4)과 `MEM_ID_MOVE`(5)는 인코딩할 수 없다(BNN/XP-GEMM 경로 불가) |
 | 7 | vtalib coherent | `VTA_COHERENT_ACCESSES=true`면 보드에서 hang | HP 포트가 non-coherent | `NESTC_EVTA_COHERENT_ACCESSES` 기본 OFF. 번들이 `VTABufferFlush/Invalidate`를 호출(`VTASave.cpp`가 생성) |
@@ -491,12 +586,41 @@ g++ -O2 -std=c++14 -Wall -o /tmp/systolic_model $N/vta-hw-zcu102-systolic/hardwa
 | RapidWright 2025.2 RWRoute partial(`Y219RWRoute.java`) → `rw_a`/`rw_b` | WNS −1.58 ns, sink 78~156개 미배선. RWRoute는 설계의 clock 제약을 몰라 criticality가 0 |
 | **dummy로 Y219 노드 점유 + Vivado 재배선**(`Y219Block.java` + `build/y219/y219block.tcl`) → `blk_e` | **WNS 0.000, WHS +0.006**, 미배선 0. 그러나 dummy를 지운 뒤 **169 net이 Y219 PIP 사용** — Vivado가 sink 없는(ANTENNAS) dummy net의 노드를 막힌 자원으로 보지 않는 것으로 보임(조사 중) |
 
-- 원인 분석(RapidWright, `~/tools/rapidwright/t/Up.java`):
+위 표의 각 시도를 다시 돌리는 명령. 실행 위치: 호스트, **`$N/vta-hw-zcu102-multi4/build/y219`**(스크립트 안의 상대 경로가 이 dir 기준이다).
+입력은 `make bin`(fence `split`, FREQ 없음)의 `../hardware/xilinx/vivado/zcu102_1x16_i8w8a32_16_15_18_17_4evta/vta.runs/impl_1`.
+RapidWright가 읽는 DCP 옆에는 같은 이름의 `.edf`가 있어야 한다(Vivado `write_edif`, `place_d.tcl`은 직접 쓴다).
+
+```bash
+cd $N/vta-hw-zcu102-multi4/build/y219
+Y=../../hardware/xilinx/scripts/y219route
+viv() { docker exec -u ubuntu -w $PWD vivado2020-build bash -c "$VIV >/dev/null; vivado -mode batch -nojournal -log $1.log -source $2 -tclargs ${*:3} > /dev/null 2>&1"; }
+viv route_a2 $Y/flow/route_a2.tcl                 # CONTAIN_ROUTING 없이 배선 → routed_a2.dcp
+viv place_d  $Y/flow/place_d.tcl routed_d         # Y218-220 배치 금지 → routed_d.{dcp,edf,timing.rpt}
+# Y219Route.java (RapidWright 2020.1, v1~v3 = 그때의 소스 판; 지금 소스는 마지막 판)
+RAPIDWRIGHT_PATH=$RW/d2020.1 java -Xmx110g -Dlimit=5000000 -Dbudget=3000 -cp $RW/rapidwright-2020.1.7-standalone-lin64.jar \
+  $Y/Y219Route.java routed_d.dcp rr_d.dcp > rr_d.log 2>&1
+# RWRoute partial (RapidWright 2025.2)
+RAPIDWRIGHT_PATH=$RW/d2025.2 java -Xmx100g -cp $RW/rapidwright-2025.2.2-standalone-lin64.jar $Y/Y219RWRoute.java routed_d.dcp rw_a.dcp > rw_a.log 2>&1
+# dummy 점유 + Vivado 재배선
+RAPIDWRIGHT_PATH=$RW/d2025.2 java -Xmx100g -Dxw=6 -cp $RW/rapidwright-2025.2.2-standalone-lin64.jar $Y/Y219Block.java routed_d.dcp blk_c.dcp > blk_c.log 2>&1
+viv blk_c_v $Y/flow/y219block.tcl blk_c.dcp blk_f     # → blk_f.dcp, 로그의 "CHK nets ..." 줄
+grep '^CHK' blk_c_v.log
+# Vivado로 연 DCP의 Y219 PIP net 수 (위 어느 결과든)
+viv y219pips $N/vta-hw-zcu102-systolic/hardware/xilinx/scripts/timing/y219pips.tcl rr_d.dcp; grep '^CHK' y219pips.log
+```
+
+- 원인 분석(RapidWright, `y219route/Up.java`, 원본 `~/tools/rapidwright/t/Up.java`). 호스트 아무 dir에서
+  `RAPIDWRIGHT_PATH=$RW/d2020.1 java -Xmx16g -cp $RW/rapidwright-2020.1.7-standalone-lin64.jar $N/vta-hw-zcu102-multi4/hardware/xilinx/scripts/y219route/Up.java SLICE_X47Y218 F4`:
   - Y218 행 IMUX 입력의 uphill 노드 절반은 Y219 타일의 INODE(_BLS)에서 온다. Y220 행은 BLN에서 같은 구조다.
   - Y219 PIP를 막으면 Y218/Y220 sink는 로컬 INT_NODE_IMUX 3개만 남는다. 그래서 혼잡해진다.
   - 그래서 바로 옆 행까지 비우면 net들은 그 행을 "지나가기만" 하게 된다.
 - RapidWright 메모: 2020.1.7은 재배선기 v1-v3, 2025.2.2는 RWRoute와 `Y219Block`(2023.2는 이 설계의 clock leaf 노드에서 예외). 2025.2의 data dir에는 jar 안의 `timing/ultrascaleplus/*.txt`를 풀어 둬야 한다. Vivado 2020.1은 2025.2가 쓴 DCP를 읽는다.
-- 그림 다시 만들기: `FloorDump.java <dcp> <csv>`(RapidWright 2025.2, `.edf` 필요) → `floorplan_svg.py <csv> docs/figs` (둘 다 `vta-hw-zcu102-multi4/hardware/xilinx/scripts/y219route/`).
+- 그림 다시 만들기(`docs/figs/zcu102_y219.svg`, `multi4_placement.svg`). 실행 위치: 호스트, `$N/vta-hw-zcu102-multi4/build/y219`(`routed_d.dcp`와 `.edf`가 있는 dir):
+  ```bash
+  cd $N/vta-hw-zcu102-multi4/build/y219; Y=../../hardware/xilinx/scripts/y219route
+  RAPIDWRIGHT_PATH=$RW/d2025.2 java -Xmx60g -cp $RW/rapidwright-2025.2.2-standalone-lin64.jar $Y/FloorDump.java routed_d.dcp routed_d.csv
+  python3 $Y/floorplan_svg.py routed_d.csv $N/docs/figs
+  ```
 - 2026-10-25 이후:
 
 | 시도 | 결과 |
@@ -509,9 +633,40 @@ g++ -O2 -std=c++14 -Wall -o /tmp/systolic_model $N/vta-hw-zcu102-systolic/hardwa
 | rs_hp + `mmcm_set.tcl` MULT 44.5 → **rs_hpm (309.6 MHz)** | WNS +0.019, WHS +0.008. stuckchk: multi2와 같은 194개, 0 extra. 보드: regpat(3회 로드), gemmprobe 4/4, sramscan, donerace 16/16(EVTA 0-3), `multi_gemm_gemm_4evta_m` 3회 모두 Golden Matched. 같은 묶음을 두 번 돌려 모두 PASS |
 | + EVTA별 `proc_sys_reset_<i>` (각 EVTA pblock 안) → **rs_rst (333 MHz)** | WNS +0.008, WHS +0.010, Y219 PIP 0. stuckchk 194, 0 extra. 보드: gemmprobe, sramscan, donerace, mg4 3회 PASS. Conv4 EVTA 시간 1.864 ms(124 GOPS/EVTA) |
 
-- 재현 순서는 `vta-hw-zcu102-multi4/hardware/xilinx/scripts/y219route/README.md`에 있다(작업 dir `build/y219`).
+위 표를 다시 돌리는 명령. 실행 위치: 호스트, **`$N/vta-hw-zcu102-multi4/build/y219`**. `viv()`와 `Y`는 위 블록과 같다.
+
+```bash
+cd $N/vta-hw-zcu102-multi4/build/y219; Y=../../hardware/xilinx/scripts/y219route
+viv() { docker exec -u ubuntu -w $PWD vivado2020-build bash -c "$VIV >/dev/null; vivado -mode batch -nojournal -log $1.log -source $2 -tclargs ${*:3} > /dev/null 2>&1"; }
+# 결함 셀 PIP 목록 (U-Ray segbits_int.db, build/wiretest/uray/에 받아 둠)
+python3 $Y/stuckpips.py $N/vta-hw-zcu102-multi4/build/wiretest/uray/segbits_int.db > $Y/stuck_int_pips.txt
+# rs_m: 결함 셀 PIP만 금지 (보드 실패)
+RAPIDWRIGHT_PATH=$RW/d2025.2 java -Xmx100g -Dcrit=0.95 -Dpips=$Y/stuck_int_pips.txt -cp $RW/rapidwright-2025.2.2-standalone-lin64.jar \
+  $Y/Y219RWRoute.java blk_f.dcp rws_m.dcp > rws_m.log 2>&1
+viv route_s_m $Y/flow/route_s.tcl rws_m.dcp rs_m
+# rs_z: 행의 PIP 전부 금지 (-Dpips 없음)
+RAPIDWRIGHT_PATH=$RW/d2025.2 java -XX:ActiveProcessorCount=8 -Dcrit=0.95 -Xmx64g -cp $RW/rapidwright-2025.2.2-standalone-lin64.jar \
+  $Y/Y219RWRoute.java blk_f.dcp rws_z.dcp > rws_z.log 2>&1
+viv route_s_z $Y/flow/route_s.tcl rws_z.dcp rs_z; grep '^CHK' route_s_z.log
+# MMCM만 바꾸기 (배치·배선 그대로): rs_zm 280 MHz = MULT 40.25, rs_hpm 309.6 MHz = MULT 44.5
+viv mm_z  $Y/flow/mmcm_set.tcl rs_z.dcp rs_zm 40.25
+viv mm_hp $Y/flow/mmcm_set.tcl rs_hp.dcp rs_hpm 44.5
+grep -A3 'WNS(ns)' rs_hpm.timing.rpt | sed -n 3p
+# rs_hp, rs_rst: vivado.tcl을 바꾼 make bin 뒤 전체 흐름 (place_d → Y219RWRoute → route_s), §2.5 2)
+nohup $Y/flow/run_flow.sh rst > flow_rst.log 2>&1 &
+# 각 결과 bit의 검사와 .bin
+python3 $N/vtabundles_xcmpl/hwtest/brambist/stuckchk.py rs_rst.bit -b $BASEBIT | tail -1
+python3 $N/vta-hw-zcu102-multi4/hardware/xilinx/scripts/bit2bin.py rs_rst.bit rs_rst.bin
+```
+
+보드 확인(rs_*.bin을 `/lib/firmware`에 넣은 뒤, 보드 `$B/vtabundles_xcmpl/hwtest`에서):
+`sudo -n /bin/sh -c "NUM_EVTA=4 /bin/sh ./probes.sh rs_rst.bin"`, `sudo -n /bin/sh -c "$B/vtabundles_xcmpl/hw/script/load_bit.sh rs_rst.bin && python3 regpat.py 0 1 2 3"`,
+`sudo -n /bin/sh -c "$B/vtabundles_xcmpl/hw/script/load_bit.sh rs_rst.bin && timeout 120 ./multi_gemm_gemm_4evta_m"`(mg4).
+
+- 재현 순서는 `vta-hw-zcu102-multi4/hardware/xilinx/scripts/y219route/README.md`에 있다(작업 dir `build/y219`). 지금 쓰는 흐름의 명령은 §2.5 1)·2).
 - 버퍼를 줄여 4개를 모두 아래에 넣는 안은 시작했다가 중단했다.
-- 타이밍: 333 MHz에서 배치 단계부터 −0.1 ns 수준이다. DONT_TOUCH를 풀고 다시 배치하는 `build/y219/place_f.tcl`이 준비되어 있다. 300 MHz로 내리려면 `pkg_config.py`의 zcu102 `fpga_freq`/`fpga_per`.
+- 타이밍: 333 MHz에서 배치 단계부터 −0.1 ns 수준이다. DONT_TOUCH를 풀고 다시 배치하는 `place_f.tcl`이 준비되어 있다(`y219route/flow/place_f.tcl`, build/y219에서 `viv place_f $Y/flow/place_f.tcl` → `routed_f.dcp`).
+  클럭만 바꾸려면 `make bin FREQ=<MHz>`(§2.5 1)). config 기본값은 `config/pkg_config.py`의 zcu102 `fpga_freq`/`fpga_per`.
 
 #### 333 MHz까지 간 과정 (rs_hpm → rs_rst, 2026-10-25~26)
 
@@ -523,12 +678,12 @@ g++ -O2 -std=c++14 -Wall -o /tmp/systolic_model $N/vta-hw-zcu102-systolic/hardwa
    - 결과 **rs_hp**: 333 MHz WNS −0.199.
 2. rs_hp의 남은 위반은 전역 `proc_sys_reset` 하나에서 compute_3(위쪽 맨 끝)으로 가는 리셋 fan-out이었다.
    지연의 97%가 배선이었다.
-   - 우선 MMCM을 309.6 MHz(MULT 44.5, `flow/mmcm_set.tcl`)로 내린 **rs_hpm**으로 보드를 확인했다(WNS +0.019).
+   - 우선 MMCM을 309.6 MHz(MULT 44.5, `flow/mmcm_set.tcl`, 명령은 위 블록의 `viv mm_hp ...`)로 내린 **rs_hpm**으로 보드를 확인했다(WNS +0.019).
 3. **rs_rst**: `vivado.tcl` `add_evta`가 EVTA마다 `proc_sys_reset_<i>`를 만들고 그 EVTA의 pblock 안에 둔다.
    - 리셋 net이 Y219를 건너지 않게 됐다.
-   - `flow/run_flow.sh rst`(place_d → Y219RWRoute → route_s) 결과: WNS +0.008, WHS +0.010, Y219 PIP 0, stuckchk 194(0 extra).
+   - `flow/run_flow.sh rst`(place_d → Y219RWRoute → route_s, build/y219에서 `nohup ../../hardware/xilinx/scripts/y219route/flow/run_flow.sh rst > flow_rst.log 2>&1 &`) 결과: WNS +0.008, WHS +0.010, Y219 PIP 0, stuckchk 194(0 extra).
    - 보드: gemmprobe 4/4, sramscan 0 wrong, donerace 16/16(EVTA 0-3), mg4 3회 Golden Matched.
-   - 번들(`hw_multievtax4/run_all.sh`)은 MultiEVTAConvTest와 MultiEVTAConv4Test가 PASS, Resnet18 4 copy와 single이 281.
+   - 번들(보드 `cd $B/vtabundles_xcmpl/hw_multievtax4 && sudo -n /bin/sh -c "OMP_NUM_THREADS=1 script/run_all.sh"`)은 MultiEVTAConvTest와 MultiEVTAConv4Test가 PASS, Resnet18 4 copy와 single이 281.
      MultiEVTAResConv10Test는 직접 실행(§6)에서 4개 출력 모두 golden이었다(`run_all.sh`로는 아직 안 돌림).
    - 비트스트림: `bit/evta_multi4_y219_333MHz_pass_261026/`, 커밋 `dfec80f7`.
    - 309.6 → 333 MHz(+7.7%)로 Conv4 EVTA 시간은 1.909 → 1.864 ms(−2.4%)만 줄었다. load/store가 GEMM 뒤에 숨지 않는 비율이 크기 때문이다.
@@ -538,13 +693,13 @@ g++ -O2 -std=c++14 -Wall -o /tmp/systolic_model $N/vta-hw-zcu102-systolic/hardwa
 
 | # | 증상 | 원인 | 수정 |
 |---|---|---|---|
-| 1 | 보드의 `vtalib-zcu102-single/multi2`에 done race 수정(§3.2 #4)이 없었다. 그 전의 일부 결과는 수정 없는 런타임으로 잰 것이다 | PC에서 고치고 push했지만 보드가 pull하지 않았다. 반대 방향으로 파일을 옮겨 맞추다 엇갈렸다 | 보드에서 `git pull --ff-only`. vtalib 서브모듈은 보드에서 init되지 않았으므로 `vta/vtalib` 안에서 pull한다. 바뀐 런타임으로 다시 실험해 single Conv4/ResConv1, multi2/multi4 run_all 모두 PASS, Resnet18 281. 이후 규칙: 보드에서 고치고 보드에서 push, PC는 pull. 복사본을 맞추기 전에는 (1) 보드의 원본과 복사본, (2) 보드와 PC(주석 포함)를 비교해 어느 쪽이 새것인지 먼저 정한다 |
+| 1 | 보드의 `vtalib-zcu102-single/multi2`에 done race 수정(§3.2 #4)이 없었다. 그 전의 일부 결과는 수정 없는 런타임으로 잰 것이다 | PC에서 고치고 push했지만 보드가 pull하지 않았다. 반대 방향으로 파일을 옮겨 맞추다 엇갈렸다 | 보드에서 `cd $B && git pull --ff-only && cd vta/vtalib && git pull --ff-only`. vtalib 서브모듈은 보드에서 init되지 않았으므로 `vta/vtalib` 안에서 pull한다. 바뀐 런타임으로 다시 실험해 single Conv4/ResConv1, multi2/multi4 run_all 모두 PASS, Resnet18 281. 이후 규칙: 보드에서 고치고 보드에서 push, PC는 pull. 복사본을 맞추기 전에는 (1) 보드의 원본과 복사본, (2) 보드와 PC(주석 포함)를 비교해 어느 쪽이 새것인지 먼저 정한다 |
 | 2 | `build_*_timed`에서 cmake 실패: 같은 `mxnet_exported_resnet18.cpp`에 custom command가 두 개 | multi set에서 한 Dir의 실행 파일 두 개(single/multi thread)가 같은 .cpp를 쓰는데, timed 사본 경로가 같았다 | timed 사본 경로를 `timed/<Dir>/<target>/<file>`로 바꿨다. 실행 파일 하나에 timed .cpp가 여러 개면 `timing_<stem>.csv`로 따로 쓴다(`8002aeab`) |
 | 3 | `run_prof.sh`가 비트스트림을 다시 로드하지 않았다(이전 실행의 PL에 그대로 돎) | `run_all.sh`의 `BIN=${BIN:-x.bin}` 줄을 그대로 읽어 `BIN`이 리터럴 `${BIN:-x.bin}`이 됐다. firmware 쓰기가 실패했지만 계속 진행했다 | sed로 기본값만 뽑고, `/lib/firmware/$BIN`이 없으면 멈춘다(`a37e3e0b`) |
 | 4 | 사용자의 `run_prof.sh -s _timed`(multi4)와 내 single `_prof` 실행이 겹쳤다: `Internal error: Oops: 9600014e`(SError), bus error(exit 135), MISMATCH, 중간에 "writing ... to Xilinx ZynqMP FPGA Manager", EVTA별 시간 표가 안 나옴 | 실행마다 PL을 다시 로드하므로, 한 실행이 다른 실행이 쓰는 중인 PL을 바꿔 넣었다 | 혼자 다시 돌려 모두 PASS. `run_all.sh`/`run_prof.sh`가 `/tmp/evta_run.lock`을 잡는다(`68a51f05`). 공유 보드이므로 실행 전 `ps`/`dmesg`도 확인한다 |
-| 5 | `build_multievtax2`에 새 타깃(`multi4conv4Bundle`)이 없음 | `add_bundle_if_present`는 configure할 때 hw dir에 소스가 있어야 타깃을 만든다. collect 전에 configure했다 | collect 뒤 `cmake .` 다시 실행 |
+| 5 | `build_multievtax2`에 새 타깃(`multi4conv4Bundle`)이 없음 | `add_bundle_if_present`는 configure할 때 hw dir에 소스가 있어야 타깃을 만든다. collect 전에 configure했다 | collect 뒤 build dir에서 `cmake .` 다시 실행(보드 `cd $B/vtabundles_xcmpl/build_multievtax2 && cmake . && make -j2 hw_bundles`) |
 | 6 | multi set의 `VTA_MAX_XFER`가 xcmpl `CMakeLists.txt`에만 있었다. vtalib만 가져가는 사람은 32 MB 기본값으로 CMA가 모자란다 | — | vtalib CMake 옵션 `NESTC_EVTA_MAX_XFER`(`e119fac9`, vtalib `f716ed3`) |
-| 7 | 4-EVTA conv 측정이 412~579 GOPS로 실행마다 달랐다 | 스레드 4개가 각자 OpenMP 4개(기본값)를 띄워 4코어에 16개가 됐다. conv 사이 CPU 명령어 생성이 늦어지고, 가장 늦은 EVTA가 wall을 정한다 | conv 반복 측정은 `OMP_NUM_THREADS=1`. ResConv10 609.7, Conv4 491.6~493.4로 3회 모두 같다(§6) |
+| 7 | 4-EVTA conv 측정이 412~579 GOPS로 실행마다 달랐다 | 스레드 4개가 각자 OpenMP 4개(기본값)를 띄워 4코어에 16개가 됐다. conv 사이 CPU 명령어 생성이 늦어지고, 가장 늦은 EVTA가 wall을 정한다 | conv 반복 측정은 `OMP_NUM_THREADS=1`(예: §6.1 아래 명령). ResConv10 609.7, Conv4 491.6~493.4로 3회 모두 같다(§6) |
 | 8 | 측정 도중 보드 ssh가 몇 분씩 끊겼다. 보드에서 `git push`가 github.com:22 타임아웃 | 보드 쪽 네트워크(재부팅은 없었음, `uptime -s` 그대로). 인터넷은 되고 22번 포트만 막혔다 | 긴 측정은 `nohup`으로 보드에서 돌리고 결과 파일을 나중에 읽는다. push는 연결이 돌아온 뒤 다시 한다. `pkill -f "git push"`를 ssh 명령 안에서 쓰면 그 ssh 셸 자신도 죽는다 |
 
 - single 기본 비트스트림을 etri `zcu102_1x16_i8w8a32_16_16_19_18.bin`에서 `vtahw_single_y219.bin`으로 바꿨다(`50cdfe85`).
@@ -576,7 +731,7 @@ g++ -O2 -std=c++14 -Wall -o /tmp/systolic_model $N/vta-hw-zcu102-systolic/hardwa
 
 **보드와 런타임**
 - `.bin` 이름은 `vtahw_` 접두사를 붙인다. etri 비트스트림(`zcu102_1x16_i8w8a32_16_16_19_18.bin`)과 CONF 문자열이 같아서 덮어쓸 위험이 있다.
-- HP1-3 포트 폭은 비트스트림이 아니라 **부트 이미지**(AFIFM 레지스터)가 정한다. multi에서 0이 나오면 `plclk.py`로 확인한다. 현재 보드는 모두 128비트다.
+- HP1-3 포트 폭은 비트스트림이 아니라 **부트 이미지**(AFIFM 레지스터)가 정한다. multi에서 0이 나오면 `plclk.py`로 확인한다(보드 `cd $B/vtabundles_xcmpl/hwtest && sudo -n /bin/sh -c "python3 plclk.py"`, HP 줄). 현재 보드는 모두 128비트다.
 - CMA 풀은 128 MB이고 런타임은 핸들당 2 x `VTA_MAX_XFER`(기본 32 MB → 64 MB)를 미리 잡는다.
   - multi에서는 vtalib CMake `NESTC_EVTA_MAX_XFER`(multi2 8 MB, multi4 4 MB)로 줄인다. hwtest는 `XFER=`.
   - 4-EVTA 테스트를 2-EVTA 비트스트림에서 돌리면 안 된다. EVTA2/3 레지스터가 없다.
@@ -586,7 +741,8 @@ g++ -O2 -std=c++14 -Wall -o /tmp/systolic_model $N/vta-hw-zcu102-systolic/hardwa
   - APM(prof): `0xA0050000 + i*0x10000`
   - 자세한 내용은 BOARD_TODO "Register map".
 - `dump_regs.py`로 compute 0x1c를 읽으면 안 된다. 실행 중에 읽으면 vld가 지워진다.
-- vta-hw의 `reset_reg` GEMM은 out에 **이전 acc+곱** 값을 쓴다. etri HW는 0을 쓴다. 의미가 다르다(`gemmprobe reset`).
+- vta-hw의 `reset_reg` GEMM은 out에 **이전 acc+곱** 값을 쓴다. etri HW는 0을 쓴다. 의미가 다르다
+  (보드 hwtest dir에서 `sudo -n /bin/sh -c "$B/vtabundles_xcmpl/hw/script/load_bit.sh <x>.bin && ./gemmprobe_nc reset"`).
 
 **ILA**
 - 프로브 이름은 opt 이후 `vta_i/<net>` 또는 `u_ila_0_<net>`가 된다. Tcl regexp로 매칭한다.
@@ -725,6 +881,27 @@ g++ -O2 -std=c++14 -Wall -o /tmp/systolic_model $N/vta-hw-zcu102-systolic/hardwa
 | 문장별 시간 | `build*_timed/`(`-DBUNDLE_TIMED=ON -DBUNDLE_EXE_SUFFIX=_timed`), `run_prof.sh -s _timed` → `timed.log`, `timing*.csv` | `timed_bundle.py`가 번들 .cpp의 문장마다 시간 측정을 넣는다. conv/FC는 GOPS도 | `convolution_wo_tr` 시간 = CPU 명령어 생성 + EVTA + 완료 대기 |
 | 여러 EVTA 동시 | `hw_multievtax{2,4}/MultiEVTA<Name>Test/multi4<name>Bundle <mask> <iters> [conv]` | barrier로 같이 출발해 마지막 EVTA가 끝날 때까지의 wall, EVTA별 시간, golden 비교 | `conv`는 `convolution_wo_tr`만 반복. **`OMP_NUM_THREADS=1`로 잰다** |
 
+각 방법의 명령. 실행 위치: 보드. 빌드는 `$B/vtabundles_xcmpl/build*`, 실행은 hw dir(single `hw`, multi `hw_multievtax2|4`).
+비트스트림 `X`는 `/lib/firmware` 안의 이름이다. 실행 전 `ps`로 다른 EVTA 실행이 없는지 본다(§2.5 5)).
+
+```bash
+X=vtahw_multi4_y219.bin
+# 번들 전체 시간 (golden 포함): 로그 끝 == summary, result/results.txt
+cd $B/vtabundles_xcmpl/hw_multievtax4 && sudo -n /bin/sh -c "OMP_NUM_THREADS=1 BIN=$X script/run_all.sh"     # 뒤에 Dir 이름을 붙이면 그 번들만
+# VTA_SYNC: 빌드 dir이 없으면 한 번 만든다 (multievtax4는 -DVTALIB=$B/vtalib-zcu102-multi4도)
+cd $B/vtabundles_xcmpl && mkdir -p build_multievtax4_prof && cd build_multievtax4_prof && \
+  cmake -DBUNDLE_SET=multievtax4 -DVTALIB=$B/vtalib-zcu102-multi4 -DNESTC_EVTA_PROFILE=ON -DBUNDLE_EXE_SUFFIX=_prof .. && make -j2 hw_bundles
+cd $B/vtabundles_xcmpl/hw_multievtax4 && sudo -n /bin/sh -c "OMP_NUM_THREADS=1 BIN=$X script/run_prof.sh"   # <Dir>/prof.log, result/prof_summary.txt
+# 문장별 시간: 빌드 -DBUNDLE_TIMED=ON -DBUNDLE_EXE_SUFFIX=_timed (build_<set>_timed), 실행
+cd $B/vtabundles_xcmpl/hw_multievtax4 && sudo -n /bin/sh -c "OMP_NUM_THREADS=1 BIN=$X script/run_prof.sh -s _timed"  # <Dir>/timed.log, timing*.csv
+# 여러 EVTA 동시 (conv만 반복): mask 15 = EVTA 0-3, 1 = EVTA0만. 실행 파일의 dir에서
+cd $B/vtabundles_xcmpl/hw_multievtax4/MultiEVTAResConv10Test
+sudo -n /bin/sh -c "$B/vtabundles_xcmpl/hw/script/load_bit.sh $X && OMP_NUM_THREADS=1 ./multi4resconv10Bundle 15 400 conv" | grep RESULT
+cd ../MultiEVTAConv4Test
+sudo -n /bin/sh -c "$B/vtabundles_xcmpl/hw/script/load_bit.sh $X && OMP_NUM_THREADS=1 ./multi4conv4Bundle 15 200 conv" | grep RESULT
+```
+- 이 dir들과 실행 파일을 처음 만들 때(`$B/vtabundles_xcmpl`): `./collect_hw_bundles.py --set multievtax4 MultiEVTAResConv10Test`, `(cd build_multievtax4 && make -j2 multi4resconv10Bundle)`.
+
 ### 6.2 결과 (2026-10-26, 333 MHz, 모두 golden 일치)
 
 | 측정 | EVTA 1개 | 2개 | 4개 |
@@ -772,10 +949,11 @@ g++ -O2 -std=c++14 -Wall -o /tmp/systolic_model $N/vta-hw-zcu102-systolic/hardwa
 - 이전 리뷰 핸드오프: `HANDOFF.md`(vta-hw vs upstream 비교, 발견 사항 #1-#22)
 - 결함 도구: `vtabundles_xcmpl/hwtest/brambist/`(`readback.tcl`, `cfgdiff.py`, `stuckchk.py`, `progrb.tcl`, brambist v1/v2)
 - multi4 작업 dir: `vta-hw-zcu102-multi4/build/y219/`
-  - 스크립트: `route_a2.tcl`, `place_d.tcl`, `route_c.tcl`, `chk.tcl`/`chkbody.tcl`
+  - 스크립트: `route_a2.tcl`, `place_d.tcl`, `route_c.tcl`, `chk.tcl`/`chkbody.tcl`(git 제외). git에 있는 판은 `hardware/xilinx/scripts/y219route/flow/`
+    (`place_d.tcl`, `route_a2.tcl`, `place_f.tcl`, `route_s.tcl`, `mmcm_set.tcl`, `y219block.tcl`, `chkbody.tcl`, `run_flow.sh`). 명령은 §3.3
   - 로그: `rr_*.log`
 - 재배선기: `vta-hw-zcu102-multi4/hardware/xilinx/scripts/y219route/Y219Route.java`
-- RapidWright 프로브: `~/tools/rapidwright/t/`(`Up.java`: 노드 uphill 분석)
+- RapidWright 프로브: `~/tools/rapidwright/t/`(`Up.java`: 노드 uphill 분석, git 판은 `y219route/Up.java`, 명령은 §3.3)
 - 커밋 규칙:
   - `git commit -s`(DCO)
   - 커밋은 요청이 있을 때만 한다. 지금까지는 보드 검증 뒤에 커밋했다.
@@ -847,7 +1025,7 @@ it_out (VTAUopLoopBegin(n_kernel_, dst tile_h·tile_w, src 0, wgt KH·KW)) : 출
     uop SRAM으로 load되는 양이 tile마다 늘어나는지는 확인해야 한다.
 - 같은 `dst`가 다시 오는 간격은 `tile_h·tile_w` 사이클(≥ 49, 최소 tile 7x7)이다. 이것이 §8.5 hazard 조건과 맞물린다.
 - **정확성 검증은 지금 비트스트림에서 먼저 할 수 있다.** 정수 누산의 순서만 바뀌므로 출력이 비트 단위로 같아야 한다.
-  - 시뮬레이터 빌드 → 지금 보드(single, multi4)에서 `run_all.sh` → ResConv10/Conv4 시간이 거의 같은지 본다.
+  - 시뮬레이터 빌드 → 지금 보드(single, multi4)에서 `run_all.sh` → ResConv10/Conv4 시간이 거의 같은지 본다. 한 명령은 §2.5 7)(Phase B, §8.10).
   - 지금 HW는 순서와 상관없이 사이클당 1 GEMM이므로 시간이 거의 같아야 한다.
 - 같은 함수를 쓰는 곳: `conv_kernel`(548/550행)과 `conv_kernel_scale`(933/935행)이 `gemmop_mxn`/`gemmop_1x1`을 쓴다.
   - `reset_acc`(89행, GEMM `reset_reg`)는 weight를 쓰지 않으므로 영향이 없다. HW에서 reset 경로는 따로 두면 된다.
@@ -928,13 +1106,13 @@ it_out (VTAUopLoopBegin(n_kernel_, dst tile_h·tile_w, src 0, wgt KH·KW)) : 출
 ### 8.7 다음 세션의 시작 순서
 
 1. **타이밍 근거 확인 (HW 작업 전에)** — 2026-10-27 완료, Phase A 클럭 sweep과 360 MHz 보드 검증까지 §8.8
-   - rs_rst DCP(`build/y219/`)를 열어 `report_timing -max_paths 100`을 본다.
+   - rs_rst DCP(`build/y219/`)를 열어 `report_timing -max_paths 100`을 본다. 명령은 §8.8 1) 아래.
    - 333 MHz에서 GEMM 경로가 상위를 차지하는지, systolic으로 몇 MHz를 기대할 수 있는지 판단한다.
    - GEMM이 병목이 아니면 클럭 이득이 작다. 그때는 이 작업의 가치를 다시 판단한다.
 2. **런타임 uop 순서 변경**
    - `gemmop_mxn`/`gemmop_1x1`을 §8.4 순서로 바꾼다. `#### JO` 표시를 달고 원래 코드는 주석으로 남긴다.
      원본 `vta/vtalib`와 복사본 3개를 같이 맞춘다(§3.4 #1의 비교 규칙).
-   - 지금 비트스트림에서 golden과 시간을 확인한다: `run_all.sh`(single, multi2, multi4)와 ResConv10/Conv4 `_prof` VTA_SYNC.
+   - 지금 비트스트림에서 golden과 시간을 확인한다: `run_all.sh`(single, multi2, multi4)와 ResConv10/Conv4 `_prof` VTA_SYNC. 명령은 §2.5 6)·7).
    - 이 단계만으로도 HW 교체 전에 런타임 쪽 검증이 끝난다.
 3. **HW GEMM 교체**
    - HLS C 모델(`vta.cc` `gemm()`과 같은 결과를 내는 사이클 모델)을 먼저 만든다.
@@ -947,6 +1125,17 @@ it_out (VTAUopLoopBegin(n_kernel_, dst tile_h·tile_w, src 0, wgt KH·KW)) : 출
 작업 위치: 브랜치 `systolic`, `vta-hw-zcu102-systolic`(single 복사본). 아래 결과를 다시 내는 명령은 §2.5에 있다. 스크립트와 결과: `vta-hw-zcu102-systolic/hardware/xilinx/scripts/timing/`(`top_paths.tcl`, `y219pips.tcl`), 결과 `build/timing/*.paths.csv`, 빌드 로그 `build/phaseA/`.
 
 **1) 지금 333 MHz의 critical path** (`report_timing -max_paths 1000 -nworst 1`, routed DCP)
+
+실행 위치: 호스트, `$N/vta-hw-zcu102-systolic/build/timing`(결과 `<name>.paths.rpt`, `<name>.paths.csv`도 여기):
+```bash
+cd $N/vta-hw-zcu102-systolic/build/timing
+T=../../hardware/xilinx/scripts/timing/top_paths.tcl
+SD=$N/vta-hw-zcu102-single/build/hardware/xilinx/vivado/zcu102_1x16_i8w8a32_16_16_19_18/vta.runs/impl_1/vta_wrapper_routed.dcp
+MD=$N/vta-hw-zcu102-multi4/build/y219/rs_rst.dcp
+docker exec -u ubuntu -w $PWD vivado2020-build bash -c "$VIV >/dev/null; vivado -mode batch -nojournal -log single.log -source $T -tclargs $SD single > /dev/null 2>&1 & \
+  vivado -mode batch -nojournal -log multi4.log -source $T -tclargs $MD multi4 > /dev/null 2>&1 & wait"
+sort -t, -k1 -g single.paths.csv | head      # slack, logic level, datapath, 배선 %, start, end, ...
+```
 - single(10-23 y219 pass)과 multi4(rs_rst) 모두 상위 1000 경로가 slack 0.23 ns 안에 몰려 있다(slack wall).
 - 상위 100개: single 100/100, multi4 96/100이 `inp_mem` BRAM → GEMM DSP A 입력이다.
   - logic 0, BRAM 출력 레지스터 없음, **fanout 346**, 데이터 경로 2.35 ns(배선 61%). §8.6의 가설이 맞다.
@@ -960,7 +1149,7 @@ it_out (VTAUopLoopBegin(n_kernel_, dst tile_h·tile_w, src 0, wgt KH·KW)) : 출
 | compute 덧셈 트리 (8 level) | 0.172 | 0.119 |
 | reset fanout | — | 0.097 |
 
-**2) 빌드 옵션** (커밋 `ab32e110`, 기본값이면 빌드는 이전과 같다)
+**2) 빌드 옵션** (커밋 `ab32e110`, 기본값이면 빌드는 이전과 같다). systolic 트리 `vta-hw-zcu102-systolic/hardware/xilinx`의 make 변수다(§2.5 1)).
 - `make ... MEM_OREG=1`: inp/wgt BRAM 포트 B(compute 읽기)에 출력 레지스터를 켜고, HLS에 read latency 2를 알린다(`vta.cc` `#ifdef VTA_MEM_OREG`).
   - GEMM 루프는 II=1, 깊이 12다. 기준은 깊이 11이다(보드의 10-23 single IP `hls/<CONF>`와 오늘 base `_prof` IP 모두 wgt 16 bank x 128비트).
     acc read→write 거리는 약 3사이클 그대로라(ST_45 load, ST_47~48 store) 새 hazard는 없다.
@@ -968,6 +1157,19 @@ it_out (VTAUopLoopBegin(n_kernel_, dst tile_h·tile_w, src 0, wgt KH·KW)) : 출
 - `make ... FREQ=<MHz>`: PLL만 바꾼다. IP는 그대로 쓴다. 빌드 dir 이름은 `<CONF>_prof[_oreg][_<FREQ>mhz]`.
 
 **3) 클럭 sweep** (single, y219 fence, `PROFILE=1`, 기본 implementation strategy)
+
+실행 위치: 호스트. make는 docker 안 `$N/vta-hw-zcu102-systolic/hardware/xilinx`에서, 로그는 `$N/vta-hw-zcu102-systolic/build/phaseA/`:
+```bash
+cd $N/vta-hw-zcu102-systolic/hardware/xilinx; L=$N/vta-hw-zcu102-systolic/build/phaseA; mkdir -p $L
+# IP 먼저 (base, oreg)
+docker exec -u ubuntu -w $PWD vivado2020-build bash -c "$VIV >/dev/null; make ip PROFILE=1 > $L/ip_base.log 2>&1; make ip PROFILE=1 MEM_OREG=1 > $L/ip_oreg.log 2>&1"
+# 클럭마다 bin (동시에)
+docker exec -u ubuntu -w $PWD vivado2020-build bash -c "$VIV >/dev/null; for f in 360 380 400; do \
+  make bin PROFILE=1 FREQ=\$f JOBS=8 > $L/bin_base_\$f.log 2>&1 & make bin PROFILE=1 MEM_OREG=1 FREQ=\$f JOBS=8 > $L/bin_oreg_\$f.log 2>&1 & done; wait"
+for v in prof_360mhz prof_380mhz prof_400mhz prof_oreg_360mhz prof_oreg_380mhz prof_oreg_400mhz; do
+  echo "$v $(grep -A3 'WNS(ns)' ../../build/hardware/xilinx/vivado/zcu102_1x16_i8w8a32_16_16_19_18_$v/export/vtahw_zcu102_1x16_i8w8a32_16_16_19_18_$v.timing.rpt | sed -n 3p | awk '{print "WNS",$1,"WHS",$5,"WPWS",$9}')"; done
+# 실패한 판의 경로 종류: 1)의 top_paths.tcl을 <BUILD>/vta.runs/impl_1/vta_wrapper_routed.dcp에 돌린다 (build/timing에서, 이름 예: prof_400mhz)
+```
 
 | 변형 | 333 | 360 | 380 | 400 |
 |---|---|---|---|---|
@@ -999,11 +1201,14 @@ it_out (VTAUopLoopBegin(n_kernel_, dst tile_h·tile_w, src 0, wgt KH·KW)) : 출
 **4) 360/380 MHz 보드 검증** (2026-10-27, `bit/evta_single_phaseA_261027/`, `/lib/firmware`에 같은 이름)
 - 비트스트림: `vtahw_zcu102_1x16_i8w8a32_16_16_19_18_prof_360mhz`(base, md5 `15768d7c…`), `..._prof_oreg_360mhz`(oreg, md5 `b7a69d41…`),
   `..._prof_380mhz`(base, md5 `9884bb74…`).
-- 호스트(§2.2): 세 판 모두 stuckchk 194, 0 extra. Y219 행 PIP net 0(`scripts/timing/y219pips.tcl`).
+- 호스트(§2.2): 세 판 모두 stuckchk 194, 0 extra. Y219 행 PIP net 0(`scripts/timing/y219pips.tcl`). 명령은 §2.2(export dir에서, `X=vtahw_zcu102_1x16_i8w8a32_16_16_19_18_prof_360mhz` 등).
+- 보드로 복사: §2.5 4) (가), `D=/home/xilinx/JO/npuprg/bit/evta_single_phaseA_261027`.
 - HW 프로브(`hwtest/*_nc`, 케이스마다 bitstream 재로드): 기준 `vtahw_single_y219.bin`과 세 판 모두 통과.
+  보드 `cd $B/vtabundles_xcmpl/hwtest && sudo -n /bin/sh -c "NUM_EVTA=0 /bin/sh ./probes.sh vtahw_single_y219.bin vtahw_zcu102_1x16_i8w8a32_16_16_19_18_prof_360mhz.bin vtahw_zcu102_1x16_i8w8a32_16_16_19_18_prof_oreg_360mhz.bin vtahw_zcu102_1x16_i8w8a32_16_16_19_18_prof_380mhz.bin"`.
   gemmprobe reset/zero/ident/perm/ones 0/16 wrong, sramscan wgt/inp(+invert) 0 bytes wrong, donerace 16/16.
-- 번들 golden(`hw/script/run_all.sh`, `BIN=<위>.bin`): 세 판 모두 30 PASS + golden 없는 5개 정상 실행(Resnet18/Partition/50 → 281, Vgg16 → 0, 이전과 같음).
-- 속도(`hw/run_prof.sh`, `_prof` 번들 = `vta/vtalib` + `NESTC_EVTA_PROFILE`, total_vta_time, 2회 반복 편차 0.1% 이내):
+- 번들 golden(`hw/script/run_all.sh`, `BIN=<위>.bin`, 명령은 §2.5 6) (가)): 세 판 모두 30 PASS + golden 없는 5개 정상 실행(Resnet18/Partition/50 → 281, Vgg16 → 0, 이전과 같음).
+- 속도(`hw/run_prof.sh`, `_prof` 번들 = `vta/vtalib` + `NESTC_EVTA_PROFILE`, total_vta_time, 2회 반복 편차 0.1% 이내).
+  보드 `cd $B/vtabundles_xcmpl/hw && sudo -n /bin/sh -c "BIN=<x>.bin script/run_prof.sh ResConv10Test Conv4Test"`, 결과 `result/prof_summary.txt`:
 
 | 번들 | 333 (`vtahw_single_y219`) | base 360 | oreg 360 |
 |---|---|---|---|
@@ -1016,9 +1221,12 @@ it_out (VTAUopLoopBegin(n_kernel_, dst tile_h·tile_w, src 0, wgt KH·KW)) : 출
   - **지금 구조(base)로 380 MHz까지 보드에서 동작한다(+14% 클럭, VTA 시간 −12%).** single 기본 비트스트림으로 바꿀지는 multi2/multi4도 본 뒤 정한다.
   - 380 판은 `_prof`(profile 카운터 + APM) 빌드다. 배포판(profile 없음)은 같은 클럭으로 다시 만들어 확인해야 한다(placement가 달라짐).
 - 보드 sudo: `xilinx`는 `/bin/sh`, `hwtest/*`, `hw/*`, `cp * /lib/firmware/*`만 비밀번호 없이 된다.
-  환경 변수를 넘기려면 `sudo -n /bin/sh -c 'BIN=... ./run_all.sh'`.
+  환경 변수를 넘기려면 hw dir에서 `sudo -n /bin/sh -c 'BIN=<x>.bin script/run_all.sh'`.
 
 **5) multi2 360/380 MHz** (2026-10-27, profile 없는 배포판, `vta-hw-zcu102-multi2` `make bin FREQ=<MHz>`, fence `y219`)
+- 명령: 빌드 §2.5 1)(`T=multi2; F=360`, `F=380`), 검사 §2.2, 복사 §2.5 4) (가)(`D=/home/xilinx/JO/npuprg/bit/evta_multi2_phaseA_261027`),
+  프로브 `NUM_EVTA=2`(§2.5 5)), 번들·속도는 보드 `cd $B/vtabundles_xcmpl/hw_multievtax2` 뒤 §2.5 6) (나)
+  (속도: `sudo -n /bin/sh -c "OMP_NUM_THREADS=1 BIN=<x>.bin script/run_prof.sh MultiEVTAResConv10Test MultiEVTAConv4Test"`).
 - 빌드: 360 WNS +0.003 / WHS +0.010, 380 WNS +0.001 / WHS +0.010. stuckchk 194, 0 extra. Y219 행 PIP net 0.
 - 보드 `bit/evta_multi2_phaseA_261027/`(`/lib/firmware`에 같은 이름):
   `vtahw_zcu102_1x16_i8w8a32_16_15_18_17_2evta_360mhz.bin`(md5 `00c8202c…`), `..._380mhz.bin`(md5 `6cb08c59…`).
@@ -1031,6 +1239,7 @@ it_out (VTAUopLoopBegin(n_kernel_, dst tile_h·tile_w, src 0, wgt KH·KW)) : 출
 
 **주의: 333 MHz 위의 판은 모두 PS8 HP 포트 규격을 벗어난다** (2026-10-27, 위 4)·5)를 확인할 때 WNS/WHS만 보고 놓쳤다)
 - `report_timing_summary`의 Pulse Width: `PS8/SAXIGP<i>RCLK`, `WCLK` Min Period 요구 3.000 ns(333 MHz)다.
+  확인: `grep -A3 'WNS(ns)' <x>.timing.rpt | sed -n 3p | awk '{print "WPWS",$9}'`, 어느 핀인지는 `grep -B2 -A12 'Pulse Width Checks' <x>.timing.rpt | grep -i saxigp`.
   360은 slack −0.222(2.778 ns), 380은 −0.368이다. single, multi2, multi4 판 모두 WPWS < 0이고, 333 판(3.003 ns)만 통과한다.
 - 보드에서는 위 결과대로 동작했지만 규격 밖이다(온도, 칩마다 보장 안 됨). 기본 비트스트림으로 쓰면 안 된다.
 - 고치는 방법: HP 포트(`saxihp<i>_fpd_aclk`)와 그 앞 register slice/SmartConnect를 333 MHz 이하의 별도 클럭으로 두고,
@@ -1038,11 +1247,15 @@ it_out (VTAUopLoopBegin(n_kernel_, dst tile_h·tile_w, src 0, wgt KH·KW)) : 출
   §8 systolic의 400 MHz 목표도 같은 분리가 필요하다.
 
 **6) multi4 360 MHz** (2026-10-27): `make bin FREQ=360`(fence `split`) 뒤 `run_flow.sh m360`.
+- 명령: 빌드 §2.5 1)(`T=multi4; F=360`), 재배선 §2.5 2)(`F=360; TAG=m360`), 검사 §2.5 3) (나), 복사 §2.5 4) (나)
+  (`D=/home/xilinx/JO/npuprg/bit/evta_multi4_phaseA_261027`), 프로브 `NUM_EVTA=4`, 번들·속도 §2.5 6) (나)(`hw_multievtax4`, `run_prof.sh` 인자 없음).
 - `make bin`은 기본 impl의 write_bitstream DRC(RTSTAT-6 partial conflict 2개)로 실패하지만, flow는 `vta_wrapper_opt.dcp`에서 다시 시작하므로 상관없다.
 - rs_m360: WNS +0.018 / WHS +0.009, WPWS −0.222(위 HP 포트). Y219 행 PIP net 0. 행 Y219의 모든 tile(CLE, BRAM, DSP, INT_INTF 포함)에서 PIP 0.
 - stuckchk: **1 extra**(frame 24215, word 62 bit 14).
-  - RapidWright `bitstream` API로 frame을 tile에 매핑하면 `INT_X35Y219` minor 23이다.
-  - U-Ray segbits로는 PIP `INT_NODE_SDQ_77_INT_OUT0 -> NN4_W_BEG4`에 해당한다.
+  - RapidWright `bitstream` API로 frame을 tile에 매핑하면 `INT_X35Y219` minor 23이다
+    (호스트 `cd $N/vta-hw-zcu102-multi4/build/y219` 뒤 `RAPIDWRIGHT_PATH=$RW/d2025.2 java -Xmx16g -cp $RW/rapidwright-2025.2.2-standalone-lin64.jar ../../hardware/xilinx/scripts/y219route/StuckLoc.java rs_m360.bit $BASEBIT | grep 'cr X.Y3'`).
+  - U-Ray segbits로는 PIP `INT_NODE_SDQ_77_INT_OUT0 -> NN4_W_BEG4`에 해당한다
+    (`grep '^INT.PIP.NN4_W_BEG4.INT_NODE_SDQ_77_INT_OUT0 ' $N/vta-hw-zcu102-multi4/build/wiretest/uray/segbits_int.db`: 그 PIP를 켜는 `<minor>_<bit>` 목록, `!`는 0이어야 하는 비트. 이름 순서는 `INT.PIP.<도착>.<출발>`).
   - DCP에서는 이 PIP와 두 node에 net이 없다(reroute 전 routed_m360도 같다). DCP로 bit를 다시 써도 같은 bit가 1이다.
   - Vivado가 net 없는 node에 쓰는 설정으로 보인다(base 194개와 같은 종류). 보드에서 0으로 읽혀도 쓰지 않는 PIP가 꺼질 뿐이다.
 - 보드 `bit/evta_multi4_phaseA_261027/vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_360mhz.bin`(md5 `4347a2d6…`, `/lib/firmware`에 같은 이름).
@@ -1070,9 +1283,9 @@ it_out (VTAUopLoopBegin(n_kernel_, dst tile_h·tile_w, src 0, wgt KH·KW)) : 출
 - `gemmop_1x1`: it_out = kernelIdx, it_in = x, uops = y. uop 수는 그대로다.
 - 정확성: 500개 무작위 tiling에서 (dst, src, wgt) 멀티셋이 원래와 같다. 같은 dst가 다시 오는 간격은 ≥ tile_h·tile_w다.
 - VTABundle.cpp는 hw_spec.h를 include하지 않는다. uop 버퍼 깊이는 `-DVTA_LOG_UOP_BUFF_SIZE`로 계산한다(`GEMM_UOP_BUFF_DEPTH`).
-- 보드 빌드: `vtabundles_xcmpl/build_sysprof/` (`-DVTALIB=/home/xilinx/JO/npuprg/systolic/vtalib-zcu102-systolic -DNESTC_EVTA_PROFILE=ON -DBUNDLE_EXE_SUFFIX=_sysprof`).
+- 보드 빌드: `vtabundles_xcmpl/build_sysprof/` (`-DVTALIB=/home/xilinx/JO/npuprg/systolic/vtalib-zcu102-systolic -DNESTC_EVTA_PROFILE=ON -DBUNDLE_EXE_SUFFIX=_sysprof`). 풀기·빌드·실행 명령은 §2.5 7).
   - 보드의 main 트리는 건드리지 않았다. vtalib는 `git archive origin/systolic vtalib-zcu102-systolic`로 `/home/xilinx/JO/npuprg/systolic/`에 풀었다.
-- 보드 결과(333 MHz `vtahw_single_y219.bin`, `hw/script/run_prof.sh [-s _sysprof] all`, `_prof` 대 `_sysprof`):
+- 보드 결과(333 MHz `vtahw_single_y219.bin`, 보드 `cd $B/vtabundles_xcmpl/hw` 뒤 `sudo -n /bin/sh -c "BIN=vtahw_single_y219.bin script/run_prof.sh all"`와 `... run_prof.sh -s _sysprof all"`, `_prof` 대 `_sysprof`):
   - golden 30개 모두 PASS. VTA 시간은 같다: Conv4 3.546 → 3.565 ms(+0.5%), ResConv10 2.896 → 2.894 ms, 나머지 ±0.5%.
   - **Resnet18 849, Resnet50 51, Resnet18Partition 737로 틀렸다**(원래 순서는 281). 세 번들만 "EVTA uop buffer overflowed"를 찍었다.
   - 원인: vtalib `UopQueue`(옛 TVM 코드)의 버그 두 개. uop 커널이 uop SRAM(8192)을 넘쳐 0으로 되돌아갈 때만 드러난다.
@@ -1091,6 +1304,7 @@ it_out (VTAUopLoopBegin(n_kernel_, dst tile_h·tile_w, src 0, wgt KH·KW)) : 출
   - **Phase B 완료: 새 uop 순서는 지금 비트스트림에서 결과가 같고 시간도 거의 같다.**
 
 **Phase C — 사이클 모델** (`vta-hw-zcu102-systolic/hardware/xilinx/sim/systolic_model.cc`, `g++ -O2 -std=c++14`)
+- 실행(호스트, 아무 dir): `g++ -O2 -std=c++14 -Wall -o /tmp/systolic_model $N/vta-hw-zcu102-systolic/hardware/xilinx/sim/systolic_model.cc && /tmp/systolic_model 300 1`(인자: 무작위 테스트 수, seed).
 - §8.5 구조를 레지스터 단위로 옮겼다.
   - A: skew와 가로 FF. B: PISO, B1 chain, B2, CEB1/CEB2 wavefront. P cascade, deskew, 태그 pipe.
   - RMW(forwarding 포함)와 issue 제어기(LOOKAHEAD 깊이 uop FIFO에서 다음 weight를 미리 읽음, 주기 16).
