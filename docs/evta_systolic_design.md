@@ -188,7 +188,25 @@
   - xsim 주의: `glbl.v`가 처음 100 ns 동안 GSR을 걸어 DSP48E2 레지스터가 CE를 무시한다. TB는 200 ns 뒤에 리셋을 푼다(처음에 이것 때문에 첫 블록의 일부 PE가 0으로 계산됐다).
 - 지연: issue(주소 제시) → RMW 입력 = L_RD + 33(`sa_ctrl` `TD`), RMW 3단.
 
-**다음**: D4 어레이 OOC 합성(400 MHz 여유, 2배 클럭 상한), HLS 쪽 `#ifdef VTA_SYSTOLIC`(§3)과 acc_mem을 BD로 꺼내기, D5 PL 시뮬레이션.
+**D4 완료(OOC)** — `rtl/syn/ooc.tcl`(xczu9eg-2, y219 fence 영역에 pblock). 호스트 `$N/vta-hw-zcu102-systolic/build/ooc`에서
+`docker exec -u ubuntu -w $PWD vivado2020-build bash -c "$VIV >/dev/null; vivado -mode batch -nojournal -log ooc_600.log -source ../../hardware/xilinx/rtl/syn/ooc.tcl -tclargs 1.667 ooc_600"`.
+
+| 클럭 | 첫 RTL WNS | RMW 비교를 S1로 당긴 뒤 WNS | WHS |
+|---|---|---|---|
+| 400 MHz | +0.125 | **+0.226** | +0.045 |
+| 500 MHz | −0.071 | **+0.121** | +0.042 |
+| 600 MHz | −0.344 | **+0.079** | +0.039 |
+| 666 MHz | −0.501 | (안 돌림) | |
+
+- 첫 RTL의 최악은 모두 RMW(dst 비교 → 512비트 선택 → 덧셈)였다. 비교를 S1에서 해서 레지스터에 담고(`f3/f4/f5`, `max_fanout 32`), S2는 선택과 덧셈만 한다. 벡터 30개 다시 비트 일치.
+- 자원: DSP 256, LUT 2,825, FF 6,811(400 MHz 첫 RTL). 지금 HLS GEMM의 16입력 덧셈 트리 LUT가 없어졌다.
+- **`gemm_sa` 전체(어레이, 컨트롤러, RMW)가 OOC 600 MHz를 통과한다.** 전체 설계(AXI, 큐, HLS 블록과 같이 배치)에서는 내려갈 수 있다. B안 400 MHz는 여유가 크고, C안(어레이 2배 클럭)도 가능성이 있다.
+
+**HLS 쪽 완료** — `vta.cc`/`vta.h` `#ifdef VTA_SYSTOLIC`(§3 그대로, 토큰 미루기 + done polling), `make ip CSIM=1 SYSTOLIC=1`: C 시뮬레이션 오류 0,
+uop 스트림 루프 II=1, ALU II=2(같음), acc_mem은 512비트 BRAM 포트 2개, uop TDATA 40비트.
+
+**BD 연결** — `rtl/gemm_sa_bd.v`(`gen_gemm_sa_bd.py`가 생성: acc/out 포트 mux, inp·wgt 16 bank 포트, 바이트 주소), `vivado.tcl`의 `systolic` 분기
+(gemm_sa_0, acc_mem BRAM 4096 x 512 지연 2, inp/wgt 포트 B 출력 레지스터). D5(PL 시뮬레이션)보다 먼저 333 MHz 비트스트림을 만들어 보드 프로브로 본다.
 
 ## 13. 열린 문제
 

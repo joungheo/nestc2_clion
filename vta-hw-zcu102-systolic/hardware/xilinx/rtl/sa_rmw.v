@@ -41,12 +41,17 @@ module sa_rmw #(
   reg            l1, l2, l3;
   reg [32*N-1:0] s3, sw1, sw2;               // sums
 
-  wire m3 = v3  && d3  == d2;
-  wire m4 = vw1 && dw1 == d2;
-  wire m5 = vw2 && dw2 == d2;
-  wire [32*N-1:0] old = m3 ? (z3 ? {32*N{1'b0}} : s3) :
-                        m4 ? (zw1 ? {32*N{1'b0}} : sw1) :
-                        m5 ? (zw2 ? {32*N{1'b0}} : sw2) : acc_rd_data;
+  //#### JO changed (2026-10-27, Phase D4): the dst compares are done one stage early (S1, against the rows that will be in
+  //#### S3 / written 1 / written 2 cycles ago when this row is in S2) and registered, so S2 is only the select and the add
+  //#### (at 400 MHz OOC the compare -> 512-bit select -> add path was the worst one).
+  //wire m3 = v3  && d3  == d2;
+  //wire m4 = vw1 && dw1 == d2;
+  //wire m5 = vw2 && dw2 == d2;
+  (* max_fanout = 32 *) reg f3, f4, f5;   // S2 takes: S3's sum, the sum written 1 / 2 cycles ago, the BRAM data
+  (* max_fanout = 32 *) reg f3z, f4z, f5z;   // that row was a reset row: the value is 0
+  wire [32*N-1:0] old = f3 ? (f3z ? {32*N{1'b0}} : s3) :
+                        f4 ? (f4z ? {32*N{1'b0}} : sw1) :
+                        f5 ? (f5z ? {32*N{1'b0}} : sw2) : acc_rd_data;
   wire [32*N-1:0] sum;
   genvar k;
   generate
@@ -57,6 +62,11 @@ module sa_rmw #(
   endgenerate
 
   always @(posedge clk) begin
+    // compare in S1: when this row (d1) is in S2, S3 holds the row now in S2 (d2), written-1 the row now in S3 (d3),
+    // written-2 the row written last cycle (dw1)
+    f3 <= v2 && d2 == d1;   f3z <= z2;
+    f4 <= v3 && d3 == d1;   f4z <= z3;
+    f5 <= vw1 && dw1 == d1; f5z <= zw1;
     r1 <= row; d1 <= tag_dst; z1 <= tag_reset; l1 <= tag_last;
     r2 <= r1;  d2 <= d1;      z2 <= z1;        l2 <= l1;
     s3 <= sum; d3 <= d2;      z3 <= z2;        l3 <= l2;

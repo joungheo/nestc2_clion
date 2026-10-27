@@ -55,6 +55,12 @@ if {[info exists ::env(VTA_FREQ)] && $::env(VTA_FREQ) ne ""} {
   set clock_freq $::env(VTA_FREQ)
 }
 set mem_oreg [expr {[info exists ::env(VTA_MEM_OREG)] && $::env(VTA_MEM_OREG) eq "1"}]
+#### JO added (2026-10-27, systolic Phase D, docs/evta_systolic_design.md §2): SYSTOLIC=1 (env VTA_SYSTOLIC) -> GEMM in the RTL
+#### unit gemm_sa (rtl/gemm_sa_bd.v): acc_mem is a BD BRAM shared by compute and gemm_sa, inp/wgt port B and out port A
+#### go through gemm_sa_bd, and inp/wgt port B have their output register (read latency 2 = gemm_sa L_RD).
+set systolic [expr {[info exists ::env(VTA_SYSTOLIC)] && $::env(VTA_SYSTOLIC) eq "1"}]
+if {$systolic} { set mem_oreg 1 }
+puts "systolic GEMM (gemm_sa) $systolic"
 puts "PLL $clock_freq MHz, inp/wgt port B output register $mem_oreg"
 set board             $FPGA_BOARD
 set board_rev         $FPGA_BOARD_REV
@@ -110,6 +116,12 @@ update_ip_catalog -add_ip $fetch_ip -repo_path $ip_lib
 update_ip_catalog -add_ip $load_ip -repo_path $ip_lib
 update_ip_catalog -add_ip $compute_ip -repo_path $ip_lib
 update_ip_catalog -add_ip $store_ip -repo_path $ip_lib
+#### JO added (systolic Phase D): RTL sources of gemm_sa_bd
+if {$systolic} {
+  set rtl_dir [file normalize [file join [file dirname [info script]] .. rtl]]
+  add_files -norecurse [list $rtl_dir/sa_pe.v $rtl_dir/sa_array.v $rtl_dir/sa_ctrl.v $rtl_dir/sa_rmw.v $rtl_dir/gemm_sa.v $rtl_dir/gemm_sa_bd.v]
+  update_compile_order -fileset sources_1
+}
 
 
 ##################################################################
@@ -223,6 +235,26 @@ set_property -dict [ list \
   CONFIG.C_M_AXI_DATA_PORT_PROT_VALUE $axi_prot \
 ] $store_0
 
+#### JO added (systolic Phase D): gemm_sa_0 and acc_mem (4096 x 512 for 16/16/19/18, output registers on both ports = latency 2)
+if {$systolic} {
+  set sa_dw [expr {int(round(log($out_mem_depth) / log(2)))}]
+  set sa_sw [expr {int(round(log($inp_mem_depth) / log(2)))}]
+  set sa_ww [expr {int(round(log($wgt_mem_depth) / log(2)))}]
+  set gemm_sa_0 [ create_bd_cell -type module -reference gemm_sa_bd gemm_sa_0 ]
+  set_property -dict [ list CONFIG.DW $sa_dw CONFIG.SW $sa_sw CONFIG.WW $sa_ww \
+    CONFIG.UB [expr {(($sa_dw + $sa_sw + $sa_ww + 2 + 7) / 8) * 8}] ] $gemm_sa_0
+  set acc_mem [ create_bd_cell -type ip -vlnv xilinx.com:ip:blk_mem_gen:8.4 acc_mem ]
+  [ init_bram_property $acc_mem 512 $out_mem_depth true ]
+  set_property CONFIG.Register_PortA_Output_of_Memory_Primitives {true} $acc_mem
+  connect_bd_intf_net [get_bd_intf_pins gemm_sa_0/mem_acc_a] [get_bd_intf_pins acc_mem/BRAM_PORTA]
+  connect_bd_intf_net [get_bd_intf_pins gemm_sa_0/mem_acc_b] [get_bd_intf_pins acc_mem/BRAM_PORTB]
+  connect_bd_intf_net [get_bd_intf_pins compute_0/acc_mem_V_PORTA] [get_bd_intf_pins gemm_sa_0/hls_acc_a]
+  connect_bd_intf_net [get_bd_intf_pins compute_0/acc_mem_V_PORTB] [get_bd_intf_pins gemm_sa_0/hls_acc_b]
+  connect_bd_intf_net [get_bd_intf_pins compute_0/out_mem_V_PORTA] [get_bd_intf_pins gemm_sa_0/hls_out]
+  connect_bd_intf_net [get_bd_intf_pins compute_0/gemm_uop_V_V] [get_bd_intf_pins gemm_sa_0/s_uop]
+  connect_bd_intf_net [get_bd_intf_pins gemm_sa_0/m_done] [get_bd_intf_pins compute_0/gemm_done_V]
+}
+
 # Create command queues and set properties
 set cmd_queue_list {load_queue gemm_queue store_queue}
 foreach cmd_queue $cmd_queue_list {
@@ -256,6 +288,7 @@ for {set i 0} {$i < $inp_part} {incr i} {
     set porta [get_bd_intf_pins load_0/inp_mem_V_PORTA]
     set portb [get_bd_intf_pins compute_0/inp_mem_V_PORTA]
   }
+  if {$systolic} { set portb [get_bd_intf_pins gemm_sa_0/mem_inp] }
   # Create interface connections
   connect_bd_intf_net -intf_net load_0_inp_mem_V_PORTA \
     [get_bd_intf_pins $inp_mem/BRAM_PORTA] \
@@ -278,6 +311,7 @@ for {set i 0} {$i < $wgt_part} {incr i} {
     set porta [get_bd_intf_pins load_0/wgt_mem_V_PORTA]
     set portb [get_bd_intf_pins compute_0/wgt_mem_V_PORTA]
   }
+  if {$systolic} { set portb [get_bd_intf_pins gemm_sa_0/mem_wgt${i}] }
   # Create interface connections
   connect_bd_intf_net -intf_net load_0_wgt_mem_${i}_V_PORTA \
     [get_bd_intf_pins $wgt_mem/BRAM_PORTA] \
@@ -303,6 +337,7 @@ for {set i 0} {$i < $out_part} {incr i} {
     set porta [get_bd_intf_pins compute_0/out_mem_V_PORTA]
     set portb [get_bd_intf_pins store_0/out_mem_V_PORTA]
   }
+  if {$systolic} { set porta [get_bd_intf_pins gemm_sa_0/mem_out] }
   # Create interface connections
   connect_bd_intf_net -intf_net compute_0_out_mem_${i}_V_PORTA \
     [get_bd_intf_pins $out_mem/BRAM_PORTA] \
@@ -450,6 +485,11 @@ connect_bd_net -net processing_system_clk \
   [get_bd_pins g2s_queue/s_aclk] \
   [get_bd_pins s2g_queue/s_aclk] \
   $saxi_clk
+#### JO added (systolic Phase D): gemm_sa_0 on the EVTA clock and the peripheral reset, like compute_0
+if {$systolic} {
+  connect_bd_net -net processing_system_clk [get_bd_pins gemm_sa_0/clk]
+  connect_bd_net -net proc_sys_reset_peripheral_aresetn [get_bd_pins gemm_sa_0/rstn]
+}
 #### JO changed: the PS register port (M_AXI_HPM0) and the crossbar's slave side run on the PS clock
 #### (pl_clk0, 100 MHz); at 333 MHz the paths into PS8 MAXIGP0* missed timing (-0.039 ns). The crossbar
 #### inserts the clock converter; register accesses are rare, so the slower clock costs nothing.
