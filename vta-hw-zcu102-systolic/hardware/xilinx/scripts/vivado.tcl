@@ -242,7 +242,7 @@ if {$systolic} {
   set sa_ww [expr {int(round(log($wgt_mem_depth) / log(2)))}]
   set gemm_sa_0 [ create_bd_cell -type module -reference gemm_sa_bd gemm_sa_0 ]
   set_property -dict [ list CONFIG.DW $sa_dw CONFIG.SW $sa_sw CONFIG.WW $sa_ww \
-    CONFIG.UB [expr {(($sa_dw + $sa_sw + $sa_ww + 3 + 7) / 8) * 8}] ] $gemm_sa_0
+    CONFIG.UB [expr {(($sa_dw + $sa_sw + $sa_ww + 5 + 7) / 8) * 8}] ] $gemm_sa_0
   set acc_mem [ create_bd_cell -type ip -vlnv xilinx.com:ip:blk_mem_gen:8.4 acc_mem ]
   [ init_bram_property $acc_mem 512 $out_mem_depth true ]
   set_property CONFIG.Register_PortA_Output_of_Memory_Primitives {true} $acc_mem
@@ -413,8 +413,16 @@ connect_bd_intf_net -intf_net fetch_0_l2g_dep_queue_V [get_bd_intf_pins l2g_queu
 connect_bd_intf_net -intf_net fetch_0_load_queue_V_V [get_bd_intf_pins fetch_0/load_queue_V_V] [get_bd_intf_pins load_queue/S_AXIS]
 connect_bd_intf_net -intf_net fetch_0_gemm_queue_V_V [get_bd_intf_pins fetch_0/gemm_queue_V_V] [get_bd_intf_pins gemm_queue/S_AXIS]
 connect_bd_intf_net -intf_net fetch_0_store_queue_V_V [get_bd_intf_pins fetch_0/store_queue_V_V] [get_bd_intf_pins store_queue/S_AXIS]
+#### JO changed (systolic Phase D): with gemm_sa the g2l / g2s queues are fed by gemm_sa_bd (gemm_sa's tokens + compute's)
+if {$systolic} {
+  connect_bd_intf_net [get_bd_intf_pins compute_0/g2l_dep_queue_V] [get_bd_intf_pins gemm_sa_0/s_g2l]
+  connect_bd_intf_net [get_bd_intf_pins gemm_sa_0/m_g2l] [get_bd_intf_pins g2l_queue/S_AXIS]
+  connect_bd_intf_net [get_bd_intf_pins compute_0/g2s_dep_queue_V] [get_bd_intf_pins gemm_sa_0/s_g2s]
+  connect_bd_intf_net [get_bd_intf_pins gemm_sa_0/m_g2s] [get_bd_intf_pins g2s_queue/S_AXIS]
+} else {
 connect_bd_intf_net -intf_net compute_0_g2l_dep_queue_V [get_bd_intf_pins compute_0/g2l_dep_queue_V] [get_bd_intf_pins g2l_queue/S_AXIS]
 connect_bd_intf_net -intf_net compute_0_g2s_dep_queue_V [get_bd_intf_pins compute_0/g2s_dep_queue_V] [get_bd_intf_pins g2s_queue/S_AXIS]
+}
 connect_bd_intf_net -intf_net store_0_s2g_dep_queue_V [get_bd_intf_pins s2g_queue/S_AXIS] [get_bd_intf_pins store_0/s2g_dep_queue_V]
 connect_bd_intf_net -intf_net load_queue_M_AXIS [get_bd_intf_pins load_0/load_queue_V_V] [get_bd_intf_pins load_queue/M_AXIS]
 connect_bd_intf_net -intf_net gemm_queue_M_AXIS [get_bd_intf_pins compute_0/gemm_queue_V_V] [get_bd_intf_pins gemm_queue/M_AXIS]

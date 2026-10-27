@@ -11,7 +11,7 @@ module gemm_sa_bd #(
   parameter L_RD = 2,
   parameter UB = 40                      // uop TDATA width of the HLS stream (bytes)
 ) (
-  (* X_INTERFACE_PARAMETER = "ASSOCIATED_BUSIF s_uop:m_done:hls_acc_a:hls_acc_b:hls_out:mem_acc_a:mem_acc_b:mem_out:mem_inp:mem_wgt0:mem_wgt1:mem_wgt2:mem_wgt3:mem_wgt4:mem_wgt5:mem_wgt6:mem_wgt7:mem_wgt8:mem_wgt9:mem_wgt10:mem_wgt11:mem_wgt12:mem_wgt13:mem_wgt14:mem_wgt15, ASSOCIATED_RESET rstn" *)
+  (* X_INTERFACE_PARAMETER = "ASSOCIATED_BUSIF s_uop:m_done:s_g2l:m_g2l:s_g2s:m_g2s:hls_acc_a:hls_acc_b:hls_out:mem_acc_a:mem_acc_b:mem_out:mem_inp:mem_wgt0:mem_wgt1:mem_wgt2:mem_wgt3:mem_wgt4:mem_wgt5:mem_wgt6:mem_wgt7:mem_wgt8:mem_wgt9:mem_wgt10:mem_wgt11:mem_wgt12:mem_wgt13:mem_wgt14:mem_wgt15, ASSOCIATED_RESET rstn" *)
   input  wire                 clk,
   input  wire                 rstn,
   input  wire [UB-1:0]        s_uop_tdata,
@@ -20,6 +20,20 @@ module gemm_sa_bd #(
   output wire [7:0]           m_done_tdata,
   output wire                 m_done_tvalid,
   input  wire                 m_done_tready,
+  // g2l / g2s dependence queues: compute's pushes (s_*) and gemm_sa's (finished GEMM instructions) merged into m_*;
+  // gemm_sa first (compute only pushes when gemm_sa has nothing outstanding, so the order is kept)
+  input  wire [7:0]           s_g2l_tdata,
+  input  wire                 s_g2l_tvalid,
+  output wire                 s_g2l_tready,
+  output wire [7:0]           m_g2l_tdata,
+  output wire                 m_g2l_tvalid,
+  input  wire                 m_g2l_tready,
+  input  wire [7:0]           s_g2s_tdata,
+  input  wire                 s_g2s_tvalid,
+  output wire                 s_g2s_tready,
+  output wire [7:0]           m_g2s_tdata,
+  output wire                 m_g2s_tvalid,
+  input  wire                 m_g2s_tready,
   (* X_INTERFACE_INFO = "xilinx.com:interface:bram:1.0 hls_acc_a ADDR" *) (* X_INTERFACE_PARAMETER = "MODE Slave, MASTER_TYPE BRAM_CTRL, MEM_WIDTH 512" *)
   input  wire [31:0]        hls_acc_a_addr,
   (* X_INTERFACE_INFO = "xilinx.com:interface:bram:1.0 hls_acc_a CLK" *)  input  wire hls_acc_a_clk,
@@ -216,11 +230,21 @@ module gemm_sa_bd #(
   wire [32*N-1:0]     acc_wr_data;
   wire [8*N-1:0]      out_wr_data;
   wire [128*N-1:0]    wgt_data;
+  wire                sa_g2l_v, sa_g2l_r, sa_g2s_v, sa_g2s_r;
+  assign m_g2l_tvalid = sa_g2l_v || s_g2l_tvalid;
+  assign m_g2l_tdata  = 8'd1;
+  assign sa_g2l_r     = m_g2l_tready;
+  assign s_g2l_tready = m_g2l_tready && !sa_g2l_v;
+  assign m_g2s_tvalid = sa_g2s_v || s_g2s_tvalid;
+  assign m_g2s_tdata  = 8'd1;
+  assign sa_g2s_r     = m_g2s_tready;
+  assign s_g2s_tready = m_g2s_tready && !sa_g2s_v;
 
   gemm_sa #(.N(N), .DW(DW), .SW(SW), .WW(WW), .L_RD(L_RD)) sa (
     .clk(clk), .rstn(rstn),
-    .s_uop_tdata(s_uop_tdata[DW+SW+WW+2:0]), .s_uop_tvalid(s_uop_tvalid), .s_uop_tready(s_uop_tready),
+    .s_uop_tdata(s_uop_tdata[DW+SW+WW+4:0]), .s_uop_tvalid(s_uop_tvalid), .s_uop_tready(s_uop_tready),
     .m_done_tdata(m_done_tdata), .m_done_tvalid(m_done_tvalid), .m_done_tready(m_done_tready),
+    .m_g2l_tvalid(sa_g2l_v), .m_g2l_tready(sa_g2l_r), .m_g2s_tvalid(sa_g2s_v), .m_g2s_tready(sa_g2s_r),
     .inp_en(inp_en), .inp_addr(inp_addr), .inp_data(mem_inp_dout),
     .wgt_en(wgt_en), .wgt_addr(wgt_addr), .wgt_data(wgt_data),
     .acc_rd_en(acc_rd_en), .acc_rd_addr(acc_rd_addr), .acc_rd_data(mem_acc_a_dout),

@@ -46,8 +46,12 @@ typedef ap_uint<VTA_BUS_WIDTH> bus_T;
 //#### gemm_sa (rtl/gemm_sa.v): {first, last, reset, wgt, src, dst}, final addresses, dst in the low bits.
 //#### first (Phase D board fix): first step of a GEMM instruction; gemm_sa refills the weight even if the address is
 //#### unchanged, since a LOAD may have written new weights at the same address between two GEMM instructions.
+//#### g2l, g2s (Phase D, speed): the GEMM instruction's dependence pushes, on its last step; gemm_sa pushes the tokens itself
+//#### when that step is written, so a load waiting for its buffer does not wait for compute to see the done.
+//#### Layout: {g2s, g2l, first, last, reset, wgt, src, dst}, bit VTA_SA_UOP_B = reset.
 //#define VTA_SA_UOP_WIDTH (VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH + VTA_LOG_WGT_BUFF_DEPTH + 2)
-#define VTA_SA_UOP_WIDTH (VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH + VTA_LOG_WGT_BUFF_DEPTH + 3)
+#define VTA_SA_UOP_B (VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH + VTA_LOG_WGT_BUFF_DEPTH)
+#define VTA_SA_UOP_WIDTH (VTA_SA_UOP_B + 5)
 typedef ap_uint<VTA_SA_UOP_WIDTH> sa_uop_T;
 #endif
 

@@ -16,7 +16,7 @@ module sa_ctrl #(
   input  wire                 clk,
   input  wire                 rst,
   // uop stream
-  input  wire [DW+SW+WW+2:0]  s_uop_tdata,   // {first, last, reset, wgt, src, dst}
+  input  wire [DW+SW+WW+4:0]  s_uop_tdata,   // {g2s, g2l, first, last, reset, wgt, src, dst}
   input  wire                 s_uop_tvalid,
   output wire                 s_uop_tready,
   // inp_mem read
@@ -33,9 +33,10 @@ module sa_ctrl #(
   output wire [DW-1:0]        tag_dst,
   output wire                 tag_reset,
   output wire                 tag_last,
+  output wire [1:0]           tag_tok,        // {g2s, g2l} of the instruction (on its last step)
   output wire                 idle           // nothing queued or in the array
 );
-  localparam UW = DW + SW + WW + 2;          // uop width kept in the FIFO (without first)
+  localparam UW = DW + SW + WW + 4;          // FIFO entry: {g2s, g2l, last, reset, wgt, src, dst} (first only makes newrun)
   localparam TD = L_RD + 33;                 // issue presented -> RMW
 
   // ---------------- uop FIFO (entry = {newrun, uop}) ----------------
@@ -56,6 +57,7 @@ module sa_ctrl #(
   //#### have written new weights at the same address since the last fill (gemmprobe: reset GEMM, LOAD WGT, GEMM, same wgt)
   //wire          in_newrun = !have_prev || in_wgt != prev_wgt;
   wire          in_first = s_uop_tdata[DW+SW+WW+2];
+  wire [1:0]    in_tok   = s_uop_tdata[DW+SW+WW+4:DW+SW+WW+3];
   wire          in_newrun = !have_prev || in_wgt != prev_wgt || in_first;
   assign s_uop_tready = !rst && !f_full && !(in_newrun && q_full);
   wire          enq = s_uop_tvalid && s_uop_tready;
@@ -63,8 +65,9 @@ module sa_ctrl #(
   // head
   wire [UW:0]   head = fifo[rp[FD-1:0]];
   wire          h_newrun = head[UW];
-  wire          h_last   = head[UW-1];
-  wire          h_reset  = head[UW-2];
+  wire [1:0]    h_tok    = head[UW-1:UW-2];
+  wire          h_last   = head[UW-3];
+  wire          h_reset  = head[UW-4];
   wire [SW-1:0] h_src    = head[DW+SW-1:DW];
   wire [DW-1:0] h_dst    = head[DW-1:0];
 
@@ -81,7 +84,7 @@ module sa_ctrl #(
       wp <= 0; rp <= 0; qw <= 0; qr <= 0; have_prev <= 1'b0; pend <= 1'b0; cnt <= 0;
     end else begin
       if (enq) begin
-        fifo[wp[FD-1:0]] <= {in_newrun, s_uop_tdata[UW-1:0]};
+        fifo[wp[FD-1:0]] <= {in_newrun, in_tok, s_uop_tdata[DW+SW+WW+1:0]};
         wp <= wp + 1'b1;
         prev_wgt <= in_wgt; have_prev <= 1'b1;
         if (in_newrun) begin runq[qw[RD-1:0]] <= in_wgt; qw <= qw + 1'b1; end
@@ -121,16 +124,17 @@ module sa_ctrl #(
   assign arr_flag = flag_p[L_RD];
   assign arr_go   = go_p[L_RD];
 
-  reg [DW+2:0] tagp [0:TD];                    // {valid, last, reset, dst}; [0] = presented cycle
+  reg [DW+4:0] tagp [0:TD];                    // {tok[1:0], valid, last, reset, dst}; [0] = presented cycle
   integer t;
   always @(posedge clk) begin
-    tagp[0] <= rst ? {(DW+3){1'b0}} : {issue, h_last, h_reset, h_dst};
-    for (t = 1; t <= TD; t = t + 1) tagp[t] <= rst ? {(DW+3){1'b0}} : tagp[t-1];
+    tagp[0] <= rst ? {(DW+5){1'b0}} : {h_tok, issue, h_last, h_reset, h_dst};
+    for (t = 1; t <= TD; t = t + 1) tagp[t] <= rst ? {(DW+5){1'b0}} : tagp[t-1];
   end
   assign tag_valid = tagp[TD][DW+2];
   assign tag_last  = tagp[TD][DW+1];
   assign tag_reset = tagp[TD][DW];
   assign tag_dst   = tagp[TD][DW-1:0];
+  assign tag_tok   = tagp[TD][DW+4:DW+3];
 
   reg any_tag;
   always @(*) begin

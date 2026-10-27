@@ -208,6 +208,28 @@ uop 스트림 루프 II=1, ALU II=2(같음), acc_mem은 512비트 BRAM 포트 2�
 **BD 연결** — `rtl/gemm_sa_bd.v`(`gen_gemm_sa_bd.py`가 생성: acc/out 포트 mux, inp·wgt 16 bank 포트, 바이트 주소), `vivado.tcl`의 `systolic` 분기
 (gemm_sa_0, acc_mem BRAM 4096 x 512 지연 2, inp/wgt 포트 B 출력 레지스터). D5(PL 시뮬레이션)보다 먼저 333 MHz 비트스트림을 만들어 보드 프로브로 본다.
 
+**보드 (2026-10-28, single, 333 MHz, `make ip CSIM=1 SYSTOLIC=1 && make bin SYSTOLIC=1`)** — `bit/evta_single_systolic_261027/vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa.bin`
+- 고친 것(순서대로, 모두 첫 보드 실행에서 드러남):
+  1. Vivado가 `gemm_sa_bd`를 top으로 잡음 → `vivado.tcl`이 wrapper를 top으로 지정.
+  2. 곱이 모두 0: BRAM 출력 레지스터는 REGCE 핀이 없으면 EN이 1일 때만 갱신된다. RTL이 EN을 한 클럭만 올려 데이터가 dout에 오지 않았다 → inp/wgt 포트 B와 acc 포트 A의 읽기 EN을 1로 둔다.
+     (`make`가 RTL 변경을 몰라 처음 재빌드는 아무것도 안 했다 → Makefile이 `SYSTOLIC=1`이면 `rtl/*.v`에 의존.)
+  3. gemmprobe 0: **같은 wgt 주소를 쓰는 다음 GEMM 명령이 weight를 다시 채우지 않았다**(사이에 LOAD WGT가 새 weight를 씀). uop에 `first` 비트, 명령의 첫 step은 항상 새 run.
+     TB/모델에 `reload` 벡터(명령 0 → weight 교체 → 같은 주소의 명령 1) 추가: `first` 없이 FAIL, 있으면 PASS.
+  4. 같은 클럭에서 느림(ResConv10 +29%): GEMM 명령의 g2l 토큰을 HLS가 done을 본 뒤 보냈는데, HLS는 다른 스레드 GEMM의 uop 루프(II=1) 안에 있어 done을 늦게 본다.
+     load의 다음 버퍼 적재가 GEMM 명령 하나만큼 늦어져 load가 숨지 못했다 → **토큰을 gemm_sa가 직접 보낸다**: uop에 `{g2s, g2l}`(마지막 step), RMW가 그 step을 쓸 때 토큰, `gemm_sa_bd`가 compute의 토큰과 합침(gemm_sa 우선). compute의 done은 acc/out 접근 전 대기에만 쓴다.
+- uop 형식(최종): `{g2s, g2l, first, last, reset, wgt, src, dst}` = 40비트(single).
+- 결과: probes 10/10, golden 30 PASS, Resnet18/Resnet18Partition/Resnet50 → 281. WNS +0.031, WHS +0.009, WPWS +0.001, stuckchk 0 extra, Y219 PIP 0.
+- 속도(333 MHz, `run_prof.sh -s _sysprof all`, total_vta_time, 같은 날 기존 HLS 비트스트림과):
+
+| 번들 | 기존 HLS `vtahw_single_y219` | systolic, 토큰 수정 전 | **systolic** |
+|---|---|---|---|
+| ResConv10 | 2.893 ms | 3.741 ms | **2.891 ms** |
+| Conv4 | 3.565 ms | 3.851 ms | **3.570 ms** |
+| Resnet18 | 48.53 ms | 56.07 ms | **48.95 ms (+0.9%)** |
+| Resnet50 | 245.78 ms | 253.72 ms | **247.39 ms (+0.7%)** |
+
+  같은 클럭에서 기존과 같은 속도다(옛 uop 순서 런타임으로는 ResConv10 7.585 ms, 가동률 약 40%, §4 예상대로). 이득은 클럭에서 나와야 한다 → 다음: 400 MHz 빌드(HP 포트 333 MHz 분리 필요, multi4 `vivado.tcl`의 방식).
+
 ## 13. 열린 문제
 
 1. HLS 2020.1: 512비트 2포트 외부 bram 인터페이스와 ALU 루프 II(§3). D5 전에 HLS만 따로 합성해 본다.
