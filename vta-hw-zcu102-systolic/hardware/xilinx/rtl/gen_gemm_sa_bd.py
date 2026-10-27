@@ -93,30 +93,36 @@ body = '''
     .out_wr_en(out_wr_en), .out_wr_addr(out_wr_addr), .out_wr_data(out_wr_data),
     .busy(busy));
 
-  // acc / out: gemm_sa while busy, else the HLS compute
+  // acc / out: gemm_sa while busy, else the HLS compute.
+  // #### JO changed (Phase D8): the port muxes select on a registered copy of busy (sel). busy is an OR over the tag
+  // #### pipe and the RMW stages; selecting 512-bit muxes with it directly was the worst path at 400 MHz (-0.06 ns).
+  // #### One cycle late is safe: gemm_sa's first acc access is >= 35 cycles after its first uop, and compute touches
+  // #### acc/out only after reading the done that comes one cycle after the last write (sel is 0 by then).
+  (* max_fanout = 64 *) reg sel;
+  always @(posedge clk) sel <= rstn ? busy : 1'b0;
   assign mem_acc_a_clk  = clk;
   assign mem_acc_a_rst  = 1'b0;
-  assign mem_acc_a_addr = busy ? {{(26-DW){1'b0}}, acc_rd_addr, 6'd0} : hls_acc_a_addr;
+  assign mem_acc_a_addr = sel ? {{(26-DW){1'b0}}, acc_rd_addr, 6'd0} : hls_acc_a_addr;
   // #### JO changed (Phase D, board): read enables stay high. With the primitive output register on and no REGCE pin,
   // #### blk_mem_gen updates the output register only while EN is 1, so a one-cycle EN pulse never reaches dout
-  // #### (first board run: every product 0). Was: busy ? acc_rd_en : hls_acc_a_en
-  assign mem_acc_a_en   = busy ? 1'b1 : hls_acc_a_en;
-  assign mem_acc_a_we   = busy ? 64'd0 : hls_acc_a_we;
+  // #### (first board run: every product 0). Was: sel ? acc_rd_en : hls_acc_a_en
+  assign mem_acc_a_en   = sel ? 1'b1 : hls_acc_a_en;
+  assign mem_acc_a_we   = sel ? 64'd0 : hls_acc_a_we;
   assign mem_acc_a_din  = hls_acc_a_din;
   assign hls_acc_a_dout = mem_acc_a_dout;
   assign mem_acc_b_clk  = clk;
   assign mem_acc_b_rst  = 1'b0;
-  assign mem_acc_b_addr = busy ? {{(26-DW){1'b0}}, acc_wr_addr, 6'd0} : hls_acc_b_addr;
-  assign mem_acc_b_en   = busy ? acc_wr_en : hls_acc_b_en;
-  assign mem_acc_b_we   = busy ? {64{acc_wr_en}} : hls_acc_b_we;
-  assign mem_acc_b_din  = busy ? acc_wr_data : hls_acc_b_din;
+  assign mem_acc_b_addr = sel ? {{(26-DW){1'b0}}, acc_wr_addr, 6'd0} : hls_acc_b_addr;
+  assign mem_acc_b_en   = sel ? acc_wr_en : hls_acc_b_en;
+  assign mem_acc_b_we   = sel ? {64{acc_wr_en}} : hls_acc_b_we;
+  assign mem_acc_b_din  = sel ? acc_wr_data : hls_acc_b_din;
   assign hls_acc_b_dout = mem_acc_b_dout;
   assign mem_out_clk    = clk;
   assign mem_out_rst    = 1'b0;
-  assign mem_out_addr   = busy ? {{(28-DW){1'b0}}, out_wr_addr, 4'd0} : hls_out_addr;
-  assign mem_out_en     = busy ? out_wr_en : hls_out_en;
-  assign mem_out_we     = busy ? {16{out_wr_en}} : hls_out_we;
-  assign mem_out_din    = busy ? out_wr_data : hls_out_din;
+  assign mem_out_addr   = sel ? {{(28-DW){1'b0}}, out_wr_addr, 4'd0} : hls_out_addr;
+  assign mem_out_en     = sel ? out_wr_en : hls_out_en;
+  assign mem_out_we     = sel ? {16{out_wr_en}} : hls_out_we;
+  assign mem_out_din    = sel ? out_wr_data : hls_out_din;
   assign hls_out_dout   = mem_out_dout;
 
   // inp / wgt port B: read only

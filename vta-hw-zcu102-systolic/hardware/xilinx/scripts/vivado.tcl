@@ -61,6 +61,12 @@ set mem_oreg [expr {[info exists ::env(VTA_MEM_OREG)] && $::env(VTA_MEM_OREG) eq
 set systolic [expr {[info exists ::env(VTA_SYSTOLIC)] && $::env(VTA_SYSTOLIC) eq "1"}]
 if {$systolic} { set mem_oreg 1 }
 puts "systolic GEMM (gemm_sa) $systolic"
+#### JO added (2026-10-28, systolic Phase D8, as vta-hw-zcu102-multi4 70ccf2f7): PS8 S_AXI_HP* allow at most 333 MHz (SAXIGP*CLK
+#### min period 3.000 ns, the pulse width check). Above that the HP port and the master side of axi_smc0 get their own
+#### clock (hp_pll, VTA_HP_FREQ, default 333); axi_smc0 (NUM_CLKS 2) crosses. Builds at 333 MHz or below are unchanged.
+set hp_freq [expr {[info exists ::env(VTA_HP_FREQ)] && $::env(VTA_HP_FREQ) ne "" ? $::env(VTA_HP_FREQ) : 333}]
+set hp_split [expr {$clock_freq > $hp_freq}]
+if {$hp_split} { puts "HP port on its own clock, $hp_freq MHz" }
 puts "PLL $clock_freq MHz, inp/wgt port B output register $mem_oreg"
 set board             $FPGA_BOARD
 set board_rev         $FPGA_BOARD_REV
@@ -192,6 +198,7 @@ set_property -dict [ list \
   CONFIG.NUM_MI {1} \
   CONFIG.NUM_SI {5} \
 ] $axi_smc0
+if {$hp_split} { set_property CONFIG.NUM_CLKS {2} $axi_smc0 }
 
 # Create instance: axi_xbar, and set properties
 set axi_xbar \
@@ -491,8 +498,21 @@ connect_bd_net -net processing_system_clk \
   [get_bd_pins l2g_queue/s_aclk] \
   [get_bd_pins g2l_queue/s_aclk] \
   [get_bd_pins g2s_queue/s_aclk] \
-  [get_bd_pins s2g_queue/s_aclk] \
-  $saxi_clk
+  [get_bd_pins s2g_queue/s_aclk]
+#### JO changed (2026-10-28): the HP port clock is the EVTA clock up to 333 MHz, else hp_pll (hp_split above)
+if {!$hp_split} {
+  connect_bd_net -net processing_system_clk $saxi_clk
+} else {
+  set hp_pll [ create_bd_cell -type ip -vlnv xilinx.com:ip:clk_wiz:6.0 hp_pll ]
+  set_property -dict [ list CONFIG.CLKOUT1_REQUESTED_OUT_FREQ $hp_freq CONFIG.USE_RESET {false} ] $hp_pll
+  create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 hp_rst
+  connect_bd_net -net ps_clk_net [get_bd_pins hp_pll/clk_in1]
+  connect_bd_net -net hp_clk [get_bd_pins hp_pll/clk_out1] [get_bd_pins hp_rst/slowest_sync_clk] \
+    [get_bd_pins axi_smc0/aclk1] $saxi_clk
+  connect_bd_net -net hp_pll_locked [get_bd_pins hp_pll/locked] [get_bd_pins hp_rst/dcm_locked]
+  connect_bd_net -net processing_system_reset [get_bd_pins hp_rst/ext_reset_in]
+  connect_bd_net -net hp_rstn [get_bd_pins hp_rst/peripheral_aresetn]
+}
 #### JO added (systolic Phase D): gemm_sa_0 on the EVTA clock and the peripheral reset, like compute_0
 if {$systolic} {
   connect_bd_net -net processing_system_clk [get_bd_pins gemm_sa_0/clk]
@@ -533,16 +553,17 @@ if {$profile} {
     [get_bd_pins axi_xbar/M04_ACLK] \
     [get_bd_pins axi_perf_mon/s_axi_aclk] \
     [get_bd_pins axi_perf_mon/core_aclk] \
-    [get_bd_pins axi_perf_mon/slot_0_axi_aclk] \
     [get_bd_pins axi_perf_mon/slot_1_axi_aclk] \
     [get_bd_pins axi_perf_mon/slot_2_axi_aclk]
   connect_bd_net [get_bd_pins proc_sys_reset/peripheral_aresetn] \
     [get_bd_pins axi_xbar/M04_ARESETN] \
     [get_bd_pins axi_perf_mon/s_axi_aresetn] \
     [get_bd_pins axi_perf_mon/core_aresetn] \
-    [get_bd_pins axi_perf_mon/slot_0_axi_aresetn] \
     [get_bd_pins axi_perf_mon/slot_1_axi_aresetn] \
     [get_bd_pins axi_perf_mon/slot_2_axi_aresetn]
+  #### JO changed (2026-10-28): slot 0 (axi_smc0 -> HP0) on the HP clock when hp_split
+  connect_bd_net -net [expr {$hp_split ? "hp_clk" : "processing_system_clk"}] [get_bd_pins axi_perf_mon/slot_0_axi_aclk]
+  connect_bd_net -net [expr {$hp_split ? "hp_rstn" : "proc_sys_reset_peripheral_aresetn"}] [get_bd_pins axi_perf_mon/slot_0_axi_aresetn]
 }
 
 # Create address segments
@@ -621,7 +642,7 @@ if {$target eq "zcu102" && $bram_fence eq "y219"} {
   set pb_xdc $proj_path/$proj_name.srcs/constrs_1/new/fence_y219.xdc
   set f [open $pb_xdc w]
   puts $f {create_pblock pb_below_y219}
-  puts $f {add_cells_to_pblock [get_pblocks pb_below_y219] [get_cells -filter {NAME !~ vta_i/processing_system && NAME !~ vta_i/pll_clk} vta_i/*]}
+  puts $f {add_cells_to_pblock [get_pblocks pb_below_y219] [get_cells -filter {NAME !~ vta_i/processing_system && NAME !~ vta_i/pll_clk && NAME !~ vta_i/hp_pll} vta_i/*]}
   puts $f {resize_pblock [get_pblocks pb_below_y219] -add {SLICE_X0Y0:SLICE_X96Y218 RAMB36_X0Y0:RAMB36_X12Y42 RAMB18_X0Y0:RAMB18_X12Y85 DSP48E2_X0Y0:DSP48E2_X17Y85}}
   puts $f {set_property CONTAIN_ROUTING true [get_pblocks pb_below_y219]}
   puts $f {set_property PROHIBIT true [get_sites -regexp {MMCM_X\d+Y[3-6]}]}

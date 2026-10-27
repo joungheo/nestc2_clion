@@ -230,6 +230,27 @@ uop 스트림 루프 II=1, ALU II=2(같음), acc_mem은 512비트 BRAM 포트 2�
 
   같은 클럭에서 기존과 같은 속도다(옛 uop 순서 런타임으로는 ResConv10 7.585 ms, 가동률 약 40%, §4 예상대로). 이득은 클럭에서 나와야 한다 → 다음: 400 MHz 빌드(HP 포트 333 MHz 분리 필요, multi4 `vivado.tcl`의 방식).
 
+**클럭 올리기 (D8, 2026-10-28)** — `vivado.tcl`에 HP 포트 분리(333 MHz 초과 시 `hp_pll` 333 MHz, `axi_smc0` NUM_CLKS 2; multi4 `70ccf2f7`와 같은 방식).
+`make bin SYSTOLIC=1 FREQ=<MHz> JOBS=8`.
+- 첫 빌드: 400 WNS −0.061(88), 380 −0.023(26). 400의 최악은 `gemm_sa_bd`의 BRAM 포트 mux였다(선택 신호 `busy`가 태그 pipe 37단 OR + RMW, 512비트 mux를 직접 고름).
+  → 선택을 한 클럭 늦춘 레지스터 `sel`로(gemm_sa의 첫 acc 접근은 첫 uop 뒤 35클럭 이상, compute는 마지막 쓰기 다음 클럭에 나오는 done을 읽은 뒤에야 acc 접근).
+- 다시: **380 MHz WNS +0.046, WHS +0.010, WPWS +0.001**, stuckchk 0 extra, Y219 PIP 0. 400 MHz는 −0.135(175개).
+  400의 실패는 이제 모두 gemm_sa 밖이다: `axi_xbar` s00 폭 변환(auto_ds → auto_cc) 112개 −0.112, HLS compute → acc_mem 34개 −0.132, compute 내부 11개 −0.135, load → inp_mem 12개 −0.128.
+  HLS IP는 3.0 ns 목표로 합성되어 있다(`FREQ`는 PLL만 바꾼다). 400을 맞추려면 HLS 목표 2.5 ns 재합성, PS M_AXI_HPM0을 32비트로(폭 변환 제거).
+- 보드 380(`bit/evta_single_systolic_261027/vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_380mhz.bin`): probes 10/10, golden 30 PASS, Resnet18/Partition/50 → 281.
+  `run_prof.sh -s _sysprof all`, 같은 날 HLS 380(`vtahw_zcu102_1x16_i8w8a32_16_16_19_18_prof_380mhz`, HP도 380이라 규격 밖)과:
+
+| 번들 | HLS 380 | systolic 380 (HP 333) | 차이 |
+|---|---|---|---|
+| ResConv10 | 2.544 ms | 2.559 ms | +0.6% |
+| Conv4 | 3.138 ms | 3.156 ms | +0.6% |
+| Resnet18 | 42.76 ms | 43.14 ms | +0.9% |
+| Resnet50 | 221.61 ms | 236.99 ms | +6.9% |
+| Vgg16Cifar10 | 29.85 ms | 31.23 ms | +4.6% |
+
+  conv는 같다. Resnet50·Vgg16의 차이는 HP 포트 클럭(333 vs 380)으로 보인다(1x1 conv 등 load/store 비중이 큰 층; multi4 380의 Conv 번들과 같은 현상).
+- **정리: systolic GEMM은 같은 클럭에서 HLS GEMM과 같은 속도로 보드에서 동작한다. 이득은 HLS가 못 가는 클럭(400 이상, C안의 어레이 2배 클럭)에서만 나온다.**
+
 ## 13. 열린 문제
 
 1. HLS 2020.1: 512비트 2포트 외부 bram 인터페이스와 ALU 루프 II(§3). D5 전에 HLS만 따로 합성해 본다.
