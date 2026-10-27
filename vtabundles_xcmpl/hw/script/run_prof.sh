@@ -36,7 +36,8 @@ if [ $# = 0 ] || [ "$1" = all ] || [ "$1" = hw_bundles ]; then
 fi
 #### JO changed (2026-10-27): summaries in result/
 #SUM=${SUFFIX#_}_summary.txt; : > $SUM
-mkdir -p result; chown --reference=. result; SUM=result/${SUFFIX#_}_summary.txt; : > $SUM
+#### JO changed (2026-10-27): + trace/ (sds_trace_data.dat of the Xlnk reset)
+mkdir -p result trace; chown --reference=. result trace; SUM=result/${SUFFIX#_}_summary.txt; : > $SUM
 
 for D in "$@"; do
   #### JO changed: a Dir can have several run lines (multi-EVTA: threaded + single-thread executable)
@@ -51,7 +52,9 @@ for D in "$@"; do
   [ -x $D/$EXE ] || { echo "$D/$EXE not built (cd ${BLD}${SUFFIX} && make $3)"
                       printf "%-30s %-34s NOT BUILT\n" $D $EXE >> $SUM; continue; }
   echo 0 > /sys/class/fpga_manager/fpga0/flags; echo $BIN > /sys/class/fpga_manager/fpga0/firmware
-  python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" 2>/dev/null
+  #### JO changed (2026-10-27): in trace/ (libcma.so writes sds_trace_data.dat to the working dir)
+  #python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" 2>/dev/null
+  ( cd trace && python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" 2>/dev/null )
   #### JO changed: keep exit code and golden result for the summary
   # ( cd $D && rm -f output.bin && timeout 300 ./$EXE $IN > $LOG 2>&1; echo "exit=$? (124 = timeout)" )
   # [ -n "$GOLD" ] && [ -f $D/output.bin ] && { cmp -s $D/output.bin $D/$GOLD && echo "RESULT: PASS" || echo "RESULT: MISMATCH"; }

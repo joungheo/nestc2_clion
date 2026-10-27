@@ -193,14 +193,18 @@ def main():
                 'exec 9>/tmp/evta_run.lock; flock -n 9 || { echo "another EVTA run is active (/tmp/evta_run.lock)"; exit 1; }\n'
                 #### JO changed (2026-10-27): results.txt in result/
                 # 'ONLY="$*"\n: > results.txt\n'
-                'ONLY="$*"\nmkdir -p result; : > result/results.txt\n'
+                #### JO changed (2026-10-27): + trace/ for the sds_trace_data.dat libcma.so writes at exit
+                # 'ONLY="$*"\nmkdir -p result; : > result/results.txt\n'
+                'ONLY="$*"\nmkdir -p result trace; : > result/results.txt\n'
                 #### JO changed: multi-EVTA sets have several executables per Dir -> one log/rc per executable
                 f'LOG() {{ echo {"$1.log" if ALL_EXES else "run.log"}; }}  # log name for executable $1\n'
                 'run() {  # dir exe input golden\n'
                 '  [ -n "$ONLY" ] && [[ " $ONLY " != *" $1 "* ]] && return\n'
                 '  echo "================ $1 ($2)"\n'
                 '  echo 0 > /sys/class/fpga_manager/fpga0/flags; echo $BIN > /sys/class/fpga_manager/fpga0/firmware\n'
-                '  python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" 2>/dev/null\n'
+                #### JO changed (2026-10-27): in trace/ (libcma.so writes sds_trace_data.dat to the working dir)
+                # '  python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" 2>/dev/null\n'
+                '  ( cd trace && python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" 2>/dev/null )\n'
                 '  ( cd $1 && rm -f output.bin && timeout 300 ./$2 $3 > $(LOG $2) 2>&1; echo $? > $(LOG $2).rc )\n'
                 '  rc=$(cat $1/$(LOG $2).rc); chown -R --reference=. $1\n'
                 '  if [ $rc = 124 ]; then res=TIMEOUT\n'

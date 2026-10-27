@@ -6,13 +6,13 @@ BIN=${BIN:-vtahw_multi2_y219.bin}
 [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
 exec 9>/tmp/evta_run.lock; flock -n 9 || { echo "another EVTA run is active (/tmp/evta_run.lock)"; exit 1; }
 ONLY="$*"
-mkdir -p result; : > result/results.txt
+mkdir -p result trace; : > result/results.txt
 LOG() { echo $1.log; }  # log name for executable $1
 run() {  # dir exe input golden
   [ -n "$ONLY" ] && [[ " $ONLY " != *" $1 "* ]] && return
   echo "================ $1 ($2)"
   echo 0 > /sys/class/fpga_manager/fpga0/flags; echo $BIN > /sys/class/fpga_manager/fpga0/firmware
-  python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" 2>/dev/null
+  ( cd trace && python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" 2>/dev/null )
   ( cd $1 && rm -f output.bin && timeout 300 ./$2 $3 > $(LOG $2) 2>&1; echo $? > $(LOG $2).rc )
   rc=$(cat $1/$(LOG $2).rc); chown -R --reference=. $1
   if [ $rc = 124 ]; then res=TIMEOUT

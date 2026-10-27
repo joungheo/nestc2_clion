@@ -20,7 +20,8 @@ Bundle sources are generated in the simulator build, then compiled for the board
 - Step 2 keeps what is already in `hw/<Dir>` (executables, `*_prof`, logs) and regenerates `hw/script/run_all.sh`.
 - git keeps only `hw/script/` (`run_all.sh`, kept so the run lines are versioned, and `run_prof.sh`) of `hw/`; the
   bundle dirs (with their logs) stay in `hw/`, the summaries (`results.txt`, `*_summary.txt`, `collect_report.txt`)
-  are in `hw/result/`; both are ignored (each run overwrites them; the numbers worth keeping go into the docs). The scripts `cd`
+  are in `hw/result/`, the `sds_trace_data.dat` that PYNQ `libcma.so` writes to the working directory at exit
+  (bitstream reload `Xlnk().xlnk_reset()`) in `hw/trace/` (the executables leave one in their bundle dir); all ignored (each run overwrites them; the numbers worth keeping go into the docs). The scripts `cd`
   to `hw/` themselves (call them from anywhere). Same for `hw_<set>/script/` (2026-10-27).
 - Step 3 uses `CMakeLists.txt` here: vtalib (`libvta_runtime.a`, `libVTABundle.a`) is built once per build
   directory with its own ZCU102 settings, and every bundle is compiled with the same `-D` macros.
