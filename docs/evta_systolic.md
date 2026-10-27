@@ -9,7 +9,7 @@
 - 조사: §9 보고서(Gemmini, VTA 원논문, DSP-Fetch, FireFly v2, 2510.08137, DPU, WP486, Tensil, AutoSA, gemm_hls; 종합 §9.12). 원문은 `docs/ref/`
 - 실험: §8 Phase A(타이밍, 클럭 sweep, 보드), §10 Phase B(uop 순서)·Phase C(사이클 모델)
 - **Phase D 설계서(글과 그림)**: `docs/evta_systolic_design.md`
-- 코드: 브랜치 `systolic`, `vta-hw-zcu102-systolic`(HW), `vtalib-zcu102-systolic`(런타임, uop 순서와 uop cache 수정).
+- 코드: 브랜치 `systolic`(2026-10-28 main에 fast-forward로 합침, 이후 작업도 `systolic`에서 하고 main에 다시 합친다), `vta-hw-zcu102-systolic`(HW), `vtalib-zcu102-systolic`(런타임, uop 순서와 uop cache 수정).
 
 ## 0. 방향 결정 (2026-10-27)
 
@@ -283,7 +283,7 @@ for v in prof_360mhz prof_380mhz prof_400mhz prof_oreg_360mhz prof_oreg_380mhz p
   보드 `cd $B/vtabundles_xcmpl/hwtest && sudo -n /bin/sh -c "NUM_EVTA=0 /bin/sh ./probes.sh vtahw_single_y219.bin vtahw_zcu102_1x16_i8w8a32_16_16_19_18_prof_360mhz.bin vtahw_zcu102_1x16_i8w8a32_16_16_19_18_prof_oreg_360mhz.bin vtahw_zcu102_1x16_i8w8a32_16_16_19_18_prof_380mhz.bin"`.
   gemmprobe reset/zero/ident/perm/ones 0/16 wrong, sramscan wgt/inp(+invert) 0 bytes wrong, donerace 16/16.
 - 번들 golden(`hw/script/run_all.sh`, `BIN=<위>.bin`, 명령은 vta_synth_notes §2.5 6) (가)): 세 판 모두 30 PASS + golden 없는 5개 정상 실행(Resnet18/Partition/50 → 281, Vgg16 → 0, 이전과 같음).
-- 속도(`hw/run_prof.sh`, `_prof` 번들 = `vta/vtalib` + `NESTC_EVTA_PROFILE`, total_vta_time, 2회 반복 편차 0.1% 이내).
+- 속도(`hw/script/run_prof.sh`, `_prof` 번들 = `vta/vtalib` + `NESTC_EVTA_PROFILE`, total_vta_time, 2회 반복 편차 0.1% 이내).
   보드 `cd $B/vtabundles_xcmpl/hw && sudo -n /bin/sh -c "BIN=<x>.bin script/run_prof.sh ResConv10Test Conv4Test"`, 결과 `result/prof_summary.txt`:
 
 | 번들 | 333 (`vtahw_single_y219`) | base 360 | oreg 360 |

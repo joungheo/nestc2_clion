@@ -7,9 +7,9 @@
 
 ```
 Debug2_remote/build_sim_bundles.sh <target>       # 1차: 시뮬레이터 빌드에서 번들 소스 생성
-vtabundles_xcmpl/collect_hw_bundles.py [--set S]  # hw/<Dir>로 복사 + run_all.sh 생성
+vtabundles_xcmpl/collect_hw_bundles.py [--set S]  # hw/<Dir>로 복사 + hw/script/run_all.sh 생성
 vtabundles_xcmpl/build*/  make -j2 hw_bundles     # 2차: 보드용 컴파일 (CMake, vtalib은 빌드 디렉터리당 1번)
-vtabundles_xcmpl/hw/run_all.sh, run_prof.sh       # sudo, 실행마다 비트스트림 재로드
+vtabundles_xcmpl/hw/script/run_all.sh, run_prof.sh  # sudo, 실행마다 비트스트림 재로드 (요약 hw/result/, trace hw/trace/)
 ```
 - 위치: `nestc2_clion/vtabundles_xcmpl` → `nest-compiler/vtabundles_xcmpl` (2026-10-17, 절대경로 제거).
 - 빌드 디렉터리: `build`(일반), `build_timed`(`-DBUNDLE_TIMED=ON`, 문장별 시간), `build_prof`(`-DNESTC_EVTA_PROFILE=ON`),
@@ -109,3 +109,19 @@ PC docker `vivado2020-build`, Vivado `/tools/Xilinx/v2020.1`. `vtahw_zcu102_1x16
 - `--set multievtax4`(EVTA 4개), `build_<set>_prof`/`_timed`, 실행 lock `/tmp/evta_run.lock`.
 - 속도 측정(2026-10-26): ResConv10(7x7x512→512 3x3) conv 반복이 EVTA 1개 152.6 GOPS, 4개 동시 **609.7 GOPS**
   (`OMP_NUM_THREADS=1`). 보고서 `docs/evta_multi4_609gops_report.md`.
+
+## 11. hw dir 구성 (2026-10-27)
+
+`hw/`, `hw_multievtax2/`, `hw_multievtax4/`는 같은 구성이다. git에는 `script/`와 `*Src/`만 들어간다(`.gitignore`).
+
+| 위치 | 내용 | git |
+|---|---|---|
+| `script/` | `run_all.sh`(collect_hw_bundles.py가 생성), `run_prof.sh`, `hw/script/load_bit.sh`(손으로 비트스트림 재로드) | O |
+| `<Dir>/` | 번들 소스·데이터, 실행 파일, `run.log`/`prof.log`/`timed.log`, `output.bin`, `timing*.csv` | X |
+| `result/` | `results.txt`(run_all), `<suffix>_summary.txt`(run_prof), `collect_report.txt`, 손으로 남긴 결과 | X |
+| `trace/` | `sds_trace_data.dat`: PYNQ `libcma.so`가 프로세스 종료 시 현재 dir에 쓴다. 스크립트가 `xlnk_reset`을 여기서 돌린다 | X |
+| `MultiEVTAConv4TestSrc/` (multi4) | `make_multi4conv4.py`, `multi4conv4Main.cpp` | O |
+
+- 스크립트는 자기 hw dir로 `cd`하므로 어디서 불러도 된다: `sudo hw/script/run_all.sh Conv4Test`.
+- 번들 실행 파일도 자기 `<Dir>/`에 `sds_trace_data.dat`를 남긴다(입력 파일 때문에 그 dir에서 돈다). 이 파일은 저장소 전체에서 git 제외.
+- `hwtest/run_*.sh`는 `hwtest/trace/`에서 reset한다.

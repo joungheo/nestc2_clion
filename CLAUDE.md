@@ -131,7 +131,7 @@ from CLion over remote.
   `-DVTA_COHERENT_ACCESSES=false`) makes the runtime flush/invalidate; ON hangs on this board. Generated
   bundles call `VTABufferFlush` / `VTABufferInvalidate` (new vtalib API) around the CPU-side transposes —
   emitted by `lib/Backends/VTA/VTASave.cpp`, so bundles generated before that change must be regenerated.
-- **Reload the bitstream before every EVTA run** (`fpga_manager` firmware write, then
+- **Reload the bitstream before every EVTA run** (by hand: `sudo vtabundles_xcmpl/hw/script/load_bit.sh <bin>`; `fpga_manager` firmware write, then
   `Xlnk().xlnk_reset()`): a hung run leaves the auto-restart EVTA blocks deadlocked and all later runs hang.
   The runtime pre-allocates 64 MB of the 128 MB CMA pool per command handle. Other users share this board.
 - With `NESTC_EVTA_RUN_ON_ZCU102=ON`, `cmake/glow/CMakeLists.txt` skips `lib`/`tools`, so VTASaverTest /
@@ -178,6 +178,11 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
 - Speed (2026-10-26, `docs/evta_multi4_609gops_report.md`): ResConv10 (3x3, 7x7x512 -> 512) repeated on each EVTA,
   152.6 GOPS on one, **609.7 GOPS on four at once** (89 % of 4 x 170.7; EVTA time unchanged, no DDR contention).
   Measure multi-EVTA runs with `OMP_NUM_THREADS=1` (the default OpenMP teams oversubscribe the 4 cores).
+- Clock and systolic work (2026-10-27, `docs/evta_systolic.md`, design `docs/evta_systolic_design.md`): `FREQ=<MHz>` on the
+  `make` of the vta-hw copies overrides the PLL (default unchanged). multi4 at 380 MHz with the HP ports on their own 333 MHz
+  clock passes the board: ResConv10 x 4 EVTAs **685.1 GOPS** (+12.4 %). [vta-hw-zcu102-systolic/](vta-hw-zcu102-systolic/) and
+  [vtalib-zcu102-systolic/](vtalib-zcu102-systolic/) are single-EVTA copies for the systolic (weight-stationary) GEMM
+  (RTL `gemm_sa`, `SYSTOLIC=1`); work on it is done on branch `systolic` and merged into main.
 
 Useful options (full list at the top of [CMakeLists.txt](CMakeLists.txt) and per-backend CMakeLists):
 

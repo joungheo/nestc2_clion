@@ -45,7 +45,7 @@ sudo cp ~/JO/npuprg/bit/evta_zcu102_1evta.bin /lib/firmware/
 cd <nest-compiler>/vtabundles_xcmpl/hwtest
 sudo BIN=evta_zcu102_1evta.bin ./run_rawtests.sh                      # 256-bit insns: "32" must pass, "16" time out
 sudo BIN=evta_zcu102_1evta.bin ./run_rawtests2.sh add_test_nc gemm_nc  # add_test: both numbers equal; gemm: Golden Matched
-cd ../hw && sudo BIN=evta_zcu102_1evta.bin ./run_all.sh Conv4Test Resnet18Test
+sudo BIN=evta_zcu102_1evta.bin ../hw/script/run_all.sh Conv4Test Resnet18Test   # (2026-10-27: was hw/run_all.sh)
 ```
 
 Notes:

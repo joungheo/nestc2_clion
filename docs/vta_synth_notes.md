@@ -92,15 +92,15 @@
   cd $B
   X=<x>.bin                                   # 예: vtahw_multi4_y219.bin
   sudo -n cp /home/xilinx/JO/npuprg/bit/<dir>/$X /lib/firmware/$X     # /lib/firmware에 없을 때만
-  sudo -n /bin/sh -c "echo 0 > /sys/class/fpga_manager/fpga0/flags; echo $X > /sys/class/fpga_manager/fpga0/firmware; \
-    cd /tmp && python3 -c 'from pynq import Xlnk; Xlnk().xlnk_reset()'; \
+  sudo -n /bin/sh -c "$B/vtabundles_xcmpl/hw/script/load_bit.sh $X && \
     python3 $B/vtabundles_xcmpl/hwtest/plreset.py"     # 마지막 줄: pl_resetn0 펄스 (EMIO GPIO 95)
   cat /sys/class/fpga_manager/fpga0/state      # operating
   ```
-  - 위 firmware 쓰기와 `xlnk_reset`은 `sudo -n /bin/sh -c "$B/vtabundles_xcmpl/hw/script/load_bit.sh $X"`와 같다(2026-10-27, plreset은 안 함).
+  - `load_bit.sh`는 firmware 쓰기(`echo 0 > .../fpga0/flags; echo $X > .../fpga0/firmware`)와 `xlnk_reset`을 하고,
+    그동안 run 스크립트와 같은 lock(`/tmp/evta_run.lock`)을 잡는다(2026-10-27). plreset은 하지 않는다.
     `xlnk_reset`을 `hw/trace/`에서 실행하므로 `sds_trace_data.dat`(PYNQ `libcma.so`가 종료 시 현재 dir에 씀)가 거기에만 생긴다.
   - 멈춘 실행은 auto-restart 블록을 deadlock 상태로 남긴다. 그래서 매번 다시 로드한다.
-  - Ctrl-C로 중단한 뒤에는 `xlnk_reset`이 필요하다(보드: `sudo -n /bin/sh -c "cd /tmp && python3 -c 'from pynq import Xlnk; Xlnk().xlnk_reset()'"`). CMA 누수가 생기면 "fpga_buff_ != nullptr" 에러가 난다.
+  - Ctrl-C로 중단한 뒤에는 `xlnk_reset`이 필요하다(보드: `sudo -n /bin/sh -c "cd $B/vtabundles_xcmpl/hw/trace && python3 -c 'from pynq import Xlnk; Xlnk().xlnk_reset()'"`). CMA 누수가 생기면 "fpga_buff_ != nullptr" 에러가 난다.
 - **JTAG/ILA를 쓸 때**: 부팅 후 먼저 실행한다(보드): `cd $B/vtabundles_xcmpl/hwtest && sudo -n /bin/sh -c ./nocpuidle.sh`.
   - 하지 않으면 hw_server 연결 몇 분 뒤 Linux가 조용히 죽는다(cpuidle 문제).
   - JTAG 케이블은 호스트 PC의 hw_server에 붙어 있다.
@@ -945,7 +945,8 @@ sudo -n /bin/sh -c "$B/vtabundles_xcmpl/hw/script/load_bit.sh $X && OMP_NUM_THRE
   - `log/BOARD_TODO.md`: 시간순 결과. 새 결과는 여기에 절을 추가한다.
   - `log/board_20261020/`, `log/host_2026102{1,2}/`: 덤프, ILA csv
 - 속도 측정: `docs/evta_multi4_609gops_report.md`, 측정 프로그램 `vtabundles_xcmpl/hw_multievtax4/MultiEVTAConv4TestSrc/`,
-  결과 `vtabundles_xcmpl/hw*/*/timing*.csv`, `prof.log`, `*_summary.txt`(git 제외)
+  결과 `vtabundles_xcmpl/hw*/<Dir>/timing*.csv`, `prof.log`, `vtabundles_xcmpl/hw*/result/*_summary.txt`, `results.txt`(git 제외).
+  hw dir 구성(`script/`만 git, `result/`, `trace/`, 번들 dir): `vtabundles_xcmpl/WORKLOG.md` §11
 - 이전 리뷰 핸드오프: `HANDOFF.md`(vta-hw vs upstream 비교, 발견 사항 #1-#22)
 - 결함 도구: `vtabundles_xcmpl/hwtest/brambist/`(`readback.tcl`, `cfgdiff.py`, `stuckchk.py`, `progrb.tcl`, brambist v1/v2)
 - multi4 작업 dir: `vta-hw-zcu102-multi4/build/y219/`
