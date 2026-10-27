@@ -2,7 +2,10 @@
 # RapidWright pass bans: the IMUX inputs of rows 218/220 are half fed from row-219 tiles, and the reroute of
 # rr_b/rr_c kept fighting over the other half), then route as in step A2.   usage: [-tclargs <out>=routed_d]
 set out [expr {[llength $argv] ? [lindex $argv 0] : "routed_d"}]
-set impl ../hardware/xilinx/vivado/zcu102_1x16_i8w8a32_16_15_18_17_4evta/vta.runs/impl_1
+#### JO changed (2026-10-27): VTA_IMPL_DIR picks another make bin (e.g. the FREQ=360 build dir _360mhz)
+#set impl ../hardware/xilinx/vivado/zcu102_1x16_i8w8a32_16_15_18_17_4evta/vta.runs/impl_1
+set impl [expr {[info exists ::env(VTA_IMPL_DIR)] && $::env(VTA_IMPL_DIR) ne "" ? $::env(VTA_IMPL_DIR) : "../hardware/xilinx/vivado/zcu102_1x16_i8w8a32_16_15_18_17_4evta/vta.runs/impl_1"}]
+puts "impl dir $impl"
 open_checkpoint $impl/vta_wrapper_opt.dcp
 # the HP register slices go below the row, next to the PS (builds before 2026-10-25 missed them: regexp in the fence xdc)
 if {[llength [get_pblocks -quiet pb_hpslice]]} { add_cells_to_pblock [get_pblocks pb_hpslice] [get_cells vta_i/hpslice*] }

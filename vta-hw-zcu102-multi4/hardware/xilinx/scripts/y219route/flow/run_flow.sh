@@ -7,7 +7,9 @@ set -e
 T=$1
 F=$(cd "$(dirname "$0")" && pwd)
 RW=/home/ubuntu/tools/rapidwright
-viv() { docker exec -u ubuntu -w $PWD vivado2020-build bash -c "source /tools/Xilinx/v2020.1/Vivado/2020.1/settings64.sh; vivado -mode batch -nojournal -log $1.log -source $2 -tclargs ${*:3} > /dev/null 2>&1"; }
+#### JO changed (2026-10-27): VTA_IMPL_DIR (place_d.tcl input, relative to build/y219) is passed into docker
+#viv() { docker exec -u ubuntu -w $PWD vivado2020-build bash -c "source /tools/Xilinx/v2020.1/Vivado/2020.1/settings64.sh; vivado -mode batch -nojournal -log $1.log -source $2 -tclargs ${*:3} > /dev/null 2>&1"; }
+viv() { docker exec -e VTA_IMPL_DIR=${VTA_IMPL_DIR:-} -u ubuntu -w $PWD vivado2020-build bash -c "source /tools/Xilinx/v2020.1/Vivado/2020.1/settings64.sh; vivado -mode batch -nojournal -log $1.log -source $2 -tclargs ${*:3} > /dev/null 2>&1"; }
 viv place_$T $F/place_d.tcl routed_$T
 grep -A3 "WNS(ns)" routed_$T.timing.rpt | sed -n 3p
 RAPIDWRIGHT_PATH=$RW/d2025.2 nice -n 10 taskset -c 0-7 java -XX:ActiveProcessorCount=8 -Dcrit=0.95 -Xmx64g \

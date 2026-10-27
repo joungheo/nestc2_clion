@@ -803,6 +803,21 @@ it_out (VTAUopLoopBegin(n_kernel_, dst tile_h·tile_w, src 0, wgt KH·KW)) : 출
 - 보드 sudo: `xilinx`는 `/bin/sh`, `hwtest/*`, `hw/*`, `cp * /lib/firmware/*`만 비밀번호 없이 된다.
   환경 변수를 넘기려면 `sudo -n /bin/sh -c 'BIN=... ./run_all.sh'`.
 
+**5) multi2 360/380 MHz** (2026-10-27, profile 없는 배포판, `vta-hw-zcu102-multi2` `make bin FREQ=<MHz>`, fence `y219`)
+- 빌드: 360 WNS +0.003 / WHS +0.010, 380 WNS +0.001 / WHS +0.010. stuckchk 194, 0 extra. Y219 행 PIP net 0.
+- 보드 `bit/evta_multi2_phaseA_261027/`(`/lib/firmware`에 같은 이름):
+  `vtahw_zcu102_1x16_i8w8a32_16_15_18_17_2evta_360mhz.bin`(md5 `00c8202c…`), `..._380mhz.bin`(md5 `6cb08c59…`).
+- HW 프로브(EVTA 0, 1 각각 `*_evta<e>_m`): 두 판 모두 gemmprobe 5개, sramscan 4개, donerace 16/16 통과.
+- `hw_multievtax2/script/run_all.sh`: 두 판 모두 MultiEVTAConv4/ResConv10/x2Conv PASS, Resnet18 2개 x 100회 모두 281.
+- 속도(`run_prof.sh`, `OMP_NUM_THREADS=1`, MultiEVTAConv4 total_vta_time): 333(`vtahw_multi2_y219`) 179.19 ms,
+  360 165.97 ms(−7.4%), 380 157.34 ms(−12.2%). ResConv10은 `_prof`가 빌드돼 있지 않았다.
+  run_all의 ResConv10 end-to-end(CPU transpose 포함, EVTA 2개 x 100회): 360 210.3 GOPS, 380 215.5 GOPS.
+- **multi2도 380 MHz까지 보드에서 동작한다.**
+
+**6) multi4 360 MHz** (진행 중): `make bin FREQ=360`(fence `split`) 뒤 `run_flow.sh m360`.
+- `flow/place_d.tcl`의 입력 impl dir을 `VTA_IMPL_DIR`로 바꿀 수 있게 했다. `run_flow.sh`가 이 변수를 docker에 넘긴다.
+  build/y219 기준 상대 경로: `VTA_IMPL_DIR=../hardware/xilinx/vivado/zcu102_1x16_i8w8a32_16_15_18_17_4evta_360mhz/vta.runs/impl_1`.
+
 ### 8.10 Phase B(uop 순서)와 Phase C(사이클 모델) (2026-10-27)
 
 **Phase B — 런타임 uop 순서** (`vtalib-zcu102-systolic/lib/Bundle/VTABundle.cpp`, 커밋 `3982d469`, `f2dd47a0`)
