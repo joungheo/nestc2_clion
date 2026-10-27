@@ -77,6 +77,8 @@
   python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()"
   python3 vtabundles_xcmpl/hwtest/plreset.py     # pl_resetn0 펄스 (EMIO GPIO 95)
   ```
+  - 위 1-3줄은 `sudo vtabundles_xcmpl/hw/script/load_bit.sh <x>.bin`과 같다(2026-10-27).
+    `xlnk_reset`을 `hw/trace/`에서 실행하므로 `sds_trace_data.dat`(PYNQ `libcma.so`가 종료 시 현재 dir에 씀)가 거기에만 생긴다.
   - 멈춘 실행은 auto-restart 블록을 deadlock 상태로 남긴다. 그래서 매번 다시 로드한다.
   - Ctrl-C로 중단한 뒤에는 `xlnk_reset`이 필요하다. CMA 누수가 생기면 "fpga_buff_ != nullptr" 에러가 난다.
 - **JTAG/ILA를 쓸 때**: 부팅 후 `sudo vtabundles_xcmpl/hwtest/nocpuidle.sh`를 먼저 실행한다.

@@ -3,3 +3,7 @@ cmake-build-*/
 Debug2_remote/
 vta/bundles/Resnet50Test/resnet50.onnx
 vta/bundles/Vgg16Cifar10Test/vgg16_cifar10.onnx
+
+#### JO added (2026-10-27): written by PYNQ libcma.so to the working directory of every EVTA process (run
+#### scripts and hw/script/load_bit.sh keep it in trace/)
+sds_trace_data.dat
