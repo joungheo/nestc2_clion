@@ -49,6 +49,11 @@ set target            $TARGET
 set device            $FPGA_DEVICE
 set device_family     $FPGA_FAMILY
 set clock_freq        $FPGA_FREQ
+#### JO added (2026-10-27): Makefile FREQ=<MHz> overrides the PLL frequency (FPGA_FREQ is a const)
+if {[info exists ::env(VTA_FREQ)] && $::env(VTA_FREQ) ne ""} {
+  set clock_freq $::env(VTA_FREQ)
+}
+puts "PLL $clock_freq MHz"
 set board             $FPGA_BOARD
 set board_rev         $FPGA_BOARD_REV
 

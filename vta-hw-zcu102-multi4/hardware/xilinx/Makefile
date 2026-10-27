@@ -49,8 +49,14 @@ CONF := $(shell $(PYTHON) ${VTA_CONFIG} --cfg-str)
 #HW_BUILD_PATH := $(BUILD_DIR)/vivado/$(CONF)
 #### JO changed: + _<N>evta
 #BUILD_NAME := $(CONF)$(if $(filter 1,$(PROFILE)),_prof)
-BUILD_NAME := $(CONF)_$(NUM_EVTA)evta$(if $(filter 1,$(PROFILE)),_prof)
-IP_BUILD_PATH := $(BUILD_DIR)/hls/$(BUILD_NAME)
+#BUILD_NAME := $(CONF)_$(NUM_EVTA)evta$(if $(filter 1,$(PROFILE)),_prof)
+#IP_BUILD_PATH := $(BUILD_DIR)/hls/$(BUILD_NAME)
+#### JO changed (2026-10-27): FREQ=<MHz> overrides the PLL frequency of the config (same IP, _<FREQ>mhz vivado dir)
+FREQ ?=
+IP_NAME := $(CONF)_$(NUM_EVTA)evta$(if $(filter 1,$(PROFILE)),_prof)
+BUILD_NAME := $(IP_NAME)$(if $(FREQ),_$(FREQ)mhz)
+IP_BUILD_PATH := $(BUILD_DIR)/hls/$(IP_NAME)
+export VTA_FREQ := $(FREQ)
 HW_BUILD_PATH := $(BUILD_DIR)/vivado/$(BUILD_NAME)
 
 # Config files

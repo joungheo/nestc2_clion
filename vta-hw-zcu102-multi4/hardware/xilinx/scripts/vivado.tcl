@@ -54,6 +54,12 @@ if { $num_evta < 1 || $num_evta > 4 } {
 
 # Source vta config variables
 source $vta_config
+#### JO added (2026-10-27): Makefile FREQ=<MHz> overrides the PLL frequency (FPGA_FREQ is a const)
+set pll_freq $FPGA_FREQ
+if {[info exists ::env(VTA_FREQ)] && $::env(VTA_FREQ) ne ""} {
+  set pll_freq $::env(VTA_FREQ)
+}
+puts "PLL $pll_freq MHz"
 if { $TARGET ne "zcu102" } {
   puts "this script supports TARGET zcu102 only"
   return 1
@@ -147,7 +153,7 @@ set proc_sys_reset [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:
 # keep the design in reset until the PLL locks
 set pll_clk [ create_bd_cell -type ip -vlnv xilinx.com:ip:clk_wiz:6.0 pll_clk ]
 set_property -dict [ list \
-  CONFIG.CLKOUT1_REQUESTED_OUT_FREQ $FPGA_FREQ \
+  CONFIG.CLKOUT1_REQUESTED_OUT_FREQ $pll_freq \
   CONFIG.USE_RESET {false} \
 ] $pll_clk
 #### JO changed (2026-10-24, from vta-hw-zcu102-single): no MMCM reset (was CONFIG.RESET_PORT resetn / RESET_TYPE
