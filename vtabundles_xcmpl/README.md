@@ -2,7 +2,7 @@
 
 Location: `nest-compiler/vtabundles_xcmpl/` (the NEST-C root is the parent directory; no absolute paths).
 Build directories are not kept in git (`.gitignore`): create them with the `cmake` lines below.
-`build_timed/`: `cmake -DBUNDLE_TIMED=ON -DBUNDLE_EXE_SUFFIX=_timed ..` (per-statement timing, `hw/run_prof.sh -s _timed`).
+`build_timed/`: `cmake -DBUNDLE_TIMED=ON -DBUNDLE_EXE_SUFFIX=_timed ..` (per-statement timing, `hw/script/run_prof.sh -s _timed`).
 
 Bundle sources are generated in the simulator build, then compiled for the board here.
 
@@ -12,12 +12,15 @@ Bundle sources are generated in the simulator build, then compiled for the board
 | 2. Copy them into `hw/<Dir>/` (no compile) | `vtabundles_xcmpl/` | `./collect_hw_bundles.py [Dir ...]` |
 | 3a. Compile for the board | `vtabundles_xcmpl/build/` | `make -j2 hw_bundles` or `make -j2 <target>` |
 | 3b. Compile with HW profiling | `vtabundles_xcmpl/build_prof/` | `make -j2 <target>` → `hw/<Dir>/<target>_prof` |
-| 4a. Run all + compare with golden | `vtabundles_xcmpl/hw/` | `sudo ./run_all.sh [Dir ...]` → `hw/results.txt` |
-| 4b. Run profiling bundles | `vtabundles_xcmpl/hw/` | `sudo ./run_prof.sh [-s _timed] [Dir ...]` (no Dir, `all` or `hw_bundles` = every bundle) → `hw/<Dir>/prof.log` (`timed.log`, `timing.csv`), one line per Dir in `hw/prof_summary.txt` (`timed_summary.txt`) |
+| 4a. Run all + compare with golden | `vtabundles_xcmpl/` | `sudo hw/script/run_all.sh [Dir ...]` → `hw/results.txt` |
+| 4b. Run profiling bundles | `vtabundles_xcmpl/` | `sudo hw/script/run_prof.sh [-s _timed] [Dir ...]` (no Dir, `all` or `hw_bundles` = every bundle) → `hw/<Dir>/prof.log` (`timed.log`, `timing.csv`), one line per Dir in `hw/prof_summary.txt` (`timed_summary.txt`) |
 
 - Step 1 runs `make <target>` in the existing Debug2_remote build (no new cmake); outputs go to
   `Debug2_remote/vta/bundles/<Dir>/`, logs to `Debug2_remote/bundle_logs/`.
-- Step 2 keeps what is already in `hw/<Dir>` (executables, `*_prof`, logs) and regenerates `hw/run_all.sh`.
+- Step 2 keeps what is already in `hw/<Dir>` (executables, `*_prof`, logs) and regenerates `hw/script/run_all.sh`.
+- git keeps only `hw/script/` (`run_all.sh`, kept so the run lines are versioned, and `run_prof.sh`) of `hw/`; the
+  bundle dirs and run outputs (`results.txt`, `*_summary.txt`, logs) stay in `hw/` and are ignored. The scripts `cd`
+  to `hw/` themselves (call them from anywhere). Same for `hw_<set>/script/` (2026-10-27).
 - Step 3 uses `CMakeLists.txt` here: vtalib (`libvta_runtime.a`, `libVTABundle.a`) is built once per build
   directory with its own ZCU102 settings, and every bundle is compiled with the same `-D` macros.
   First configure: `mkdir build && cd build && cmake ..` (clang-8 is the default compiler);
@@ -40,8 +43,8 @@ Bundle sources are generated in the simulator build, then compiled for the board
 
 - Generate (simulator build, configured once with `-DNESTC_EVTA_MULTI_BUNDLES=ON`):
   `Debug2_remote/build_sim_bundles.sh multievtax2ConvTestBundle multievtax2SingleResnet18Bundle multievtax2Resnet18Bundle`
-- Copy: `./collect_hw_bundles.py --set multievtax2` (writes `hw_multievtax2/run_all.sh` with the 2-EVTA bitstream
-  and copies `hw/run_prof.sh` there).
+- Copy: `./collect_hw_bundles.py --set multievtax2` (writes `hw_multievtax2/script/run_all.sh` with the 2-EVTA bitstream
+  and copies `hw/script/run_prof.sh` there).
 - Build: `mkdir build_multievtax2 && cd build_multievtax2 && cmake -DBUNDLE_SET=multievtax2 .. && make -j2 hw_bundles`
   (vtalib with `NESTC_EVTA_MULTI=ON` -> buffers 16/15/18/17, and `VTA_MAX_XFER` 8 MB so two command handles fit in
   the 128 MB CMA).
@@ -67,7 +70,7 @@ Bundle sources are generated in the simulator build, then compiled for the board
   any single-conv bundle of `hw/` and writes `MultiEVTA<Name>Test` (names and op count in `multiconv.h`); run line
   `multi4resconv10Bundle 15 100` / `3 100`. Measure GOPS with `OMP_NUM_THREADS=1 ./<exe> <mask> 400 conv` (with the
   default OpenMP teams, the 4 threads oversubscribe the 4 cores and the slowest EVTA sets the wall time).
-- git keeps `hw_<set>/run_all.sh`, `run_prof.sh` and `*Src/` dirs; the bundle dirs and run outputs are ignored.
+- git keeps `hw_<set>/script/` (`run_all.sh`, `run_prof.sh`) and `*Src/` dirs; the bundle dirs and run outputs are ignored.
 - Results (2026-10-26, 333 MHz, `OMP_NUM_THREADS=1 ./<exe> <mask> 400 conv`, all = golden): ResConv10 152.6 GOPS on 1
   EVTA, **609.7 on 4** (multi4), 305.5 on 2 (multi2); Conv4 123.5 / 491.6-493.4 / 247.1. With `build_multievtax4_prof`
   the VTA_SYNC table shows EVTA time per conv 1.447 ms alone and 1.449 ms with 4 at once (no HP/DDR contention) and a
@@ -76,7 +79,7 @@ Bundle sources are generated in the simulator build, then compiled for the board
 - Per VTA run / per statement for the multi sets, as for `hw/`: build dirs `build_<set>_prof`
   (`-DBUNDLE_SET=<set> -DNESTC_EVTA_PROFILE=ON -DBUNDLE_EXE_SUFFIX=_prof`) and `build_<set>_timed`
   (`-DBUNDLE_SET=<set> -DBUNDLE_TIMED=ON -DBUNDLE_EXE_SUFFIX=_timed`), multievtax4 also `-DVTALIB=<root>/vtalib-zcu102-multi4`;
-  then `sudo hw_<set>/run_prof.sh [-s _timed] [Dir ...]`. Each timed .cpp (one per EVTA copy) prints its own table
+  then `sudo hw_<set>/script/run_prof.sh [-s _timed] [Dir ...]`. Each timed .cpp (one per EVTA copy) prints its own table
   and writes `timing_<cpp>.csv` (a single timed .cpp still writes `timing.csv`).
 - Each bundle is pinned to one EVTA at code generation (`-index-multi-evta` mask 1/2/4/8 -> EVTA 0..3,
   `VTASave.cpp` ~line 4958); a multi-EVTA executable runs one bundle per thread.

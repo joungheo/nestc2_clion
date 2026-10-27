@@ -4,21 +4,23 @@
 #   _timed           built in ../build_timed (-DBUNDLE_TIMED=ON -DBUNDLE_EXE_SUFFIX=_timed): per statement,
 #                    also <Dir>/timing.csv
 # Executable, input and golden come from the "run <dir> <exe> <input> <golden>" lines of run_all.sh. Reloads the bitstream before each run.
-# usage (from hw/): sudo ./run_prof.sh [-s _timed] Dir [Dir ...]
-#                   sudo ./run_prof.sh [-s _timed] [all|hw_bundles]   (no Dir = every run line of run_all.sh)
+# usage: sudo hw/script/run_prof.sh [-s _timed] Dir [Dir ...]     (or hw_<set>/script/run_prof.sh)
+#        sudo hw/script/run_prof.sh [-s _timed] [all|hw_bundles]   (no Dir = every run line of run_all.sh)
 # One line per Dir (exit, golden check, total time) is also written to <suffix>_summary.txt, printed at the end.
 #### JO added (2026-10-26): also in hw_multievtax2/ and hw_multievtax4/ (copied there by collect_hw_bundles.py):
 #### build dirs build_<set>_prof / build_<set>_timed. An executable with several timed .cpp (one per EVTA or VTA
 #### partition) prints one table each (header names the .cpp) and writes timing_<cpp>.csv each.
 set -u
-cd "$(dirname "$0")"
+#### JO changed (2026-10-27): this script is in <hw dir>/script/ (the part of the hw dir in git); runs in the hw dir
+#cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."; RUN_ALL=script/run_all.sh
 #### JO added: build dir prefix of this hw dir (hw/ -> ../build, hw_<set>/ -> ../build_<set>)
 HWD=$(basename "$PWD"); BLD=../build${HWD#hw}
 #### JO changed: bitstream from run_all.sh of this hw dir (hw/: single EVTA, hw_multievtax2/: 2 EVTAs)
 #BIN=zcu102_1x16_i8w8a32_16_16_19_18.bin
 #### JO changed (2026-10-26): run_all.sh has BIN=${BIN:-<file>} -> take <file>; BIN=<file> in the environment wins
 #BIN=$(sed -n "s/^BIN=//p" run_all.sh)
-BIN=${BIN:-$(sed -n 's/^BIN=\${BIN:-\(.*\)}$/\1/p; s/^BIN=\([^$].*\)$/\1/p' run_all.sh)}
+BIN=${BIN:-$(sed -n 's/^BIN=\${BIN:-\(.*\)}$/\1/p; s/^BIN=\([^$].*\)$/\1/p' $RUN_ALL)}
 [ -f /lib/firmware/$BIN ] || { echo "bitstream /lib/firmware/$BIN not found"; exit 1; }
 [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
 #### JO added (2026-10-26): one EVTA run at a time on the board (the same lock as run_all.sh): each run reloads the
@@ -30,14 +32,14 @@ LOG=${SUFFIX#_}.log
 #### JO changed: no Dir / "all" / "hw_bundles" runs every bundle listed in run_all.sh
 # [ $# -gt 0 ] || { echo "usage: sudo ./run_prof.sh [-s _timed] Dir [Dir ...]"; exit 1; }
 if [ $# = 0 ] || [ "$1" = all ] || [ "$1" = hw_bundles ]; then
-  set -- $(sed -n "s/^run \([^ ]*\) .*/\1/p" run_all.sh | uniq)
+  set -- $(sed -n "s/^run \([^ ]*\) .*/\1/p" $RUN_ALL | uniq)
 fi
 SUM=${SUFFIX#_}_summary.txt; : > $SUM
 
 for D in "$@"; do
   #### JO changed: a Dir can have several run lines (multi-EVTA: threaded + single-thread executable)
   # line=$(grep -E "^run $D " run_all.sh) || { echo "$D: not in run_all.sh"; continue; }
-  grep -qE "^run $D " run_all.sh || { echo "$D: not in run_all.sh"; continue; }
+  grep -qE "^run $D " $RUN_ALL || { echo "$D: not in $RUN_ALL"; continue; }
   while read -r line <&3; do
   eval "set -- $line"     # -> run dir exe input golden
   EXE=$3$SUFFIX; IN=$4; GOLD=$5
@@ -76,7 +78,7 @@ for D in "$@"; do
   #### JO changed: executable column, end of the per-line loop
   # printf "%-30s exit=%-3s %-10s %s\n" $D $rc "$res" "$t" >> $SUM
   printf "%-30s %-34s exit=%-3s %-10s %s\n" $D $EXE $rc "$res" "$t" >> $SUM
-  done 3< <(grep -E "^run $D " run_all.sh)
+  done 3< <(grep -E "^run $D " $RUN_ALL)
 done
 echo; echo "== summary ($SUM)"; cat $SUM
 chown --reference=. $SUM

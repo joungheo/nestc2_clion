@@ -287,7 +287,7 @@ RESULT mask 0xf: 4 EVTAs x 400 runs (conv only) in 606.748 ms wall, 609.71 GOPS,
 sudo -n /bin/sh -c 'echo 0 > /sys/class/fpga_manager/fpga0/flags; echo vtahw_multi4_y219.bin > /sys/class/fpga_manager/fpga0/firmware; python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()"'
 cd hw_multievtax4/MultiEVTAResConv10Test
 sudo OMP_NUM_THREADS=1 ./multi4resconv10Bundle 15 400 conv          # 4개 동시; 1 = EVTA0만
-# golden 비교 포함 정식 실행: sudo hw_multievtax4/run_all.sh MultiEVTAResConv10Test
+# golden 비교 포함 정식 실행: sudo hw_multievtax4/script/run_all.sh MultiEVTAResConv10Test
 ```
 
 - 실행 하나가 끝날 때마다 비트스트림을 다시 로드한다(멈춘 실행이 EVTA를 deadlock 상태로 남김).

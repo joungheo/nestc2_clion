@@ -138,7 +138,7 @@ from CLion over remote.
   model-compiler are not built there: generate bundle sources in the simulator build (`Debug2_remote`) and
   build them for the board with the standalone CMake project in `vtabundles_xcmpl/` (not part of the NEST-C
   CMake; its build dirs are git-ignored; see its `README.md`:
-  `build_sim_bundles.sh` → `collect_hw_bundles.py` → `make` in `build/` → `hw/run_all.sh`).
+  `build_sim_bundles.sh` → `collect_hw_bundles.py` → `make` in `build/` → `hw/script/run_all.sh`; of `hw/` and `hw_<set>/` only `script/` is in git).
 
 ### EVTA bitstreams (host PC, Vivado 2020.1 in docker)
 
