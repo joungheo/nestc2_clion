@@ -1,6 +1,6 @@
 // #### JO added (2026-10-27): which tile a stuckchk.py "extra" cell belongs to (RapidWright 2025.2 bitstream API).
 // usage: RAPIDWRIGHT_PATH=~/tools/rapidwright/d2025.2 java -Xmx16g -cp ~/tools/rapidwright/rapidwright-2025.2.2-standalone-lin64.jar StuckLoc.java <design.bit> <base.bit>
-// then match the frame to the PIP with build/wiretest/uray segbits_int.db (docs/vta_synth_notes.md §8.8 6)).
+// then match the frame to the PIP with build/wiretest/uray segbits_int.db (docs/evta_systolic.md §8 6)).
 import com.xilinx.rapidwright.bitstream.*;
 // frames where <bit> sets a stuck cell (word 61 b18, word 62 b0-3,12-14) that <base> does not; prints block tiles
 public class StuckLoc { public static void main(String[] a) {

@@ -1,6 +1,6 @@
 #!/bin/sh
-# #### JO added (2026-10-27): HW probes of a bitstream, reloading it before each case (what §8.8 of
-# docs/vta_synth_notes.md calls "HW 프로브"): gemmprobe reset/zero/ident/perm/ones, sramscan wgt/inp (+invert), donerace 16.
+# #### JO added (2026-10-27): HW probes of a bitstream, reloading it before each case (what §8 of
+# docs/evta_systolic.md calls "HW 프로브"): gemmprobe reset/zero/ident/perm/ones, sramscan wgt/inp (+invert), donerace 16.
 # NUM_EVTA=0 (default): single bitstream, the *_nc tests  (VTA_COHERENT=false SUFFIX=_nc ./build.sh gemmprobe sramscan donerace)
 # NUM_EVTA=2|4:         multi bitstream, the *_evta<e>_m tests of EVTA 0..NUM_EVTA-1
 #                       (for e in 0 1 2 3; do VTA_COHERENT=false SUFFIX=_m BUFF="15 18 17" XFER=8388608 EVTA=$e ./build.sh gemmprobe sramscan donerace; done)
