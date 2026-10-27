@@ -779,12 +779,13 @@ it_out (VTAUopLoopBegin(n_kernel_, dst tile_h·tile_w, src 0, wgt KH·KW)) : 출
   - systolic은 400 MHz 실패 경로 중 가장 많은 두 종류(상위 200 중 122개, 최악 −0.162)를 없앤다.
   - 400 MHz를 맞추려면 load 쓰기, out_mem 쓰기, fetch/AXI FIFO, reset 복제도 같이 고쳐야 한다(HLS pipeline/regslice, `proc_sys_reset` 복제).
 - 기대 이득: 지금 구조로 360~380 MHz(333 대비 +8~14%, 360은 보드 확인). systolic과 주변 정리(load 쓰기, out_mem, 큐/AXI, reset)로 400 MHz(+20%). 그 위는 어레이만 2배 클럭(§8.9 #4).
-**4) 360 MHz 보드 검증** (2026-10-27, `bit/evta_single_phaseA_261027/`, `/lib/firmware`에 같은 이름)
-- 비트스트림: `vtahw_zcu102_1x16_i8w8a32_16_16_19_18_prof_360mhz`(base, md5 `15768d7c…`), `..._prof_oreg_360mhz`(oreg, md5 `b7a69d41…`).
-- 호스트(§2.2): 두 판 모두 stuckchk 194, 0 extra. Y219 행 PIP net 0(`scripts/timing/y219pips.tcl`).
-- HW 프로브(`hwtest/*_nc`, 케이스마다 bitstream 재로드): 기준 `vtahw_single_y219.bin`과 두 360 판 모두 통과.
+**4) 360/380 MHz 보드 검증** (2026-10-27, `bit/evta_single_phaseA_261027/`, `/lib/firmware`에 같은 이름)
+- 비트스트림: `vtahw_zcu102_1x16_i8w8a32_16_16_19_18_prof_360mhz`(base, md5 `15768d7c…`), `..._prof_oreg_360mhz`(oreg, md5 `b7a69d41…`),
+  `..._prof_380mhz`(base, md5 `9884bb74…`).
+- 호스트(§2.2): 세 판 모두 stuckchk 194, 0 extra. Y219 행 PIP net 0(`scripts/timing/y219pips.tcl`).
+- HW 프로브(`hwtest/*_nc`, 케이스마다 bitstream 재로드): 기준 `vtahw_single_y219.bin`과 세 판 모두 통과.
   gemmprobe reset/zero/ident/perm/ones 0/16 wrong, sramscan wgt/inp(+invert) 0 bytes wrong, donerace 16/16.
-- 번들 golden(`hw/run_all.sh`, `BIN=<위>.bin`): 두 판 모두 30 PASS + golden 없는 5개 정상 실행(Resnet18/Partition/50 → 281, Vgg16 → 0, 이전과 같음).
+- 번들 golden(`hw/script/run_all.sh`, `BIN=<위>.bin`): 세 판 모두 30 PASS + golden 없는 5개 정상 실행(Resnet18/Partition/50 → 281, Vgg16 → 0, 이전과 같음).
 - 속도(`hw/run_prof.sh`, `_prof` 번들 = `vta/vtalib` + `NESTC_EVTA_PROFILE`, total_vta_time, 2회 반복 편차 0.1% 이내):
 
 | 번들 | 333 (`vtahw_single_y219`) | base 360 | oreg 360 |
@@ -792,8 +793,11 @@ it_out (VTAUopLoopBegin(n_kernel_, dst tile_h·tile_w, src 0, wgt KH·KW)) : 출
 | ResConv10 | 2.895 ms | 2.686 ms (−7.2%) | 2.683~2.686 ms (−7.3%) |
 | Conv4 | 3.547 ms | 3.292~3.295 ms (−7.2%) | 3.293~3.294 ms (−7.2%) |
 
-  - 클럭 비율 기대치는 −7.5%다. 시간이 클럭에 비례한다(DDR 병목 아님). oreg의 latency +1은 차이가 없다.
-  - **360 MHz는 지금 구조(base)로 바로 쓸 수 있다.** single 기본 비트스트림으로 바꿀지는 multi2/multi4 360도 본 뒤 정한다.
+  base 380: ResConv10 2.545 ms(−12.1%), Conv4 3.124 ms(−11.9%). 클럭 비율 기대치 −12.4%.
+
+  - 360 MHz의 클럭 비율 기대치는 −7.5%다. 시간이 클럭에 비례한다(DDR 병목 아님). oreg의 latency +1은 차이가 없다.
+  - **지금 구조(base)로 380 MHz까지 보드에서 동작한다(+14% 클럭, VTA 시간 −12%).** single 기본 비트스트림으로 바꿀지는 multi2/multi4도 본 뒤 정한다.
+  - 380 판은 `_prof`(profile 카운터 + APM) 빌드다. 배포판(profile 없음)은 같은 클럭으로 다시 만들어 확인해야 한다(placement가 달라짐).
 - 보드 sudo: `xilinx`는 `/bin/sh`, `hwtest/*`, `hw/*`, `cp * /lib/firmware/*`만 비밀번호 없이 된다.
   환경 변수를 넘기려면 `sudo -n /bin/sh -c 'BIN=... ./run_all.sh'`.
 

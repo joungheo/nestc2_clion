@@ -136,6 +136,12 @@ struct gemmop_mxn {
 //#### Old order: it_out = x, it_in = kx, uops = ky x kernelIdx x y.
 //#### New order: it_out = kernelIdx, it_in = kx, uops = ky x y x x (KH x tile_h x tile_w uops).
 //#### Uop kernels larger than a quarter of the uop buffer (two virtual threads keep one each) keep the old order.
+//#### hw_spec.h is not included here: the uop buffer depth comes from vtalib's -DVTA_LOG_UOP_BUFF_SIZE (64-bit uops).
+#ifdef VTA_LOG_UOP_BUFF_SIZE
+#define GEMM_UOP_BUFF_DEPTH ((1 << VTA_LOG_UOP_BUFF_SIZE) / 8)
+#else
+#define GEMM_UOP_BUFF_DEPTH 8192
+#endif
 static int gemmop_mxn_old(struct gemmop_mxn *ctx, VTACommandHandle cmdh) {
   VTAUopLoopBegin(cmdh, ctx->tile_size_w_, 1, ctx->stride_w_, 0);
   VTAUopLoopBegin(cmdh, ctx->kernel_w_, 0, 1, 1);
@@ -161,7 +167,7 @@ static int gemmop_mxn_old(struct gemmop_mxn *ctx, VTACommandHandle cmdh) {
 int gemmop_mxn(void *param,VTACommandHandle cmdh ) {
 
   struct gemmop_mxn *ctx = (struct gemmop_mxn *) (param);
-  if (ctx->kernel_h_ * ctx->tile_size_h_ * ctx->tile_size_w_ > VTA_UOP_BUFF_DEPTH / 4)
+  if (ctx->kernel_h_ * ctx->tile_size_h_ * ctx->tile_size_w_ > GEMM_UOP_BUFF_DEPTH / 4)
     return gemmop_mxn_old(ctx, cmdh);
   VTAUopLoopBegin(cmdh, ctx->n_kernel_, ctx->tile_size_h_ * ctx->tile_size_w_, 0,
                   ctx->kernel_w_ * ctx->kernel_h_);
