@@ -579,6 +579,8 @@ save_bd_design
 make_wrapper -files \
   [get_files $proj_path/$proj_name.srcs/sources_1/bd/$proj_name/$proj_name.bd] -top
 add_files -norecurse $proj_path/$proj_name.srcs/sources_1/bd/$proj_name/hdl/${proj_name}_wrapper.v
+#### JO added (systolic Phase D): with the gemm_sa RTL files in sources_1 the automatic top would be gemm_sa_bd
+set_property top ${proj_name}_wrapper [current_fileset]
 update_compile_order -fileset sources_1
 update_compile_order -fileset sim_1
 
