@@ -683,8 +683,8 @@ it_out (VTAUopLoopBegin(n_kernel_, dst tile_h·tile_w, src 0, wgt KH·KW)) : 출
 - inp_mem·wgt_mem 포트 B: RTL만 쓴다(ALU는 inp/wgt를 읽지 않음).
 - HLS → RTL: 지금 GEMM 루프(II=1)가 계산 대신 uop 스트림 {dst, src, wgt, reset, last}를 AXIS로 내보낸다. RTL → HLS: done 1개.
 - 명령 경계: RMW가 순서대로라 연속한 GEMM 명령 사이에는 drain이 필요 없다.
-  - 처음 구현은 단순하게 GEMM 명령마다 done을 기다린다(약 50클럭 x 64명령 = 0.6%, §8.5 이전 추정과 같음).
-  - 그다음 ALU/STORE 토큰 앞에서만 기다리게 줄인다.
+  - ~~처음 구현은 단순하게 GEMM 명령마다 done을 기다린다~~ → §8.10 모델: 명령마다 기다리면 ResConv10형이 88%로 떨어진다.
+    처음부터 ALU/STORE 토큰 앞에서만 기다리고, 다음 GEMM 명령의 첫 weight를 미리 채운다.
 
 **HLS vs RTL**: 어레이, skew/deskew, CE wavefront, PISO, RMW, mux는 RTL. 큐, uop decode, ALU, 토큰은 HLS 그대로.
 **검증**: §8.7 3단계 그대로(C 사이클 모델 → RTL 단위 TB → cosim → `gemmprobe`/`rawtest*` → `run_all.sh`).
@@ -800,6 +800,41 @@ it_out (VTAUopLoopBegin(n_kernel_, dst tile_h·tile_w, src 0, wgt KH·KW)) : 출
   - 380 판은 `_prof`(profile 카운터 + APM) 빌드다. 배포판(profile 없음)은 같은 클럭으로 다시 만들어 확인해야 한다(placement가 달라짐).
 - 보드 sudo: `xilinx`는 `/bin/sh`, `hwtest/*`, `hw/*`, `cp * /lib/firmware/*`만 비밀번호 없이 된다.
   환경 변수를 넘기려면 `sudo -n /bin/sh -c 'BIN=... ./run_all.sh'`.
+
+### 8.10 Phase B(uop 순서)와 Phase C(사이클 모델) (2026-10-27)
+
+**Phase B — 런타임 uop 순서** (`vtalib-zcu102-systolic/lib/Bundle/VTABundle.cpp`, 커밋 `3982d469`, `f2dd47a0`)
+- `gemmop_mxn`: it_out = kernelIdx(dst tile_h·tile_w, wgt KH·KW), it_in = kx, uops = ky x y x x.
+  - uop 수가 KH·tile_h·tile_w > uop 버퍼/4(2048)이면 원래 순서(`gemmop_mxn_old`)를 쓴다.
+- `gemmop_1x1`: it_out = kernelIdx, it_in = x, uops = y. uop 수는 그대로다.
+- 정확성: 500개 무작위 tiling에서 (dst, src, wgt) 멀티셋이 원래와 같다. 같은 dst가 다시 오는 간격은 ≥ tile_h·tile_w다.
+- VTABundle.cpp는 hw_spec.h를 include하지 않는다. uop 버퍼 깊이는 `-DVTA_LOG_UOP_BUFF_SIZE`로 계산한다(`GEMM_UOP_BUFF_DEPTH`).
+- 보드 빌드: `vtabundles_xcmpl/build_sysprof/` (`-DVTALIB=/home/xilinx/JO/npuprg/systolic/vtalib-zcu102-systolic -DNESTC_EVTA_PROFILE=ON -DBUNDLE_EXE_SUFFIX=_sysprof`).
+  - 보드의 main 트리는 건드리지 않았다. vtalib는 `git archive origin/systolic vtalib-zcu102-systolic`로 `/home/xilinx/JO/npuprg/systolic/`에 풀었다.
+- 보드 결과(333 MHz `vtahw_single_y219.bin`, `_prof` 대 `_sysprof`): (진행 중)
+
+**Phase C — 사이클 모델** (`vta-hw-zcu102-systolic/hardware/xilinx/sim/systolic_model.cc`, `g++ -O2 -std=c++14`)
+- §8.5 구조를 레지스터 단위로 옮겼다.
+  - A: skew와 가로 FF. B: PISO, B1 chain, B2, CEB1/CEB2 wavefront. P cascade, deskew, 태그 pipe.
+  - RMW(forwarding 포함)와 issue 제어기(LOOKAHEAD 깊이 uop FIFO에서 다음 weight를 미리 읽음, 주기 16).
+- 기준: `vta.cc` `gemm()`과 같은 순차 계산. 단 `reset_reg`일 때 out = 0이다(HLS는 acc+dot의 하위 8비트, §8.5).
+- 무작위 300개(명령 1~4개, 임의 uop/factor/reset, drain on/off, LOOKAHEAD 1~64): **모두 비트 단위로 일치**(forwarding 68회).
+- 가동률(GEMM / 사이클, LOOKAHEAD 32, RMW 3, 명령 사이 handshake 4):
+
+| 경우 | 원래 순서 | 새 순서, 명령마다 drain | 새 순서, drain 없음 |
+|---|---|---|---|
+| 3x3 7x7 nk1 (ResConv10형) | 41.7% | 88.2% | 99.8% |
+| 3x3 7x7 nk4 | 43.2% | 96.8% | 100.0% |
+| 3x3 8x56 nk1 (Conv4형) | 49.7% | 98.6% | 99.9% |
+| 1x1 7x7 nk4 | 39.4% | 76.9% | 99.6% |
+
+- 해석:
+  - 원래 순서는 §8.4 예상대로 약 44%다(7사이클 계산, 9사이클 대기). Phase B가 필수다.
+  - 명령마다 drain을 기다리면 명령당 약 40사이클(파이프 깊이 + RMW + handshake)과 첫 weight 채우기 19사이클이 든다.
+    작은 명령(ResConv10 nk1 441 GEMM, 1x1)에서 88%, 77%로 떨어진다. 지금 HLS(93.5%)보다 낮다.
+  - **drain을 GEMM 명령 사이에서 생략하고, 다음 명령의 첫 weight를 미리 채우는 것이 필수다.** §8.5의 "처음 구현은 단순하게"를 바꿔, 첫 구현부터 넣는다.
+    - drain은 ALU/STORE 토큰 앞에서만 한다.
+    - RMW가 순서대로라 정확성은 그대로다(모델의 drain 없음 모드도 비트 일치).
 
 ### 8.9 조사: Gemmini, Tensil, UG579, AutoSA 등 (2026-10-27)
 
