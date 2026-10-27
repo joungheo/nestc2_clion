@@ -384,6 +384,114 @@ class UopQueue : public BaseQueue<VTAUop> {
   void InitSpace() {
     BaseQueue::InitSpace(kElemBytes, kMaxBytes, kCoherent, kAlwaysCache);
   }
+  //#### JO: the old Push .. ReadBarrier (copy loop), replaced below
+//  // Push data to the queue
+//  template<typename FAutoSync>
+//  void Push(UopKernel* kernel, FAutoSync fautosync) {
+//    // if the micro-op is cached in VTA SRAM, skip
+//    if (kernel->cached()) return;
+//    // check if we've exceeded the size of the allocated FPGA readable buffer
+//    size_t num_op = kernel->size();
+//    if (dram_buffer_.size() + num_op > kMaxElems) {
+//      fautosync();
+//      CHECK(dram_buffer_.size() <= kMaxElems);
+//    }
+//    // Cannot have a micro-op kernel larger than SRAM buffer
+//    CHECK(num_op <= kMaxNumUop);
+//    uint32_t uop_begin = 0;
+//    if (sram_end_ + num_op > kMaxNumUop) {
+//      // Need to evict
+//      printf("warning: EVTA uop buffer overflowed. No longer uop instruction can be reused.\n");
+//      cache_idx_ = 0;
+//      sram_begin_ = 0;
+//      sram_end_ = num_op;
+//    } else {
+//      uop_begin = sram_end_;
+//      sram_end_ += num_op;
+//    }
+//    // Simple eviction policy
+//    uint32_t evict_begin = cache_idx_;
+//    for (; cache_idx_ < cache_.size(); ++cache_idx_) {
+//      if (cache_[cache_idx_]->sram_begin_ >= sram_end_) break;
+//      // Mark the kernel as "invalid"
+//      cache_[cache_idx_]->sram_begin_ = 0;
+//      cache_[cache_idx_]->sram_end_ = 0;
+//    }
+//    // Increase size of buffer
+//    kernel->sram_begin_ = uop_begin;
+//    kernel->sram_end_ = sram_end_;
+//    CHECK(kernel->cached());
+//    cache_.insert(cache_.begin() + cache_idx_, kernel);
+//    cache_.erase(cache_.begin() + evict_begin, cache_.begin() + cache_idx_);
+//    cache_idx_ = evict_begin + 1;
+//  }
+//  // Flush micro op load instruction
+//  void FlushUopLoad(VTAMemInsn* insn) {
+//    if (sram_begin_ != sram_end_) {
+//      // Derive offset in FPGA-readable buffer
+//      int32_t offset = 0;
+//      for (uint32_t i = 0; i < cache_idx_ - 1; ++i) {
+//        offset += cache_[i]->size() * kElemBytes;
+//      }
+//      insn->memory_type = VTA_MEM_ID_UOP;
+//      insn->sram_base = sram_begin_;
+//      // Update cache idx to physical address map
+//      insn->dram_base = (fpga_buff_phy_ + offset) / kElemBytes;
+//      insn->y_size = 1;
+//      insn->x_size = (sram_end_ - sram_begin_);
+//      insn->x_stride = (sram_end_ - sram_begin_);
+//      insn->y_pad_0 = 0;
+//      insn->y_pad_1 = 0;
+//      insn->x_pad_0 = 0;
+//      insn->x_pad_1 = 0;
+//      // Reset indices
+//      sram_begin_ = sram_end_;
+//    }
+//  }
+//  /*! \brief clear cache and reset base queue buffer.*/
+//  void Reset() {
+//    cache_.clear();
+//    cache_idx_ = 0;
+//    BaseQueue<VTAUop>::Reset();
+//  }
+//  void UopReset() {
+//    cache_idx_ = 0;
+//    sram_begin_ = 0;
+//    sram_end_ = 0;
+//  }
+//  void AutoReadBarrier() {
+//    ReadBarrier();
+//  }
+//  /*! \brief Writer barrier to make sure that data written by CPU is visible to VTA. */
+//  void ReadBarrier() {
+//    CHECK(fpga_buff_ != nullptr);
+//    CHECK(fpga_buff_phy_);
+//    // Iterate over caches; allocate buffer in FPGA-readable memory
+//    uint32_t buff_size = 0;
+//    for (uint32_t i = 0; i < cache_.size(); ++i) {
+//      buff_size += cache_[i]->size() * kElemBytes;
+//    }
+//    CHECK(buff_size <= kMaxBytes);
+//    // Move kernel contents to FPGA readable buffer
+//    uint32_t offset = 0;
+//    for (uint32_t i = 0; i < cache_.size(); ++i) {
+//      uint32_t ksize = cache_[i]->size() * kElemBytes;
+//      VTAMemCopyFromHost(static_cast<char*>(fpga_buff_) + offset,
+//                         cache_[i]->data(),
+//                         ksize);
+//      // Update offset
+//      offset += ksize;
+//    }
+  //#### JO changed (2026-10-27, systolic GEMM): two bugs of the old (TVM) uop cache, hit once uop kernels fill
+  //#### the uop SRAM (weight-stationary gemmop_mxn: Resnet18/50 gave wrong classes on the board):
+  //####   1. the DRAM offset of a kernel's uop LOAD was the sum of the kernels before it in cache_, and ReadBarrier
+  //####      copied cache_ in order; an eviction erased kernels from cache_, so LOADs issued earlier in the same
+  //####      batch read the wrong DRAM words
+  //####   2. Reset() (every Synchronize) cleared cache_ but left the kernels marked cached; a later wrap of the SRAM
+  //####      did not invalidate them and they ran over uops that had been overwritten
+  //#### Now: batch_ = kernels to copy for this batch (append-only, the offset is fixed at Push, cleared by Reset);
+  //#### cache_ = kernels resident in uop SRAM (kept across batches, all invalidated when the SRAM wraps to 0).
+  //#### The old code is kept below in comments.
   // Push data to the queue
   template<typename FAutoSync>
   void Push(UopKernel* kernel, FAutoSync fautosync) {
@@ -391,47 +499,36 @@ class UopQueue : public BaseQueue<VTAUop> {
     if (kernel->cached()) return;
     // check if we've exceeded the size of the allocated FPGA readable buffer
     size_t num_op = kernel->size();
-    if (dram_buffer_.size() + num_op > kMaxElems) {
+    if (batch_elems_ + num_op > kMaxElems) {
       fautosync();
-      CHECK(dram_buffer_.size() <= kMaxElems);
+      CHECK(batch_elems_ == 0);
     }
     // Cannot have a micro-op kernel larger than SRAM buffer
     CHECK(num_op <= kMaxNumUop);
     uint32_t uop_begin = 0;
     if (sram_end_ + num_op > kMaxNumUop) {
-      // Need to evict
+      // Wrap to the start of the uop SRAM: every resident kernel will be overwritten
       printf("warning: EVTA uop buffer overflowed. No longer uop instruction can be reused.\n");
-      cache_idx_ = 0;
+      InvalidateResident();
       sram_begin_ = 0;
       sram_end_ = num_op;
     } else {
       uop_begin = sram_end_;
       sram_end_ += num_op;
     }
-    // Simple eviction policy
-    uint32_t evict_begin = cache_idx_;
-    for (; cache_idx_ < cache_.size(); ++cache_idx_) {
-      if (cache_[cache_idx_]->sram_begin_ >= sram_end_) break;
-      // Mark the kernel as "invalid"
-      cache_[cache_idx_]->sram_begin_ = 0;
-      cache_[cache_idx_]->sram_end_ = 0;
-    }
-    // Increase size of buffer
     kernel->sram_begin_ = uop_begin;
     kernel->sram_end_ = sram_end_;
     CHECK(kernel->cached());
-    cache_.insert(cache_.begin() + cache_idx_, kernel);
-    cache_.erase(cache_.begin() + evict_begin, cache_.begin() + cache_idx_);
-    cache_idx_ = evict_begin + 1;
+    cache_.push_back(kernel);
+    last_offset_ = batch_elems_ * kElemBytes;
+    batch_.push_back(kernel);
+    batch_elems_ += num_op;
   }
   // Flush micro op load instruction
   void FlushUopLoad(VTAMemInsn* insn) {
     if (sram_begin_ != sram_end_) {
-      // Derive offset in FPGA-readable buffer
-      int32_t offset = 0;
-      for (uint32_t i = 0; i < cache_idx_ - 1; ++i) {
-        offset += cache_[i]->size() * kElemBytes;
-      }
+      // Offset in FPGA-readable buffer of the kernel just pushed
+      int32_t offset = last_offset_;
       insn->memory_type = VTA_MEM_ID_UOP;
       insn->sram_base = sram_begin_;
       // Update cache idx to physical address map
@@ -447,14 +544,15 @@ class UopQueue : public BaseQueue<VTAUop> {
       sram_begin_ = sram_end_;
     }
   }
-  /*! \brief clear cache and reset base queue buffer.*/
+  /*! \brief start a new batch: the resident kernels stay cached. */
   void Reset() {
-    cache_.clear();
-    cache_idx_ = 0;
+    batch_.clear();
+    batch_elems_ = 0;
+    last_offset_ = 0;
     BaseQueue<VTAUop>::Reset();
   }
   void UopReset() {
-    cache_idx_ = 0;
+    InvalidateResident();
     sram_begin_ = 0;
     sram_end_ = 0;
   }
@@ -465,22 +563,17 @@ class UopQueue : public BaseQueue<VTAUop> {
   void ReadBarrier() {
     CHECK(fpga_buff_ != nullptr);
     CHECK(fpga_buff_phy_);
-    // Iterate over caches; allocate buffer in FPGA-readable memory
-    uint32_t buff_size = 0;
-    for (uint32_t i = 0; i < cache_.size(); ++i) {
-      buff_size += cache_[i]->size() * kElemBytes;
-    }
-    CHECK(buff_size <= kMaxBytes);
-    // Move kernel contents to FPGA readable buffer
+    // Move the kernels of this batch to the FPGA readable buffer, at the offsets given to their LOADs
     uint32_t offset = 0;
-    for (uint32_t i = 0; i < cache_.size(); ++i) {
-      uint32_t ksize = cache_[i]->size() * kElemBytes;
+    for (uint32_t i = 0; i < batch_.size(); ++i) {
+      uint32_t ksize = batch_[i]->size() * kElemBytes;
       VTAMemCopyFromHost(static_cast<char*>(fpga_buff_) + offset,
-                         cache_[i]->data(),
+                         batch_[i]->data(),
                          ksize);
       // Update offset
       offset += ksize;
     }
+    CHECK(offset <= kMaxBytes);
     // Flush if we're using a shared memory system
     // and if interface is non-coherent
     if (!coherent_ && always_cache_) {
@@ -491,10 +584,21 @@ class UopQueue : public BaseQueue<VTAUop> {
   }
 
  private:
-  // Cache pointer
-  uint32_t cache_idx_{0};
-  // Cached ring, sorted by sram_begin
+  //#### JO changed (2026-10-27): resident kernels and the batch to copy, see Push
+  // // Cache pointer
+  // uint32_t cache_idx_{0};
+  // // Cached ring, sorted by sram_begin
+  // std::vector<UopKernel*> cache_;
+  void InvalidateResident() {
+    for (auto *k : cache_) { k->sram_begin_ = 0; k->sram_end_ = 0; }
+    cache_.clear();
+  }
+  // Kernels in uop SRAM, in SRAM order
   std::vector<UopKernel*> cache_;
+  // Kernels copied to the FPGA-readable buffer at the next ReadBarrier, in buffer order
+  std::vector<UopKernel*> batch_;
+  uint32_t batch_elems_{0};
+  uint32_t last_offset_{0};
   // Constants
   static constexpr int kElemBytes = sizeof(VTAUop);
   static constexpr int kMaxNumUop = VTA_UOP_BUFF_DEPTH;
