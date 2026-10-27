@@ -20,6 +20,7 @@
 #include <cstring>
 #include <deque>
 #include <random>
+#include <string>
 #include <vector>
 
 static const int N = 16;          // VTA_BLOCK_IN = VTA_BLOCK_OUT
@@ -42,7 +43,8 @@ struct Mem {
   Mem(int ni, int nw, int na) : inp(ni * N), wgt(nw * N * N), out(na * N), acc(na * N), ninp(ni), nwgt(nw), nacc(na) {}
 };
 
-// sequential reference (vta.cc gemm(), except that reset writes out = 0, see §8.5)
+// sequential reference = vta.cc gemm(): acc = reset ? 0 : acc + dot, out = low 8 bits of (acc + dot) even on reset
+//### JO changed (2026-10-27, Phase D1): out on reset as in vta.cc (was out = 0), so the RTL can be compared bit for bit
 static void reference(const std::vector<Insn> &insns, Mem &m, std::vector<int> &last_writer_reset) {
   for (auto &in : insns)
     for (auto &it : in.items) {
@@ -51,7 +53,7 @@ static void reference(const std::vector<Insn> &insns, Mem &m, std::vector<int> &
         for (int ic = 0; ic < N; ic++) tmp += int32_t(m.inp[it.src * N + ic]) * int32_t(m.wgt[(it.wgt * N + oc) * N + ic]);
         int32_t accum = m.acc[it.dst * N + oc] + tmp;
         m.acc[it.dst * N + oc] = it.reset ? 0 : accum;
-        m.out[it.dst * N + oc] = it.reset ? 0 : int8_t(accum & 0xff);
+        m.out[it.dst * N + oc] = int8_t(accum & 0xff);
       }
       last_writer_reset[it.dst] = it.reset;
     }
@@ -105,7 +107,7 @@ static Stats simulate(const std::vector<Insn> &insns, Mem &m) {
   auto next_wgt = [&](int k, int w) -> int {
     for (int q = k; q < ns && q < head + LOOKAHEAD; q++) {
       if (DRAIN && s[q].insn != s[head].insn) break;
-      if (!s[q].reset && s[q].wgt != w) return q;
+      if (s[q].wgt != w) return q;   //### JO changed (Phase D1): was !s[q].reset && ...
     }
     return -1;
   };
@@ -123,8 +125,9 @@ static Stats simulate(const std::vector<Insn> &insns, Mem &m) {
       }
       if (s[head].insn == cur_insn && visible_at(head) <= c) {
         const Item &h = s[head];
-        if (h.reset) issue = head;
-        else {
+        //### JO changed (Phase D1): a reset uop uses its own weight like any other (vta.cc computes the dot product and
+        //### writes it to out), so no reset bypass: if (h.reset) issue = head; else {
+        {
           if (cur >= 0 && blks[cur].wgt == h.wgt) issue = head;
           else {
             if (nxt >= 0 && blks[nxt].wgt != h.wgt) { fprintf(stderr, "prefetched the wrong block\n"); exit(3); }
@@ -197,7 +200,7 @@ static Stats simulate(const std::vector<Insn> &insns, Mem &m) {
     // RMW: commit due writes, then read (forwarding) for this row
     while (!wq.empty() && wq.front().at <= c) {
       Wr &w = wq.front();
-      for (int j = 0; j < N; j++) { m.acc[w.dst * N + j] = w.reset ? 0 : w.v[j]; m.out[w.dst * N + j] = w.reset ? 0 : int8_t(w.v[j] & 0xff); }
+      for (int j = 0; j < N; j++) { m.acc[w.dst * N + j] = w.reset ? 0 : w.v[j]; m.out[w.dst * N + j] = int8_t(w.v[j] & 0xff); }
       wq.pop_front(); insn_left_writes--; last_done = c;
     }
     if (tg.valid) {
@@ -249,11 +252,79 @@ static Gen conv_gen(bool neworder, int kh, int th, int tw, int nk, int stride, i
 static int check(const Mem &a, const Mem &b, const std::vector<int> &lastreset) {
   int bad = 0;
   for (size_t i = 0; i < a.acc.size(); i++) bad += a.acc[i] != b.acc[i];
-  for (int d = 0; d < a.nacc; d++) if (!lastreset[d]) for (int j = 0; j < N; j++) bad += a.out[d * N + j] != b.out[d * N + j];
+  (void)lastreset;   //### JO changed (Phase D1): out compared for every row (was skipped after a reset)
+  for (int d = 0; d < a.nacc; d++) for (int j = 0; j < N; j++) bad += a.out[d * N + j] != b.out[d * N + j];
   return bad;
 }
 
+//### JO added (2026-10-27, Phase D1): test vectors for the RTL testbench (rtl/tb/tb_gemm_sa.v).
+// ./systolic_model dump <dir> <seed> [hazard]   writes, in $readmemh format (one word per line, hex, lane 0 in the low bits):
+//   meta.txt   n_uops n_inp n_wgt n_acc n_last
+//   uops.hex   {last, reset, wgt[11], src[12], dst[12]} = 37 bits, issue order
+//   inp.hex    n_inp x 128 bits (x[ic] in bits 8ic+7:8ic)
+//   wgt.hex    n_wgt*16 x 128 bits, line blk*16+j = bank j of block blk = w[j][0..15] (w[j][ic] in bits 8ic+7:8ic)
+//   acc0.hex   n_acc x 512 bits (lane oc in bits 32oc+31:32oc), initial accumulator
+//   acc.hex, out.hex  expected acc (512 bits) and out (128 bits, lane oc in bits 8oc+7:8oc) after all uops (reference = vta.cc gemm())
+// hazard: few dst rows (8), so the same dst comes back within the RMW window often (forwarding). same: dst 0 or 1 only.
+// conv: 16 ResConv10-like GEMM instructions (3x3, 7x7 tile, new uop order), for cycles per GEMM.
+static void hexline(FILE *f, const uint8_t *bytes, int n) {   // little endian bytes -> big endian hex text
+  for (int k = n - 1; k >= 0; k--) fprintf(f, "%02x", bytes[k]);
+  fprintf(f, "\n");
+}
+static int dump_vectors(const char *dir, unsigned seed, bool hazard, bool same, bool conv) {
+  std::mt19937 rng(seed);
+  auto rnd = [&](int lo, int hi) { return std::uniform_int_distribution<int>(lo, hi)(rng); };
+  DRAIN = false; LOOKAHEAD = 32;   // the RTL does not drain between GEMM instructions
+  const int NI = 256, NW = 64, NA = 256;
+  Mem m(NI, NW, NA);
+  for (auto &v : m.inp) v = rnd(-128, 127);
+  for (auto &v : m.wgt) v = rnd(-128, 127);
+  for (auto &v : m.acc) v = rnd(-100000, 100000);
+  std::vector<Insn> insns;
+  if (conv) {   // ResConv10-like: 3x3 kernel, 7x7 output tile, new uop order, 16 instructions (one per input channel block)
+    for (int q = 0; q < 16; q++) {
+      Gen g = conv_gen(true, 3, 7, 7, 1, 1, 0, (q % 2) * 81, (q * 9) % 54);
+      insns.push_back(g.expand(q, false));
+    }
+  }
+  int ni = conv ? 0 : rnd(1, 6);
+  int dmax = same ? 1 : hazard ? 7 : NA - 1;
+  for (int q = 0; q < ni; q++) {
+    Gen g{rnd(1, 3), rnd(0, 9), rnd(0, 9), rnd(0, 3), rnd(1, 3), rnd(0, 9), rnd(0, 9), rnd(0, 3), {}};
+    if (hazard || same) { g.do_ = rnd(0, 2); g.di = 0; g.wi = 0; g.wo = rnd(0, 1); }   // same dst back to back with one weight
+    int nu = rnd(1, 40);
+    for (int u = 0; u < nu; u++) g.uops.push_back({rnd(0, dmax), rnd(0, 150), rnd(0, 40), false, 0});
+    Insn in = g.expand(q, rnd(0, 7) == 0);
+    for (auto &it : in.items) { it.dst %= NA; it.src %= NI; it.wgt %= NW; }
+    insns.push_back(in);
+  }
+  Mem r = m; std::vector<int> lr(r.nacc, 0);
+  reference(insns, r, lr);
+  auto open = [&](const char *n) { std::string p = std::string(dir) + "/" + n; FILE *f = fopen(p.c_str(), "w"); if (!f) { perror(p.c_str()); exit(1); } return f; };
+  int nu = 0, nl = 0;
+  FILE *f = open("uops.hex");
+  for (auto &in : insns)
+    for (size_t k = 0; k < in.items.size(); k++) {
+      const Item &it = in.items[k]; bool last = k + 1 == in.items.size();
+      uint64_t w = uint64_t(it.dst) | uint64_t(it.src) << 12 | uint64_t(it.wgt) << 24 | uint64_t(it.reset) << 35 | uint64_t(last) << 36;
+      fprintf(f, "%010llx\n", (unsigned long long)w); nu++; nl += last;
+    }
+  fclose(f);
+  f = open("inp.hex"); for (int i = 0; i < NI; i++) hexline(f, (const uint8_t *)&m.inp[i * N], N); fclose(f);
+  f = open("wgt.hex"); for (int b = 0; b < NW; b++) for (int j = 0; j < N; j++) hexline(f, (const uint8_t *)&m.wgt[(b * N + j) * N], N); fclose(f);
+  f = open("acc0.hex"); for (int a = 0; a < NA; a++) hexline(f, (const uint8_t *)&m.acc[a * N], 4 * N); fclose(f);
+  f = open("acc.hex"); for (int a = 0; a < NA; a++) hexline(f, (const uint8_t *)&r.acc[a * N], 4 * N); fclose(f);
+  f = open("out.hex"); for (int a = 0; a < NA; a++) hexline(f, (const uint8_t *)&r.out[a * N], N); fclose(f);
+  f = open("meta.txt"); fprintf(f, "%d %d %d %d %d\n", nu, NI, NW, NA, nl); fclose(f);
+  // the cycle model on the same vectors (must agree before the RTL is compared)
+  Stats st = simulate(insns, m);
+  int bad = check(r, m, lr);
+  printf("dump %s seed %u: %d uops, %d instructions, model %s (forwarded %ld)\n", dir, seed, nu, nl, bad ? "MISMATCH" : "bit exact", st.forwards);
+  return bad ? 1 : 0;
+}
+
 int main(int argc, char **argv) {
+  if (argc > 1 && !strcmp(argv[1], "dump")) return dump_vectors(argv[2], argc > 3 ? atoi(argv[3]) : 1, argc > 4 && !strcmp(argv[4], "hazard"), argc > 4 && !strcmp(argv[4], "same"), argc > 4 && !strcmp(argv[4], "conv"));
   int ntests = argc > 1 ? atoi(argv[1]) : 300;
   unsigned seed = argc > 2 ? atoi(argv[2]) : 1;
   std::mt19937 rng(seed);

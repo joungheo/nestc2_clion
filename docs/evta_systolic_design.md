@@ -165,7 +165,32 @@
 | `scripts/vivado.tcl` | `gemm_sa`를 BD에 추가, acc_mem BRAM과 mux, `VTA_SYSTOLIC` 빌드 옵션 |
 | `Makefile` | `SYSTOLIC=1` (빌드 dir 이름에 `_sa`) |
 
-## 12. 열린 문제
+## 12. 진행 상황 (2026-10-27)
+
+**D1 완료** — `sim/systolic_model.cc`
+- reset GEMM의 out을 `vta.cc`와 같게(acc+내적의 하위 8비트) 바꾸고, out을 모든 행에서 비교한다. 무작위 300개 비트 일치.
+- **reset uop도 자기 wgt로 계산한다.** `reset_acc`의 uop은 src = 0, wgt = 0이고, 지금 HW는 그 내적을 out에 쓴다. 비트 단위로 같게 하려면 reset을 따로 처리하지 않는 것이 가장 단순하다(§6의 "reset uop은 바로 issue"를 없앴다).
+- 벡터 덤프: `systolic_model dump <dir> <seed> [hazard|same|conv]`(meta.txt, uops/inp/wgt/acc0 입력, acc/out 기대값).
+
+**D2·D3 완료(xsim)** — `hardware/xilinx/rtl/`(`sa_pe.v`, `sa_array.v`, `sa_ctrl.v`, `sa_rmw.v`, `gemm_sa.v`), TB `rtl/tb/tb_gemm_sa.v`, 실행 `rtl/tb/run_xsim.sh <vector dir>...`
+- 명령(호스트, `$N/vta-hw-zcu102-systolic`에서):
+  ```bash
+  g++ -O2 -std=c++14 -o /tmp/systolic_model hardware/xilinx/sim/systolic_model.cc
+  V=$PWD/build/rtl_sim/vec; mkdir -p $V/t1; /tmp/systolic_model dump $V/t1 1      # 벡터는 트리 안에 둔다(docker가 /tmp를 못 봄)
+  hardware/xilinx/rtl/tb/run_xsim.sh $V/t1                                        # → "RESULT ...: PASS acc_wrong 0 out_wrong 0 cycles .. uops .."
+  GAP=20 BP=30 DBG=80 hardware/xilinx/rtl/tb/run_xsim.sh $V/t1                    # uop 공백 20%, done backpressure 30%, 처음 80클럭 trace
+  ```
+- 결과: 무작위 13개, hazard 8개, same(dst 0/1) 8개, gap/backpressure 포함 **31개 모두 acc·out 비트 일치**. ResConv10형(3x3, 7x7, 새 순서, 명령 16개, GEMM 7,056) **7,114클럭, 99.2%**(차이 = 첫 채우기 17 + 파이프 깊이).
+- 설계서와 달라진 점:
+  - **CEB2는 x와 같이 흐르는 플래그 비트**다(9번째 비트). PE(i, j)에 플래그가 도착하는 클럭 = CEB2라서 대각선 CE 생성기가 따로 없다(§6).
+  - "다음 weight" 찾기는 FIFO 전체 검색이 아니라, uop이 FIFO에 들어올 때 wgt가 바뀌면 run 큐(깊이 8)에 넣는 방식이다.
+  - weight 주기는 17클럭이다(채우기 시작 = 앞 블록 latch 클럭, latch ≥ 채우기 + 17). 16으로 줄이려면 latch 한 클럭 전에 채우기를 시작해야 한다. run 길이가 49 이상이라 차이는 없다.
+  - xsim 주의: `glbl.v`가 처음 100 ns 동안 GSR을 걸어 DSP48E2 레지스터가 CE를 무시한다. TB는 200 ns 뒤에 리셋을 푼다(처음에 이것 때문에 첫 블록의 일부 PE가 0으로 계산됐다).
+- 지연: issue(주소 제시) → RMW 입력 = L_RD + 33(`sa_ctrl` `TD`), RMW 3단.
+
+**다음**: D4 어레이 OOC 합성(400 MHz 여유, 2배 클럭 상한), HLS 쪽 `#ifdef VTA_SYSTOLIC`(§3)과 acc_mem을 BD로 꺼내기, D5 PL 시뮬레이션.
+
+## 13. 열린 문제
 
 1. HLS 2020.1: 512비트 2포트 외부 bram 인터페이스와 ALU 루프 II(§3). D5 전에 HLS만 따로 합성해 본다.
 2. wgt_mem 2048비트 동시 읽기 → PISO 16개 적재: 지금 wgt → DSP 경로(0.06~0.16 ns 여유)가 PISO 적재 한 번으로 바뀐다. 필요하면 레지스터를 한 단 더 넣는다(채우기 지연 +1, 주기에는 영향 없음).
