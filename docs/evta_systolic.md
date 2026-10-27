@@ -382,6 +382,19 @@ for v in prof_360mhz prof_380mhz prof_400mhz prof_oreg_360mhz prof_oreg_380mhz p
     HP 포트를 규격 안에 두는 대가다. 확인하려면 VTA_SYNC 안 load/store 시간을 따로 봐야 한다(PROFILE=1 비트스트림).
   - 6)의 Conv4 333 값 194.39 ms는 한 번 잰 값이었고 오늘은 179.60 ms다. 360 MHz의 −14.4%는 그 편차 때문이다(오늘 기준이면 −7.4%).
 - **multi4는 380 MHz에서 HP 규격을 지키면서 보드에서 동작한다.** 기본 비트스트림으로 바꿀지는 single, multi2도 HP 분리로 다시 만든 뒤 정한다.
+- **ResConv10 conv만 반복**(609.7 GOPS 측정과 같은 방법, vta_synth_notes §6.1: `multi4resconv10Bundle <mask> 400 conv`, `OMP_NUM_THREADS=1`,
+  실행마다 `load_bit.sh`로 재로드, 333과 380을 번갈아 3회, 2026-10-27):
+
+| 비트스트림 | EVTA 4개 (mask 15) | EVTA 1개 (mask 1) | conv 한 번 (EVTA당) |
+|---|---|---|---|
+| 333 MHz `vtahw_multi4_y219` | 609.60, 609.67 GOPS (1회차 586.76: EVTA3만 1.576 ms로 느림) | 152.53~152.62 | 1.516 ms |
+| 380 MHz (HP 333) | **685.07, 685.24, 685.06 GOPS** | 171.57~171.60 | 1.349 ms |
+| 비 | **+12.4%** | +12.5% | −11.0% |
+
+  - 모든 실행에서 4개 출력 모두 golden. 이론 최대(4 x 256 MAC x 2 x 379.96 MHz = 778.2 GOPS)의 88.0%.
+  - 클럭 비율은 +14.0%(379.96 / 333.33)다. 이득이 그보다 작은 것은 conv 사이 CPU 간격(명령어 생성, 약 66 µs, vta_synth_notes §6.2)이 클럭과 무관하기 때문이다.
+    333 MHz의 EVTA 시간 1.449 ms를 클럭 비율로 줄이면 1.271 ms, 여기에 CPU 간격을 더하면 1.338 ms로 측정값 1.349 ms와 거의 맞는다.
+  - HP 클럭이 333으로 묶여도 ResConv10은 영향이 없다(GEMM 가동률 93.5%, load/store가 GEMM 뒤에 숨는다). Conv 번들이 안 빨라진 것(위 표)과 대조된다.
 
 ## 9. 조사 보고서: 외부 설계·논문·문서 분석 (2026-10-27)
 
