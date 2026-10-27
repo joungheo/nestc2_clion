@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="470" viewBox="0 0 1040 470" font-family="'Noto Sans CJK KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12">
+<title>Systolic GEMM: acc read-modify-write</title>
+<defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#333"/></marker></defs>
+<rect x="0" y="0" width="1040" height="470" fill="white"/>
+<text x="20" y="26" font-size="16" font-weight="bold">그림 4. RMW: 어레이의 한 행을 acc[dst]에 더한다 (RMW_LAT = 3, BRAM 읽기 2 + 덧셈 1)</text>
+
+<text x="20" y="62" fill="#555">클럭</text>
+<text x="190" y="62" fill="#555">c</text><text x="360" y="62" fill="#555">c+1</text><text x="530" y="62" fill="#555">c+2</text><text x="760" y="62" fill="#555">c+3</text>
+
+<rect x="20" y="80" width="140" height="70" fill="#fbe9e0" stroke="#b8501f"/>
+<text x="30" y="100">deskew 출력</text><text x="30" y="116" fill="#555">행 R: 16 x int32</text><text x="30" y="132" fill="#555">태그: dst, reset,</text><text x="30" y="146" fill="#555">last</text>
+
+<rect x="180" y="80" width="150" height="70" fill="white" stroke="#555"/>
+<text x="190" y="100">S0: acc 읽기 주소</text><text x="190" y="116" fill="#555">= dst (포트 A)</text><text x="190" y="132" fill="#555">R, 태그는 3단 지연</text>
+
+<rect x="350" y="80" width="150" height="70" fill="white" stroke="#555"/>
+<text x="360" y="100">S1: BRAM</text><text x="360" y="116" fill="#555">(출력 레지스터)</text>
+
+<rect x="520" y="80" width="200" height="70" fill="white" stroke="#555"/>
+<text x="530" y="100">S2: 읽은 값 D (512비트)</text><text x="530" y="116" fill="#555">forward mux: 같은 dst가</text><text x="530" y="132" fill="#555">S3에 있으면 그 sum을 씀</text>
+
+<rect x="740" y="80" width="280" height="70" fill="#fff8ee" stroke="#c07a2c" stroke-width="2"/>
+<text x="750" y="100">S3: sum = D + R (16 lane, int32)</text><text x="750" y="116" fill="#555">acc[dst] ← reset ? 0 : sum (포트 B)</text><text x="750" y="132" fill="#555">out[dst] ← sum의 lane별 하위 8비트</text><text x="750" y="146" fill="#555">last면 done</text>
+
+<line x1="160" y1="115" x2="178" y2="115" stroke="#333" marker-end="url(#ar)"/>
+<line x1="330" y1="115" x2="348" y2="115" stroke="#333" marker-end="url(#ar)"/>
+<line x1="500" y1="115" x2="518" y2="115" stroke="#333" marker-end="url(#ar)"/>
+<line x1="720" y1="115" x2="738" y2="115" stroke="#333" marker-end="url(#ar)"/>
+<path d="M 880 150 L 880 176 L 620 176 L 620 152" fill="none" stroke="#b8501f" stroke-dasharray="4 3" marker-end="url(#ar)"/>
+<text x="640" y="192" font-size="11" fill="#b8501f">forwarding (S3 → S2): 같은 dst가 연달아 오면 BRAM에 아직 안 쓰인 값</text>
+
+<rect x="20" y="220" width="480" height="96" fill="#f7f7f7" stroke="#777"/>
+<text x="30" y="240" font-weight="bold">hazard 창</text>
+<text x="30" y="258" fill="#333">S0에서 읽는 dst를 S1, S2, S3(쓰기 전)의 dst와 비교한다(최대 3개).</text>
+<text x="30" y="274" fill="#333">같으면 그 행의 sum을 S2에서 대신 쓴다(가장 최근 것). 어레이는 멈출 수 없어서</text>
+<text x="30" y="290" fill="#333">Gemmini처럼 stall하지 않고 forwarding한다. §4 uop 순서에서는 같은 dst 간격 ≥ 49라</text>
+<text x="30" y="306" fill="#333">실제로는 거의 안 쓰이지만, 정확성을 순서에 맡기지 않는다(모델 무작위 테스트 68회 사용).</text>
+
+<rect x="540" y="220" width="480" height="96" fill="#eef7ee" stroke="#4a8a4a"/>
+<text x="550" y="240" font-weight="bold">acc_mem 4096 x 512 (BD의 true dual-port BRAM)</text>
+<text x="550" y="258" fill="#333">포트 A = 읽기, 포트 B = 쓰기. 두 포트 모두 mux:</text>
+<text x="550" y="274" fill="#333">gemm_busy = 1 → gemm_sa (S0 읽기, S3 쓰기)</text>
+<text x="550" y="290" fill="#333">gemm_busy = 0 → HLS compute (ALU, bias load, 지금과 같음)</text>
+<text x="550" y="306" fill="#333">out_mem 포트 A도 같은 신호로 mux. GEMM과 ALU는 명령 순서로 겹치지 않는다.</text>
+
+<text x="20" y="350" font-weight="bold">한 행 단위인 이유</text>
+<text x="20" y="368" fill="#333">열마다 시각이 다른 출력을 열별 acc bank에 따로 쓰면 ALU·STORE·bias load의 접근 방식이 모두 바뀐다. deskew로 한 행을 만든 뒤 쓰면 acc는 지금과 같은 512비트 행이다.</text>
+<text x="20" y="386" fill="#333">hazard 창도 systolic 깊이(~50클럭)가 아니라 RMW 깊이(3클럭)로 줄어든다.</text>
+<text x="20" y="414" font-weight="bold">reset_reg GEMM</text>
+<text x="20" y="432" fill="#333">태그의 reset 비트로 S3가 acc에 0을 쓴다. 같은 pipe를 지나가므로 앞뒤 GEMM과 순서가 자동으로 지켜진다.</text>
+<text x="20" y="450" fill="#333">out은 reset이어도 (D + R)의 하위 8비트를 쓴다. 지금 vta.cc gemm()과 같게 해서 기존 비트스트림과 비트 단위로 비교할 수 있게 한다.</text>
+</svg>

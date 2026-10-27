@@ -1,0 +1,113 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="800" viewBox="0 0 1040 800" font-family="'Noto Sans CJK KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12">
+<title>Systolic GEMM: array dataflow</title>
+<defs>
+  <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#333"/></marker>
+  <marker id="arb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f7d32"/></marker>
+  <marker id="arp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#b8501f"/></marker>
+  <marker id="ara" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2d5fa8"/></marker>
+  <g id="pe">
+    <rect x="0" y="0" width="130" height="100" rx="4" fill="#fffaf2" stroke="#8a6a3a"/>
+    <rect x="8" y="8" width="30" height="20" fill="#e6eef9" stroke="#2d5fa8"/><text x="18" y="22" font-size="11">A</text>
+    <rect x="96" y="32" width="28" height="18" fill="#e6f2e6" stroke="#2f7d32"/><text x="101" y="45" font-size="11">B1</text>
+    <rect x="96" y="58" width="28" height="18" fill="#e6f2e6" stroke="#2f7d32"/><text x="101" y="71" font-size="11">B2</text>
+    <circle cx="80" cy="52" r="10" fill="white" stroke="#555"/><text x="75" y="57" font-size="13">×</text>
+    <rect x="46" y="72" width="34" height="20" fill="#fbe9e0" stroke="#b8501f"/><text x="52" y="86" font-size="11">+ P</text>
+    <line x1="23" y1="28" x2="72" y2="46" stroke="#555"/>
+    <line x1="110" y1="50" x2="110" y2="58" stroke="#2f7d32"/>
+    <line x1="96" y1="67" x2="88" y2="57" stroke="#555"/>
+    <line x1="74" y1="61" x2="68" y2="72" stroke="#555"/>
+  </g>
+</defs>
+<rect x="0" y="0" width="1040" height="800" fill="white"/>
+<text x="20" y="26" font-size="16" font-weight="bold">그림 2. 16 x 16 weight-stationary 어레이 (행 i = 입력 채널, 열 j = 출력 채널, 열 하나 = DSP48E2 열 하나)</text>
+<text x="20" y="46" fill="#555">행 0, 1, 15와 열 0, 1, 15만 그렸다. PE(i, j) = DSP48E2: P(i, j) = A·B2 + P(i−1, j). 색: 파랑 입력 x, 초록 weight, 주황 부분합.</text>
+
+<!-- PISO per column -->
+<g font-size="11">
+<rect x="290" y="70" width="130" height="44" fill="#e6f2e6" stroke="#2f7d32"/><text x="298" y="88">PISO 0 ← wgt bank 0</text><text x="298" y="104" fill="#555">128비트, 16클럭 shift</text>
+<rect x="460" y="70" width="130" height="44" fill="#e6f2e6" stroke="#2f7d32"/><text x="468" y="88">PISO 1 ← wgt bank 1</text><text x="468" y="104" fill="#555">w[1][15] 먼저</text>
+<rect x="720" y="70" width="130" height="44" fill="#e6f2e6" stroke="#2f7d32"/><text x="728" y="88">PISO 15 ← bank 15</text><text x="728" y="104" fill="#555">8비트씩 BCIN으로</text>
+</g>
+
+<!-- PE grid: cols x = 290, 460, 720 ; rows y = 160, 310, 500 -->
+<use href="#pe" x="290" y="160"/><use href="#pe" x="460" y="160"/><use href="#pe" x="720" y="160"/>
+<use href="#pe" x="290" y="310"/><use href="#pe" x="460" y="310"/><use href="#pe" x="720" y="310"/>
+<use href="#pe" x="290" y="500"/><use href="#pe" x="460" y="500"/><use href="#pe" x="720" y="500"/>
+<g font-size="10" fill="#8a6a3a">
+<text x="296" y="254">PE(0,0)</text><text x="466" y="254">PE(0,1)</text><text x="726" y="254">PE(0,15)</text>
+<text x="296" y="404">PE(1,0)</text><text x="466" y="404">PE(1,1)</text><text x="726" y="404">PE(1,15)</text>
+<text x="296" y="594">PE(15,0)</text><text x="466" y="594">PE(15,1)</text><text x="726" y="594">PE(15,15)</text>
+</g>
+<text x="640" y="320" font-size="22" fill="#888">⋯</text>
+<text x="640" y="560" font-size="22" fill="#888">⋯</text>
+<text x="350" y="460" font-size="22" fill="#888">⋮</text><text x="520" y="460" font-size="22" fill="#888">⋮</text><text x="780" y="460" font-size="22" fill="#888">⋮</text>
+
+<text x="852" y="252" font-size="11" fill="#2f7d32">BCOUT→BCIN</text>
+<text x="852" y="266" font-size="11" fill="#2f7d32">(B1 chain, 초록)</text>
+
+<text x="852" y="300" font-size="11" fill="#b8501f">PCOUT→PCIN</text>
+<text x="852" y="314" font-size="11" fill="#b8501f">(부분합, 행 0의 PCIN = 0)</text>
+
+<!-- input x (blue): skew then horizontal FF chain -->
+<rect x="20" y="150" width="70" height="460" fill="#e6eef9" stroke="#2d5fa8"/>
+<text x="30" y="372" font-size="11">inp_mem</text><text x="30" y="388" font-size="11">한 행</text><text x="30" y="404" font-size="11">128비트</text><text x="30" y="420" font-size="11">x[0..15]</text>
+<g font-size="11">
+<text x="100" y="168" fill="#2d5fa8">x[0]: 0 FF</text>
+<rect x="150" y="317" width="22" height="22" fill="white" stroke="#2d5fa8"/><text x="100" y="324" fill="#2d5fa8">x[1]</text><text x="150" y="352" fill="#555" font-size="10">1 FF</text>
+<rect x="140" y="507" width="22" height="22" fill="white" stroke="#2d5fa8"/><rect x="164" y="507" width="22" height="22" fill="white" stroke="#2d5fa8"/><text x="190" y="523">⋯</text><rect x="208" y="507" width="22" height="22" fill="white" stroke="#2d5fa8"/>
+<text x="100" y="514" fill="#2d5fa8">x[15]</text><text x="140" y="543" fill="#555" font-size="10">15 FF (skew)</text>
+</g>
+<text x="100" y="146" font-size="11" fill="#2d5fa8">A 레지스터 = 가로 FF 한 칸 (fanout 1)</text>
+
+<g stroke="#2f7d32" stroke-width="1.5" fill="none">
+<line x1="355" y1="114" x2="400" y2="190" marker-end="url(#arb)"/>
+<path d="M 414 201 L 418 201 L 418 264 L 400 340" marker-end="url(#arb)"/>
+<path d="M 414 351 L 418 351 L 418 414 L 400 530" stroke-dasharray="4 3" marker-end="url(#arb)"/>
+<line x1="525" y1="114" x2="570" y2="190" marker-end="url(#arb)"/>
+<path d="M 584 201 L 588 201 L 588 264 L 570 340" marker-end="url(#arb)"/>
+<path d="M 584 351 L 588 351 L 588 414 L 570 530" stroke-dasharray="4 3" marker-end="url(#arb)"/>
+<line x1="785" y1="114" x2="830" y2="190" marker-end="url(#arb)"/>
+<path d="M 844 201 L 848 201 L 848 264 L 830 340" marker-end="url(#arb)"/>
+<path d="M 844 351 L 848 351 L 848 414 L 830 530" stroke-dasharray="4 3" marker-end="url(#arb)"/>
+</g>
+<g stroke="#b8501f" stroke-width="1.5">
+<line x1="353" y1="252" x2="353" y2="380" marker-end="url(#arp)"/>
+<line x1="353" y1="402" x2="353" y2="570" stroke-dasharray="4 3" marker-end="url(#arp)"/>
+<line x1="353" y1="592" x2="353" y2="650" marker-end="url(#arp)"/>
+<line x1="523" y1="252" x2="523" y2="380" marker-end="url(#arp)"/>
+<line x1="523" y1="402" x2="523" y2="570" stroke-dasharray="4 3" marker-end="url(#arp)"/>
+<line x1="523" y1="592" x2="523" y2="650" marker-end="url(#arp)"/>
+<line x1="783" y1="252" x2="783" y2="380" marker-end="url(#arp)"/>
+<line x1="783" y1="402" x2="783" y2="570" stroke-dasharray="4 3" marker-end="url(#arp)"/>
+<line x1="783" y1="592" x2="783" y2="650" marker-end="url(#arp)"/>
+</g>
+<g stroke="#2d5fa8" stroke-width="1.5">
+<line x1="90" y1="178" x2="296" y2="178" marker-end="url(#ara)"/>
+<line x1="328" y1="178" x2="466" y2="178" marker-end="url(#ara)"/><line x1="498" y1="178" x2="620" y2="178"/><line x1="680" y1="178" x2="726" y2="178" stroke-dasharray="4 3" marker-end="url(#ara)"/>
+<line x1="90" y1="328" x2="150" y2="328"/><line x1="172" y1="328" x2="296" y2="328" marker-end="url(#ara)"/>
+<line x1="328" y1="328" x2="466" y2="328" marker-end="url(#ara)"/><line x1="498" y1="328" x2="620" y2="328"/><line x1="680" y1="328" x2="726" y2="328" stroke-dasharray="4 3" marker-end="url(#ara)"/>
+<line x1="90" y1="518" x2="140" y2="518"/><line x1="230" y1="518" x2="296" y2="518" marker-end="url(#ara)"/>
+<line x1="328" y1="518" x2="466" y2="518" marker-end="url(#ara)"/><line x1="498" y1="518" x2="620" y2="518"/><line x1="680" y1="518" x2="726" y2="518" stroke-dasharray="4 3" marker-end="url(#ara)"/>
+</g>
+<!-- deskew -->
+<g font-size="11">
+<rect x="308" y="652" width="90" height="34" fill="#fbe9e0" stroke="#b8501f"/><text x="316" y="673">deskew 15 FF</text>
+<rect x="478" y="652" width="90" height="34" fill="#fbe9e0" stroke="#b8501f"/><text x="486" y="673">deskew 14 FF</text>
+<rect x="738" y="652" width="90" height="34" fill="#fbe9e0" stroke="#b8501f"/><text x="746" y="673">deskew 0 FF</text>
+</g>
+<g stroke="#b8501f" stroke-width="1.5"><line x1="353" y1="686" x2="353" y2="714" marker-end="url(#arp)"/><line x1="523" y1="686" x2="523" y2="714" marker-end="url(#arp)"/><line x1="783" y1="686" x2="783" y2="714" marker-end="url(#arp)"/></g>
+<rect x="300" y="716" width="610" height="30" fill="#fbe9e0" stroke="#b8501f"/>
+<text x="312" y="736">16 x int32 = 512비트 한 행 (열 j의 합 + 같은 클럭) → RMW (그림 4)</text>
+<rect x="930" y="652" width="100" height="94" fill="#f4f4f4" stroke="#777"/>
+<text x="938" y="672" font-size="11">태그 pipe</text><text x="938" y="688" font-size="11" fill="#555">dst, reset,</text><text x="938" y="704" font-size="11" fill="#555">last</text><text x="938" y="720" font-size="11" fill="#555">깊이 OUT_OFS</text><text x="938" y="736" font-size="11" fill="#555">→ RMW</text>
+
+<!-- timing notes -->
+<g font-size="11" fill="#333">
+<text x="20" y="640">시각 (issue = 0, 픽셀 a):</text>
+<text x="20" y="656">PE(i, j)가 x를 받음: a+i+j</text>
+<text x="20" y="672">열 j 아래로 합이 나옴: a+15+j(+DSP 지연)</text>
+<text x="20" y="688">deskew 뒤 16열 모두: a+30(+지연)</text>
+<text x="20" y="704">태그도 같은 깊이로 지연</text>
+</g>
+<text x="20" y="790" fill="#555">세로 cascade(BCIN/PCIN)는 같은 DSP 열 안에서만 된다. 그래서 weight와 부분합은 세로, 입력 x는 fabric FF로 가로다. ZU9EG fence 안 DSP 열 X0..X17 x Y0..Y85에 16열이 들어간다.</text>
+</svg>

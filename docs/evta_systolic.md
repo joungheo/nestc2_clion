@@ -8,6 +8,7 @@
 - 계획: §1 제안 → §2 결론 → §3·§4 지금 HW와 uop 순서 → §5 HW 세부 설계 → §6 득실 → §7 순서
 - 조사: §9 보고서(Gemmini, VTA 원논문, DSP-Fetch, FireFly v2, 2510.08137, DPU, WP486, Tensil, AutoSA, gemm_hls; 종합 §9.12). 원문은 `docs/ref/`
 - 실험: §8 Phase A(타이밍, 클럭 sweep, 보드), §10 Phase B(uop 순서)·Phase C(사이클 모델)
+- **Phase D 설계서(글과 그림)**: `docs/evta_systolic_design.md`
 - 코드: 브랜치 `systolic`, `vta-hw-zcu102-systolic`(HW), `vtalib-zcu102-systolic`(런타임, uop 순서와 uop cache 수정).
 
 ## 0. 방향 결정 (2026-10-27)

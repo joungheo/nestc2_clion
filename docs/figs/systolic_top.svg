@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="600" viewBox="0 0 1040 600" font-family="'Noto Sans CJK KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12">
+<title>Systolic GEMM: top-level blocks</title>
+<defs>
+  <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#333"/></marker>
+</defs>
+<rect x="0" y="0" width="1040" height="600" fill="white"/>
+<text x="20" y="26" font-size="16" font-weight="bold">Phase D: HLS compute + RTL GEMM unit (gemm_sa)</text>
+
+<!-- HLS compute -->
+<rect x="20" y="50" width="250" height="300" rx="6" fill="#eef3fb" stroke="#4a6fa5"/>
+<text x="32" y="72" font-weight="bold" fill="#2c4a7a">HLS compute (vta.cc, 그대로)</text>
+<rect x="36" y="86" width="218" height="40" fill="white" stroke="#4a6fa5"/>
+<text x="46" y="104">명령 decode, 토큰(큐)</text><text x="46" y="119" fill="#555">GEMM / ALU / LOAD(uop, acc)</text>
+<rect x="36" y="136" width="218" height="54" fill="white" stroke="#4a6fa5"/>
+<text x="46" y="154">GEMM 루프 (II=1)</text><text x="46" y="169" fill="#555">iter_out x iter_in x uop</text><text x="46" y="184" fill="#555">계산 대신 uop을 AXIS로 push</text>
+<rect x="36" y="200" width="218" height="40" fill="white" stroke="#4a6fa5"/>
+<text x="46" y="218">ALU, bias load (acc 접근)</text><text x="46" y="233" fill="#555">gemm_busy일 때는 안 함</text>
+<rect x="36" y="250" width="218" height="40" fill="white" stroke="#4a6fa5"/>
+<text x="46" y="268">GEMM 명령 done 대기</text><text x="46" y="283" fill="#555">ALU/STORE 토큰 앞에서만</text>
+<text x="36" y="316" fill="#555">acc_mem, out_mem은 HLS 밖으로:</text>
+<text x="36" y="332" fill="#555">INTERFACE bram (RAM_T2P, latency 2)</text>
+
+<!-- RTL gemm_sa -->
+<rect x="330" y="50" width="450" height="420" rx="6" fill="#fdf3e7" stroke="#c07a2c"/>
+<text x="342" y="72" font-weight="bold" fill="#8a4f12">RTL gemm_sa (새로 작성, Verilog)</text>
+<rect x="346" y="86" width="150" height="54" fill="white" stroke="#c07a2c"/>
+<text x="356" y="104">uop FIFO</text><text x="356" y="119" fill="#555">깊이 LOOKAHEAD=32</text><text x="356" y="134" fill="#555">{dst,src,wgt,reset,last}</text>
+<rect x="516" y="86" width="248" height="54" fill="white" stroke="#c07a2c"/>
+<text x="526" y="104">issue 제어</text><text x="526" y="119" fill="#555">wgt 주소 비교, 다음 weight prefetch</text><text x="526" y="134" fill="#555">주기 16 미만이면 issue 멈춤</text>
+<rect x="346" y="154" width="150" height="40" fill="white" stroke="#c07a2c"/>
+<text x="356" y="172">inp 읽기 → skew</text><text x="356" y="187" fill="#555">행 i를 i클럭 지연</text>
+<rect x="516" y="154" width="248" height="40" fill="white" stroke="#c07a2c"/>
+<text x="526" y="172">wgt 읽기 (2048비트) → PISO x16</text><text x="526" y="187" fill="#555">열 j: bank j 128비트, 8비트씩 16클럭</text>
+<rect x="346" y="208" width="418" height="92" fill="#fff8ee" stroke="#c07a2c" stroke-width="2"/>
+<text x="356" y="228" font-weight="bold">systolic 어레이 16 x 16 (DSP48E2 256개)</text>
+<text x="356" y="246" fill="#555">입력 x: 행 i, 열 0→15로 FF 한 칸씩 (fanout 1)</text>
+<text x="356" y="262" fill="#555">weight: 열 j의 B1 chain(BCIN)으로 채움, B2로 계산</text>
+<text x="356" y="278" fill="#555">부분합: 열 안 P cascade(PCIN), 열 j 아래로 나옴</text>
+<text x="356" y="294" fill="#555">그림 2, 3</text>
+<rect x="346" y="314" width="200" height="40" fill="white" stroke="#c07a2c"/>
+<text x="356" y="332">deskew (열 j: 15−j FF)</text><text x="356" y="347" fill="#555">16열 → 512비트 한 행</text>
+<rect x="564" y="314" width="200" height="40" fill="white" stroke="#c07a2c"/>
+<text x="574" y="332">태그 pipe (깊이 OUT_OFS)</text><text x="574" y="347" fill="#555">dst, reset, last</text>
+<rect x="346" y="368" width="418" height="54" fill="white" stroke="#c07a2c"/>
+<text x="356" y="386">RMW: acc[dst] 읽기 → +행 → acc[dst], out[dst] 쓰기</text>
+<text x="356" y="401" fill="#555">in-flight dst(≤3)와 비교해 forwarding, reset이면 0</text>
+<text x="356" y="416" fill="#555">그림 4</text>
+<text x="346" y="450" fill="#555">last가 RMW를 통과하면 done</text>
+
+<!-- memories -->
+<rect x="840" y="60" width="180" height="60" fill="#eef7ee" stroke="#4a8a4a"/>
+<text x="850" y="80" font-weight="bold">inp_mem</text><text x="850" y="96" fill="#555">A: load(HLS) 쓰기</text><text x="850" y="111" fill="#555">B: gemm_sa 읽기</text>
+<rect x="840" y="134" width="180" height="60" fill="#eef7ee" stroke="#4a8a4a"/>
+<text x="850" y="154" font-weight="bold">wgt_mem (16 bank x 128)</text><text x="850" y="170" fill="#555">A: load(HLS) 쓰기</text><text x="850" y="185" fill="#555">B: gemm_sa 읽기</text>
+<rect x="840" y="330" width="180" height="76" fill="#eef7ee" stroke="#4a8a4a"/>
+<text x="850" y="350" font-weight="bold">acc_mem 4096 x 512</text><text x="850" y="366" fill="#555">BD의 2포트 BRAM</text><text x="850" y="382" fill="#555">포트 0, 1 모두 mux</text><text x="850" y="397" fill="#555">(gemm_busy: RTL / HLS)</text>
+<rect x="840" y="420" width="180" height="60" fill="#eef7ee" stroke="#4a8a4a"/>
+<text x="850" y="440" font-weight="bold">out_mem</text><text x="850" y="456" fill="#555">A: mux (RTL / HLS ALU)</text><text x="850" y="471" fill="#555">B: store(HLS) 읽기</text>
+<rect x="800" y="340" width="28" height="140" fill="#f4f4f4" stroke="#777"/>
+<text x="806" y="416" font-size="11" transform="rotate(-90 814 410)">mux</text>
+
+<!-- arrows -->
+<line x1="270" y1="163" x2="344" y2="113" stroke="#333" marker-end="url(#ar)"/>
+<text x="276" y="124" font-size="11" fill="#8a4f12">uop AXIS</text>
+<line x1="496" y1="113" x2="514" y2="113" stroke="#333" marker-end="url(#ar)"/>
+<line x1="421" y1="140" x2="421" y2="152" stroke="#333" marker-end="url(#ar)"/>
+<line x1="640" y1="140" x2="640" y2="152" stroke="#333" marker-end="url(#ar)"/>
+<path d="M 838 100 L 806 100 L 806 147 L 470 147 L 470 152" fill="none" stroke="#4a8a4a" marker-end="url(#ar)"/>
+<line x1="838" y1="164" x2="766" y2="170" stroke="#4a8a4a" marker-end="url(#ar)"/>
+<line x1="421" y1="194" x2="421" y2="206" stroke="#333" marker-end="url(#ar)"/>
+<line x1="640" y1="194" x2="640" y2="206" stroke="#333" marker-end="url(#ar)"/>
+<line x1="446" y1="300" x2="446" y2="312" stroke="#333" marker-end="url(#ar)"/>
+<line x1="555" y1="355" x2="555" y2="366" stroke="#333" marker-end="url(#ar)"/>
+<line x1="664" y1="355" x2="664" y2="366" stroke="#333" marker-end="url(#ar)"/>
+<line x1="764" y1="395" x2="798" y2="395" stroke="#333" marker-end="url(#ar)"/>
+<line x1="828" y1="368" x2="838" y2="368" stroke="#333" marker-end="url(#ar)"/>
+<line x1="828" y1="450" x2="838" y2="450" stroke="#333" marker-end="url(#ar)"/>
+<path d="M 270 220 L 300 220 L 300 520 L 814 520 L 814 482" fill="none" stroke="#4a6fa5" marker-end="url(#ar)"/>
+<text x="310" y="512" font-size="11" fill="#2c4a7a">HLS ALU / bias load의 acc, out 접근 (GEMM이 아닐 때)</text>
+<path d="M 346 446 L 316 446 L 316 270 L 272 270" fill="none" stroke="#c07a2c" marker-end="url(#ar)"/>
+<text x="280" y="462" font-size="11" fill="#8a4f12">done</text>
+<text x="20" y="570" fill="#555">같은 clock 하나(B안). C안은 어레이(skew 뒤 ~ deskew 앞)만 2x clock으로 떼고 경계에 2:1 gearbox를 넣는다.</text>
+<text x="20" y="588" fill="#555">ALU, 큐, 토큰, load/store는 HLS 그대로. 명령·uop 포맷, hw_spec.h, 컴파일러는 바뀌지 않는다.</text>
+</svg>
