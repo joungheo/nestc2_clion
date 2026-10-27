@@ -129,9 +129,14 @@ struct gemmop_mxn {
 
 };
 
-int gemmop_mxn(void *param,VTACommandHandle cmdh ) {
-
-  struct gemmop_mxn *ctx = (struct gemmop_mxn *) (param);
+//#### JO changed (2026-10-27, systolic GEMM, docs/vta_synth_notes.md §8.4): weight-stationary uop order.
+//#### The same weight block is used for all tile_h x tile_w output pixels in a row (was tile_h cycles), so a
+//#### systolic GEMM that needs 16 cycles to load a weight block can hide the load. The result is the same
+//#### (only the order of the integer accumulation changes); on the current GEMM the time is the same.
+//#### Old order: it_out = x, it_in = kx, uops = ky x kernelIdx x y.
+//#### New order: it_out = kernelIdx, it_in = kx, uops = ky x y x x (KH x tile_h x tile_w uops).
+//#### Uop kernels larger than a quarter of the uop buffer (two virtual threads keep one each) keep the old order.
+static int gemmop_mxn_old(struct gemmop_mxn *ctx, VTACommandHandle cmdh) {
   VTAUopLoopBegin(cmdh, ctx->tile_size_w_, 1, ctx->stride_w_, 0);
   VTAUopLoopBegin(cmdh, ctx->kernel_w_, 0, 1, 1);
 
@@ -153,11 +158,41 @@ int gemmop_mxn(void *param,VTACommandHandle cmdh ) {
   return 0;
 }
 
+int gemmop_mxn(void *param,VTACommandHandle cmdh ) {
+
+  struct gemmop_mxn *ctx = (struct gemmop_mxn *) (param);
+  if (ctx->kernel_h_ * ctx->tile_size_h_ * ctx->tile_size_w_ > VTA_UOP_BUFF_DEPTH / 4)
+    return gemmop_mxn_old(ctx, cmdh);
+  VTAUopLoopBegin(cmdh, ctx->n_kernel_, ctx->tile_size_h_ * ctx->tile_size_w_, 0,
+                  ctx->kernel_w_ * ctx->kernel_h_);
+  VTAUopLoopBegin(cmdh, ctx->kernel_w_, 0, 1, 1);
+
+  for (int dx = 0; dx < ctx->kernel_h_; dx++) {
+    for (int inTileHIdx = 0; inTileHIdx < ctx->tile_size_h_; inTileHIdx++) {
+      for (int outTileWIdx = 0; outTileWIdx < ctx->tile_size_w_; outTileWIdx++) {
+        VTAUopPush(cmdh, 0, 0, ctx->output_base_addr_ + inTileHIdx * ctx->tile_size_w_ + outTileWIdx,
+                   ctx->input_base_addr_ + (inTileHIdx * ctx->stride_h_ + dx) * (ctx->in_tile_size_w_) +
+                       outTileWIdx * ctx->stride_w_,
+                   ctx->weight_base_addr_ + dx * ctx->kernel_w_, 0, 0, 0);
+      }
+    }
+  }
+
+  VTAUopLoopEnd(cmdh);
+  VTAUopLoopEnd(cmdh);
+
+  return 0;
+}
+
+//#### JO changed (2026-10-27, systolic GEMM): weight-stationary order as gemmop_mxn, same number of uops.
+//#### Old order: it_out = x, it_in = kernelIdx, uops = y. New order: it_out = kernelIdx, it_in = x, uops = y.
 int gemmop_1x1(void *param,VTACommandHandle cmdh) {
 
   struct gemmop_mxn *ctx = (struct gemmop_mxn *) (param);
-  VTAUopLoopBegin(cmdh, ctx->tile_size_w_, 1, ctx->stride_w_, 0);
+  // VTAUopLoopBegin(cmdh, ctx->tile_size_w_, 1, ctx->stride_w_, 0);
+  // VTAUopLoopBegin(cmdh, ctx->n_kernel_, ctx->tile_size_w_ * ctx->tile_size_h_, 0, 1);
   VTAUopLoopBegin(cmdh, ctx->n_kernel_, ctx->tile_size_w_ * ctx->tile_size_h_, 0, 1);
+  VTAUopLoopBegin(cmdh, ctx->tile_size_w_, 1, ctx->stride_w_, 0);
 
   for (int dx = 0; dx < ctx->kernel_h_; dx++) {
     for (int inTileHIdx = 0; inTileHIdx < ctx->tile_size_h_; inTileHIdx++) {
