@@ -11,7 +11,9 @@ for a in "1 0 0" "1 0 1" "3 0 0" "3 1 0" "3 1 1" "3 1 1 32 32 14"; do
   echo "================ convvar $a ================"
   echo 0 > /sys/class/fpga_manager/fpga0/flags
   echo $BIN > /sys/class/fpga_manager/fpga0/firmware
-  python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" 2>/dev/null
+  #### JO changed (2026-10-27): in trace/ (libcma.so writes sds_trace_data.dat to the working dir)
+  #python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" 2>/dev/null
+  ( mkdir -p trace && cd trace && python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" 2>/dev/null )
   timeout 20 ./convvar $a; rc=$?
   [ $rc = 124 ] && echo "RESULT convvar $a: TIMEOUT"
 done 2>&1 | tee convvar.log

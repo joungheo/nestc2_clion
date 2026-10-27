@@ -284,7 +284,7 @@ RESULT mask 0xf: 4 EVTAs x 400 runs (conv only) in 606.748 ms wall, 609.71 GOPS,
 (cd build_multievtax4 && make -j2 multi4resconv10Bundle)
 (cd build_multievtax4_prof && make -j2 multi4resconv10Bundle)       # VTA_SYNC 표가 필요할 때
 # 실행 전: 비트스트림 재로드 (run_all.sh가 하는 것과 같음), 다른 EVTA 실행 없음 확인
-sudo -n /bin/sh -c 'echo 0 > /sys/class/fpga_manager/fpga0/flags; echo vtahw_multi4_y219.bin > /sys/class/fpga_manager/fpga0/firmware; python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()"'
+sudo hw/script/load_bit.sh vtahw_multi4_y219.bin                 # xlnk_reset은 hw/trace/에서 (2026-10-27)
 cd hw_multievtax4/MultiEVTAResConv10Test
 sudo OMP_NUM_THREADS=1 ./multi4resconv10Bundle 15 400 conv          # 4개 동시; 1 = EVTA0만
 # golden 비교 포함 정식 실행: sudo hw_multievtax4/script/run_all.sh MultiEVTAResConv10Test
