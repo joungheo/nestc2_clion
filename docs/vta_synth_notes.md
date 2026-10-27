@@ -811,7 +811,23 @@ it_out (VTAUopLoopBegin(n_kernel_, dst tile_h·tile_w, src 0, wgt KH·KW)) : 출
 - VTABundle.cpp는 hw_spec.h를 include하지 않는다. uop 버퍼 깊이는 `-DVTA_LOG_UOP_BUFF_SIZE`로 계산한다(`GEMM_UOP_BUFF_DEPTH`).
 - 보드 빌드: `vtabundles_xcmpl/build_sysprof/` (`-DVTALIB=/home/xilinx/JO/npuprg/systolic/vtalib-zcu102-systolic -DNESTC_EVTA_PROFILE=ON -DBUNDLE_EXE_SUFFIX=_sysprof`).
   - 보드의 main 트리는 건드리지 않았다. vtalib는 `git archive origin/systolic vtalib-zcu102-systolic`로 `/home/xilinx/JO/npuprg/systolic/`에 풀었다.
-- 보드 결과(333 MHz `vtahw_single_y219.bin`, `_prof` 대 `_sysprof`): (진행 중)
+- 보드 결과(333 MHz `vtahw_single_y219.bin`, `hw/script/run_prof.sh [-s _sysprof] all`, `_prof` 대 `_sysprof`):
+  - golden 30개 모두 PASS. VTA 시간은 같다: Conv4 3.546 → 3.565 ms(+0.5%), ResConv10 2.896 → 2.894 ms, 나머지 ±0.5%.
+  - **Resnet18 849, Resnet50 51, Resnet18Partition 737로 틀렸다**(원래 순서는 281). 세 번들만 "EVTA uop buffer overflowed"를 찍었다.
+  - 원인: vtalib `UopQueue`(옛 TVM 코드)의 버그 두 개. uop 커널이 uop SRAM(8192)을 넘쳐 0으로 되돌아갈 때만 드러난다.
+    원래 순서는 커널이 작아 넘친 적이 없었다.
+    1. uop LOAD의 DRAM offset을 `cache_` 안 앞 커널 크기의 합으로 정했다. `ReadBarrier`도 `cache_`를 그 순서로 복사했다.
+       eviction이 `cache_`에서 커널을 지우면, 같은 배치에서 먼저 나간 LOAD가 다른 위치를 읽는다.
+    2. `Synchronize`마다 `Reset()`이 `cache_`를 비우지만, 커널의 cached 표시는 남는다.
+       뒤에 SRAM이 넘쳐도 그 커널들은 무효화되지 않고, 덮어쓴 uop으로 실행된다.
+  - 수정(`vtalib-zcu102-systolic` `include/zcu102/dat_queue.h`, `lib/simulator/runtime.cc`, 같은 내용):
+    배치마다 append-only `batch_`(offset을 Push 때 고정)를 `ReadBarrier`가 복사한다.
+    `cache_`는 SRAM에 있는 커널을 sync를 넘어 들고 있고, SRAM이 0으로 되돌아갈 때 모두 무효화한다.
+  - 이 버그는 원본 `vta/vtalib`와 복사본 3개에도 있다. 큰 uop 커널을 쓰는 다른 변경에서도 같은 일이 생긴다.
+  - 수정 후(커밋 `vtalib-zcu102-systolic: fix the uop cache`, 다시 `run_prof.sh -s _sysprof all`):
+    golden 30개 PASS, Resnet18/Resnet18Partition/Resnet50 → 281, Vgg16 → 0. overflow는 그대로 5번 나지만 결과가 맞다.
+    VTA 시간: Resnet18 48.378 → 48.535 ms(+0.3%), Resnet50 245.63 → 246.03 ms(+0.2%), 나머지 ±0.5%(uop load가 늘어난 만큼).
+  - **Phase B 완료: 새 uop 순서는 지금 비트스트림에서 결과가 같고 시간도 거의 같다.**
 
 **Phase C — 사이클 모델** (`vta-hw-zcu102-systolic/hardware/xilinx/sim/systolic_model.cc`, `g++ -O2 -std=c++14`)
 - §8.5 구조를 레지스터 단위로 옮겼다.
