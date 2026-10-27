@@ -60,6 +60,14 @@ if {[info exists ::env(VTA_FREQ)] && $::env(VTA_FREQ) ne ""} {
   set pll_freq $::env(VTA_FREQ)
 }
 puts "PLL $pll_freq MHz"
+#### JO added (2026-10-27): PS8 S_AXI_HP* allow at most 333 MHz (SAXIGP*CLK min period 3.000 ns, the pulse width
+#### check of report_timing_summary; 360/380 builds had WNS >= 0 but WPWS < 0). Above that hpslice<i>, the HP ports
+#### and the master side of smc_<i> get their own clock (hp_pll, VTA_HP_FREQ, default 333); smc_<i> crosses.
+set hp_freq [expr {[info exists ::env(VTA_HP_FREQ)] && $::env(VTA_HP_FREQ) ne "" ? $::env(VTA_HP_FREQ) : 333}]
+set hp_split [expr {$pll_freq > $hp_freq}]
+set hp_clk  [expr {$hp_split ? "hp_clk" : "evta_clk"}]
+set hp_rstn [expr {$hp_split ? "hp_rstn" : "evta_rstn"}]
+if {$hp_split} { puts "HP ports on their own clock, $hp_freq MHz" }
 if { $TARGET ne "zcu102" } {
   puts "this script supports TARGET zcu102 only"
   return 1
@@ -175,6 +183,17 @@ connect_bd_net -net evta_clk [get_bd_pins pll_clk/clk_out1] [get_bd_pins proc_sy
   [get_bd_pins axi_xbar/ACLK]
 connect_bd_net -net evta_ic_rstn [get_bd_pins proc_sys_reset/interconnect_aresetn] [get_bd_pins axi_xbar/ARESETN]
 connect_bd_net -net evta_rstn [get_bd_pins proc_sys_reset/peripheral_aresetn]
+#### JO added (2026-10-27): HP clock domain (hp_split above); hpslice_rst goes below row Y219 with hpslice<i>
+if {$hp_split} {
+  set hp_pll [ create_bd_cell -type ip -vlnv xilinx.com:ip:clk_wiz:6.0 hp_pll ]
+  set_property -dict [ list CONFIG.CLKOUT1_REQUESTED_OUT_FREQ $hp_freq CONFIG.USE_RESET {false} ] $hp_pll
+  create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 hpslice_rst
+  connect_bd_net -net ps_clk_net [get_bd_pins hp_pll/clk_in1]
+  connect_bd_net -net hp_clk [get_bd_pins hp_pll/clk_out1] [get_bd_pins hpslice_rst/slowest_sync_clk]
+  connect_bd_net -net hp_pll_locked [get_bd_pins hp_pll/locked] [get_bd_pins hpslice_rst/dcm_locked]
+  connect_bd_net -net processing_system_reset [get_bd_pins hpslice_rst/ext_reset_in]
+  connect_bd_net -net hp_rstn [get_bd_pins hpslice_rst/peripheral_aresetn]
+}
 # the PS register port (M_AXI_HPM0) and the crossbar's slave side run on pl_clk0 (100 MHz): at 333 MHz the
 # paths into PS8 MAXIGP0* miss timing (single EVTA: -0.039 ns); the crossbar inserts the clock converter
 set proc_sys_reset_ps [ create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 proc_sys_reset_ps ]
@@ -195,7 +214,8 @@ proc connect_ctrl {k s} {
 proc add_evta {i} {
   global AXI_CACHE_BITS AXI_PROT_BITS INSN_BYTES INP_MEM_BANKS INP_MEM_WIDTH INP_MEM_DEPTH \
          WGT_MEM_BANKS WGT_MEM_WIDTH WGT_MEM_DEPTH OUT_MEM_BANKS OUT_MEM_WIDTH OUT_MEM_DEPTH \
-         IP_REG_MAP_RANGE FETCH_BASE_ADDR LOAD_BASE_ADDR COMPUTE_BASE_ADDR STORE_BASE_ADDR evta_addr_stride
+         IP_REG_MAP_RANGE FETCH_BASE_ADDR LOAD_BASE_ADDR COMPUTE_BASE_ADDR STORE_BASE_ADDR evta_addr_stride \
+         hp_split hp_clk hp_rstn
   set c $AXI_CACHE_BITS
   set p $AXI_PROT_BITS
   set fetch   [ create_bd_cell -type ip -vlnv xilinx.com:hls:fetch:1.0 fetch_$i ]
@@ -244,6 +264,7 @@ proc add_evta {i} {
   # data: 5 masters -> smc_i -> S_AXI_HP<i>_FPD
   set smc [ create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 smc_$i ]
   set_property -dict [ list CONFIG.NUM_MI {1} CONFIG.NUM_SI {5} ] $smc
+  if {$hp_split} { set_property CONFIG.NUM_CLKS {2} $smc }
   set k 0
   foreach m [list fetch_$i/m_axi_ins_port load_$i/m_axi_data_port compute_$i/m_axi_uop_port \
                   compute_$i/m_axi_data_port store_$i/m_axi_data_port] {
@@ -259,8 +280,9 @@ proc add_evta {i} {
   connect_bd_intf_net -intf_net smc_${i}_M00_AXI [get_bd_intf_pins smc_$i/M00_AXI] [get_bd_intf_pins hpslice$i/S_AXI]
   connect_bd_intf_net -intf_net hpslice${i}_M_AXI [get_bd_intf_pins hpslice$i/M_AXI] \
     [get_bd_intf_pins processing_system/S_AXI_HP${i}_FPD]
-  connect_bd_net -net evta_clk [get_bd_pins hpslice$i/aclk]
-  connect_bd_net -net evta_rstn [get_bd_pins hpslice$i/aresetn]
+  #### JO changed (2026-10-27): on the HP clock ($hp_clk = evta_clk without the split)
+  connect_bd_net -net $hp_clk [get_bd_pins hpslice$i/aclk]
+  connect_bd_net -net $hp_rstn [get_bd_pins hpslice$i/aresetn]
 
   # control: crossbar M(4i+0..3) -> fetch/load/compute/store
   set k 0
@@ -286,7 +308,10 @@ proc add_evta {i} {
     connect_bd_net -net evta_clk [get_bd_pins ${q}_$i/s_aclk]
     connect_bd_net -net evta_rstn_$i [get_bd_pins ${q}_$i/s_aresetn]
   }
-  connect_bd_net -net evta_clk [get_bd_pins smc_$i/aclk] [get_bd_pins processing_system/saxihp${i}_fpd_aclk]
+  #### JO changed (2026-10-27): HP port (and smc aclk1) on $hp_clk
+  connect_bd_net -net evta_clk [get_bd_pins smc_$i/aclk]
+  if {$hp_split} { connect_bd_net -net hp_clk [get_bd_pins smc_$i/aclk1] }
+  connect_bd_net -net $hp_clk [get_bd_pins processing_system/saxihp${i}_fpd_aclk]
   connect_bd_net -net evta_rstn_$i [get_bd_pins smc_$i/aresetn]
 
   # address map: control registers of EVTA i, and the low 2 GB of DDR through HP<i>
@@ -309,7 +334,7 @@ proc add_evta {i} {
 # +0x30 rd bytes, +0x40 rd transactions, +0x50 rd latency; slots at 0x100 / 0x160 / 0x500, control 0x300
 # (vtalib pynq_driver.cc AXI_PERF_MONITOR + i * 0x10000).
 proc add_apm {i num_evta} {
-  global apm_base_addr evta_addr_stride
+  global apm_base_addr evta_addr_stride hp_clk hp_rstn
   set apm [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_perf_mon:5.0 apm_$i ]
   set_property -dict [ list \
     CONFIG.C_ENABLE_PROFILE {1} \
@@ -324,8 +349,9 @@ proc add_apm {i num_evta} {
   foreach pin {s_axi core slot_0_axi slot_1_axi slot_2_axi} {
     set clk [expr {$pin eq "core" ? "core_aclk" : "${pin}_aclk"}]
     set rst [expr {$pin eq "core" ? "core_aresetn" : "${pin}_aresetn"}]
-    connect_bd_net -net evta_clk [get_bd_pins apm_$i/$clk]
-    connect_bd_net -net evta_rstn [get_bd_pins apm_$i/$rst]
+    #### JO changed (2026-10-27): slot 0 (smc_i -> hpslice_i) on the HP clock
+    connect_bd_net -net [expr {$pin eq "slot_0_axi" ? $hp_clk : "evta_clk"}] [get_bd_pins apm_$i/$clk]
+    connect_bd_net -net [expr {$pin eq "slot_0_axi" ? $hp_rstn : "evta_rstn"}] [get_bd_pins apm_$i/$rst]
   }
   set addr [format "0x%08X" [expr {$apm_base_addr + $i * $evta_addr_stride}]]
   create_bd_addr_seg -range 0x10000 -offset $addr [get_bd_addr_spaces processing_system/Data] \
@@ -412,7 +438,7 @@ if {$bram_fence eq "split" || $bram_fence eq "y219"} {
     puts $f "set_property PARENT pb_fence \[get_pblocks pb_hpslice\]"
     puts $f "add_cells_to_pblock \[get_pblocks pb_hpslice\] \[get_cells {vta_i/hpslice*}\]"
   }
-  puts $f {add_cells_to_pblock [get_pblocks pb_fence] [get_cells -filter {NAME !~ vta_i/processing_system && NAME !~ vta_i/pll_clk && PBLOCK == ""} vta_i/*]}
+  puts $f {add_cells_to_pblock [get_pblocks pb_fence] [get_cells -filter {NAME !~ vta_i/processing_system && NAME !~ vta_i/pll_clk && NAME !~ vta_i/hp_pll && PBLOCK == ""} vta_i/*]}
   puts $f {set_property PROHIBIT true [get_sites -regexp {MMCM_X\d+Y[3-6]}]}
   #### one line per site type: with SLICE first in one -regexp alternation get_sites returned only the SLICEs
   #### (multi2 build 2026-10-24: 2 RAMB36 placed at Y43)
