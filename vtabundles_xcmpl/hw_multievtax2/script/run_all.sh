@@ -6,24 +6,24 @@ BIN=${BIN:-vtahw_multi2_y219.bin}
 [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
 exec 9>/tmp/evta_run.lock; flock -n 9 || { echo "another EVTA run is active (/tmp/evta_run.lock)"; exit 1; }
 ONLY="$*"
-: > results.txt
+mkdir -p result trace; : > result/results.txt
 LOG() { echo $1.log; }  # log name for executable $1
 run() {  # dir exe input golden
   [ -n "$ONLY" ] && [[ " $ONLY " != *" $1 "* ]] && return
   echo "================ $1 ($2)"
   echo 0 > /sys/class/fpga_manager/fpga0/flags; echo $BIN > /sys/class/fpga_manager/fpga0/firmware
-  python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" 2>/dev/null
+  ( cd trace && python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" 2>/dev/null )
   ( cd $1 && rm -f output.bin && timeout 300 ./$2 $3 > $(LOG $2) 2>&1; echo $? > $(LOG $2).rc )
   rc=$(cat $1/$(LOG $2).rc); chown -R --reference=. $1
   if [ $rc = 124 ]; then res=TIMEOUT
   elif [ $rc != 0 ]; then res="FAIL(rc=$rc)"
   elif [ -n "$4" ]; then cmp -s $1/output.bin $1/$4 && res=PASS || res=MISMATCH
   else res="RAN (no golden; see $1/$(LOG $2))"; fi
-  tail -3 $1/$(LOG $2); printf "%-30s %-34s %s\n" $1 $2 "$res" | tee -a results.txt
+  tail -3 $1/$(LOG $2); printf "%-30s %-34s %s\n" $1 $2 "$res" | tee -a result/results.txt
 }
 run MultiEVTAConv4Test multi4conv4Bundle '3 100' vtaConv4TestGolden.bin
 run MultiEVTAResConv10Test multi4resconv10Bundle '3 100' vtaResConv10TestGolden.bin
 run MultiEVTAx2ConvTest multievtax2ConvTestBundle multievtaConvTestInput0.bin multievtaConvTestGolden0.bin
 run MultiEVTAx2Resnet18Test multievtax2Resnet18Bundle /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler/glow/tests/images/imagenet/cat_285.png ''
 run MultiEVTAx2Resnet18Test multievtax2SingleResnet18Bundle /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler/glow/tests/images/imagenet/cat_285.png ''
-echo; echo "== summary"; cat results.txt
+echo; echo "== summary"; cat result/results.txt
