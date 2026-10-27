@@ -6,7 +6,7 @@
 다른 세션이 여기서 이어 시작할 수 있게 정리한 검토다. 읽는 순서:
 - **§0 방향 결정**(무엇을 할지와 그 근거, 아래 절들의 요약)
 - 계획: §1 제안 → §2 결론 → §3·§4 지금 HW와 uop 순서 → §5 HW 세부 설계 → §6 득실 → §7 순서
-- 조사: §9(Gemmini, UG579, DSP-Fetch 논문, DPU, Tensil, AutoSA, INT8 packing)
+- 조사: §9 보고서(Gemmini, VTA 원논문, DSP-Fetch, FireFly v2, 2510.08137, DPU, WP486, Tensil, AutoSA, gemm_hls; 종합 §9.12). 원문은 `docs/ref/`
 - 실험: §8 Phase A(타이밍, 클럭 sweep, 보드), §10 Phase B(uop 순서)·Phase C(사이클 모델)
 - 코드: 브랜치 `systolic`, `vta-hw-zcu102-systolic`(HW), `vtalib-zcu102-systolic`(런타임, uop 순서와 uop cache 수정).
 
@@ -18,8 +18,8 @@
 |---|---|---|---|---|
 | A | 지금 HLS GEMM 그대로, 클럭만 360~380 MHz + HP 포트 333 MHz 분리 | 클럭 +8~14%, EVTA 시간 −7~12% (보드 측정) | §8 3)~6): base가 380까지 timing 통과, single/multi2/multi4 보드 golden PASS. WPWS 위반은 HP 분리로 해결 중 | 작다. `vivado.tcl`만. multi4 380(HP 분리) 빌드 중 |
 | B | GEMM을 systolic RTL로(§5), 같은 클럭 1개로 400 MHz | 클럭 +20% | §8 3): 400 MHz 실패 경로 상위 200 중 169개가 GEMM 어레이(inp broadcast, wgt→DSP, 덧셈 트리)이고 systolic에서 없어진다. §10 모델: drain 생략 시 가동률 99.6~100% | 크다. RTL, cosim, acc를 compute 밖으로. 400을 맞추려면 load 쓰기, out_mem, AXI FIFO, reset 복제도 고쳐야 한다 |
-| C | B + 어레이만 2배 클럭(DPU 방식, 666 MHz), 나머지 333 MHz | GEMM 처리량 최대 2배(같은 256 MAC) | §9 #4: DPU PG338 325/650 MHz, 2409.03508 DSP-Fetch 666 MHz(OOC). HP 대역: EVTA당 1.66 GB/s(vta_synth_notes §6.2) x2 = 3.3 GB/s < HP 128비트 x 333 MHz = 5.3 GB/s | B 위에 2:1 폭 변환과 클럭 경계. 666은 어레이 단독 값이고 전체 설계 사례는 650(DPU)뿐. GEMM 가동률이 낮은 conv(Conv4 73%)는 load/store가 막아 2배가 안 된다 |
-| D | INT8 2-MAC packing(DSP 하나에 같은 입력을 쓰는 곱 2개, WP486) | DSP 수 절반, 또는 같은 DSP로 MAC 2배 | §9 #5 | MAC을 늘리려면 BLOCK_OUT 32 → ISA·`hw_spec.h`·컴파일러 변경. 지금 DSP는 모자라지 않다 |
+| C | B + 어레이만 2배 클럭(DPU 방식, 목표 ~600 MHz), 나머지 300~333 MHz | GEMM 처리량 최대 2배(같은 256 MAC) | §9.12: DPU 325/650 MHz, DSP-Fetch 666 MHz(OOC), **보드 시스템**: FireFly v2 ZU3EG 300/600·ZU7EV 250/500, U50 300/600. HP 대역: EVTA당 1.66 GB/s(vta_synth_notes §6.2) x2 = 3.3 GB/s < HP 128비트 x 333 MHz = 5.3 GB/s | B 위에 2:1 폭 변환과 클럭 경계. 큰 ZU+(5EV/7EV)는 보드에서 500으로 내려갔다(§9.5). GEMM 가동률이 낮은 conv(Conv4 73%)는 load/store가 막아 2배가 안 된다 |
+| D | INT8 2-MAC packing(DSP 하나에 같은 입력을 쓰는 곱 2개, WP486) | DSP 수 절반, 또는 같은 DSP로 MAC 2배 | §9.8 | MAC을 늘리려면 BLOCK_OUT 32 → ISA·`hw_spec.h`·컴파일러 변경. 지금 DSP는 모자라지 않다 |
 | E | 어레이 32x32(MAC 4배) | 이론 4배 | §6 | ISA BLOCK, 레이아웃, NEST-C 스케줄, SRAM 폭 4배. multi4는 이미 BRAM 556/912. 가장 큰 작업 |
 
 **전체 속도에 대한 주의**: 위 이득은 EVTA 시간(VTA_SYNC)의 이득이다. Resnet18 같은 실제 네트워크는 CPU 연산(conv0, transpose, elemadd)이 큰 몫이고,
@@ -33,9 +33,9 @@ CPU 연산을 EVTA로 옮기는 일은 GEMM 구조와 별개로 남는다.
 3. **D, E는 지금 하지 않는다.** ISA와 컴파일러가 바뀌는 별도 프로젝트다. C 뒤에도 GEMM이 병목이면 다시 본다.
 
 **결정 전에 확인할 것(아직 모름)**:
-- C의 전체 설계 클럭: 어레이 단독 666 MHz(OOC) 사례뿐이다. y219 fence와 공유 DSP 열 배치에서 몇 MHz가 나오는지는 Phase D 어레이 OOC 합성으로 먼저 잰다.
+- C의 우리 보드 클럭: 보드 시스템 사례는 ZU3EG 600, ZU5EV/7EV 500, U50 600 MHz다(§9.5, §9.6). ZU9EG -2의 DSP Fmax(DS925)와, y219 fence 안 DSP 열 배치에서 몇 MHz가 나오는지는 Phase D 어레이 OOC 합성으로 먼저 잰다.
 - Conv4형(GEMM 73%)처럼 load/store가 GEMM 뒤에 숨지 않는 conv의 비율: vta_synth_notes §6.2 `_timed` 순위로 Resnet18 conv 시간 중 GEMM 가동률이 낮은 conv의 몫을 계산한다.
-- 조사에서 못 본 수치: Gemmini의 FPGA 클럭(PMC 2023 Gemmini FPGA 연구 본문 미확인), AutoSA·Tensil의 클럭(§9 #4).
+- 조사에서 못 본 수치: Gemmini의 FPGA 클럭(PMC 2023 Gemmini FPGA 연구 본문 미확인), AutoSA·Tensil의 클럭(§9.13).
 
 ## 1. 제안된 구조
 
@@ -120,7 +120,7 @@ it_out (VTAUopLoopBegin(n_kernel_, dst tile_h·tile_w, src 0, wgt KH·KW)) : 출
   열 j의 행 i는 픽셀을 t+i+j에 받는다. A cascade는 세로라 가로 전달에 쓸 수 없다.
 - FF: skew 8x(0+…+15)=960 + 가로 16x16x8=2048. AREG=1이면 가로 한 칸을 DSP A 레지스터가 대신한다.
 
-**weight (B 포트)** — UG579로 확인(§9 #2): BREG=2, BCASCREG=1이면 BCOUT은 B1에서 나가고 곱셈기는 B2를 쓴다(INMODE[4]=0). CEB1/CEB2는 따로다.
+**weight (B 포트)** — UG579로 확인(§9.3): BREG=2, BCASCREG=1이면 BCOUT은 B1에서 나가고 곱셈기는 B2를 쓴다(INMODE[4]=0). CEB1/CEB2는 따로다.
 - B1 = prefetch chain(BCIN으로 위 행에서 한 칸씩), B2 = 계산 중 고정. 2409.03508의 "DSP-Fetch"가 정확히 이 구조다(ZU3EG 14x14, 666 MHz).
 - **CE는 wavefront로 늦춘다.** PE(i, j)는 픽셀을 t+i+j에 받으므로 weight 교체(CEB2)도 PE(i, j)에서 T+i+j에 일어나야 한다.
   - CEB1을 한꺼번에 켜면 아래 행이 B2로 넘기기 전에 B1이 덮인다. 그러면 다음 채우기를 T+15 이후에야 시작할 수 있어 주기가 31클럭이 된다.
@@ -144,7 +144,7 @@ it_out (VTAUopLoopBegin(n_kernel_, dst tile_h·tile_w, src 0, wgt KH·KW)) : 출
   §4 순서면 같은 dst 간격이 ≥49라 forwarding이 쓰일 일은 없지만 정확성을 순서에 맡기지 않는다.
 - `reset_reg` GEMM: 태그에 reset 비트를 싣고 같은 pipe로 보낸다. RMW가 0을 쓴다. 순서는 자동으로 지켜진다.
 
-**HLS와 RTL의 경계** (§9 #1)
+**HLS와 RTL의 경계** (§9.1)
 - 지금 `acc_mem`은 HLS compute 안의 4096 x 512 true dual-port RAM(BRAM36 114개, 두 포트 모두 HLS가 씀)이다. 이것을 compute 밖으로 꺼낸다.
   - BD에 512비트 2포트 RAM. 포트 0, 1 모두 `gemm_busy`로 RTL(RMW 읽기/쓰기)과 HLS(ALU, bias load, 지금 그대로) 사이를 mux한다.
   - GEMM과 ALU는 compute 안에서 명령 단위로 순서대로 돌므로 동시 접근은 없다. HLS는 GEMM 명령을 내고 done을 받을 때까지 acc를 건드리지 않는다.
@@ -272,7 +272,7 @@ for v in prof_360mhz prof_380mhz prof_400mhz prof_oreg_360mhz prof_oreg_380mhz p
   - BRAM 출력 레지스터는 BRAM Tco만 줄인다. fanout 346 배선은 그대로라 inp broadcast가 400 MHz에서도 상위에 남는다. 구조(fanout)를 바꿔야 끊긴다.
   - systolic은 400 MHz 실패 경로 중 가장 많은 두 종류(상위 200 중 122개, 최악 −0.162)를 없앤다.
   - 400 MHz를 맞추려면 load 쓰기, out_mem 쓰기, fetch/AXI FIFO, reset 복제도 같이 고쳐야 한다(HLS pipeline/regslice, `proc_sys_reset` 복제).
-- 기대 이득: 지금 구조로 360~380 MHz(333 대비 +8~14%, 360은 보드 확인). systolic과 주변 정리(load 쓰기, out_mem, 큐/AXI, reset)로 400 MHz(+20%). 그 위는 어레이만 2배 클럭(§9 #4).
+- 기대 이득: 지금 구조로 360~380 MHz(333 대비 +8~14%, 360은 보드 확인). systolic과 주변 정리(load 쓰기, out_mem, 큐/AXI, reset)로 400 MHz(+20%). 그 위는 어레이만 2배 클럭(§9.12).
 **4) 360/380 MHz 보드 검증** (2026-10-27, `bit/evta_single_phaseA_261027/`, `/lib/firmware`에 같은 이름)
 - 비트스트림: `vtahw_zcu102_1x16_i8w8a32_16_16_19_18_prof_360mhz`(base, md5 `15768d7c…`), `..._prof_oreg_360mhz`(oreg, md5 `b7a69d41…`),
   `..._prof_380mhz`(base, md5 `9884bb74…`).
@@ -350,71 +350,182 @@ for v in prof_360mhz prof_380mhz prof_400mhz prof_oreg_360mhz prof_oreg_380mhz p
 - `flow/place_d.tcl`의 입력 impl dir을 `VTA_IMPL_DIR`로 바꿀 수 있게 했다. `run_flow.sh`가 이 변수를 docker에 넘긴다.
   build/y219 기준 상대 경로: `VTA_IMPL_DIR=../hardware/xilinx/vivado/zcu102_1x16_i8w8a32_16_15_18_17_4evta_360mhz/vta.runs/impl_1`.
 
-## 9. 조사: Gemmini, Tensil, UG579, AutoSA 등 (2026-10-27)
+## 9. 조사 보고서: 외부 설계·논문·문서 분석 (2026-10-27)
 
-**#1 acc를 compute 밖으로 꺼내는 경계 — Gemmini**
-- Gemmini의 accumulator는 별도 모듈이다(`AccumulatorMem.scala`).
-  - 어레이 쓰기는 주소 비트로 accumulate/overwrite를 고른다. 읽기(mvout)에 scale/activation을 붙인다.
-  - accumulate는 메모리 쪽 RMW다. 쓰기 요청이 `acc_latency` 깊이 pipe에 들어가고 같은 주소의 옛 값을 읽어 더한다.
-- hazard는 **forwarding 없이 stall**한다.
-  - 같은 주소가 pipe에 있으면 `io.write.ready`를 내린다. 같은 주소의 pending 쓰기가 있으면 읽기도 받지 않는다.
-  - 파일 안에 작은 행렬의 read-after-write가 낡은 값을 읽을 수 있다는 TODO가 남아 있다.
-- 어레이 출력(`MeshWithDelays.scala`)은 deskew shift register로 행을 맞춘 뒤 accumulator로 간다. 어레이는 acc 주소를 모르고, 호출자가 준 태그만 데이터와 같이 흘린다.
-- 컨트롤러 사이의 hazard는 ROB가 막는다. 같은 컨트롤러 안의 hazard는 각 컨트롤러가 책임진다.
-- 우리 설계에 반영(§5):
-  - 출력 쪽 RMW, 태그 pipe, deskew FF로 바꿨다. 열별 acc bank 안은 버렸다.
-  - 우리 어레이는 멈출 수 없으므로 stall 대신 forwarding으로 한다.
-  - GEMM/ALU 순서는 compute 명령 순서가 지켜 준다(ROB 역할).
+받은 원문은 `docs/ref/`에 있다(목록·라이선스·git 포함 여부는 `docs/ref/README.md`). 각 소스를 같은 틀로 정리했다:
+무엇인가 → 구조 → 핵심 수치 → 우리 설계(§5)와 같은 점·다른 점 → 가져올 것 → 확인 못 한 것.
+맨 끝 §9.12에 소스를 가로질러 비교한 표와 방향(§0)에 주는 결론을 모았다.
 
-**#2 B1/B2와 BCIN으로 weight 채우기 — UG579 (v1.11)**
-- BREG=2이면 BCASCREG는 1이나 2일 수 있다. BREG=1이면 B2를 쓴다. INMODE[4]=0이면 곱셈기는 B2(BREG에 따름)를 쓴다.
-  CEB1/CEB2는 따로 있다(UG579 Table 3-2 핀, Table 3-3 속성, Figure 2-6 dual B register).
-- BCASCREG=1이면 BCOUT은 B1 뒤에서 나온다. 그래서 B1 = prefetch chain, B2 = 계산 중 고정이 된다.
-  arXiv 2409.03508 "DSP-Fetch"가 이 구조를 쓴다. 문장도 같다: "B1 registers serve as the operand prefetching path, while B2 registers remain static".
-- 겹치기 조건(우리가 확인): CEB2는 PE(i, j)에서 T+i+j, CEB1은 [T+i+j, T+15+j]. 주기 16에서 비트 정확 모델 오류 0이었다(§5).
+### 9.1 Gemmini (UC Berkeley, Chisel, BSD-3) — 가장 가까운 공개 WS 어레이
 
-**#3 PE 사이 입력 레지스터(fanout 1)**
-- §8 결과로 근거가 강해졌다. 출력 레지스터를 켜도 inp broadcast는 400 MHz에서 −0.130 ns(배선 88%)다. 문제는 fanout이지 BRAM Tco가 아니다.
-- 2409.03508: TPUv1형 어레이에서 activation을 가로 CLB FF로 전달하고(DSP cascade는 세로뿐), 부분합은 세로 P cascade를 쓴다. 우리 배치와 같다.
+- **무엇**: RISC-V SoC(Chipyard)에 붙는 DNN 가속기 생성기. 논문 arXiv 1911.09925(DAC'21), 소스 `docs/ref/gemmini/*.scala`.
+- **구조**
+  - 기본 설정(`Configs.scala`): 16x16 mesh(`meshRows/meshColumns = 16`, `tileRows/tileColumns = 1`), 입력 `SInt(8)`, 누산 `SInt(32)`,
+    **어레이 출력 `SInt(20)`**, scratchpad 256 KB, accumulator 64 KB, `dataflow = BOTH`(WS/OS 둘 다). `chipConfig`는 WS 전용, `largeChipConfig`는 32x32.
+  - PE(`PE.scala`): 레지스터 `c1`, `c2` 두 개를 둔다. WS에서는 둘이 **weight double buffer**다. `propagate` 비트가 어느 쪽을 곱셈에 쓰고 어느 쪽을 `in_d`(위에서 내려오는 새 weight)로 채울지 고른다.
+    `prop = PROPAGATE`이면 `c2`로 곱하고 `c1 := d`, 아니면 반대. 부분합은 `in_b → mac → out_b`로 세로로 흐른다(WS에서 `in_c := b`).
+  - Tile/Mesh(`Tile.scala`, `Mesh.scala`): tile 안은 조합회로, tile 사이에 `ShiftRegister(…, tile_latency+1)` 파이프 레지스터. a(입력)는 가로, b(부분합)와 d(weight preload)는 세로.
+  - MeshWithDelays(`MeshWithDelays.scala`): 입력 행렬을 `shifted()`로 skew(행 j를 `j*(tile_latency+1)` 지연)하고 출력을 deskew한다.
+    `propagate`도 `ShiftRegister(in_prop, i*(tile_latency+1))`로 **데이터와 같은 대각선으로 skew**한다. 행렬마다 `matmul_id`(태그)를 흘린다.
+  - AccumulatorMem(`AccumulatorMem.scala`): `acc_latency`(≥2) 깊이의 `pipelined_writes`로 RMW(읽어서 더해 쓰기). 같은 주소가 pipe에 있으면 `rmw_req.ready`를 내려 **stall**한다(forwarding 없음).
+- **핵심 수치**(논문, ASIC): systolic 1.89 GHz vs vector(NVDLA형) 0.69 GHz(같은 공정), 면적은 16x16 어레이가 SoC의 11.3%, scratchpad 52.9%.
+  ResNet50 22.8 FPS @1 GHz(im2col 블록 포함). **im2col이 없으면 host CPU가 end-to-end를 좌우하고, BOOM CPU로 바꾸면 2.0배**라고 보고한다.
+- **같은 점**: 16x16 int8 WS, 세로 부분합, 가로 입력, skew/deskew, 태그 pipe, 출력 쪽 RMW accumulator. 어레이 출력 폭 20비트는 우리 계산(16항 합 int21, §5)과 거의 같다.
+- **다른 점**
+  - weight 교체: Gemmini는 PE의 c1/c2(fabric 레지스터)와 propagate 비트, 우리는 DSP48E2 내부 B1/B2와 CEB1/CEB2 wavefront(§5, §9.4). 같은 원리를 DSP 안으로 넣은 것이다.
+  - hazard: Gemmini는 stall, 우리는 어레이를 멈출 수 없어 forwarding(§5).
+  - 연산 단위: Gemmini 명령은 행렬(최대 16x16 x 16x16), 우리는 uop 하나가 1x16 · 16x16. 그래서 우리는 uop 순서(§4)로 weight 재사용을 만든다.
+- **가져올 것**: propagate 비트를 데이터와 같은 대각선으로 흘리는 방식(우리 CE wavefront 생성기와 같은 구조), 태그 pipe, 출력 RMW.
+  그리고 **"host CPU 부담이 end-to-end를 정한다"**는 결과는 우리 Resnet18이 CPU-bound인 것(vta_synth_notes §6.5)과 같은 현상이다. GEMM만 빠르게 해서는 전체가 안 빨라진다.
+- **확인 못 한 것**: Gemmini의 FPGA 클럭. 2023 Sensors의 FPGA 구현 연구(PMC10007457)는 WS가 OS보다 약 3배 빠르다고 하지만 본문을 받지 못해 장치·클럭을 모른다.
 
-**#4 ZU+에서 현실적인 클럭**
-- arXiv 2409.03508 (XCZU3EG, Vivado OOC, speed grade 미기재):
-  - INT8 14x14 TPUv1형: tinyTPU 400 MHz, Libano/CLB-Fetch/DSP-Fetch 666 MHz.
-  - DPU B1024 재현 666 MHz.
-  - 어레이만 단독(OOC) 측정한 값이다. 큐, AXI, HLS 제어가 붙은 전체 설계 값이 아니다.
-- Xilinx DPU (PG338): 데이터/제어 325 MHz, DSP 계산 `dpu_2x_clk` 650 MHz(Matched Routing 2클럭).
-  상용 설계도 fabric 제어는 ~325 MHz, DSP 어레이만 2배다.
-- arXiv 2510.08137 (Alveo U50): 시스템 300 MHz, SA와 on-chip 메모리 600 MHz. activation은 DSP 입력 cascade로 세로, 부분합은 C 포트로 가로.
-- Tensil: ZU+ 아키텍처 파일만 확인했다(ultra96v2 16x16, zcu104 32x32, FP16BP8). 공개 자료에서 클럭 수치는 찾지 못했다(hackster 글은 403).
-- AutoSA (UCLA, FPGA'21): polyhedral 컴파일러로 HLS C systolic을 생성한다. I/O 모듈 daisy-chain(L1/L2/L3), double buffering, SIMD를 지원한다.
-  - U250에서 MM int8 6.95 TOPs, int16 3.41 TOPs, fp32 934 GFLOPs.
-  - 클럭은 논문 본문을 받지 못해 확인하지 못했다(par.nsf.gov 접속 실패).
-  - HLS 생성물이라 우리 경우(HLS가 333 MHz에서 막힘)에 RTL보다 나을 근거는 없다.
-- SPCL `gemm_hls`(HLS systolic, VCU1525): half/single/double 462/301/132 GFLOP/s. 클럭 목표가 낮은 HLS 설계라 참고만 한다.
-- 결론:
-  - fabric 전체(HLS 큐/AXI 포함)는 ~400 MHz가 현실적인 상한이다.
-  - DSP 어레이만은 650~666 MHz까지 사례가 있다.
-  - 큰 이득은 "어레이를 2배 클럭(666 MHz), 나머지는 333 MHz"(DPU 방식)에서 나온다. 같은 256 MAC으로 2배다.
-  - §5 구조(fanout 1, 모두 레지스터 경계)는 그 방향과 맞는다. 2배 클럭은 어레이 입출력에 2:1 폭 변환만 더하면 되므로 다음 단계로 둔다.
+### 9.2 VTA 원논문 (arXiv 1807.04188) — 우리 EVTA의 원형
 
-**#5 INT8 2-MAC packing — Xilinx WP486 "Deep Learning with INT8 Optimization on Xilinx Devices"**
-- DSP48E2의 27x18 곱셈기에 같은 입력을 쓰는 int8 곱 두 개를 넣는다(pre-adder로 weight 두 개를 한 operand에 붙인다). 공유되는 쪽이 weight라고 설명되어 있다.
-  같은 자원의 다른 FPGA 대비 INT8 1.75배(peak)라고 한다. 원문 PDF는 받지 못했고 재게시본과 2차 논문으로 확인했다.
-- 우리 어레이에 맞추면 PE 하나가 같은 입력 x[i]로 열 두 개(oc j, j+16)를 계산한다. MAC을 늘리려면 BLOCK_OUT이 32가 되어야 하므로 ISA·컴파일러가 바뀐다(§0 D).
-  BLOCK을 그대로 두면 DSP만 절반(256 → 128)이 된다. 지금은 DSP가 모자라지 않아 이득이 없다.
-- 2409.03508과 FireFly v2(2309.16158)도 이 packing을 쓴다. FireFly v2는 DSP double data rate로 500~600 MHz를 냈다(C 방향의 사례).
+- **무엇**: TVM VTA의 HW/SW 설계 논문. EVTA는 이것의 ETRI 변형이다.
+- **관련 내용**
+  - GEMM core는 "parallel vector dot-product using reduction trees, but can be substituted with other implementations such as systolic arrays"라고 쓰여 있다. 원 설계도 systolic 교체를 염두에 뒀다.
+  - GEMM intrinsic 모양(예: (1,32)x(32,32) vs (4,16)x(16,16))이 ISA 파라미터다(BATCH, BLOCK_IN, BLOCK_OUT).
+  - 설계 공간 탐색의 회로 knob: **"Circuit Pipelining: e.g. for GEMM core between [11, 20] stages"**, **"PLL Frequency Sweeps: e.g. 250 vs. 300 vs. 333MHz"**. 많은 후보가 "fail placement, routing, or timing closure"로 떨어진다.
+  - access-execute decoupling(load/compute/store 큐와 토큰)으로 메모리 지연을 숨긴다.
+- **우리와의 관계**: 지금 EVTA는 원논문 구성(reduction tree, II=1, 333 MHz)에 가깝다. 원논문도 PLL sweep 상한이 333 MHz였고, 우리 Phase A가 그 위(360~380)를 처음 보드에서 확인했다.
+  BATCH=1, BLOCK=16이라 GEMM 하나가 1x16 · 16x16이고, systolic에서 이것이 weight 재사용 문제(§4)가 된다.
+- **가져올 것**: ISA를 그대로 두고 GEMM core만 바꾼다는 전제(§2)가 원 설계 의도와 맞는다.
 
-**#6 Gemmini의 dataflow 선택**
-- Gemmini는 WS(weight-stationary)와 OS(output-stationary)를 둘 다 지원한다(elaboration 또는 실행 중 선택).
-- 2023 Sensors의 FPGA 구현 연구(Gemmini 설정 공간 탐색)는 WS가 OS보다 약 3배 빨랐다고 한다. 장치·클럭 수치는 본문을 못 받아 확인하지 못했다.
-- 우리는 WS다. ISA가 "uop 하나 = 1x16 · 16x16" 단위라 weight를 고정하고 픽셀을 흘리는 쪽이 uop 순서만 바꾸면 맞는다(§4). OS는 acc를 PE 안에 두므로 acc_mem 구조와 ALU 경로가 다 바뀐다.
+### 9.3 UG579 v1.11 (UltraScale Architecture DSP Slice) — B1/B2와 CE의 근거
 
-출처: [Gemmini](https://github.com/ucb-bar/gemmini) (`PE.scala`, `AccumulatorMem.scala`, `MeshWithDelays.scala`),
-UG579 v1.11 (UltraScale DSP48E2), [arXiv 2409.03508](https://arxiv.org/abs/2409.03508), [arXiv 2510.08137](https://arxiv.org/abs/2510.08137),
-[PG338 Clocking](https://docs.amd.com/r/3.4-English/pg338-dpu/Clocking), [Tensil arch](https://github.com/tensil-ai/tensil/tree/main/arch),
-[AutoSA](https://github.com/UCLA-VAST/AutoSA), [spcl/gemm_hls](https://github.com/spcl/gemm_hls),
-[WP486 재게시본](https://www.edge-ai-vision.com/2016/11/deep-learning-with-int8-optimization-on-xilinx-devices/), [FireFly v2 arXiv 2309.16158](https://arxiv.org/pdf/2309.16158),
-[Gemmini FPGA 설정 탐색(Sensors 2023, PMC10007457)](https://pmc.ncbi.nlm.nih.gov/articles/PMC10007457/), [Chipyard Gemmini 문서](https://chipyard.readthedocs.io/en/1.1.0/Generators/Gemmini.html).
+- **무엇**: DSP48E2 사용자 가이드. `docs/ref/ug579_v1.11.pdf`(git 제외, AMD 문서).
+- **확인한 것**
+  - dual B register(Figure 2-6): B1, B2 두 단에 **CEB1, CEB2가 따로** 있다(Table 3-2 핀).
+  - `BREG`는 0/1/2, `BCASCREG`는 BREG=2일 때 1 또는 2. **BCASCREG=1이면 BCOUT은 B1 뒤에서 나간다.** 그래서 B1끼리 BCIN/BCOUT로 이어진 chain을 만들 수 있고, 곱셈기는 B2를 쓴다.
+  - `INMODE[4]=0`이면 곱셈기 B 입력은 BREG 설정에 따른 B2(BREG=2)다. INMODE[4]로 B1을 고를 수도 있다(§9.4의 in-DSP multiplexing이 이것을 쓴다).
+  - cascade(ACIN/BCIN/PCIN)는 같은 DSP 열 안에서 세로로만 이어진다.
+- **우리 설계에 적용**(§5): B1 = prefetch chain, B2 = 계산용. CEB1은 PE(i, j)에서 [T+i+j, T+15+j], CEB2는 T+i+j. 한 열의 비트 정확 모델로 주기 16에서 오류 0을 확인했다.
+
+### 9.4 Li et al., "Revealing Untapped DSP Optimization Potentials for FPGA-Based Systolic Matrix Engines" (arXiv 2409.03508)
+
+- **무엇**: DSP48E2의 잘 안 쓰이는 기능(B1/B2 이중 레지스터와 개별 CE, 동적 mux, 세 cascade 경로)으로 TPUv1형(WS)과 Vitis AI DPU형(OS) systolic 엔진을 개선한 논문. 중국과학원 자동화연구소. FireFly(§9.5)와 같은 그룹.
+- **기법 1: in-DSP operand prefetching (WS용)**
+  - `BREG=2`, `BCASCREG=1`, `B_INPUT=Cascade`. B1이 BCIN/BCOUT로 이어진 **weight prefetch chain**, B2가 곱셈에 쓰는 고정 weight. "When data stored in the B2 registers expires, the data in the B1 registers shifts into B2."
+  - weight 적재 경로와 부분합 경로가 모두 DSP 안(세로 cascade)에 들어가 fabric이 거의 없다.
+- **기법 2: in-DSP multiplexing (DDR용)**: DPU는 DSP를 2배 클럭(Clk×2)으로 돌리고 CLB mux로 느린 클럭 데이터 두 조각을 번갈아 넣는다.
+  논문은 B1/B2를 ping-pong으로 쓰고 INMODE mux로 고른다. LUT mux가 없어지고 staging 레지스터는 느린 클럭에 남는다(timing 압박 감소).
+- **기법 3: ring accumulator**: 빠른 클럭의 DSP 두 개를 고리로 묶어 accumulator 수를 절반으로.
+- **핵심 수치**(XCZU3EG, Vivado OOC)
+
+| 설계 (INT8 14x14 TPUv1형) | LUT | FF | DSP | 클럭 | WNS | 전력 |
+|---|---|---|---|---|---|---|
+| tinyTPU (broadcast, packing 없음) | 120 | 129 | 196 | 400 MHz | 0.076 | 0.25 W |
+| Libano (DDR mux, CLB 누산) | 23,080 | 60,422 | 196 | 666 | 0.044 | 4.87 |
+| CLB-Fetch (weight 경로만 fabric) | 168 | 6,195 | 210 | 666 | 0.083 | 0.94 |
+| DSP-Fetch (전부 DSP 안) | 167 | 4,516 | 210 | 666 | 0.052 | 0.93 |
+
+  DPU B1024 재현(Table II): 공식 vs 제안, 둘 다 666 MHz. AccDSP 64 → 32, MuxLUT 128 → 0, 전체 LUT 1,280 → 158, 전력 1.03 → 0.826 W.
+  FireFly 적용(Table III): 666 MHz, FF 4,344 → 2,296.
+- **같은 점**: 우리 §5의 weight 경로(B1 chain + B2 고정)가 DSP-Fetch와 같다. 입력을 가로 FF로, 부분합을 세로 P cascade로 보내는 배치도 같다.
+- **다른 점·주의**
+  - 수치는 **어레이 단독 OOC**다. AXI, 큐, BRAM 공급 경로가 없다.
+  - tinyTPU가 400 MHz에 그친 이유를 "data broadcasting instead of staging"이라고 쓴다. 우리 지금 HLS의 inp broadcast(fanout 346, §8 1))와 같은 원인이다.
+  - 14x14 + INT8 packing(196 → 210 DSP)이라 DSP 하나에 MAC 2개다. 우리는 packing 없이 시작한다(§9.8).
+- **가져올 것**: B1/B2 설정값과 CE 파형(우리 §5 wavefront는 이 논문의 Fig. 3을 skew 어레이로 확장한 것), C 단계에서 in-DSP multiplexing(LUT mux 없이 2배 클럭).
+- "peak clock rate of DSP48E2 can exceed 700MHz for a device of the fastest speed grade"라고 인용한다(우리 보드 xczu9eg-2는 가장 빠른 등급이 아니다).
+
+### 9.5 FireFly v2 (arXiv 2309.16158) — 보드 위 시스템에서 DSP 2배 클럭
+
+- **무엇**: SNN 가속기. 같은 그룹. 중요한 것은 **OOC가 아니라 Zynq US+ 보드의 전체 시스템**에서 DSP 2배 클럭을 낸 결과다.
+- **구조**: 계산 엔진만 2배 클럭. 원칙 세 가지를 명시한다:
+  "the circuits in the doubled-frequency domain should be well-decoupled from the circuits in the low-frequency domain",
+  "avoid the use of LUTs in the doubled frequency domain, and instead, only use DSP48E2 and flip-flops", "avoid high-fanout nets".
+  느린 쪽과 빠른 쪽 사이는 **gearbox**(2배 폭 → 2배 속도, 양쪽 대역폭 같음). 어레이는 OS(weight 세로, spike 가로).
+- **핵심 수치**(Table III, 실제 구현)
+
+| 장치 | DSP | 클럭(시스템/엔진) | 피크 | 전력 |
+|---|---|---|---|---|
+| xczu3eg (FireFly v1) | 288 | 300 | 1,382 GOP/s | 3.11 W |
+| xczu3eg (v2) | 256 | **300/600** | 2,458 | 6.2 W |
+| xczu5ev (v2) | 512 | **250/500** | 4,096 | 4.9 W |
+| xczu7ev (v2) | 1,024 | **250/500** | 8,192 | 13.5 W |
+
+  큰 장치(5EV/7EV)에서는 500 MHz로 내려갔다. 장치가 크고 어레이가 클수록 2배 클럭의 상한이 내려간다.
+- **우리에게 주는 것**: ZU9EG(7EV보다 크다)에서 **엔진 500~600 MHz, 시스템 250~333 MHz**가 현실적인 범위라는 근거다. 우리 C안(§0)의 목표를 666이 아니라 **~600 MHz(시스템 300~333의 2배 근처)**로 잡는 것이 맞다.
+  gearbox와 "빠른 도메인에는 DSP와 FF만" 원칙은 §5의 "모든 경계를 레지스터로" 방침과 같다.
+
+### 9.6 Petropoulos & Antonakopoulos (arXiv 2510.08137, CC-BY 4.0) — 2 클럭 도메인 GEMM 시스템
+
+- **무엇**: Alveo U50(HBM)용 GEMM 가속기. PU(processing unit) 여러 개.
+- **구조**: 시스템 300 MHz, **systolic array와 on-chip weight memory(URAM cascade) 600 MHz**. HBM 컨트롤러 450 MHz.
+  "A stream-width adapter … converts the 256-bit interface at 300 MHz (system clock) to 128 bits at 600 MHz (fast clock)".
+  activation은 DSP 입력 cascade로 세로, 부분합은 C 포트로 가로(우리와 방향이 반대). URAM cascade로 weight를 공급한다.
+- **핵심 수치**: PU2x는 DSP 514, LUT 16.5K. 최대 구성(PU1x 5 + PU2x 5) URAM 100%, DSP 64.8%. ResNet-18 1,237.7 FPS, ResNet-50 584.9 FPS,
+  측정/이론 성능비 최대 98%, 12.7 FPS/W. 첫 conv는 호스트가 IM2COL로 바꿔 넣는다(정렬 제약).
+- **우리에게 주는 것**: "시스템 1x + 어레이와 weight 메모리 2x"가 보드 시스템에서 98% 효율로 동작한 사례. 2x 쪽에 **weight 공급 메모리까지** 넣었다는 점이 다르다.
+  우리 C안에서 wgt_mem → PISO만 빠른 쪽에 둘지, 느린 쪽 2배 폭으로 줄지 정할 때 참고한다(대역폭이 같으면 폭 2배·속도 1x가 단순하다).
+
+### 9.7 Xilinx DPU (PG338, DPUCZDX8G)
+
+- **무엇**: Xilinx의 상용 CNN IP(암호화). ZCU102/ZCU104 공식 지원.
+- **구조**: 클럭 도메인 셋(레지스터 설정, 데이터 컨트롤러, 계산). "The DSP slices in the computation unit module are in the `dpu_2x_clk` domain, which runs at twice the clock frequency of the data controller module." "The two related clocks must be edge-aligned."
+  OS systolic, 채널·픽셀 병렬. §9.4에 따르면 CLB mux로 2배 클럭 DSP에 데이터를 번갈아 넣고 결과를 느린 쪽 accumulator로 돌린다.
+- **수치**: 이전 세션에서 PG338로 확인한 것은 데이터 325 MHz / DSP 650 MHz다. 이번에 받은 Clocking 페이지에는 수치가 없어 다시 확인하지 못했다(§9.13).
+- **우리에게 주는 것**: 같은 MMCM의 edge-aligned 1x/2x 클럭. 우리 `pll_clk`(clk_wiz)에 CLKOUT 하나를 더 두면 된다(지금 HP 분리용 `hp_pll`은 다른 MMCM이라 비동기이고, 어레이용 2x는 같은 MMCM에서 내야 한다).
+
+### 9.8 Xilinx WP486 "Deep Learning with INT8 Optimization on Xilinx Devices"
+
+- **무엇**: DSP48E2 하나로 int8 곱 두 개(공유 operand 하나)를 하는 방법.
+- **방법**: int8 a, b를 pre-adder로 27비트 포트에 붙인다(a를 18비트 왼쪽으로). c(공유)는 18비트 포트. 45비트 곱 = a·c·2^18 + b·c.
+  "a minimum of 16 + 8 = 24-bits total input size". 공유 operand는 weight여도 된다.
+- **한계**: "accumulation of up to 7 product terms only can be guaranteed with no overflow for the lower bits", 7항마다 DSP 하나를 더 써서 보정한다. 그래서 8 DSP로 14 MAC = **1.75배**.
+- **우리에게 주는 것**: 우리 열은 16항을 P cascade로 더한다. 7항 제한 때문에 packing을 쓰려면 cascade를 7항마다 끊고 보정해야 한다(§9.4의 DSP-Fetch도 INT8 correction용 LUT/CARRY를 쓴다).
+  MAC을 늘리려면 BLOCK_OUT 32(ISA 변경)도 필요하다. **지금 단계에서는 이득보다 복잡도가 크다**(§0 D 보류의 근거).
+
+### 9.9 Tensil (Apache-2.0) — 오픈 소스 TCU
+
+- **무엇**: Chisel 기반 systolic TCU와 컴파일러. `docs/ref/tensil/*.tarch`.
+- **구성**: ultra96v2 `array_size 16`, zcu104 `array_size 32`, 둘 다 `data_type FP16BP8`(16비트 고정소수점, 소수 8비트), `accumulator_depth 4096`, `local_depth` 20480/16384.
+- **수치**: README가 "ResNet at 300 FPS on ZCU104"(ResNet20 CIFAR) 튜토리얼을 링크한다. 클럭은 확인하지 못했다(문서 사이트가 다른 도메인으로 리다이렉트된다).
+- **우리에게 주는 것**: 16비트 고정소수점이라 DSP당 MAC 1개, 우리 int8과 직접 비교하기 어렵다. ZCU104에서 32x32를 쓴다는 점(E안의 규모 참고) 정도.
+
+### 9.10 AutoSA (UCLA, MIT) — HLS systolic 생성기
+
+- **무엇**: polyhedral 컴파일러로 C 루프에서 HLS systolic 배열을 생성한다(FPGA'21). `docs/ref/autosa/README.md`.
+- **수치**(이전 세션, 논문 요약): U250에서 MM int8 6.95 TOPs, int16 3.41 TOPs, fp32 934 GFLOPs. I/O 모듈 daisy-chain(L1/L2/L3), double buffering, SIMD.
+- **우리에게 주는 것**: HLS 생성물이다. 우리 문제는 HLS 경로의 fanout과 배선(§8)이므로 HLS로 다시 만드는 것은 근거가 약하다. 논문 PDF(cadlab.cs.ucla.edu)는 이번에도 받지 못해 클럭을 확인하지 못했다.
+
+### 9.11 de Fine Licht et al., gemm_hls (arXiv 1912.06526, BSD-3)
+
+- **무엇**: communication-avoiding GEMM을 HLS로 만든 설계. VCU1525(VU9P).
+- **수치**(논문 Table): FP16 171.3 MHz 606 GOp/s, FP32 145.7 MHz 409 GOp/s, FP64 181.2 MHz 132 GOp/s, **uint8 186.5 MHz 1,544 GOp/s**. 목표 200 MHz, SLR을 넘으면 클럭이 떨어진다.
+- **우리에게 주는 것**: HLS systolic의 클럭이 200 MHz 근처라는 사례. 큰 HLS 어레이가 배선 때문에 클럭을 잃는 것은 우리 §8 관찰과 같다.
+
+### 9.12 종합: 소스 비교와 방향에 주는 결론
+
+| 소스 | 장치 | 측정 | 어레이 | dataflow | weight 교체 | 부분합 | 클럭 |
+|---|---|---|---|---|---|---|---|
+| 우리 지금 HLS | ZU9EG-2 | 보드 | 16x16 int8 | (트리) | 매 사이클 2048비트 읽기 | 16입력 덧셈 트리 | 333 (380 보드 OK) |
+| 우리 §5 계획 | ZU9EG-2 | — | 16x16 int8 | WS | B1 chain + B2, CE wavefront | P cascade | 목표 400 / C안 ~600 |
+| Gemmini | ASIC | 논문 | 16x16 int8 | WS/OS | PE c1/c2 + propagate | 세로 b | 1.89 GHz(ASIC) |
+| DSP-Fetch | ZU3EG | OOC | 14x14 int8 packed | WS | B1 chain + B2 | P cascade | 666 |
+| FireFly v2 | ZU3EG/5EV/7EV | 보드 | 16x16x(4~8)x4 | OS | — | DSP | 300/600, 250/500 |
+| 2510.08137 | U50 | 보드 | RSA x CSA | — | URAM cascade @2x | C 포트 가로 | 300/600 |
+| DPU | ZU+ | 상용 | B512~B4096 | OS | CLB mux @2x | DSP | 325/650 |
+| tinyTPU | ZU3EG | OOC | 14x14 | WS | broadcast | — | 400 |
+| gemm_hls | VU9P | 보드 | HLS | — | — | — | 145~186 |
+
+**결론**
+1. **fanout을 없애면 400 MHz는 근거가 있다.** broadcast형 tinyTPU가 400, staging형이 666이다(같은 장치, OOC). 우리 400 MHz 실패의 주원인도 broadcast다(§8). → B안의 목표 400은 보수적이고 타당하다.
+2. **2배 클럭(C안)은 보드 시스템에서도 됐다.** FireFly v2(ZU+ 보드 300/600, 250/500), 2510.08137(U50 300/600), DPU(325/650). 공통 조건: 빠른 도메인에는 DSP와 FF만, 경계는 gearbox, 같은 MMCM의 edge-aligned 클럭.
+   큰 장치에서 500으로 내려간 사례가 있으므로 **ZU9EG 목표는 ~600(시스템 300~333)**으로 잡는다.
+3. **weight 경로는 DSP 안 B1/B2가 정답이다.** DSP-Fetch가 fabric 대비 FF 27% 감소, 같은 클럭. 우리 §5 설계 그대로 간다.
+4. **INT8 packing은 보류.** 16항 cascade에 7항 제한과 보정이 붙고, MAC 증가에는 ISA 변경이 필요하다.
+5. **end-to-end는 CPU가 정한다.** Gemmini(im2col 없으면 CPU가 좌우)와 우리 측정이 같다. GEMM 작업과 별도로 CPU 쪽(conv0, transpose, im2col) 이전을 계획에 넣어야 한다.
+6. **HLS로 systolic을 다시 만드는 길(AutoSA, gemm_hls)은 택하지 않는다.** 공개 HLS 사례의 클럭이 우리 지금 HLS보다 낮다.
+
+### 9.13 확인하지 못한 것
+
+- Gemmini의 FPGA 클럭(Sensors 2023 본문, PMC 접속이 브라우저 확인 페이지로 막힘).
+- Tensil 클럭(문서 사이트 리다이렉트), AutoSA 클럭(논문 PDF 시간 초과).
+- DPU 325/650 MHz 수치: PG338 Clocking 페이지에는 수치가 없었다. Computation Clock 페이지는 "twice"와 "edge-aligned"만 확인했다.
+- WP486 원문 PDF(재게시본으로 확인).
+- ZU9EG -2 speed grade의 DSP48E2 Fmax(DS925). C안 목표의 상한을 정할 때 필요하다.
 
 ## 10. Phase B(uop 순서)와 Phase C(사이클 모델) (2026-10-27)
 
