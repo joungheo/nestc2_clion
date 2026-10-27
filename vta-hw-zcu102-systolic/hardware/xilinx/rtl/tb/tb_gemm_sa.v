@@ -9,7 +9,7 @@ module tb_gemm_sa;
   reg clk = 0, rstn = 0;
   always #1.25 clk = ~clk;
 
-  reg  [DW+SW+WW+1:0] uop_d;
+  reg  [DW+SW+WW+2:0] uop_d;
   reg                 uop_v;
   wire                uop_r;
   wire [7:0]          done_d;

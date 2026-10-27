@@ -352,12 +352,14 @@ bool gemm_sa_issue(
         inp_idx_T src_idx = uop.range(VTA_UOP_GEM_1_1, VTA_UOP_GEM_1_0) + src_offset_in;
         wgt_idx_T wgt_idx = uop.range(VTA_UOP_GEM_2_1, VTA_UOP_GEM_2_0) + wgt_offset_in;
         bool last = it_out == insn.iter_out - 1 && it_in == insn.iter_in - 1 && upc == insn.uop_end - 1;
+        bool first = it_out == 0 && it_in == 0 && upc == insn.uop_bgn;
         sa_uop_T u;
         u.range(VTA_LOG_ACC_BUFF_DEPTH - 1, 0) = dst_idx;
         u.range(VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH - 1, VTA_LOG_ACC_BUFF_DEPTH) = src_idx;
-        u.range(VTA_SA_UOP_WIDTH - 3, VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH) = wgt_idx;
-        u[VTA_SA_UOP_WIDTH - 2] = insn.reset_reg;
-        u[VTA_SA_UOP_WIDTH - 1] = last;
+        u.range(VTA_SA_UOP_WIDTH - 4, VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH) = wgt_idx;
+        u[VTA_SA_UOP_WIDTH - 3] = insn.reset_reg;
+        u[VTA_SA_UOP_WIDTH - 2] = last;
+        u[VTA_SA_UOP_WIDTH - 1] = first;
         gemm_uop.write(u);
       }
       dst_offset_in += insn.dst_factor_in;
@@ -384,8 +386,8 @@ void gemm_sa_csim(
     sa_uop_T u = gemm_uop.read();
     acc_idx_T dst_idx = u.range(VTA_LOG_ACC_BUFF_DEPTH - 1, 0);
     inp_idx_T src_idx = u.range(VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH - 1, VTA_LOG_ACC_BUFF_DEPTH);
-    wgt_idx_T wgt_idx = u.range(VTA_SA_UOP_WIDTH - 3, VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH);
-    bool reset = u[VTA_SA_UOP_WIDTH - 2];
+    wgt_idx_T wgt_idx = u.range(VTA_SA_UOP_WIDTH - 4, VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH);
+    bool reset = u[VTA_SA_UOP_WIDTH - 3];
     wgt_T w_tensor[VTA_BLOCK_OUT][VTA_BLOCK_IN];
     read_tensor<bus_T, wgt_T, wgt_idx_T, VTA_BUS_WIDTH, VTA_WGT_WIDTH, VTA_BLOCK_OUT, VTA_BLOCK_IN>(wgt_idx, wgt_mem, w_tensor);
     inp_T i_tensor[VTA_BATCH][VTA_BLOCK_IN];
@@ -408,7 +410,7 @@ void gemm_sa_csim(
     }
     write_tensor<bus_T, acc_T, acc_idx_T, VTA_BUS_WIDTH, VTA_ACC_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, a_tensor, acc_mem);
     write_tensor<bus_T, out_T, acc_idx_T, VTA_BUS_WIDTH, VTA_OUT_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, o_tensor, out_mem);
-    if (u[VTA_SA_UOP_WIDTH - 1]) gemm_done.write(1);
+    if (u[VTA_SA_UOP_WIDTH - 2]) gemm_done.write(1);
   }
 }
 #endif

@@ -117,7 +117,10 @@ $(IP_PATH): $(SRC_DIR)/* $(VTA_HW_DIR)/include/vta/hw_spec.h $(SCRIPT_DIR)/hls.t
 
 #### JO changed: batch mode, export name = EXPORT_NAME, JOBS threads; rebuilt when vivado.tcl changes
 #$(BIT_PATH): $(IP_PATH)
-$(BIT_PATH): $(IP_PATH) $(SCRIPT_DIR)/vivado.tcl
+#### JO changed (2026-10-27, systolic Phase D): with SYSTOLIC=1 the bitstream also depends on the gemm_sa RTL
+#$(BIT_PATH): $(IP_PATH) $(SCRIPT_DIR)/vivado.tcl
+SA_RTL := $(if $(filter 1,$(SYSTOLIC)),$(wildcard $(SCRIPT_DIR)/../rtl/*.v))
+$(BIT_PATH): $(IP_PATH) $(SCRIPT_DIR)/vivado.tcl $(SA_RTL)
 	mkdir -p $(HW_BUILD_PATH)
 	cd $(HW_BUILD_PATH) && \
 		$(VIVADO) \

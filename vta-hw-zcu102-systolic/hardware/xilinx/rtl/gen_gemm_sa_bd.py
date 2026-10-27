@@ -60,7 +60,7 @@ body = '''
 
   gemm_sa #(.N(N), .DW(DW), .SW(SW), .WW(WW), .L_RD(L_RD)) sa (
     .clk(clk), .rstn(rstn),
-    .s_uop_tdata(s_uop_tdata[DW+SW+WW+1:0]), .s_uop_tvalid(s_uop_tvalid), .s_uop_tready(s_uop_tready),
+    .s_uop_tdata(s_uop_tdata[DW+SW+WW+2:0]), .s_uop_tvalid(s_uop_tvalid), .s_uop_tready(s_uop_tready),
     .m_done_tdata(m_done_tdata), .m_done_tvalid(m_done_tvalid), .m_done_tready(m_done_tready),
     .inp_en(inp_en), .inp_addr(inp_addr), .inp_data(mem_inp_dout),
     .wgt_en(wgt_en), .wgt_addr(wgt_addr), .wgt_data(wgt_data),
@@ -73,7 +73,10 @@ body = '''
   assign mem_acc_a_clk  = clk;
   assign mem_acc_a_rst  = 1'b0;
   assign mem_acc_a_addr = busy ? {{(26-DW){1'b0}}, acc_rd_addr, 6'd0} : hls_acc_a_addr;
-  assign mem_acc_a_en   = busy ? acc_rd_en : hls_acc_a_en;
+  // #### JO changed (Phase D, board): read enables stay high. With the primitive output register on and no REGCE pin,
+  // #### blk_mem_gen updates the output register only while EN is 1, so a one-cycle EN pulse never reaches dout
+  // #### (first board run: every product 0). Was: busy ? acc_rd_en : hls_acc_a_en
+  assign mem_acc_a_en   = busy ? 1'b1 : hls_acc_a_en;
   assign mem_acc_a_we   = busy ? 64'd0 : hls_acc_a_we;
   assign mem_acc_a_din  = hls_acc_a_din;
   assign hls_acc_a_dout = mem_acc_a_dout;
@@ -96,7 +99,7 @@ body = '''
   assign mem_inp_clk  = clk;
   assign mem_inp_rst  = 1'b0;
   assign mem_inp_addr = {{(28-SW){1'b0}}, inp_addr, 4'd0};
-  assign mem_inp_en   = inp_en;
+  assign mem_inp_en   = 1'b1;   // read only, see mem_acc_a_en (was inp_en)
   assign mem_inp_we   = 16'd0;
   assign mem_inp_din  = 128'd0;
 '''
@@ -104,7 +107,7 @@ for j in range(N):
     body += f'''  assign mem_wgt{j}_clk  = clk;
   assign mem_wgt{j}_rst  = 1'b0;
   assign mem_wgt{j}_addr = {{{{(28-WW){{1'b0}}}}, wgt_addr[WW*{j} +: WW], 4'd0}};
-  assign mem_wgt{j}_en   = wgt_en[{j}];
+  assign mem_wgt{j}_en   = 1'b1;   // read only, see mem_acc_a_en (was wgt_en[{j}])
   assign mem_wgt{j}_we   = 16'd0;
   assign mem_wgt{j}_din  = 128'd0;
   assign wgt_data[128*{j} +: 128] = mem_wgt{j}_dout;

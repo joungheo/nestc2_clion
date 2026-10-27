@@ -16,7 +16,7 @@ module sa_ctrl #(
   input  wire                 clk,
   input  wire                 rst,
   // uop stream
-  input  wire [DW+SW+WW+1:0]  s_uop_tdata,   // {last, reset, wgt, src, dst}
+  input  wire [DW+SW+WW+2:0]  s_uop_tdata,   // {first, last, reset, wgt, src, dst}
   input  wire                 s_uop_tvalid,
   output wire                 s_uop_tready,
   // inp_mem read
@@ -35,7 +35,7 @@ module sa_ctrl #(
   output wire                 tag_last,
   output wire                 idle           // nothing queued or in the array
 );
-  localparam UW = DW + SW + WW + 2;          // uop width
+  localparam UW = DW + SW + WW + 2;          // uop width kept in the FIFO (without first)
   localparam TD = L_RD + 33;                 // issue presented -> RMW
 
   // ---------------- uop FIFO (entry = {newrun, uop}) ----------------
@@ -52,7 +52,11 @@ module sa_ctrl #(
   wire [WW-1:0] in_wgt = s_uop_tdata[DW+SW+WW-1:DW+SW];
   reg  [WW-1:0] prev_wgt;
   reg           have_prev;
-  wire          in_newrun = !have_prev || in_wgt != prev_wgt;
+  //#### JO changed (Phase D board fix): the first uop of each GEMM instruction always starts a run (refill): a LOAD may
+  //#### have written new weights at the same address since the last fill (gemmprobe: reset GEMM, LOAD WGT, GEMM, same wgt)
+  //wire          in_newrun = !have_prev || in_wgt != prev_wgt;
+  wire          in_first = s_uop_tdata[DW+SW+WW+2];
+  wire          in_newrun = !have_prev || in_wgt != prev_wgt || in_first;
   assign s_uop_tready = !rst && !f_full && !(in_newrun && q_full);
   wire          enq = s_uop_tvalid && s_uop_tready;
 
@@ -77,7 +81,7 @@ module sa_ctrl #(
       wp <= 0; rp <= 0; qw <= 0; qr <= 0; have_prev <= 1'b0; pend <= 1'b0; cnt <= 0;
     end else begin
       if (enq) begin
-        fifo[wp[FD-1:0]] <= {in_newrun, s_uop_tdata};
+        fifo[wp[FD-1:0]] <= {in_newrun, s_uop_tdata[UW-1:0]};
         wp <= wp + 1'b1;
         prev_wgt <= in_wgt; have_prev <= 1'b1;
         if (in_newrun) begin runq[qw[RD-1:0]] <= in_wgt; qw <= qw + 1'b1; end

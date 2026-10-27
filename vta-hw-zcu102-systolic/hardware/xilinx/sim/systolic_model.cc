@@ -260,7 +260,7 @@ static int check(const Mem &a, const Mem &b, const std::vector<int> &lastreset) 
 //### JO added (2026-10-27, Phase D1): test vectors for the RTL testbench (rtl/tb/tb_gemm_sa.v).
 // ./systolic_model dump <dir> <seed> [hazard]   writes, in $readmemh format (one word per line, hex, lane 0 in the low bits):
 //   meta.txt   n_uops n_inp n_wgt n_acc n_last
-//   uops.hex   {last, reset, wgt[11], src[12], dst[12]} = 37 bits, issue order
+//   uops.hex   {first, last, reset, wgt[11], src[12], dst[12]} = 38 bits, issue order
 //   inp.hex    n_inp x 128 bits (x[ic] in bits 8ic+7:8ic)
 //   wgt.hex    n_wgt*16 x 128 bits, line blk*16+j = bank j of block blk = w[j][0..15] (w[j][ic] in bits 8ic+7:8ic)
 //   acc0.hex   n_acc x 512 bits (lane oc in bits 32oc+31:32oc), initial accumulator
@@ -306,7 +306,8 @@ static int dump_vectors(const char *dir, unsigned seed, bool hazard, bool same, 
   for (auto &in : insns)
     for (size_t k = 0; k < in.items.size(); k++) {
       const Item &it = in.items[k]; bool last = k + 1 == in.items.size();
-      uint64_t w = uint64_t(it.dst) | uint64_t(it.src) << 12 | uint64_t(it.wgt) << 24 | uint64_t(it.reset) << 35 | uint64_t(last) << 36;
+      uint64_t w = uint64_t(it.dst) | uint64_t(it.src) << 12 | uint64_t(it.wgt) << 24 | uint64_t(it.reset) << 35 | uint64_t(last) << 36 |
+                   uint64_t(k == 0) << 37;   // first step of the instruction (gemm_sa refills the weight)
       fprintf(f, "%010llx\n", (unsigned long long)w); nu++; nl += last;
     }
   fclose(f);

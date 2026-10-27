@@ -43,8 +43,11 @@ typedef ap_uint<VTA_BUS_WIDTH> bus_T;
 
 #ifdef VTA_SYSTOLIC
 //#### JO added (2026-10-27, systolic Phase D, docs/evta_systolic_design.md §3, §4): one GEMM step for the RTL unit
-//#### gemm_sa (rtl/gemm_sa.v): {last, reset, wgt, src, dst}, final addresses, dst in the low bits
-#define VTA_SA_UOP_WIDTH (VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH + VTA_LOG_WGT_BUFF_DEPTH + 2)
+//#### gemm_sa (rtl/gemm_sa.v): {first, last, reset, wgt, src, dst}, final addresses, dst in the low bits.
+//#### first (Phase D board fix): first step of a GEMM instruction; gemm_sa refills the weight even if the address is
+//#### unchanged, since a LOAD may have written new weights at the same address between two GEMM instructions.
+//#define VTA_SA_UOP_WIDTH (VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH + VTA_LOG_WGT_BUFF_DEPTH + 2)
+#define VTA_SA_UOP_WIDTH (VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH + VTA_LOG_WGT_BUFF_DEPTH + 3)
 typedef ap_uint<VTA_SA_UOP_WIDTH> sa_uop_T;
 #endif
 

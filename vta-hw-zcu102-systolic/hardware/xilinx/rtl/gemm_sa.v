@@ -12,7 +12,7 @@ module gemm_sa #(
 ) (
   input  wire                 clk,
   input  wire                 rstn,
-  input  wire [DW+SW+WW+1:0]  s_uop_tdata,
+  input  wire [DW+SW+WW+2:0]  s_uop_tdata,   // {first, last, reset, wgt, src, dst}
   input  wire                 s_uop_tvalid,
   output wire                 s_uop_tready,
   output wire [7:0]           m_done_tdata,
