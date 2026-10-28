@@ -3104,6 +3104,14 @@ void saveConvolutionInst(const glow::ConvolutionInst *Inst, std::string *bundle,
                filterOffset == 0 && biasOffset == 0 && shift >= 0) {
       // saveVTADWConvolutionInst(Inst, bundle, initConst, ctx);
       saveNonVTAConvolutionInst(Inst, bundle, initConst, ctx);
+    //#### JO added (2026-10-29): a quantized 3-channel conv (the image conv0 when it is not skipped from
+    //#### quantization) runs on EVTA with its input and filter zero-filled to 16 channels, the path of the
+    //#### first BNN conv; it is plain int8 (convolution_wo_tr), so it does not need VTA_BNN
+    } else if (Inst->getGroup() == 1 && scale > 1 && srcDims[3] == 3 &&
+               filterDims[3] == 3 && filterDims[0] % 16 == 0 &&
+               biasScale == matMulScale && outOffset == 0 && inOffset == 0 &&
+               filterOffset == 0 && biasOffset == 0 && shift >= 0) {
+      saveFirstBNNVTAConvolutionInst(Inst, bundle, initConst, ctx);
     } else {
 #if defined(VTA_BNN)
       saveFirstBNNVTAConvolutionInst(Inst, bundle, initConst, ctx);
