@@ -179,6 +179,54 @@ conv 호출 wall 시간에서 같은 conv의 EVTA 시간을 뺐다(두 번째 ru
 - 양자화 자체는 이 이미지에서 결과를 바꾸지 않았다. 느려진 것은 CPU int8 conv가 최적화되지 않았기 때문이다(float 쪽은 1547 → 76 ms로 고쳐 둠).
   conv0을 EVTA로 보내야(입력 0 채움 3 → 16채널, `saveFirstBNNVTAConvolutionInst`와 같은 방식) 의미가 있다. 예상 약 8 ms.
 
+**conv0을 EVTA로 (2026-10-29, 보드 single 380 MHz, `..._16_16_19_18_380mhz.bin`)**
+- `VTASave.cpp` `saveConvolutionInst`: 3채널 int8 conv가 EVTA 조건(2의 거듭제곱 scale, offset 0, 출력 채널 16의 배수)을 만족하면
+  `VTA_BNN` 없이도 `saveFirstBNNVTAConvolutionInst`로 보낸다(입력은 `transpose_nhwc2vtaio_zerofill`, 가중치는 16채널로 0 채움해 저장, `convolution_wo_tr`).
+- 보드 `Debug2_remote`는 `make VTA/fast model-compiler/fast`로 다시 빌드했다(그냥 `make`는 `vta/vtalib/CMakeLists.txt`가 캐시보다 새로워 cmake와 Glow 전체를 다시 돌린다).
+  번들 `Debug2_remote/vta/bundles/Resnet18Test_q0e/`, 보드 실행 `vtabundles_xcmpl/hw/Resnet18Q0ETest/`. weights.bin은 64×7×7×13 B(0 채움분) 커졌다.
+
+| | conv0 float (기본) | conv0 int8 CPU (Q0) | conv0 int8 EVTA (Q0E) |
+|---|---|---|---|
+| 분류 (cat_285) / confidence | 281 / 0.588 | 281 / 0.533 | 281 / 0.656 |
+| conv0 | `convolutionFloat` 76.3 ms | `nonvtaconvolution` 1156 ms | zerofill 6.7 + `convolution_wo_tr` 13.5 + 출력 transpose 3.5 ms |
+| 추론 전체 (`_timed`, run 2) | 131.8 ms | 1209.8 ms | **78.4 ms** |
+| EVTA 시간 (`_prof`, 추론 2회분) | 42.94 ms | 42.95 ms | 68.57 ms (conv0 1회 12.8 ms) |
+
+- 추론 전체가 기본보다 40 % 짧아졌다. conv0 EVTA는 16채널로 계산해 13/16이 0이라 실효 236 Mops / 13.5 ms = 17.5 GOPS(예상 8 ms보다 느림).
+  남은 CPU 몫인 zerofill(6.7 ms)은 3채널 NHWC를 바로 16채널 블록으로 쓰면 줄일 수 있다(지금은 NCHW를 거쳐 malloc 두 번).
+- Q0와 Q0E는 conv0만 다른데 confidence가 다르다(0.533 / 0.656). conv0 출력(relu 후, int8 scale 1/32)을 덤프해 비교했다
+  (`hw/<dir>/dump_*`: 번들 .cpp에 fwrite 한 줄을 넣은 `_prof` 빌드, 기준은 기본 번들의 float 출력 × 32):
+
+  | | float × 32 와의 차 평균 | 평균 \|차\| | 최대 \|차\| | 일치 |
+  |---|---|---|---|---|
+  | Q0 (CPU `nonvtaconvolution`) | +0.015 | 0.315 | 3.77 | round(float×32)와 75.8 % |
+  | Q0E (EVTA) | −0.340 | 0.402 | 3.93 | floor(float×32)와 77.2 % |
+
+  Q0E − Q0는 0(64.5 %) 아니면 −1(35.5 %)뿐이다. EVTA는 shift로 내림(산술 시프트), CPU는 반올림한다. 계산 오류가 아니라 반올림 방식 차이이며,
+  conv0 뒤 층은 세 번들 모두 같은 EVTA(내림)라 confidence 차이는 conv0 반올림 방식에서 온다. 어느 쪽이 더 정확한지는 이미지 하나로는 말할 수 없다.
+
+**기본 번들도 conv0을 EVTA로 (2026-10-29, `f126a2b6`)**
+- 소스의 `VTA_RESNET18_WITH_SKIPQUANT0` 기본값은 원래 OFF였고, 보드 `Debug2_remote` 캐시만 ON이었다. OFF로 바꿨다.
+- model-compiler는 skip 목록을 cwd의 `./VTASkipQuantizeNodes.txt`에서 읽는다. OFF는 복사만 안 해서 예전 파일이 남으면 conv0이 계속 float였다
+  → OFF면 그 파일을 지우게 했다(`vta/bundles/Resnet18Test`). multi-EVTA Resnet18(x2, x4)은 옵션과 상관없이 복사하던 것을 옵션을 따르게 했다.
+  `Resnet18PartitionTest`는 그대로 skip 목록을 쓴다(분할 계획이 conv0 float를 전제로 한다).
+- x4(`MultiEVTAResnet18Test`)는 sim 빌드의 target이 아니다(`NESTC_EVTA_MULTI=OFF`). copy 0/1은 x2에서 복사하고, 2/3은 model-compiler를
+  `-index-multi-evta=4|8 -network-name=mxnet_exported_resnet18_2|_3`으로 직접 돌려 만들었다(skip 파일 없는 dir에서).
+  예전 번들 소스는 보드 `/home/xilinx/JO/skipq0_backup/`.
+- `vtabundles_xcmpl/build_multievtax4{,_prof,_timed}`의 캐시에 지운 `vtalib-zcu102-multi4/lib/acl`의 `EXTERN_ACL_*` 경로가 남아 링크가 깨졌다.
+  `cmake -UEXTERN_ACL_* -Uvta_runtime_LIB_DEPENDS .`로 고쳤다(나머지 build dir은 해당 없음).
+- 보드 결과(380 MHz 기본 비트스트림): golden single 30 PASS(Resnet18 281 / 0.656, Resnet18Partition·Resnet50 281), multi2·multi4 PASS,
+  Resnet18 multi/single 100회 모두 281(rc 0, "maxIdx" 0줄).
+
+| 번들 | EVTA 시간 전 (10-28, 8)) | 후 | 추론 전체 |
+|---|---|---|---|
+| single Resnet18 (추론 2회) | 42.94 ms | 68.56 ms | `_timed` run 2: 131.8 → **78.6 ms** |
+| multi2 Resnet18 x2 | 1053.49 ms | 1719.76 ms | 100회 6.60 s(`OMP_NUM_THREADS=1`) |
+| multi4 Resnet18 multi | 516.57 ms | 937.76 ms | 100회 5.77 s |
+| multi4 Resnet18 single | 1157.39 ms | 1779.75 ms | 100회 4.08 s |
+
+  EVTA 시간은 conv0이 더해진 만큼 늘었다. multi 번들의 추론 전체는 예전 값이 기록에 없어 비교하지 못했다.
+
 ## 6. 정할 것
 
 1. AOT 0단계를 시험으로 먼저 할지, 아니면 conv0과 layout 작업을 먼저 할지.
