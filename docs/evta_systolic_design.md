@@ -275,9 +275,35 @@ uop 스트림 루프 II=1, ALU II=2(같음), acc_mem은 512비트 BRAM 포트 2�
 - **B안 결론: systolic GEMM으로 HLS GEMM이 못 가는 400 MHz를 보드에서 동작시켰고, conv/Resnet18 EVTA 시간이 약 15.5% 줄었다.**
   남은 것: multi2/multi4 적용, HP 포트 대역(load/store 병목 층), C안(어레이 2배 클럭).
 
+**multi4 400 MHz (2026-10-28)**
+- `vta-hw-zcu102-multi4` `SYSTOLIC=1`(`352dbd6a`): EVTA마다 `gemm_sa` + `acc_mem`.
+  - 명령: `make ip CSIM=1 SYSTOLIC=1`, `make bin SYSTOLIC=1 FREQ=400 JOBS=4 IMPL_STRATEGY=Performance_ExtraTimingOpt BUILD_TAG=Performance_ExtraTimingOpt`
+  - 이어서 Y219 재배선: build/y219에서 `VTA_IMPL_DIR=../hardware/xilinx/vivado/zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz_Performance_ExtraTimingOpt/vta.runs/impl_1 run_flow.sh msa400`
+- 결과: `rs_msa400` **WNS +0.002, WHS +0.009, WPWS +0.001**.
+  - 배선: Y219 PIP 0, 미배선 0. stuckchk 0 extra.
+  - 자원: BRAM 580/886, DSP 1,072.
+  - 빌드 중 PC가 한 번 멈춰서 `JOBS=4`로 다시 돌렸다(10-28).
+- 보드 `bit/evta_multi4_systolic_400MHz_pass_261028/`(md5 `eded254a…`, README 있음).
+  - probes: EVTA 0-3에서 40/40.
+  - golden: Conv4, ConvTest, ResConv10 PASS. Resnet18 x4/x1은 exit 0(golden 없음).
+- **런타임 주의:** multi4 번들도 `vtalib-zcu102-systolic`(새 uop 순서, uop cache 수정)으로 빌드해야 한다.
+  - 원래 `vtalib-zcu102-multi4` 번들은 결과는 맞지만 ResConv10이 2.895 ms(EVTA 1개 79.9 GOPS)로 절반 속도다.
+  - `vtalib-zcu102-multi4`는 single 사본과 파일이 같고, multi 설정은 cmake 옵션으로 정해진다. 그래서 systolic 사본을 그대로 쓴다.
+  - 보드 빌드: `vtabundles_xcmpl/build_multievtax4_sys`, `-DBUNDLE_SET=multievtax4 -DNESTC_EVTA_MULTI=ON -DNESTC_EVTA_MAX_XFER=4194304 -DVTALIB=<vtalib-zcu102-systolic> -DBUNDLE_EXE_SUFFIX=_sys`.
+- 속도 측정 조건: ResConv10, EVTA마다 400회, `OMP_NUM_THREADS=1`, 두 비트스트림 모두 같은 `_sys` 번들, 같은 날 연달아 측정.
+
+| 비트스트림 | EVTA 1개 | 4개 동시 (3회) |
+|---|---|---|
+| HLS 380 (`4evta_380mhz`) | 171.4~171.5 GOPS | 650.7 / 650.7 / 660.4 GOPS |
+| **systolic 400** | **179.3~179.8 GOPS** | **681.0 / 709.6 / 678.0 GOPS** |
+
+  - EVTA 1개는 +4.8 %로 클럭 비율(+5.3 %)과 같다. HLS 333(152.4) 대비로는 +17.9 %다.
+  - 4개 동시는 EVTA 하나가 늦어지는 run이 있어 편차가 크다. 최고값 709.6 GOPS는 4 x 179.8의 98.7 %다.
+    HLS 380 최고값(10-27, 옛 번들) 685.3 GOPS 대비로는 +3.5 %다.
+
 ## 13. 열린 문제
 
 1. HLS 2020.1: 512비트 2포트 외부 bram 인터페이스와 ALU 루프 II(§3). D5 전에 HLS만 따로 합성해 본다.
 2. wgt_mem 2048비트 동시 읽기 → PISO 16개 적재: 지금 wgt → DSP 경로(0.06~0.16 ns 여유)가 PISO 적재 한 번으로 바뀐다. 필요하면 레지스터를 한 단 더 넣는다(채우기 지연 +1, 주기에는 영향 없음).
-3. multi4: EVTA마다 `gemm_sa`. DSP 256 x 4 = 1,024(ZU9EG 2,520). y219 fence와 위/아래 pblock 배치는 Phase A의 multi4 흐름을 따른다.
+3. ~~multi4: EVTA마다 `gemm_sa`~~ → 400 MHz 보드 통과(§12 multi4 400 MHz, 2026-10-28). multi2는 아직 하지 않았다.
 4. `reset_reg`의 out 의미는 §7처럼 지금 HW와 같게 한다. 런타임이 reset GEMM의 out을 쓰는지는 따지지 않는다(같게 만들면 상관없음).
