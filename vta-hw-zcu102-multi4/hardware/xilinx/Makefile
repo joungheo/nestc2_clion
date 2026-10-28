@@ -53,8 +53,20 @@ CONF := $(shell $(PYTHON) ${VTA_CONFIG} --cfg-str)
 #IP_BUILD_PATH := $(BUILD_DIR)/hls/$(BUILD_NAME)
 #### JO changed (2026-10-27): FREQ=<MHz> overrides the PLL frequency of the config (same IP, _<FREQ>mhz vivado dir)
 FREQ ?=
-IP_NAME := $(CONF)_$(NUM_EVTA)evta$(if $(filter 1,$(PROFILE)),_prof)
-BUILD_NAME := $(IP_NAME)$(if $(FREQ),_$(FREQ)mhz)
+#### JO changed (2026-10-28, systolic Phase D, docs/evta_systolic_design.md): SYSTOLIC=1 -> GEMM in the RTL unit gemm_sa per EVTA
+#### (RTL from vta-hw-zcu102-systolic/hardware/xilinx/rtl, _sa dirs), IMPL_STRATEGY / BUILD_TAG as in that tree
+SYSTOLIC ?= 0
+IMPL_STRATEGY ?=
+BUILD_TAG ?=
+#IP_NAME := $(CONF)_$(NUM_EVTA)evta$(if $(filter 1,$(PROFILE)),_prof)
+#BUILD_NAME := $(IP_NAME)$(if $(FREQ),_$(FREQ)mhz)
+IP_NAME := $(CONF)_$(NUM_EVTA)evta$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(SYSTOLIC)),_sa)
+BUILD_NAME := $(IP_NAME)$(if $(FREQ),_$(FREQ)mhz)$(if $(BUILD_TAG),_$(BUILD_TAG))
+export VTA_SYSTOLIC := $(SYSTOLIC)
+export VTA_IMPL_STRATEGY := $(IMPL_STRATEGY)
+SA_RTL_DIR := $(abspath $(CURDIR)/../../../vta-hw-zcu102-systolic/hardware/xilinx/rtl)
+export VTA_SA_RTL := $(SA_RTL_DIR)
+SA_RTL := $(if $(filter 1,$(SYSTOLIC)),$(wildcard $(SA_RTL_DIR)/*.v))
 IP_BUILD_PATH := $(BUILD_DIR)/hls/$(IP_NAME)
 export VTA_FREQ := $(FREQ)
 HW_BUILD_PATH := $(BUILD_DIR)/vivado/$(BUILD_NAME)
@@ -114,7 +126,7 @@ $(IP_PATH): $(SRC_DIR)/* $(VTA_HW_DIR)/include/vta/hw_spec.h $(SCRIPT_DIR)/hls.t
 
 #### JO changed: batch mode, export name = EXPORT_NAME, JOBS threads; rebuilt when vivado.tcl changes
 #$(BIT_PATH): $(IP_PATH)
-$(BIT_PATH): $(IP_PATH) $(SCRIPT_DIR)/vivado.tcl
+$(BIT_PATH): $(IP_PATH) $(SCRIPT_DIR)/vivado.tcl $(SA_RTL)
 	mkdir -p $(HW_BUILD_PATH)
 	cd $(HW_BUILD_PATH) && \
 		$(VIVADO) \
