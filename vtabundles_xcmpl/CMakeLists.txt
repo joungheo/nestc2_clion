@@ -27,7 +27,7 @@ endif()
 #### JO changed: this project now lives in nest-compiler/vtabundles_xcmpl -> NEST-C root is the parent dir
 #set(NESTC_ROOT /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler)
 get_filename_component(NESTC_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/.. ABSOLUTE)
-#### JO changed: -DVTALIB=<dir> picks another vtalib copy (e.g. ${NESTC_ROOT}/vtalib-zcu102-single)
+#### JO changed: -DVTALIB=<dir> picks another vtalib copy (e.g. ${NESTC_ROOT}/vtalib-zcu102-systolic)
 #set(VTALIB ${NESTC_ROOT}/vta/vtalib)
 set(VTALIB ${NESTC_ROOT}/vta/vtalib CACHE PATH "vtalib source dir")
 
@@ -38,7 +38,7 @@ set(NESTC_EVTA_COHERENT_ACCESSES OFF CACHE BOOL "board/bitstream is not cache-co
 #### JO added: bundle set = which bitstream the build targets.
 ####   single      (default) hw/            vta-hw-zcu102-single (or the etri zcu102_1x16_i8w8a32_16_16_19_18): buffers 16/19/18
 ####   multievtax2           hw_multievtax2/ vta-hw-zcu102-multi2 (or the etri zcu102_2_1x16_*): NESTC_EVTA_MULTI -> buffers 15/18/17
-####   multievtax4           hw_multievtax4/ vta-hw-zcu102-multi4 (4 EVTAs, same buffers; -DVTALIB=.../vtalib-zcu102-multi4)
+####   multievtax4           hw_multievtax4/ vta-hw-zcu102-multi4 (4 EVTAs, same buffers)
 #### Use one build dir per set, e.g. mkdir build_multievtax2 && cd build_multievtax2 && cmake -DBUNDLE_SET=multievtax2 ..
 set(BUNDLE_SET single CACHE STRING "bundle set: single, multievtax2 or multievtax4")
 if(BUNDLE_SET STREQUAL "single")

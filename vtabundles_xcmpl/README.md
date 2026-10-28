@@ -27,10 +27,11 @@ Bundle sources are generated in the simulator build, then compiled for the board
   directory with its own ZCU102 settings, and every bundle is compiled with the same `-D` macros.
   First configure: `mkdir build && cd build && cmake ..` (clang-8 is the default compiler);
   profiling: `mkdir build_prof && cd build_prof && cmake -DNESTC_EVTA_PROFILE=ON -DBUNDLE_EXE_SUFFIX=_prof ..`.
-  With a `vta-hw-zcu102-single` `PROFILE=1` bitstream (compute counters + AXI perf monitor), use its vtalib copy:
-  `cmake -DVTALIB=$PWD/../../vtalib-zcu102-single -DNESTC_EVTA_PROFILE=ON -DNESTC_EVTA_PROFILE_AXI_MONITOR=ON -DBUNDLE_EXE_SUFFIX=_prof ..`
-  (multi2/multi4 `PROFILE=1`: `vtalib-zcu102-multi2/4`, one monitor per EVTA at 0xA0050000 + i * 0x10000; `vta/vtalib`
-  has the same option and addresses since 2026-10-26, the copies are kept apart for runtime experiments).
+  With a `vta-hw-zcu102-single/multi2/multi4` `PROFILE=1` bitstream (compute counters + AXI perf monitor) add
+  `-DNESTC_EVTA_PROFILE_AXI_MONITOR=ON` (one monitor per EVTA at 0xA0050000 + i * 0x10000).
+  Every set builds with `vta/vtalib` (the default `VTALIB`); `BUNDLE_SET` alone picks the buffer and queue sizes.
+  The only other vtalib is `vtalib-zcu102-systolic` (`-DVTALIB=`, for the systolic bitstreams). The copies
+  `vtalib-zcu102-single/multi2/multi4` were removed on 2026-10-29 (identical to `vta/vtalib` since 2026-10-26).
 - Step 4 reloads the bitstream before each bundle (a hung run leaves the EVTA deadlocked).
 - `hwtest/` holds raw ISA probes and vtalib HW tests (`build.sh` has the vtalib ZCU102 `-D` set inline);
   it is not part of the flow above. Re-run its `rawtest*` probes first if a different bitstream is used.
@@ -56,8 +57,8 @@ Bundle sources are generated in the simulator build, then compiled for the board
   `vta/multievtax2_bundles/MultiEVTAx2ConvTest`, Resnet18 copies 0/1 those of `MultiEVTAx2Resnet18Test`, and copies
   2/3 come from `Debug2_remote/glow/bin/model-compiler` with the flags of `MultiEVTAResnet18Test/CMakeLists.txt`
   (`-index-multi-evta=4/8 -network-name=mxnet_exported_resnet18_2/_3`), all copied into
-  `Debug2_remote/vta/multievta_bundles/<Dir>`. Build: `cmake -DBUNDLE_SET=multievtax4
-  -DVTALIB=<root>/vtalib-zcu102-multi4 ..` (`VTA_MAX_XFER` 4 MB for four handles). `run_all.sh` compares only
+  `Debug2_remote/vta/multievta_bundles/<Dir>`. Build: `cmake -DBUNDLE_SET=multievtax4 ..`
+  (`VTA_MAX_XFER` 4 MB for four handles). `run_all.sh` compares only
   ConvTest output 0; outputs 1-3 are `multievtaConvTestOutput<i>.bin` vs `multievtaConvTestGolden<i>.bin`.
   Resnet18 is CPU-bound: `multivtaMxnetResnet18Bundle` (4 threads share 100 inferences) is fastest with
   `OMP_NUM_THREADS=1` (11.0 s vs 14.1 s with 4; single EVTA 13.5 s with 4).
@@ -80,7 +81,7 @@ Bundle sources are generated in the simulator build, then compiled for the board
   `../docs/evta_multi4_609gops_report.md`.
 - Per VTA run / per statement for the multi sets, as for `hw/`: build dirs `build_<set>_prof`
   (`-DBUNDLE_SET=<set> -DNESTC_EVTA_PROFILE=ON -DBUNDLE_EXE_SUFFIX=_prof`) and `build_<set>_timed`
-  (`-DBUNDLE_SET=<set> -DBUNDLE_TIMED=ON -DBUNDLE_EXE_SUFFIX=_timed`), multievtax4 also `-DVTALIB=<root>/vtalib-zcu102-multi4`;
+  (`-DBUNDLE_SET=<set> -DBUNDLE_TIMED=ON -DBUNDLE_EXE_SUFFIX=_timed`);
   then `sudo hw_<set>/script/run_prof.sh [-s _timed] [Dir ...]`. Each timed .cpp (one per EVTA copy) prints its own table
   and writes `timing_<cpp>.csv` (a single timed .cpp still writes `timing.csv`).
 - Each bundle is pinned to one EVTA at code generation (`-index-multi-evta` mask 1/2/4/8 -> EVTA 0..3,
