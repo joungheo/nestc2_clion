@@ -17,6 +17,7 @@ module sa_rmw #(
   input  wire [DW-1:0]     tag_dst,
   input  wire              tag_reset,
   input  wire              tag_last,
+  input  wire [1:0]        tag_tok,
   // acc_mem: read port (address cycle -> data two cycles later) and write port
   output wire              acc_rd_en,
   output wire [DW-1:0]     acc_rd_addr,
@@ -29,6 +30,7 @@ module sa_rmw #(
   output wire [DW-1:0]     out_wr_addr,
   output wire [8*N-1:0]    out_wr_data,
   output wire              done,         // pulse: the last uop of a GEMM instruction is written
+  output wire [1:0]        done_tok,     // its {g2s, g2l} pushes, with done
   output wire              busy
 );
   assign acc_rd_en   = tag_valid;
@@ -39,6 +41,7 @@ module sa_rmw #(
   reg [DW-1:0]   d1, d2, d3, dw1, dw2;
   reg            z1, z2, z3, zw1, zw2;       // reset
   reg            l1, l2, l3;
+  reg [1:0]      k1, k2, k3;               // tokens
   reg [32*N-1:0] s3, sw1, sw2;               // sums
 
   //#### JO changed (2026-10-27, Phase D4): the dst compares are done one stage early (S1, against the rows that will be in
@@ -67,9 +70,9 @@ module sa_rmw #(
     f3 <= v2 && d2 == d1;   f3z <= z2;
     f4 <= v3 && d3 == d1;   f4z <= z3;
     f5 <= vw1 && dw1 == d1; f5z <= zw1;
-    r1 <= row; d1 <= tag_dst; z1 <= tag_reset; l1 <= tag_last;
-    r2 <= r1;  d2 <= d1;      z2 <= z1;        l2 <= l1;
-    s3 <= sum; d3 <= d2;      z3 <= z2;        l3 <= l2;
+    r1 <= row; d1 <= tag_dst; z1 <= tag_reset; l1 <= tag_last; k1 <= tag_tok;
+    r2 <= r1;  d2 <= d1;      z2 <= z1;        l2 <= l1;       k2 <= k1;
+    s3 <= sum; d3 <= d2;      z3 <= z2;        l3 <= l2;       k3 <= k2;
     sw1 <= s3; dw1 <= d3;     zw1 <= z3;
     sw2 <= sw1; dw2 <= dw1;   zw2 <= zw1;
     if (rst) begin v1 <= 0; v2 <= 0; v3 <= 0; vw1 <= 0; vw2 <= 0; end
@@ -82,5 +85,6 @@ module sa_rmw #(
   assign out_wr_en   = v3;
   assign out_wr_addr = d3;
   assign done        = v3 && l3;
+  assign done_tok    = (v3 && l3) ? k3 : 2'b00;
   assign busy        = v1 || v2 || v3;
 endmodule

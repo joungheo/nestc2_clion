@@ -12,12 +12,17 @@ module gemm_sa #(
 ) (
   input  wire                 clk,
   input  wire                 rstn,
-  input  wire [DW+SW+WW+1:0]  s_uop_tdata,
+  input  wire [DW+SW+WW+4:0]  s_uop_tdata,   // {g2s, g2l, first, last, reset, wgt, src, dst}
   input  wire                 s_uop_tvalid,
   output wire                 s_uop_tready,
   output wire [7:0]           m_done_tdata,
   output wire                 m_done_tvalid,
   input  wire                 m_done_tready,
+  // dependence tokens of finished GEMM instructions (to the g2l / g2s queues, merged with compute's in gemm_sa_bd)
+  output wire                 m_g2l_tvalid,
+  input  wire                 m_g2l_tready,
+  output wire                 m_g2s_tvalid,
+  input  wire                 m_g2s_tready,
   output wire                 inp_en,
   output wire [SW-1:0]        inp_addr,
   input  wire [8*N-1:0]       inp_data,
@@ -39,6 +44,7 @@ module gemm_sa #(
   always @(posedge clk) rst <= !rstn;
 
   wire flag, go, tv, tz, tl, idle, done, rbusy;
+  wire [1:0] tk, dtok;
   wire [DW-1:0] td;
   wire [PW*N-1:0] row;
 
@@ -47,17 +53,17 @@ module gemm_sa #(
     .s_uop_tdata(s_uop_tdata), .s_uop_tvalid(s_uop_tvalid), .s_uop_tready(s_uop_tready),
     .inp_en(inp_en), .inp_addr(inp_addr), .wgt_en(wgt_en), .wgt_addr(wgt_addr),
     .arr_flag(flag), .arr_go(go),
-    .tag_valid(tv), .tag_dst(td), .tag_reset(tz), .tag_last(tl), .idle(idle));
+    .tag_valid(tv), .tag_dst(td), .tag_reset(tz), .tag_last(tl), .tag_tok(tk), .idle(idle));
 
   sa_array #(.N(N), .PW(PW)) array (
     .clk(clk), .rst(rst), .x_in(inp_data), .f_in(flag), .go(go), .wd(wgt_data), .row_out(row));
 
   sa_rmw #(.N(N), .PW(PW), .DW(DW)) rmw (
-    .clk(clk), .rst(rst), .row(row), .tag_valid(tv), .tag_dst(td), .tag_reset(tz), .tag_last(tl),
+    .clk(clk), .rst(rst), .row(row), .tag_valid(tv), .tag_dst(td), .tag_reset(tz), .tag_last(tl), .tag_tok(tk),
     .acc_rd_en(acc_rd_en), .acc_rd_addr(acc_rd_addr), .acc_rd_data(acc_rd_data),
     .acc_wr_en(acc_wr_en), .acc_wr_addr(acc_wr_addr), .acc_wr_data(acc_wr_data),
     .out_wr_en(out_wr_en), .out_wr_addr(out_wr_addr), .out_wr_data(out_wr_data),
-    .done(done), .busy(rbusy));
+    .done(done), .done_tok(dtok), .busy(rbusy));
 
   // done tokens (the HLS side may read them late)
   reg [7:0] ndone;
@@ -66,5 +72,15 @@ module gemm_sa #(
     else ndone <= ndone + done - (m_done_tvalid && m_done_tready);
   assign m_done_tvalid = ndone != 0;
   assign m_done_tdata  = 8'd1;
+  // tokens: counters (a token is only a count)
+  reg [7:0] ng2l, ng2s;
+  always @(posedge clk)
+    if (rst) begin ng2l <= 0; ng2s <= 0; end
+    else begin
+      ng2l <= ng2l + dtok[0] - (m_g2l_tvalid && m_g2l_tready);
+      ng2s <= ng2s + dtok[1] - (m_g2s_tvalid && m_g2s_tready);
+    end
+  assign m_g2l_tvalid = ng2l != 0;
+  assign m_g2s_tvalid = ng2s != 0;
   assign busy = !idle || rbusy;
 endmodule

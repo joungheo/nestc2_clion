@@ -9,7 +9,9 @@ module tb_gemm_sa;
   reg clk = 0, rstn = 0;
   always #1.25 clk = ~clk;
 
-  reg  [DW+SW+WW+1:0] uop_d;
+  reg  [DW+SW+WW+4:0] uop_d;
+  wire                g2l_v, g2s_v;
+  integer             ng2l, ng2s, eg2l, eg2s;
   reg                 uop_v;
   wire                uop_r;
   wire [7:0]          done_d;
@@ -60,6 +62,7 @@ module tb_gemm_sa;
     .clk(clk), .rstn(rstn),
     .s_uop_tdata(uop_d), .s_uop_tvalid(uop_v), .s_uop_tready(uop_r),
     .m_done_tdata(done_d), .m_done_tvalid(done_v), .m_done_tready(done_r),
+    .m_g2l_tvalid(g2l_v), .m_g2l_tready(1'b1), .m_g2s_tvalid(g2s_v), .m_g2s_tready(1'b1),
     .inp_en(inp_en), .inp_addr(inp_addr), .inp_data(inp_p[L_RD-1]),
     .wgt_en(wgt_en), .wgt_addr(wgt_addr), .wgt_data(wgt_data),
     .acc_rd_en(acc_rd_en), .acc_rd_addr(acc_rd_addr), .acc_rd_data(acc_p1),
@@ -85,12 +88,18 @@ module tb_gemm_sa;
 
   // ---------------- stimulus ----------------
   reg [1023:0] dir;
-  integer nu, ni, nw, na, nl, fd, r, gap, bp, k, sent, ndone, cyc, cyc0, cyc1, bad_acc, bad_out, b;
+  integer nu, ni, nw, na, nl, fd, r, gap, bp, k, sent, ndone, cyc, cyc0, cyc1, bad_acc, bad_out, b, reload, swapped, n0;
+  reg [127:0] wgt2_all [0:NW*N-1];
+  reg [39:0] nofirst;
   initial begin
     if (!$value$plusargs("dir=%s", dir)) begin $display("need +dir="); $finish; end
     if (!$value$plusargs("gap=%d", gap)) gap = 0;
     if (!$value$plusargs("bp=%d", bp)) bp = 0;
-    fd = $fopen($sformatf("%0s/meta.txt", dir), "r"); r = $fscanf(fd, "%d %d %d %d %d", nu, ni, nw, na, nl); $fclose(fd);
+    fd = $fopen($sformatf("%0s/meta.txt", dir), "r"); r = $fscanf(fd, "%d %d %d %d %d %d", nu, ni, nw, na, nl, reload); $fclose(fd);
+    if (r < 6) reload = 0;
+    if (reload) $readmemh($sformatf("%0s/wgt2.hex", dir), wgt2_all);
+    swapped = 0;
+    if (!$value$plusargs("nofirst=%d", nofirst)) nofirst = 0;   // 1: clear the first bit (shows why it is needed)
     $readmemh($sformatf("%0s/uops.hex", dir), uops);
     $readmemh($sformatf("%0s/inp.hex", dir), inp_mem);
     $readmemh($sformatf("%0s/wgt.hex", dir), wgt_all);
@@ -98,8 +107,10 @@ module tb_gemm_sa;
     $readmemh($sformatf("%0s/acc.hex", dir), acc_exp);
     $readmemh($sformatf("%0s/out.hex", dir), out_exp);
     for (b = 0; b < NW; b = b + 1) for (j = 0; j < N; j = j + 1) wgt_bank[j][b] = wgt_all[b * N + j];
+    n0 = 0; while (n0 < nu && !uops[n0][36]) n0 = n0 + 1; n0 = n0 + 1;   // uops of instruction 0 (up to its last)
     for (k = 0; k < NA; k = k + 1) out_mem[k] = 0;
-    uop_v = 0; done_r = 0; sent = 0; ndone = 0; cyc = 0; cyc0 = -1; cyc1 = 0;
+    uop_v = 0; done_r = 0; sent = 0; ndone = 0; cyc = 0; cyc0 = -1; cyc1 = 0; ng2l = 0; ng2s = 0;
+    eg2l = 0; eg2s = 0; for (k = 0; k < nu; k = k + 1) begin eg2l = eg2l + uops[k][38]; eg2s = eg2s + uops[k][39]; end
     // glbl.v holds GSR for the first 100 ns: DSP48E2 registers ignore their CEs until then (simulation only)
     #200;
     @(posedge clk);
@@ -110,7 +121,14 @@ module tb_gemm_sa;
       cyc = cyc + 1;
       if (uop_v && uop_r) begin sent = sent + 1; if (cyc0 < 0) cyc0 = cyc; end
       if (done_v && done_r) begin ndone = ndone + 1; cyc1 = cyc; end
-      if (sent < nu && ($urandom % 100) >= gap) begin uop_v <= 1; uop_d <= uops[sent]; end
+      if (g2l_v) ng2l = ng2l + 1;
+      if (g2s_v) ng2s = ng2s + 1;
+      // reload: instruction 1 waits for instruction 0's done and the weight swap (LOAD WGT in between)
+      if (reload && !swapped && ndone >= 1) begin
+        for (b = 0; b < NW; b = b + 1) for (j = 0; j < N; j = j + 1) wgt_bank[j][b] = wgt2_all[b * N + j];
+        swapped = 1;
+      end
+      if (sent < nu && !(reload && !swapped && sent >= n0) && ($urandom % 100) >= gap) begin uop_v <= 1; uop_d <= uops[sent] & ~(nofirst << 37); end
       else uop_v <= 0;
       if (uop_v && uop_r && sent >= nu) uop_v <= 0;
       done_r <= ($urandom % 100) >= bp;
@@ -128,8 +146,9 @@ module tb_gemm_sa;
         if (bad_out <= 3) $display("out[%0d] got %h exp %h", k, out_mem[k], out_exp[k]);
       end
     end
-    $display("RESULT %0s: %0s acc_wrong %0d out_wrong %0d cycles %0d uops %0d", dir,
-             (bad_acc == 0 && bad_out == 0) ? "PASS" : "FAIL", bad_acc, bad_out, cyc1 - cyc0 + 1, nu);
+    $display("RESULT %0s: %0s acc_wrong %0d out_wrong %0d cycles %0d uops %0d tokens g2l %0d/%0d g2s %0d/%0d", dir,
+             (bad_acc == 0 && bad_out == 0 && ng2l == eg2l && ng2s == eg2s) ? "PASS" : "FAIL", bad_acc, bad_out, cyc1 - cyc0 + 1, nu,
+             ng2l, eg2l, ng2s, eg2s);
     $finish;
   end
 endmodule

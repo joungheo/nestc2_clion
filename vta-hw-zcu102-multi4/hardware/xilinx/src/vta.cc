@@ -324,6 +324,105 @@ void gemm(
   }
 }
 
+#ifdef VTA_SYSTOLIC
+//#### JO added (2026-10-27, systolic Phase D, docs/evta_systolic_design.md §3): the GEMM loop of gemm() with the
+//#### computation replaced by one uop to gemm_sa per step (final addresses, last on the instruction's final step).
+//#### Returns false if the instruction has no step (then gemm_sa sends no done for it).
+bool gemm_sa_issue(
+  insn_T insn_raw,
+  uop_T uop_mem[VTA_UOP_BUFF_DEPTH],
+  hls::stream<sa_uop_T> &gemm_uop) {
+  VTAGenericInsn ginsn = *((VTAGenericInsn *) &insn_raw);
+#pragma HLS INLINE
+
+  VTAGemInsn insn = *((VTAGemInsn *) &insn_raw);
+  bool any = insn.iter_out != 0 && insn.iter_in != 0 && insn.uop_end > insn.uop_bgn;
+
+  acc_idx_T dst_offset_out = 0;
+  inp_idx_T src_offset_out = 0;
+  wgt_idx_T wgt_offset_out = 0;
+  SA_OUT_LOOP: for (int it_out = 0; it_out < insn.iter_out; it_out++) {
+    acc_idx_T dst_offset_in = dst_offset_out;
+    inp_idx_T src_offset_in = src_offset_out;
+    wgt_idx_T wgt_offset_in = wgt_offset_out;
+    SA_IN_LOOP: for (int it_in = 0; it_in < insn.iter_in; it_in++) {
+      SA_UOP: for (int upc = insn.uop_bgn; upc < insn.uop_end; upc++) {
+#pragma HLS PIPELINE II = 1
+        uop_T uop = uop_mem[upc];
+        acc_idx_T dst_idx = uop.range(VTA_UOP_GEM_0_1, VTA_UOP_GEM_0_0) + dst_offset_in;
+        inp_idx_T src_idx = uop.range(VTA_UOP_GEM_1_1, VTA_UOP_GEM_1_0) + src_offset_in;
+        wgt_idx_T wgt_idx = uop.range(VTA_UOP_GEM_2_1, VTA_UOP_GEM_2_0) + wgt_offset_in;
+        bool last = it_out == insn.iter_out - 1 && it_in == insn.iter_in - 1 && upc == insn.uop_end - 1;
+        bool first = it_out == 0 && it_in == 0 && upc == insn.uop_bgn;
+        sa_uop_T u;
+        u.range(VTA_LOG_ACC_BUFF_DEPTH - 1, 0) = dst_idx;
+        u.range(VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH - 1, VTA_LOG_ACC_BUFF_DEPTH) = src_idx;
+        u.range(VTA_SA_UOP_B - 1, VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH) = wgt_idx;
+        u[VTA_SA_UOP_B] = insn.reset_reg;
+        u[VTA_SA_UOP_B + 1] = last;
+        u[VTA_SA_UOP_B + 2] = first;
+        u[VTA_SA_UOP_B + 3] = last && ginsn.push_prev_dep;   // g2l token, pushed by gemm_sa
+        u[VTA_SA_UOP_B + 4] = last && ginsn.push_next_dep;   // g2s token
+        gemm_uop.write(u);
+      }
+      dst_offset_in += insn.dst_factor_in;
+      src_offset_in += insn.src_factor_in;
+      wgt_offset_in += insn.wgt_factor_in;
+    }
+    dst_offset_out += insn.dst_factor_out;
+    src_offset_out += insn.src_factor_out;
+    wgt_offset_out += insn.wgt_factor_out;
+  }
+  return any;
+}
+
+#ifndef __SYNTHESIS__
+//#### JO added: C model of gemm_sa for C simulation: the arithmetic of gemm() for each streamed step, a done per last
+void gemm_sa_csim(
+  hls::stream<sa_uop_T> &gemm_uop,
+  hls::stream<bool> &gemm_done,
+  bus_T acc_mem[VTA_ACC_BUFF_DEPTH][ACC_MAT_AXI_RATIO],
+  bus_T inp_mem[VTA_INP_BUFF_DEPTH][INP_MAT_AXI_RATIO],
+  bus_T wgt_mem[VTA_WGT_BUFF_DEPTH][WGT_MAT_AXI_RATIO],
+  bus_T out_mem[VTA_ACC_BUFF_DEPTH][OUT_MAT_AXI_RATIO],
+  hls::stream<bool> &g2l_dep_queue,
+  hls::stream<bool> &g2s_dep_queue) {
+  while (!gemm_uop.empty()) {
+    sa_uop_T u = gemm_uop.read();
+    acc_idx_T dst_idx = u.range(VTA_LOG_ACC_BUFF_DEPTH - 1, 0);
+    inp_idx_T src_idx = u.range(VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH - 1, VTA_LOG_ACC_BUFF_DEPTH);
+    wgt_idx_T wgt_idx = u.range(VTA_SA_UOP_B - 1, VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH);
+    bool reset = u[VTA_SA_UOP_B];
+    wgt_T w_tensor[VTA_BLOCK_OUT][VTA_BLOCK_IN];
+    read_tensor<bus_T, wgt_T, wgt_idx_T, VTA_BUS_WIDTH, VTA_WGT_WIDTH, VTA_BLOCK_OUT, VTA_BLOCK_IN>(wgt_idx, wgt_mem, w_tensor);
+    inp_T i_tensor[VTA_BATCH][VTA_BLOCK_IN];
+    read_tensor<bus_T, inp_T, inp_idx_T, VTA_BUS_WIDTH, VTA_INP_WIDTH, VTA_BATCH, VTA_BLOCK_IN>(src_idx, inp_mem, i_tensor);
+    acc_T a_tensor[VTA_BATCH][VTA_BLOCK_OUT];
+    read_tensor<bus_T, acc_T, acc_idx_T, VTA_BUS_WIDTH, VTA_ACC_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, acc_mem, a_tensor);
+    out_T o_tensor[VTA_BATCH][VTA_BLOCK_OUT];
+    for (int b = 0; b < VTA_BATCH; b++) {
+      for (int oc = 0; oc < VTA_BLOCK_OUT; oc++) {
+        acc_T accum = a_tensor[b][oc];
+        sum_T tmp = 0;
+        for (int ic = 0; ic < VTA_BLOCK_IN; ic++) {
+          mul_T prod_dsp = i_tensor[b][ic] * w_tensor[oc][ic];
+          tmp += (sum_T) prod_dsp;
+        }
+        accum += (acc_T) tmp;
+        a_tensor[b][oc] = reset ? (acc_T) 0 : accum;
+        o_tensor[b][oc] = (out_T) accum.range(VTA_OUT_WIDTH - 1, 0);
+      }
+    }
+    write_tensor<bus_T, acc_T, acc_idx_T, VTA_BUS_WIDTH, VTA_ACC_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, a_tensor, acc_mem);
+    write_tensor<bus_T, out_T, acc_idx_T, VTA_BUS_WIDTH, VTA_OUT_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, o_tensor, out_mem);
+    if (u[VTA_SA_UOP_B + 3]) g2l_dep_queue.write(1);
+    if (u[VTA_SA_UOP_B + 4]) g2s_dep_queue.write(1);
+    if (u[VTA_SA_UOP_B + 1]) gemm_done.write(1);
+  }
+}
+#endif
+#endif
+
 void alu(
   insn_T insn_raw,
   uop_T uop_mem[VTA_UOP_BUFF_DEPTH],
@@ -424,6 +523,11 @@ void compute(
   bus_T inp_mem[VTA_INP_BUFF_DEPTH][INP_MAT_AXI_RATIO],
   bus_T wgt_mem[VTA_WGT_BUFF_DEPTH][WGT_MAT_AXI_RATIO],
   bus_T out_mem[VTA_ACC_BUFF_DEPTH][OUT_MAT_AXI_RATIO]
+#ifdef VTA_SYSTOLIC
+  , bus_T acc_mem[VTA_ACC_BUFF_DEPTH][ACC_MAT_AXI_RATIO],
+  hls::stream<sa_uop_T> &gemm_uop,
+  hls::stream<bool> &gemm_done
+#endif
 #ifdef VTA_HW_PROFILE
   , uint32_t &load_count,
   uint32_t &gemm_count,
@@ -450,13 +554,60 @@ PRAGMA_HLS(HLS INTERFACE s_axilite port = done bundle = CONTROL_BUS offset = VTA
 #pragma HLS INTERFACE bram port = wgt_mem
 #pragma HLS INTERFACE bram port = out_mem
 #pragma HLS INTERFACE s_axilite port = return bundle = CONTROL_BUS
+//#### JO changed (2026-10-27, systolic Phase A): with VTA_MEM_OREG the inp/wgt BRAMs register port B
+//#### (vivado.tcl), so compute reads them with latency 2
+#ifdef VTA_MEM_OREG
+#pragma HLS RESOURCE variable = inp_mem core = RAM_1P latency = 2
+#pragma HLS RESOURCE variable = wgt_mem core = RAM_1P latency = 2
+#else
 #pragma HLS RESOURCE variable = inp_mem core = RAM_1P
 #pragma HLS RESOURCE variable = wgt_mem core = RAM_1P
+#endif
 #pragma HLS RESOURCE variable = out_mem core = RAM_1P
 
   // Micro-op storage
   static uop_T uop_mem[VTA_UOP_BUFF_DEPTH];
 
+#ifdef VTA_SYSTOLIC
+//#### JO changed (2026-10-27, systolic Phase D, docs/evta_systolic_design.md §3): acc_mem is a BD BRAM shared with gemm_sa
+//#### (both ports muxed by gemm_sa busy); GEMM steps go to gemm_sa on gemm_uop, one gemm_done comes back per instruction.
+//#### The dependence pushes of a GEMM instruction ride on its last step and gemm_sa pushes them when that step is
+//#### written (gemm_sa_bd merges them into g2l/g2s), so load/store never reuse a buffer gemm_sa still reads, and a load
+//#### waiting for its buffer does not also wait for compute to read the done (that cost ~one GEMM instruction per
+//#### input block: compute is inside the next instruction's II=1 loop). compute only counts the outstanding GEMM
+//#### instructions (gemm_done) and waits for all of them before any other instruction.
+#pragma HLS INTERFACE bram port = acc_mem
+#pragma HLS INTERFACE axis port = gemm_uop
+#pragma HLS INTERFACE axis port = gemm_done
+#pragma HLS RESOURCE variable = acc_mem core = RAM_T2P_BRAM latency = 2
+#pragma HLS ARRAY_RESHAPE variable = acc_mem complete dim=2
+#pragma HLS DEPENDENCE variable = acc_mem inter false
+  static ap_uint<16> sa_out = 0;         // GEMM instructions in gemm_sa
+  bool sa_deferred = false;
+#define SA_RETIRE() { gemm_done.read(); sa_out--; }
+#define SA_POLL() { if (sa_out != 0 && !gemm_done.empty()) SA_RETIRE(); }
+
+  insn_T raw_insn;
+  SA_WAIT_INSN: while (gemm_queue.empty()) SA_POLL();
+  raw_insn = gemm_queue.read();
+  VTAInsn insn;
+  insn_T raw_copy = raw_insn;
+  insn.generic = *((VTAGenericInsn *) &raw_copy);
+  if (insn.generic.pop_prev_dep) {
+    SA_WAIT_L2G: while (l2g_dep_queue.empty()) SA_POLL();
+    l2g_dep_queue.read();
+  }
+  if (insn.generic.pop_next_dep) {
+    SA_WAIT_S2G: while (s2g_dep_queue.empty()) SA_POLL();
+    s2g_dep_queue.read();
+  }
+  // everything but GEMM and a token-free uop LOAD waits for gemm_sa (acc/out access, token order)
+  if (insn.generic.opcode != VTA_OPCODE_GEMM &&
+      !(insn.generic.opcode == VTA_OPCODE_LOAD && insn.mem.memory_type == VTA_MEM_ID_UOP &&
+        !insn.generic.push_prev_dep && !insn.generic.push_next_dep)) {
+    SA_DRAIN: while (sa_out != 0) SA_RETIRE();
+  }
+#else
   // Accumulator storage
   static bus_T acc_mem[VTA_ACC_BUFF_DEPTH][ACC_MAT_AXI_RATIO];
 #pragma HLS ARRAY_RESHAPE variable = acc_mem complete dim=2
@@ -477,6 +628,7 @@ PRAGMA_HLS(HLS INTERFACE s_axilite port = done bundle = CONTROL_BUS offset = VTA
   if (insn.generic.pop_next_dep) {
     s2g_dep_queue.read();
   }
+#endif
 
   // Set done value
   done = 0;
@@ -514,7 +666,18 @@ PRAGMA_HLS(HLS INTERFACE s_axilite port = done bundle = CONTROL_BUS offset = VTA
           y_offset_1);
     }
   } else if (insn.generic.opcode == VTA_OPCODE_GEMM) {
+#ifdef VTA_SYSTOLIC
+    if (gemm_sa_issue(raw_copy, uop_mem, gemm_uop)) {
+      sa_out++; sa_deferred = true;   // its pushes ride on the last step
+    }
+#ifndef __SYNTHESIS__
+    // C simulation: the C model runs the steps (and pushes the tokens) now
+    gemm_sa_csim(gemm_uop, gemm_done, acc_mem, inp_mem, wgt_mem, out_mem, g2l_dep_queue, g2s_dep_queue);
+    while (sa_out != 0) SA_RETIRE();
+#endif
+#else
     gemm(raw_copy, uop_mem, acc_mem, inp_mem, wgt_mem, out_mem);
+#endif
   } else if (insn.generic.opcode == VTA_OPCODE_ALU) {
     alu(raw_copy, uop_mem, acc_mem, inp_mem, wgt_mem, out_mem);
   }
@@ -550,12 +713,18 @@ PRAGMA_HLS(HLS INTERFACE s_axilite port = done bundle = CONTROL_BUS offset = VTA
 #endif
 
   // Push dependence token if instructed
+#ifdef VTA_SYSTOLIC
+  if (!sa_deferred) {   //#### JO added: a GEMM's pushes are pushed by gemm_sa
+#endif
   if (insn.generic.push_prev_dep) {
     g2l_dep_queue.write(1);
   }
   if (insn.generic.push_next_dep) {
     g2s_dep_queue.write(1);
   }
+#ifdef VTA_SYSTOLIC
+  }
+#endif
 }
 
 void store(
@@ -653,6 +822,15 @@ void vta(
   bus_T inp_mem[VTA_INP_BUFF_DEPTH][INP_MAT_AXI_RATIO];
   bus_T wgt_mem[VTA_WGT_BUFF_DEPTH][WGT_MAT_AXI_RATIO];
   bus_T out_mem[VTA_ACC_BUFF_DEPTH][OUT_MAT_AXI_RATIO];
+#ifdef VTA_SYSTOLIC
+  //#### JO added (systolic Phase D): acc_mem and the gemm_sa streams live outside compute
+  static bus_T acc_mem[VTA_ACC_BUFF_DEPTH][ACC_MAT_AXI_RATIO];
+  hls::stream<sa_uop_T> gemm_uop;
+  hls::stream<bool> gemm_done;
+#define SA_ARGS , acc_mem, gemm_uop, gemm_done
+#else
+#define SA_ARGS
+#endif
 
   // Push all instructions into the queues
   fetch(insn_count, insns, tmp_load_queue, tmp_gemm_queue, tmp_store_queue);
@@ -721,11 +899,11 @@ void vta(
 #ifdef VTA_HW_PROFILE
         //#### JO added
         compute(done, uops, biases, gemm_queue, l2g_dep_queue, s2g_dep_queue,
-                g2l_dep_queue, g2s_dep_queue, inp_mem, wgt_mem, out_mem,
+                g2l_dep_queue, g2s_dep_queue, inp_mem, wgt_mem, out_mem SA_ARGS,
                 load_count, gemm_count, alu_count);
 #else
         compute(done, uops, biases, gemm_queue, l2g_dep_queue, s2g_dep_queue,
-                g2l_dep_queue, g2s_dep_queue, inp_mem, wgt_mem, out_mem);
+                g2l_dep_queue, g2s_dep_queue, inp_mem, wgt_mem, out_mem SA_ARGS);
 #endif
       } else {
         // Execution of load stage pending on completion of other stages,

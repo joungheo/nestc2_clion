@@ -55,7 +55,12 @@ FREQ ?=
 SYSTOLIC ?= 0
 #IP_NAME := $(CONF)$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(MEM_OREG)),_oreg)
 IP_NAME := $(CONF)$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(MEM_OREG)),_oreg)$(if $(filter 1,$(SYSTOLIC)),_sa)
-BUILD_NAME := $(IP_NAME)$(if $(FREQ),_$(FREQ)mhz)
+#### JO changed (2026-10-28, systolic D8): IMPL_STRATEGY=<Vivado impl strategy>, BUILD_TAG=<suffix of the vivado dir>
+#BUILD_NAME := $(IP_NAME)$(if $(FREQ),_$(FREQ)mhz)
+IMPL_STRATEGY ?=
+BUILD_TAG ?=
+BUILD_NAME := $(IP_NAME)$(if $(FREQ),_$(FREQ)mhz)$(if $(BUILD_TAG),_$(BUILD_TAG))
+export VTA_IMPL_STRATEGY := $(IMPL_STRATEGY)
 IP_BUILD_PATH := $(BUILD_DIR)/hls/$(IP_NAME)
 export VTA_MEM_OREG := $(MEM_OREG)
 export VTA_SYSTOLIC := $(SYSTOLIC)
@@ -117,7 +122,10 @@ $(IP_PATH): $(SRC_DIR)/* $(VTA_HW_DIR)/include/vta/hw_spec.h $(SCRIPT_DIR)/hls.t
 
 #### JO changed: batch mode, export name = EXPORT_NAME, JOBS threads; rebuilt when vivado.tcl changes
 #$(BIT_PATH): $(IP_PATH)
-$(BIT_PATH): $(IP_PATH) $(SCRIPT_DIR)/vivado.tcl
+#### JO changed (2026-10-27, systolic Phase D): with SYSTOLIC=1 the bitstream also depends on the gemm_sa RTL
+#$(BIT_PATH): $(IP_PATH) $(SCRIPT_DIR)/vivado.tcl
+SA_RTL := $(if $(filter 1,$(SYSTOLIC)),$(wildcard $(SCRIPT_DIR)/../rtl/*.v))
+$(BIT_PATH): $(IP_PATH) $(SCRIPT_DIR)/vivado.tcl $(SA_RTL)
 	mkdir -p $(HW_BUILD_PATH)
 	cd $(HW_BUILD_PATH) && \
 		$(VIVADO) \

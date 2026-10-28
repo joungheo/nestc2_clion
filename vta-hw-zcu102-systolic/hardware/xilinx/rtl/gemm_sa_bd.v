@@ -11,7 +11,7 @@ module gemm_sa_bd #(
   parameter L_RD = 2,
   parameter UB = 40                      // uop TDATA width of the HLS stream (bytes)
 ) (
-  (* X_INTERFACE_PARAMETER = "ASSOCIATED_BUSIF s_uop:m_done:hls_acc_a:hls_acc_b:hls_out:mem_acc_a:mem_acc_b:mem_out:mem_inp:mem_wgt0:mem_wgt1:mem_wgt2:mem_wgt3:mem_wgt4:mem_wgt5:mem_wgt6:mem_wgt7:mem_wgt8:mem_wgt9:mem_wgt10:mem_wgt11:mem_wgt12:mem_wgt13:mem_wgt14:mem_wgt15, ASSOCIATED_RESET rstn" *)
+  (* X_INTERFACE_PARAMETER = "ASSOCIATED_BUSIF s_uop:m_done:s_g2l:m_g2l:s_g2s:m_g2s:hls_acc_a:hls_acc_b:hls_out:mem_acc_a:mem_acc_b:mem_out:mem_inp:mem_wgt0:mem_wgt1:mem_wgt2:mem_wgt3:mem_wgt4:mem_wgt5:mem_wgt6:mem_wgt7:mem_wgt8:mem_wgt9:mem_wgt10:mem_wgt11:mem_wgt12:mem_wgt13:mem_wgt14:mem_wgt15, ASSOCIATED_RESET rstn" *)
   input  wire                 clk,
   input  wire                 rstn,
   input  wire [UB-1:0]        s_uop_tdata,
@@ -20,6 +20,20 @@ module gemm_sa_bd #(
   output wire [7:0]           m_done_tdata,
   output wire                 m_done_tvalid,
   input  wire                 m_done_tready,
+  // g2l / g2s dependence queues: compute's pushes (s_*) and gemm_sa's (finished GEMM instructions) merged into m_*;
+  // gemm_sa first (compute only pushes when gemm_sa has nothing outstanding, so the order is kept)
+  input  wire [7:0]           s_g2l_tdata,
+  input  wire                 s_g2l_tvalid,
+  output wire                 s_g2l_tready,
+  output wire [7:0]           m_g2l_tdata,
+  output wire                 m_g2l_tvalid,
+  input  wire                 m_g2l_tready,
+  input  wire [7:0]           s_g2s_tdata,
+  input  wire                 s_g2s_tvalid,
+  output wire                 s_g2s_tready,
+  output wire [7:0]           m_g2s_tdata,
+  output wire                 m_g2s_tvalid,
+  input  wire                 m_g2s_tready,
   (* X_INTERFACE_INFO = "xilinx.com:interface:bram:1.0 hls_acc_a ADDR" *) (* X_INTERFACE_PARAMETER = "MODE Slave, MASTER_TYPE BRAM_CTRL, MEM_WIDTH 512" *)
   input  wire [31:0]        hls_acc_a_addr,
   (* X_INTERFACE_INFO = "xilinx.com:interface:bram:1.0 hls_acc_a CLK" *)  input  wire hls_acc_a_clk,
@@ -216,11 +230,21 @@ module gemm_sa_bd #(
   wire [32*N-1:0]     acc_wr_data;
   wire [8*N-1:0]      out_wr_data;
   wire [128*N-1:0]    wgt_data;
+  wire                sa_g2l_v, sa_g2l_r, sa_g2s_v, sa_g2s_r;
+  assign m_g2l_tvalid = sa_g2l_v || s_g2l_tvalid;
+  assign m_g2l_tdata  = 8'd1;
+  assign sa_g2l_r     = m_g2l_tready;
+  assign s_g2l_tready = m_g2l_tready && !sa_g2l_v;
+  assign m_g2s_tvalid = sa_g2s_v || s_g2s_tvalid;
+  assign m_g2s_tdata  = 8'd1;
+  assign sa_g2s_r     = m_g2s_tready;
+  assign s_g2s_tready = m_g2s_tready && !sa_g2s_v;
 
   gemm_sa #(.N(N), .DW(DW), .SW(SW), .WW(WW), .L_RD(L_RD)) sa (
     .clk(clk), .rstn(rstn),
-    .s_uop_tdata(s_uop_tdata[DW+SW+WW+1:0]), .s_uop_tvalid(s_uop_tvalid), .s_uop_tready(s_uop_tready),
+    .s_uop_tdata(s_uop_tdata[DW+SW+WW+4:0]), .s_uop_tvalid(s_uop_tvalid), .s_uop_tready(s_uop_tready),
     .m_done_tdata(m_done_tdata), .m_done_tvalid(m_done_tvalid), .m_done_tready(m_done_tready),
+    .m_g2l_tvalid(sa_g2l_v), .m_g2l_tready(sa_g2l_r), .m_g2s_tvalid(sa_g2s_v), .m_g2s_tready(sa_g2s_r),
     .inp_en(inp_en), .inp_addr(inp_addr), .inp_data(mem_inp_dout),
     .wgt_en(wgt_en), .wgt_addr(wgt_addr), .wgt_data(wgt_data),
     .acc_rd_en(acc_rd_en), .acc_rd_addr(acc_rd_addr), .acc_rd_data(mem_acc_a_dout),
@@ -228,145 +252,154 @@ module gemm_sa_bd #(
     .out_wr_en(out_wr_en), .out_wr_addr(out_wr_addr), .out_wr_data(out_wr_data),
     .busy(busy));
 
-  // acc / out: gemm_sa while busy, else the HLS compute
+  // acc / out: gemm_sa while busy, else the HLS compute.
+  // #### JO changed (Phase D8): the port muxes select on a registered copy of busy (sel). busy is an OR over the tag
+  // #### pipe and the RMW stages; selecting 512-bit muxes with it directly was the worst path at 400 MHz (-0.06 ns).
+  // #### One cycle late is safe: gemm_sa's first acc access is >= 35 cycles after its first uop, and compute touches
+  // #### acc/out only after reading the done that comes one cycle after the last write (sel is 0 by then).
+  (* max_fanout = 64 *) reg sel;
+  always @(posedge clk) sel <= rstn ? busy : 1'b0;
   assign mem_acc_a_clk  = clk;
   assign mem_acc_a_rst  = 1'b0;
-  assign mem_acc_a_addr = busy ? {{(26-DW){1'b0}}, acc_rd_addr, 6'd0} : hls_acc_a_addr;
-  assign mem_acc_a_en   = busy ? acc_rd_en : hls_acc_a_en;
-  assign mem_acc_a_we   = busy ? 64'd0 : hls_acc_a_we;
+  assign mem_acc_a_addr = sel ? {{(26-DW){1'b0}}, acc_rd_addr, 6'd0} : hls_acc_a_addr;
+  // #### JO changed (Phase D, board): read enables stay high. With the primitive output register on and no REGCE pin,
+  // #### blk_mem_gen updates the output register only while EN is 1, so a one-cycle EN pulse never reaches dout
+  // #### (first board run: every product 0). Was: sel ? acc_rd_en : hls_acc_a_en
+  assign mem_acc_a_en   = sel ? 1'b1 : hls_acc_a_en;
+  assign mem_acc_a_we   = sel ? 64'd0 : hls_acc_a_we;
   assign mem_acc_a_din  = hls_acc_a_din;
   assign hls_acc_a_dout = mem_acc_a_dout;
   assign mem_acc_b_clk  = clk;
   assign mem_acc_b_rst  = 1'b0;
-  assign mem_acc_b_addr = busy ? {{(26-DW){1'b0}}, acc_wr_addr, 6'd0} : hls_acc_b_addr;
-  assign mem_acc_b_en   = busy ? acc_wr_en : hls_acc_b_en;
-  assign mem_acc_b_we   = busy ? {64{acc_wr_en}} : hls_acc_b_we;
-  assign mem_acc_b_din  = busy ? acc_wr_data : hls_acc_b_din;
+  assign mem_acc_b_addr = sel ? {{(26-DW){1'b0}}, acc_wr_addr, 6'd0} : hls_acc_b_addr;
+  assign mem_acc_b_en   = sel ? acc_wr_en : hls_acc_b_en;
+  assign mem_acc_b_we   = sel ? {64{acc_wr_en}} : hls_acc_b_we;
+  assign mem_acc_b_din  = sel ? acc_wr_data : hls_acc_b_din;
   assign hls_acc_b_dout = mem_acc_b_dout;
   assign mem_out_clk    = clk;
   assign mem_out_rst    = 1'b0;
-  assign mem_out_addr   = busy ? {{(28-DW){1'b0}}, out_wr_addr, 4'd0} : hls_out_addr;
-  assign mem_out_en     = busy ? out_wr_en : hls_out_en;
-  assign mem_out_we     = busy ? {16{out_wr_en}} : hls_out_we;
-  assign mem_out_din    = busy ? out_wr_data : hls_out_din;
+  assign mem_out_addr   = sel ? {{(28-DW){1'b0}}, out_wr_addr, 4'd0} : hls_out_addr;
+  assign mem_out_en     = sel ? out_wr_en : hls_out_en;
+  assign mem_out_we     = sel ? {16{out_wr_en}} : hls_out_we;
+  assign mem_out_din    = sel ? out_wr_data : hls_out_din;
   assign hls_out_dout   = mem_out_dout;
 
   // inp / wgt port B: read only
   assign mem_inp_clk  = clk;
   assign mem_inp_rst  = 1'b0;
   assign mem_inp_addr = {{(28-SW){1'b0}}, inp_addr, 4'd0};
-  assign mem_inp_en   = inp_en;
+  assign mem_inp_en   = 1'b1;   // read only, see mem_acc_a_en (was inp_en)
   assign mem_inp_we   = 16'd0;
   assign mem_inp_din  = 128'd0;
   assign mem_wgt0_clk  = clk;
   assign mem_wgt0_rst  = 1'b0;
   assign mem_wgt0_addr = {{(28-WW){1'b0}}, wgt_addr[WW*0 +: WW], 4'd0};
-  assign mem_wgt0_en   = wgt_en[0];
+  assign mem_wgt0_en   = 1'b1;   // read only, see mem_acc_a_en (was wgt_en[0])
   assign mem_wgt0_we   = 16'd0;
   assign mem_wgt0_din  = 128'd0;
   assign wgt_data[128*0 +: 128] = mem_wgt0_dout;
   assign mem_wgt1_clk  = clk;
   assign mem_wgt1_rst  = 1'b0;
   assign mem_wgt1_addr = {{(28-WW){1'b0}}, wgt_addr[WW*1 +: WW], 4'd0};
-  assign mem_wgt1_en   = wgt_en[1];
+  assign mem_wgt1_en   = 1'b1;   // read only, see mem_acc_a_en (was wgt_en[1])
   assign mem_wgt1_we   = 16'd0;
   assign mem_wgt1_din  = 128'd0;
   assign wgt_data[128*1 +: 128] = mem_wgt1_dout;
   assign mem_wgt2_clk  = clk;
   assign mem_wgt2_rst  = 1'b0;
   assign mem_wgt2_addr = {{(28-WW){1'b0}}, wgt_addr[WW*2 +: WW], 4'd0};
-  assign mem_wgt2_en   = wgt_en[2];
+  assign mem_wgt2_en   = 1'b1;   // read only, see mem_acc_a_en (was wgt_en[2])
   assign mem_wgt2_we   = 16'd0;
   assign mem_wgt2_din  = 128'd0;
   assign wgt_data[128*2 +: 128] = mem_wgt2_dout;
   assign mem_wgt3_clk  = clk;
   assign mem_wgt3_rst  = 1'b0;
   assign mem_wgt3_addr = {{(28-WW){1'b0}}, wgt_addr[WW*3 +: WW], 4'd0};
-  assign mem_wgt3_en   = wgt_en[3];
+  assign mem_wgt3_en   = 1'b1;   // read only, see mem_acc_a_en (was wgt_en[3])
   assign mem_wgt3_we   = 16'd0;
   assign mem_wgt3_din  = 128'd0;
   assign wgt_data[128*3 +: 128] = mem_wgt3_dout;
   assign mem_wgt4_clk  = clk;
   assign mem_wgt4_rst  = 1'b0;
   assign mem_wgt4_addr = {{(28-WW){1'b0}}, wgt_addr[WW*4 +: WW], 4'd0};
-  assign mem_wgt4_en   = wgt_en[4];
+  assign mem_wgt4_en   = 1'b1;   // read only, see mem_acc_a_en (was wgt_en[4])
   assign mem_wgt4_we   = 16'd0;
   assign mem_wgt4_din  = 128'd0;
   assign wgt_data[128*4 +: 128] = mem_wgt4_dout;
   assign mem_wgt5_clk  = clk;
   assign mem_wgt5_rst  = 1'b0;
   assign mem_wgt5_addr = {{(28-WW){1'b0}}, wgt_addr[WW*5 +: WW], 4'd0};
-  assign mem_wgt5_en   = wgt_en[5];
+  assign mem_wgt5_en   = 1'b1;   // read only, see mem_acc_a_en (was wgt_en[5])
   assign mem_wgt5_we   = 16'd0;
   assign mem_wgt5_din  = 128'd0;
   assign wgt_data[128*5 +: 128] = mem_wgt5_dout;
   assign mem_wgt6_clk  = clk;
   assign mem_wgt6_rst  = 1'b0;
   assign mem_wgt6_addr = {{(28-WW){1'b0}}, wgt_addr[WW*6 +: WW], 4'd0};
-  assign mem_wgt6_en   = wgt_en[6];
+  assign mem_wgt6_en   = 1'b1;   // read only, see mem_acc_a_en (was wgt_en[6])
   assign mem_wgt6_we   = 16'd0;
   assign mem_wgt6_din  = 128'd0;
   assign wgt_data[128*6 +: 128] = mem_wgt6_dout;
   assign mem_wgt7_clk  = clk;
   assign mem_wgt7_rst  = 1'b0;
   assign mem_wgt7_addr = {{(28-WW){1'b0}}, wgt_addr[WW*7 +: WW], 4'd0};
-  assign mem_wgt7_en   = wgt_en[7];
+  assign mem_wgt7_en   = 1'b1;   // read only, see mem_acc_a_en (was wgt_en[7])
   assign mem_wgt7_we   = 16'd0;
   assign mem_wgt7_din  = 128'd0;
   assign wgt_data[128*7 +: 128] = mem_wgt7_dout;
   assign mem_wgt8_clk  = clk;
   assign mem_wgt8_rst  = 1'b0;
   assign mem_wgt8_addr = {{(28-WW){1'b0}}, wgt_addr[WW*8 +: WW], 4'd0};
-  assign mem_wgt8_en   = wgt_en[8];
+  assign mem_wgt8_en   = 1'b1;   // read only, see mem_acc_a_en (was wgt_en[8])
   assign mem_wgt8_we   = 16'd0;
   assign mem_wgt8_din  = 128'd0;
   assign wgt_data[128*8 +: 128] = mem_wgt8_dout;
   assign mem_wgt9_clk  = clk;
   assign mem_wgt9_rst  = 1'b0;
   assign mem_wgt9_addr = {{(28-WW){1'b0}}, wgt_addr[WW*9 +: WW], 4'd0};
-  assign mem_wgt9_en   = wgt_en[9];
+  assign mem_wgt9_en   = 1'b1;   // read only, see mem_acc_a_en (was wgt_en[9])
   assign mem_wgt9_we   = 16'd0;
   assign mem_wgt9_din  = 128'd0;
   assign wgt_data[128*9 +: 128] = mem_wgt9_dout;
   assign mem_wgt10_clk  = clk;
   assign mem_wgt10_rst  = 1'b0;
   assign mem_wgt10_addr = {{(28-WW){1'b0}}, wgt_addr[WW*10 +: WW], 4'd0};
-  assign mem_wgt10_en   = wgt_en[10];
+  assign mem_wgt10_en   = 1'b1;   // read only, see mem_acc_a_en (was wgt_en[10])
   assign mem_wgt10_we   = 16'd0;
   assign mem_wgt10_din  = 128'd0;
   assign wgt_data[128*10 +: 128] = mem_wgt10_dout;
   assign mem_wgt11_clk  = clk;
   assign mem_wgt11_rst  = 1'b0;
   assign mem_wgt11_addr = {{(28-WW){1'b0}}, wgt_addr[WW*11 +: WW], 4'd0};
-  assign mem_wgt11_en   = wgt_en[11];
+  assign mem_wgt11_en   = 1'b1;   // read only, see mem_acc_a_en (was wgt_en[11])
   assign mem_wgt11_we   = 16'd0;
   assign mem_wgt11_din  = 128'd0;
   assign wgt_data[128*11 +: 128] = mem_wgt11_dout;
   assign mem_wgt12_clk  = clk;
   assign mem_wgt12_rst  = 1'b0;
   assign mem_wgt12_addr = {{(28-WW){1'b0}}, wgt_addr[WW*12 +: WW], 4'd0};
-  assign mem_wgt12_en   = wgt_en[12];
+  assign mem_wgt12_en   = 1'b1;   // read only, see mem_acc_a_en (was wgt_en[12])
   assign mem_wgt12_we   = 16'd0;
   assign mem_wgt12_din  = 128'd0;
   assign wgt_data[128*12 +: 128] = mem_wgt12_dout;
   assign mem_wgt13_clk  = clk;
   assign mem_wgt13_rst  = 1'b0;
   assign mem_wgt13_addr = {{(28-WW){1'b0}}, wgt_addr[WW*13 +: WW], 4'd0};
-  assign mem_wgt13_en   = wgt_en[13];
+  assign mem_wgt13_en   = 1'b1;   // read only, see mem_acc_a_en (was wgt_en[13])
   assign mem_wgt13_we   = 16'd0;
   assign mem_wgt13_din  = 128'd0;
   assign wgt_data[128*13 +: 128] = mem_wgt13_dout;
   assign mem_wgt14_clk  = clk;
   assign mem_wgt14_rst  = 1'b0;
   assign mem_wgt14_addr = {{(28-WW){1'b0}}, wgt_addr[WW*14 +: WW], 4'd0};
-  assign mem_wgt14_en   = wgt_en[14];
+  assign mem_wgt14_en   = 1'b1;   // read only, see mem_acc_a_en (was wgt_en[14])
   assign mem_wgt14_we   = 16'd0;
   assign mem_wgt14_din  = 128'd0;
   assign wgt_data[128*14 +: 128] = mem_wgt14_dout;
   assign mem_wgt15_clk  = clk;
   assign mem_wgt15_rst  = 1'b0;
   assign mem_wgt15_addr = {{(28-WW){1'b0}}, wgt_addr[WW*15 +: WW], 4'd0};
-  assign mem_wgt15_en   = wgt_en[15];
+  assign mem_wgt15_en   = 1'b1;   // read only, see mem_acc_a_en (was wgt_en[15])
   assign mem_wgt15_we   = 16'd0;
   assign mem_wgt15_din  = 128'd0;
   assign wgt_data[128*15 +: 128] = mem_wgt15_dout;

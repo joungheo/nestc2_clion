@@ -41,6 +41,20 @@
 /* \typedef bus_T memory bus datatype*/
 typedef ap_uint<VTA_BUS_WIDTH> bus_T;
 
+#ifdef VTA_SYSTOLIC
+//#### JO added (2026-10-27, systolic Phase D, docs/evta_systolic_design.md §3, §4): one GEMM step for the RTL unit
+//#### gemm_sa (rtl/gemm_sa.v): {first, last, reset, wgt, src, dst}, final addresses, dst in the low bits.
+//#### first (Phase D board fix): first step of a GEMM instruction; gemm_sa refills the weight even if the address is
+//#### unchanged, since a LOAD may have written new weights at the same address between two GEMM instructions.
+//#### g2l, g2s (Phase D, speed): the GEMM instruction's dependence pushes, on its last step; gemm_sa pushes the tokens itself
+//#### when that step is written, so a load waiting for its buffer does not wait for compute to see the done.
+//#### Layout: {g2s, g2l, first, last, reset, wgt, src, dst}, bit VTA_SA_UOP_B = reset.
+//#define VTA_SA_UOP_WIDTH (VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH + VTA_LOG_WGT_BUFF_DEPTH + 2)
+#define VTA_SA_UOP_B (VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH + VTA_LOG_WGT_BUFF_DEPTH)
+#define VTA_SA_UOP_WIDTH (VTA_SA_UOP_B + 5)
+typedef ap_uint<VTA_SA_UOP_WIDTH> sa_uop_T;
+#endif
+
 /* \typedef uop_T Micro-op datatype*/
 typedef ap_uint<VTA_UOP_WIDTH> uop_T;
 
@@ -189,6 +203,12 @@ void compute(
   bus_T inp_mem[VTA_INP_BUFF_DEPTH][INP_MAT_AXI_RATIO],
   bus_T wgt_mem[VTA_WGT_BUFF_DEPTH][WGT_MAT_AXI_RATIO],
   bus_T out_mem[VTA_ACC_BUFF_DEPTH][OUT_MAT_AXI_RATIO]
+//#### JO added (2026-10-27, systolic Phase D): acc_mem outside compute (BD BRAM shared with gemm_sa), uop / done streams
+#ifdef VTA_SYSTOLIC
+  , bus_T acc_mem[VTA_ACC_BUFF_DEPTH][ACC_MAT_AXI_RATIO],
+  hls::stream<sa_uop_T> &gemm_uop,
+  hls::stream<bool> &gemm_done
+#endif
 //#### JO added: profiling counters (CONTROL_BUS 0x50/0x60/0x70), only with -DVTA_HW_PROFILE
 #ifdef VTA_HW_PROFILE
   , uint32_t &load_count,

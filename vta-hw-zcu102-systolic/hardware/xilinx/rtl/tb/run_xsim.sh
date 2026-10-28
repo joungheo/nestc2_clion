@@ -11,6 +11,6 @@ docker exec -u ubuntu -w $W vivado2020-build bash -c "source /tools/Xilinx/v2020
   xelab -L unisims_ver -timescale 1ns/1ps tb_gemm_sa glbl -s tb > xelab.log 2>&1 || { grep -E 'ERROR|WARNING: \[VRFC' xelab.log | head -20; exit 1; }"
 for d in "$@"; do
   docker exec -u ubuntu -w $W vivado2020-build bash -c "source /tools/Xilinx/v2020.1/Vivado/2020.1/settings64.sh >/dev/null; \
-    xsim tb -R -testplusarg dir=$d -testplusarg gap=${GAP:-0} -testplusarg bp=${BP:-0} -testplusarg dbg=${DBG:-0} > xsim_\$(basename $d).log 2>&1"
+    xsim tb -R -testplusarg dir=$d -testplusarg gap=${GAP:-0} -testplusarg bp=${BP:-0} -testplusarg dbg=${DBG:-0} -testplusarg nofirst=${NOFIRST:-0} > xsim_\$(basename $d).log 2>&1"
   grep -E '^RESULT|^acc\[|^out\[|  got|  exp' $W/xsim_$(basename $d).log | head -12
 done

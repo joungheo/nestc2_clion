@@ -38,12 +38,25 @@ SETS = {  # name: (bundle dir under the NEST-C root, hw dir here, bitstream in /
     #### JO changed (2026-10-26): the Y219 build of vta-hw-zcu102-single (same results as the etri bitstream,
     #### EVTA time 1-21 % shorter); the etri one stays usable with BIN=zcu102_1x16_i8w8a32_16_16_19_18.bin
     # 'single': ('vta/bundles', 'hw', 'zcu102_1x16_i8w8a32_16_16_19_18.bin', False),
-    'single': ('vta/bundles', 'hw', 'vtahw_single_y219.bin', False),
+    #### JO changed (2026-10-28): 380 MHz HLS GEMM, HP ports on 333 MHz (vta-hw-zcu102-systolic without SYSTOLIC=1)
+    # 'single': ('vta/bundles', 'hw', 'vtahw_single_y219.bin', False),
+    'single': ('vta/bundles', 'hw', 'vtahw_zcu102_1x16_i8w8a32_16_16_19_18_380mhz.bin', False),
     #### JO changed (2026-10-26): the lab board's Y219 build of vta-hw-zcu102-multi2 (etri bitstream: stuck cells)
     # 'multievtax2': ('vta/multievtax2_bundles', 'hw_multievtax2', 'zcu102_2_1x16_i8w8a32_16_15_18_17.bin', True),
-    'multievtax2': ('vta/multievtax2_bundles', 'hw_multievtax2', 'vtahw_multi2_y219.bin', True),
+    #### JO changed (2026-10-28): 380 MHz, HP ports on 333 MHz (vta-hw-zcu102-multi4 with NUM_EVTA=2; the
+    #### ..._2evta_380mhz.bin of 2026-10-27 has the HP ports on 380 MHz, out of spec)
+    # 'multievtax2': ('vta/multievtax2_bundles', 'hw_multievtax2', 'vtahw_multi2_y219.bin', True),
+    'multievtax2': ('vta/multievtax2_bundles', 'hw_multievtax2', 'vtahw_zcu102_1x16_i8w8a32_16_15_18_17_2evta_380mhz_hp333.bin', True),
     #### JO added: 4 EVTAs (vta-hw-zcu102-multi4 on the lab board: the Y219 build, /lib/firmware/vtahw_multi4_y219.bin)
-    'multievtax4': ('vta/multievta_bundles', 'hw_multievtax4', 'vtahw_multi4_y219.bin', True),
+    #### JO changed (2026-10-28): 380 MHz, HP ports on 333 MHz (bit/evta_multi4_phaseA_261027)
+    # 'multievtax4': ('vta/multievta_bundles', 'hw_multievtax4', 'vtahw_multi4_y219.bin', True),
+    'multievtax4': ('vta/multievta_bundles', 'hw_multievtax4', 'vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_380mhz.bin', True),
+}
+#### JO added (2026-10-28): systolic GEMM bitstream per set, for the _sys* executables (built with
+#### -DVTALIB=<vtalib-zcu102-systolic>); run_all.sh gets SYS_BIN=, read by run_prof.sh -s _sys*
+SYS_BINS = {
+    'single': 'vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_400mhz.bin',
+    'multievtax4': 'vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz.bin',
 }
 #### JO added: per set, dirs made by a script here: (dir, executable, arguments, golden, generator command)
 #### JO changed (2026-10-26): + the hw/ dir the generator copies from (ResConv10Test: the fastest conv shape)
@@ -187,6 +200,8 @@ def main():
                 #### JO changed (2026-10-27): in <hw dir>/script/, runs in the hw dir
                 # f'set -u\ncd "$(dirname "$0")"\nBIN=${{BIN:-{BIN}}}\n'
                 f'set -u\ncd "$(dirname "$0")/.."\nBIN=${{BIN:-{BIN}}}\n'
+                #### JO added (2026-10-28): systolic bitstream for run_prof.sh -s _sys*
+                + (f'SYS_BIN=${{SYS_BIN:-{SYS_BINS[SET]}}}\n' if SET in SYS_BINS else '') +
                 '[ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }\n'
                 #### JO added (2026-10-26): one EVTA run at a time on the board (each run reloads the PL; two runs
                 #### swap bitstreams under each other -> SError / bus errors); run_prof.sh takes the same lock

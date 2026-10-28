@@ -208,9 +208,102 @@ uop 스트림 루프 II=1, ALU II=2(같음), acc_mem은 512비트 BRAM 포트 2�
 **BD 연결** — `rtl/gemm_sa_bd.v`(`gen_gemm_sa_bd.py`가 생성: acc/out 포트 mux, inp·wgt 16 bank 포트, 바이트 주소), `vivado.tcl`의 `systolic` 분기
 (gemm_sa_0, acc_mem BRAM 4096 x 512 지연 2, inp/wgt 포트 B 출력 레지스터). D5(PL 시뮬레이션)보다 먼저 333 MHz 비트스트림을 만들어 보드 프로브로 본다.
 
+**보드 (2026-10-28, single, 333 MHz, `make ip CSIM=1 SYSTOLIC=1 && make bin SYSTOLIC=1`)** — `bit/evta_single_systolic_261027/vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa.bin`
+- 고친 것(순서대로, 모두 첫 보드 실행에서 드러남):
+  1. Vivado가 `gemm_sa_bd`를 top으로 잡음 → `vivado.tcl`이 wrapper를 top으로 지정.
+  2. 곱이 모두 0: BRAM 출력 레지스터는 REGCE 핀이 없으면 EN이 1일 때만 갱신된다. RTL이 EN을 한 클럭만 올려 데이터가 dout에 오지 않았다 → inp/wgt 포트 B와 acc 포트 A의 읽기 EN을 1로 둔다.
+     (`make`가 RTL 변경을 몰라 처음 재빌드는 아무것도 안 했다 → Makefile이 `SYSTOLIC=1`이면 `rtl/*.v`에 의존.)
+  3. gemmprobe 0: **같은 wgt 주소를 쓰는 다음 GEMM 명령이 weight를 다시 채우지 않았다**(사이에 LOAD WGT가 새 weight를 씀). uop에 `first` 비트, 명령의 첫 step은 항상 새 run.
+     TB/모델에 `reload` 벡터(명령 0 → weight 교체 → 같은 주소의 명령 1) 추가: `first` 없이 FAIL, 있으면 PASS.
+  4. 같은 클럭에서 느림(ResConv10 +29%): GEMM 명령의 g2l 토큰을 HLS가 done을 본 뒤 보냈는데, HLS는 다른 스레드 GEMM의 uop 루프(II=1) 안에 있어 done을 늦게 본다.
+     load의 다음 버퍼 적재가 GEMM 명령 하나만큼 늦어져 load가 숨지 못했다 → **토큰을 gemm_sa가 직접 보낸다**: uop에 `{g2s, g2l}`(마지막 step), RMW가 그 step을 쓸 때 토큰, `gemm_sa_bd`가 compute의 토큰과 합침(gemm_sa 우선). compute의 done은 acc/out 접근 전 대기에만 쓴다.
+- uop 형식(최종): `{g2s, g2l, first, last, reset, wgt, src, dst}` = 40비트(single).
+- 결과: probes 10/10, golden 30 PASS, Resnet18/Resnet18Partition/Resnet50 → 281. WNS +0.031, WHS +0.009, WPWS +0.001, stuckchk 0 extra, Y219 PIP 0.
+- 속도(333 MHz, `run_prof.sh -s _sysprof all`, total_vta_time, 같은 날 기존 HLS 비트스트림과):
+
+| 번들 | 기존 HLS `vtahw_single_y219` | systolic, 토큰 수정 전 | **systolic** |
+|---|---|---|---|
+| ResConv10 | 2.893 ms | 3.741 ms | **2.891 ms** |
+| Conv4 | 3.565 ms | 3.851 ms | **3.570 ms** |
+| Resnet18 | 48.53 ms | 56.07 ms | **48.95 ms (+0.9%)** |
+| Resnet50 | 245.78 ms | 253.72 ms | **247.39 ms (+0.7%)** |
+
+  같은 클럭에서 기존과 같은 속도다(옛 uop 순서 런타임으로는 ResConv10 7.585 ms, 가동률 약 40%, §4 예상대로). 이득은 클럭에서 나와야 한다 → 다음: 400 MHz 빌드(HP 포트 333 MHz 분리 필요, multi4 `vivado.tcl`의 방식).
+
+**클럭 올리기 (D8, 2026-10-28)** — `vivado.tcl`에 HP 포트 분리(333 MHz 초과 시 `hp_pll` 333 MHz, `axi_smc0` NUM_CLKS 2; multi4 `70ccf2f7`와 같은 방식).
+`make bin SYSTOLIC=1 FREQ=<MHz> JOBS=8`.
+- 첫 빌드: 400 WNS −0.061(88), 380 −0.023(26). 400의 최악은 `gemm_sa_bd`의 BRAM 포트 mux였다(선택 신호 `busy`가 태그 pipe 37단 OR + RMW, 512비트 mux를 직접 고름).
+  → 선택을 한 클럭 늦춘 레지스터 `sel`로(gemm_sa의 첫 acc 접근은 첫 uop 뒤 35클럭 이상, compute는 마지막 쓰기 다음 클럭에 나오는 done을 읽은 뒤에야 acc 접근).
+- 다시: **380 MHz WNS +0.046, WHS +0.010, WPWS +0.001**, stuckchk 0 extra, Y219 PIP 0. 400 MHz는 −0.135(175개).
+  400의 실패는 이제 모두 gemm_sa 밖이다: `axi_xbar` s00 폭 변환(auto_ds → auto_cc) 112개 −0.112, HLS compute → acc_mem 34개 −0.132, compute 내부 11개 −0.135, load → inp_mem 12개 −0.128.
+  HLS IP는 3.0 ns 목표로 합성되어 있다(`FREQ`는 PLL만 바꾼다). 400을 맞추려면 HLS 목표 2.5 ns 재합성, PS M_AXI_HPM0을 32비트로(폭 변환 제거).
+- 보드 380(`bit/evta_single_systolic_261027/vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_380mhz.bin`): probes 10/10, golden 30 PASS, Resnet18/Partition/50 → 281.
+  `run_prof.sh -s _sysprof all`, 같은 날 HLS 380(`vtahw_zcu102_1x16_i8w8a32_16_16_19_18_prof_380mhz`, HP도 380이라 규격 밖)과:
+
+| 번들 | HLS 380 | systolic 380 (HP 333) | 차이 |
+|---|---|---|---|
+| ResConv10 | 2.544 ms | 2.559 ms | +0.6% |
+| Conv4 | 3.138 ms | 3.156 ms | +0.6% |
+| Resnet18 | 42.76 ms | 43.14 ms | +0.9% |
+| Resnet50 | 221.61 ms | 236.99 ms | +6.9% |
+| Vgg16Cifar10 | 29.85 ms | 31.23 ms | +4.6% |
+
+  conv는 같다. Resnet50·Vgg16의 차이는 HP 포트 클럭(333 vs 380)으로 보인다(1x1 conv 등 load/store 비중이 큰 층; multi4 380의 Conv 번들과 같은 현상).
+- **정리: systolic GEMM은 같은 클럭에서 HLS GEMM과 같은 속도로 보드에서 동작한다. 이득은 HLS가 못 가는 클럭(400 이상, C안의 어레이 2배 클럭)에서만 나온다.**
+
+**400 MHz (B안 완성, 2026-10-28)**
+- 400 실패(gemm_sa 밖)를 고친 것:
+  - `axi_xbar`의 128 → 32비트 폭 변환이 클럭 변환기 뒤(EVTA 클럭)에 있었다 → 333 MHz 초과 빌드에서 PS와 xbar 사이에 `reg_dwc`(axi_dwidth_converter, PS 클럭 100 MHz).
+    PS 쪽 HPM0 폭은 그대로 128비트다(포트 폭은 부트 이미지가 정해서 비트스트림만 32비트로 바꾸면 레지스터 접근이 깨진다).
+  - HLS compute/load 경로(로직 6~7단, 배선 70%): HLS 목표는 이미 2 ns(`pkg_config.py fpga_per`)라 재합성 대신 구현 전략.
+    Makefile `IMPL_STRATEGY=<전략>`, `BUILD_TAG=<빌드 dir 접미사>`.
+- 명령: `make bin SYSTOLIC=1 FREQ=400 JOBS=8 IMPL_STRATEGY=Performance_ExtraTimingOpt BUILD_TAG=Performance_ExtraTimingOpt`
+  → **WNS +0.015, WHS +0.010, WPWS +0.001**(Performance_ExplorePostRoutePhysOpt는 +0.012). stuckchk 0 extra, Y219 PIP 0.
+- 보드 `bit/evta_single_systolic_261027/vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_400mhz.bin`(md5 `21f50187…`): probes 10/10, golden 30 PASS, Resnet18/Partition/50 → 281.
+- 속도(`run_prof.sh -s _sysprof all`, total_vta_time, 같은 날 333 MHz HLS `vtahw_single_y219`):
+
+| 번들 | 333 MHz HLS | **400 MHz systolic** | 시간 | 속도 |
+|---|---|---|---|---|
+| ResConv10 | 2.893 ms | 2.435 ms | −15.8% | +18.8% |
+| Conv4 | 3.564 ms | 3.008 ms | −15.6% | +18.5% |
+| ResConv4 | 3.189 ms | 2.681 ms | −15.9% | +18.9% |
+| Resnet18 | 48.54 ms | 41.10 ms | −15.3% | +18.1% |
+| Vgg16Cifar10 | 33.52 ms | 30.10 ms | −10.2% | +11.4% |
+| Resnet50 | 245.77 ms | 229.00 ms | −6.8% | +7.3% |
+
+  클럭 비율 기대치는 −16.7%(+20%). conv와 Resnet18은 거의 그만큼이다. Resnet50·Vgg16은 HP 포트(333 MHz)에 묶인 load/store 비중이 커서 덜 줄었다.
+- **B안 결론: systolic GEMM으로 HLS GEMM이 못 가는 400 MHz를 보드에서 동작시켰고, conv/Resnet18 EVTA 시간이 약 15.5% 줄었다.**
+  남은 것: multi2/multi4 적용, HP 포트 대역(load/store 병목 층), C안(어레이 2배 클럭).
+
+**multi4 400 MHz (2026-10-28)**
+- `vta-hw-zcu102-multi4` `SYSTOLIC=1`(`352dbd6a`): EVTA마다 `gemm_sa` + `acc_mem`.
+  - 명령: `make ip CSIM=1 SYSTOLIC=1`, `make bin SYSTOLIC=1 FREQ=400 JOBS=4 IMPL_STRATEGY=Performance_ExtraTimingOpt BUILD_TAG=Performance_ExtraTimingOpt`
+  - 이어서 Y219 재배선: build/y219에서 `VTA_IMPL_DIR=../hardware/xilinx/vivado/zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz_Performance_ExtraTimingOpt/vta.runs/impl_1 run_flow.sh msa400`
+- 결과: `rs_msa400` **WNS +0.002, WHS +0.009, WPWS +0.001**.
+  - 배선: Y219 PIP 0, 미배선 0. stuckchk 0 extra.
+  - 자원: BRAM 580/886, DSP 1,072.
+  - 빌드 중 PC가 한 번 멈춰서 `JOBS=4`로 다시 돌렸다(10-28).
+- 보드 `bit/evta_multi4_systolic_400MHz_pass_261028/`(md5 `eded254a…`, README 있음).
+  - probes: EVTA 0-3에서 40/40.
+  - golden: Conv4, ConvTest, ResConv10 PASS. Resnet18 x4/x1은 exit 0(golden 없음).
+- **런타임 주의:** multi4 번들도 `vtalib-zcu102-systolic`(새 uop 순서, uop cache 수정)으로 빌드해야 한다.
+  - 원래 `vtalib-zcu102-multi4` 번들은 결과는 맞지만 ResConv10이 2.895 ms(EVTA 1개 79.9 GOPS)로 절반 속도다.
+  - `vtalib-zcu102-multi4`는 single 사본과 파일이 같고, multi 설정은 cmake 옵션으로 정해진다. 그래서 systolic 사본을 그대로 쓴다.
+  - 보드 빌드: `vtabundles_xcmpl/build_multievtax4_sys`, `-DBUNDLE_SET=multievtax4 -DNESTC_EVTA_MULTI=ON -DNESTC_EVTA_MAX_XFER=4194304 -DVTALIB=<vtalib-zcu102-systolic> -DBUNDLE_EXE_SUFFIX=_sys`.
+- 속도 측정 조건: ResConv10, EVTA마다 400회, `OMP_NUM_THREADS=1`, 두 비트스트림 모두 같은 `_sys` 번들, 같은 날 연달아 측정.
+
+| 비트스트림 | EVTA 1개 | 4개 동시 (3회) |
+|---|---|---|
+| HLS 380 (`4evta_380mhz`) | 171.4~171.5 GOPS | 650.7 / 650.7 / 660.4 GOPS |
+| **systolic 400** | **179.3~179.8 GOPS** | **681.0 / 709.6 / 678.0 GOPS** |
+
+  - EVTA 1개는 +4.8 %로 클럭 비율(+5.3 %)과 같다. HLS 333(152.4) 대비로는 +17.9 %다.
+  - 4개 동시는 EVTA 하나가 늦어지는 run이 있어 편차가 크다. 최고값 709.6 GOPS는 4 x 179.8의 98.7 %다.
+    HLS 380 최고값(10-27, 옛 번들) 685.3 GOPS 대비로는 +3.5 %다.
+
 ## 13. 열린 문제
 
 1. HLS 2020.1: 512비트 2포트 외부 bram 인터페이스와 ALU 루프 II(§3). D5 전에 HLS만 따로 합성해 본다.
 2. wgt_mem 2048비트 동시 읽기 → PISO 16개 적재: 지금 wgt → DSP 경로(0.06~0.16 ns 여유)가 PISO 적재 한 번으로 바뀐다. 필요하면 레지스터를 한 단 더 넣는다(채우기 지연 +1, 주기에는 영향 없음).
-3. multi4: EVTA마다 `gemm_sa`. DSP 256 x 4 = 1,024(ZU9EG 2,520). y219 fence와 위/아래 pblock 배치는 Phase A의 multi4 흐름을 따른다.
+3. ~~multi4: EVTA마다 `gemm_sa`~~ → 400 MHz 보드 통과(§12 multi4 400 MHz, 2026-10-28). multi2는 아직 하지 않았다.
 4. `reset_reg`의 out 의미는 §7처럼 지금 HW와 같게 한다. 런타임이 reset GEMM의 out을 쓰는지는 따지지 않는다(같게 만들면 상관없음).

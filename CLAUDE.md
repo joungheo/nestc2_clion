@@ -160,15 +160,20 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
 - Output: `build/hardware/xilinx/vivado/<CONF>[_prof]/export/vtahw_<CONF>[_prof].{bit,bin,hwh,xsa}` plus
   timing/utilization reports — check WNS >= 0 in `*.timing.rpt`. The `vtahw_` prefix keeps it apart from
   the etri bitstream of the same CONF in the board's `/lib/firmware`.
-- [vtalib-zcu102-single/](vtalib-zcu102-single/) is the vtalib copy that matches it (use with
-  `vtabundles_xcmpl` `-DVTALIB=...`; `NESTC_EVTA_PROFILE_AXI_MONITOR=ON` for a `PROFILE=1` bitstream).
+- Software: `vta/vtalib` for every set (`vtabundles_xcmpl -DBUNDLE_SET=single|multievtax2|multievtax4` sets
+  buffers and queue size; `NESTC_EVTA_PROFILE_AXI_MONITOR=ON` for a `PROFILE=1` bitstream). The old copies
+  `vtalib-zcu102-single/multi2/multi4` were removed 2026-10-29; `vtalib-zcu102-systolic` stays (systolic uop order).
 - Multi-EVTA: [vta-hw-zcu102-multi2/](vta-hw-zcu102-multi2/) and [vta-hw-zcu102-multi4/](vta-hw-zcu102-multi4/)
   (`NUM_EVTA` 2 / 4, buffers 16/15/18/17 = vtalib `NESTC_EVTA_MULTI`): EVTA i registers at
   `0xA0000000 + i*0x10000`, data through `S_AXI_HP<i>_FPD`, perf monitor (`PROFILE=1`) at `0xA0050000 + i*0x10000`;
-  matching vtalib copies `vtalib-zcu102-multi2/4`. Output `vtahw_<CONF>_<N>evta[_prof].bin`. On the board the
+  Output `vtahw_<CONF>_<N>evta[_prof].bin`. On the board the
   HP1-3 port widths come from the boot image (AFIFM registers), not from the bitstream — check them if a
   multi-EVTA run returns zeros. `vtabundles_xcmpl/evta_hw/` is an older multi-EVTA flow (not built).
 - Built 2026-10-20 at 333 MHz, all `_prof`: single WNS +0.054 ns, multi2 +0.004, multi4 +0.003 (BRAM 556/912).
+- Default bitstreams of `vtabundles_xcmpl/hw*/script/run_all.sh` (2026-10-28, `docs/evta_systolic.md` §8 8)): 380 MHz HLS GEMM with the
+  HP ports on a separate 333 MHz clock (single `..._16_16_19_18_380mhz`, multi2 `..._2evta_380mhz_hp333`, multi4 `..._4evta_380mhz`);
+  `SYS_BIN` = systolic 400 MHz (single, multi4), used by `run_prof.sh -s _sys*` (executables built with `-DVTALIB=<vtalib-zcu102-systolic>`).
+  The 333 MHz `vtahw_*_y219.bin` stay usable with `BIN=<file>`.
   The PS register port (`M_AXI_HPM0`) runs on `pl_clk0` 100 MHz; at 333 MHz it missed timing.
 - The lab board's PL has a defective configuration row (tile row SLICE Y219, cells stuck at 0; `log/BOARD_TODO.md`
   2026-10-23/24). `vivado.tcl` on zcu102 fences the design below it by default (`VTA_BRAM_FENCE=y219|upper|none`).

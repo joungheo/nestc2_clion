@@ -260,7 +260,7 @@ static int check(const Mem &a, const Mem &b, const std::vector<int> &lastreset) 
 //### JO added (2026-10-27, Phase D1): test vectors for the RTL testbench (rtl/tb/tb_gemm_sa.v).
 // ./systolic_model dump <dir> <seed> [hazard]   writes, in $readmemh format (one word per line, hex, lane 0 in the low bits):
 //   meta.txt   n_uops n_inp n_wgt n_acc n_last
-//   uops.hex   {last, reset, wgt[11], src[12], dst[12]} = 37 bits, issue order
+//   uops.hex   {g2s, g2l, first, last, reset, wgt[11], src[12], dst[12]} = 40 bits, issue order
 //   inp.hex    n_inp x 128 bits (x[ic] in bits 8ic+7:8ic)
 //   wgt.hex    n_wgt*16 x 128 bits, line blk*16+j = bank j of block blk = w[j][0..15] (w[j][ic] in bits 8ic+7:8ic)
 //   acc0.hex   n_acc x 512 bits (lane oc in bits 32oc+31:32oc), initial accumulator
@@ -271,7 +271,7 @@ static void hexline(FILE *f, const uint8_t *bytes, int n) {   // little endian b
   for (int k = n - 1; k >= 0; k--) fprintf(f, "%02x", bytes[k]);
   fprintf(f, "\n");
 }
-static int dump_vectors(const char *dir, unsigned seed, bool hazard, bool same, bool conv) {
+static int dump_vectors(const char *dir, unsigned seed, bool hazard, bool same, bool conv, bool reload) {
   std::mt19937 rng(seed);
   auto rnd = [&](int lo, int hi) { return std::uniform_int_distribution<int>(lo, hi)(rng); };
   DRAIN = false; LOOKAHEAD = 32;   // the RTL does not drain between GEMM instructions
@@ -287,7 +287,7 @@ static int dump_vectors(const char *dir, unsigned seed, bool hazard, bool same, 
       insns.push_back(g.expand(q, false));
     }
   }
-  int ni = conv ? 0 : rnd(1, 6);
+  int ni = conv ? 0 : reload ? 2 : rnd(1, 6);
   int dmax = same ? 1 : hazard ? 7 : NA - 1;
   for (int q = 0; q < ni; q++) {
     Gen g{rnd(1, 3), rnd(0, 9), rnd(0, 9), rnd(0, 3), rnd(1, 3), rnd(0, 9), rnd(0, 9), rnd(0, 3), {}};
@@ -299,6 +299,18 @@ static int dump_vectors(const char *dir, unsigned seed, bool hazard, bool same, 
     insns.push_back(in);
   }
   Mem r = m; std::vector<int> lr(r.nacc, 0);
+  // reload: instruction 1 runs after a LOAD rewrote every weight block (wgt2.hex), as gemmprobe does (reset GEMM,
+  // LOAD WGT, GEMM on the same address); the testbench swaps the memory after the first done and only then sends
+  // instruction 1 (the HLS compute streams an instruction only after its load token).
+  std::vector<int8_t> wgt2;
+  if (reload) {
+    for (auto &it : insns[1].items) it.wgt = insns[0].items.back().wgt;   // same address as instruction 0's last block (no run change)
+    std::vector<Insn> i0(insns.begin(), insns.begin() + 1), i1(insns.begin() + 1, insns.end());
+    reference(i0, r, lr);
+    wgt2.resize(m.wgt.size()); for (auto &v : wgt2) v = rnd(-128, 127);
+    r.wgt = wgt2;
+    reference(i1, r, lr);
+  } else
   reference(insns, r, lr);
   auto open = [&](const char *n) { std::string p = std::string(dir) + "/" + n; FILE *f = fopen(p.c_str(), "w"); if (!f) { perror(p.c_str()); exit(1); } return f; };
   int nu = 0, nl = 0;
@@ -306,7 +318,9 @@ static int dump_vectors(const char *dir, unsigned seed, bool hazard, bool same, 
   for (auto &in : insns)
     for (size_t k = 0; k < in.items.size(); k++) {
       const Item &it = in.items[k]; bool last = k + 1 == in.items.size();
-      uint64_t w = uint64_t(it.dst) | uint64_t(it.src) << 12 | uint64_t(it.wgt) << 24 | uint64_t(it.reset) << 35 | uint64_t(last) << 36;
+      uint64_t w = uint64_t(it.dst) | uint64_t(it.src) << 12 | uint64_t(it.wgt) << 24 | uint64_t(it.reset) << 35 | uint64_t(last) << 36 |
+                   uint64_t(k == 0) << 37 |   // first step of the instruction (gemm_sa refills the weight)
+                   uint64_t(last && (it.insn % 3 != 1)) << 38 | uint64_t(last && (it.insn % 2 == 0)) << 39;   // g2l, g2s tokens
       fprintf(f, "%010llx\n", (unsigned long long)w); nu++; nl += last;
     }
   fclose(f);
@@ -315,16 +329,20 @@ static int dump_vectors(const char *dir, unsigned seed, bool hazard, bool same, 
   f = open("acc0.hex"); for (int a = 0; a < NA; a++) hexline(f, (const uint8_t *)&m.acc[a * N], 4 * N); fclose(f);
   f = open("acc.hex"); for (int a = 0; a < NA; a++) hexline(f, (const uint8_t *)&r.acc[a * N], 4 * N); fclose(f);
   f = open("out.hex"); for (int a = 0; a < NA; a++) hexline(f, (const uint8_t *)&r.out[a * N], N); fclose(f);
-  f = open("meta.txt"); fprintf(f, "%d %d %d %d %d\n", nu, NI, NW, NA, nl); fclose(f);
-  // the cycle model on the same vectors (must agree before the RTL is compared)
-  Stats st = simulate(insns, m);
+  if (reload) { f = open("wgt2.hex"); for (int b = 0; b < NW; b++) for (int j = 0; j < N; j++) hexline(f, (const uint8_t *)&wgt2[(b * N + j) * N], N); fclose(f); }
+  f = open("meta.txt"); fprintf(f, "%d %d %d %d %d %d\n", nu, NI, NW, NA, nl, reload ? 1 : 0); fclose(f);
+  // the cycle model on the same vectors (must agree before the RTL is compared); reload: run the two halves
+  Stats st;
+  if (reload) { std::vector<Insn> i0(insns.begin(), insns.begin() + 1), i1(insns.begin() + 1, insns.end());
+    st = simulate(i0, m); m.wgt = wgt2; Stats s2 = simulate(i1, m); st.forwards += s2.forwards; }
+  else st = simulate(insns, m);
   int bad = check(r, m, lr);
   printf("dump %s seed %u: %d uops, %d instructions, model %s (forwarded %ld)\n", dir, seed, nu, nl, bad ? "MISMATCH" : "bit exact", st.forwards);
   return bad ? 1 : 0;
 }
 
 int main(int argc, char **argv) {
-  if (argc > 1 && !strcmp(argv[1], "dump")) return dump_vectors(argv[2], argc > 3 ? atoi(argv[3]) : 1, argc > 4 && !strcmp(argv[4], "hazard"), argc > 4 && !strcmp(argv[4], "same"), argc > 4 && !strcmp(argv[4], "conv"));
+  if (argc > 1 && !strcmp(argv[1], "dump")) return dump_vectors(argv[2], argc > 3 ? atoi(argv[3]) : 1, argc > 4 && !strcmp(argv[4], "hazard"), argc > 4 && !strcmp(argv[4], "same"), argc > 4 && !strcmp(argv[4], "conv"), argc > 4 && !strcmp(argv[4], "reload"));
   int ntests = argc > 1 ? atoi(argv[1]) : 300;
   unsigned seed = argc > 2 ? atoi(argv[2]) : 1;
   std::mt19937 rng(seed);

@@ -8,7 +8,7 @@ option(NESTC_EVTA_DEBUG "Debug mode for EVTA library" OFF)
 option(NESTC_EVTA_PROFILE "Profile mode for EVTA HW" OFF)
 #### JO added: also read the AXI perf monitor of EVTA i at 0xA0050000 + i * 0x10000 (only bitstreams that have one:
 #### vta-hw-zcu102-single/multi2/multi4 `make bin PROFILE=1`; on others the reads SIGBUS). The copies
-#### vtalib-zcu102-single/multi2/multi4 in nest-compiler have the same option; they are kept apart for experiments.
+#### vta/vtalib has the same option.
 option(NESTC_EVTA_PROFILE_AXI_MONITOR "EVTA bitstream has an AXI perf monitor (with NESTC_EVTA_PROFILE)" OFF)
 #### JO added: the ZCU102 EVTA bitstream zcu102_1x16_i8w8a32_16_16_19_18 on our board is not
 #### cache-coherent (coherent=true hangs), so the runtime must flush/invalidate CPU caches.
@@ -22,7 +22,7 @@ option(NESTC_EVTA_MULTI "use Multi-EVTA" OFF)
 #### 1<<25 = 32 MB). Every handle (one per EVTA) takes 2 x VTA_MAX_XFER of CMA, and the ZCU102 has 128 MB of CMA, so
 #### a multi-EVTA build needs smaller queues; a full instruction queue syncs early, so smaller only means more syncs.
 #### Empty: 4 MB with NESTC_EVTA_MULTI on the ZCU102 (2-4 handles + model weights fit), else the driver.h default.
-#### (vtabundles_xcmpl uses 8 MB for 2 EVTAs.) Same in vtalib-zcu102-single/multi2/multi4.
+#### (vtabundles_xcmpl uses 8 MB for 2 EVTAs.) Same in vta/vtalib.
 set(NESTC_EVTA_MAX_XFER "" CACHE STRING "VTA_MAX_XFER in bytes (empty: 4 MB with NESTC_EVTA_MULTI on the ZCU102)")
 
 #use VTALIB_ONLY running without nest-c

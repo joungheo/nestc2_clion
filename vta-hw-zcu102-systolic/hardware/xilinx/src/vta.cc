@@ -332,6 +332,7 @@ bool gemm_sa_issue(
   insn_T insn_raw,
   uop_T uop_mem[VTA_UOP_BUFF_DEPTH],
   hls::stream<sa_uop_T> &gemm_uop) {
+  VTAGenericInsn ginsn = *((VTAGenericInsn *) &insn_raw);
 #pragma HLS INLINE
 
   VTAGemInsn insn = *((VTAGemInsn *) &insn_raw);
@@ -352,12 +353,16 @@ bool gemm_sa_issue(
         inp_idx_T src_idx = uop.range(VTA_UOP_GEM_1_1, VTA_UOP_GEM_1_0) + src_offset_in;
         wgt_idx_T wgt_idx = uop.range(VTA_UOP_GEM_2_1, VTA_UOP_GEM_2_0) + wgt_offset_in;
         bool last = it_out == insn.iter_out - 1 && it_in == insn.iter_in - 1 && upc == insn.uop_end - 1;
+        bool first = it_out == 0 && it_in == 0 && upc == insn.uop_bgn;
         sa_uop_T u;
         u.range(VTA_LOG_ACC_BUFF_DEPTH - 1, 0) = dst_idx;
         u.range(VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH - 1, VTA_LOG_ACC_BUFF_DEPTH) = src_idx;
-        u.range(VTA_SA_UOP_WIDTH - 3, VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH) = wgt_idx;
-        u[VTA_SA_UOP_WIDTH - 2] = insn.reset_reg;
-        u[VTA_SA_UOP_WIDTH - 1] = last;
+        u.range(VTA_SA_UOP_B - 1, VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH) = wgt_idx;
+        u[VTA_SA_UOP_B] = insn.reset_reg;
+        u[VTA_SA_UOP_B + 1] = last;
+        u[VTA_SA_UOP_B + 2] = first;
+        u[VTA_SA_UOP_B + 3] = last && ginsn.push_prev_dep;   // g2l token, pushed by gemm_sa
+        u[VTA_SA_UOP_B + 4] = last && ginsn.push_next_dep;   // g2s token
         gemm_uop.write(u);
       }
       dst_offset_in += insn.dst_factor_in;
@@ -379,13 +384,15 @@ void gemm_sa_csim(
   bus_T acc_mem[VTA_ACC_BUFF_DEPTH][ACC_MAT_AXI_RATIO],
   bus_T inp_mem[VTA_INP_BUFF_DEPTH][INP_MAT_AXI_RATIO],
   bus_T wgt_mem[VTA_WGT_BUFF_DEPTH][WGT_MAT_AXI_RATIO],
-  bus_T out_mem[VTA_ACC_BUFF_DEPTH][OUT_MAT_AXI_RATIO]) {
+  bus_T out_mem[VTA_ACC_BUFF_DEPTH][OUT_MAT_AXI_RATIO],
+  hls::stream<bool> &g2l_dep_queue,
+  hls::stream<bool> &g2s_dep_queue) {
   while (!gemm_uop.empty()) {
     sa_uop_T u = gemm_uop.read();
     acc_idx_T dst_idx = u.range(VTA_LOG_ACC_BUFF_DEPTH - 1, 0);
     inp_idx_T src_idx = u.range(VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH - 1, VTA_LOG_ACC_BUFF_DEPTH);
-    wgt_idx_T wgt_idx = u.range(VTA_SA_UOP_WIDTH - 3, VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH);
-    bool reset = u[VTA_SA_UOP_WIDTH - 2];
+    wgt_idx_T wgt_idx = u.range(VTA_SA_UOP_B - 1, VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH);
+    bool reset = u[VTA_SA_UOP_B];
     wgt_T w_tensor[VTA_BLOCK_OUT][VTA_BLOCK_IN];
     read_tensor<bus_T, wgt_T, wgt_idx_T, VTA_BUS_WIDTH, VTA_WGT_WIDTH, VTA_BLOCK_OUT, VTA_BLOCK_IN>(wgt_idx, wgt_mem, w_tensor);
     inp_T i_tensor[VTA_BATCH][VTA_BLOCK_IN];
@@ -408,7 +415,9 @@ void gemm_sa_csim(
     }
     write_tensor<bus_T, acc_T, acc_idx_T, VTA_BUS_WIDTH, VTA_ACC_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, a_tensor, acc_mem);
     write_tensor<bus_T, out_T, acc_idx_T, VTA_BUS_WIDTH, VTA_OUT_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, o_tensor, out_mem);
-    if (u[VTA_SA_UOP_WIDTH - 1]) gemm_done.write(1);
+    if (u[VTA_SA_UOP_B + 3]) g2l_dep_queue.write(1);
+    if (u[VTA_SA_UOP_B + 4]) g2s_dep_queue.write(1);
+    if (u[VTA_SA_UOP_B + 1]) gemm_done.write(1);
   }
 }
 #endif
@@ -562,21 +571,20 @@ PRAGMA_HLS(HLS INTERFACE s_axilite port = done bundle = CONTROL_BUS offset = VTA
 #ifdef VTA_SYSTOLIC
 //#### JO changed (2026-10-27, systolic Phase D, docs/evta_systolic_design.md §3): acc_mem is a BD BRAM shared with gemm_sa
 //#### (both ports muxed by gemm_sa busy); GEMM steps go to gemm_sa on gemm_uop, one gemm_done comes back per instruction.
-//#### The dependence pushes of a GEMM instruction wait (sa_tok) until its done, so load/store never reuse a buffer
-//#### gemm_sa still reads; compute meanwhile streams the next GEMM. Every other instruction first waits for all of them.
-//#### Blocking reads poll gemm_done, else compute waiting on a token could block the done that frees it.
+//#### The dependence pushes of a GEMM instruction ride on its last step and gemm_sa pushes them when that step is
+//#### written (gemm_sa_bd merges them into g2l/g2s), so load/store never reuse a buffer gemm_sa still reads, and a load
+//#### waiting for its buffer does not also wait for compute to read the done (that cost ~one GEMM instruction per
+//#### input block: compute is inside the next instruction's II=1 loop). compute only counts the outstanding GEMM
+//#### instructions (gemm_done) and waits for all of them before any other instruction.
 #pragma HLS INTERFACE bram port = acc_mem
 #pragma HLS INTERFACE axis port = gemm_uop
 #pragma HLS INTERFACE axis port = gemm_done
 #pragma HLS RESOURCE variable = acc_mem core = RAM_T2P_BRAM latency = 2
 #pragma HLS ARRAY_RESHAPE variable = acc_mem complete dim=2
 #pragma HLS DEPENDENCE variable = acc_mem inter false
-  static ap_uint<5> sa_out = 0;          // GEMM instructions in gemm_sa
-  static ap_uint<2> sa_tok[16];          // their dependence pushes {next, prev}
-  static ap_uint<4> sa_head = 0, sa_tail = 0;
+  static ap_uint<16> sa_out = 0;         // GEMM instructions in gemm_sa
   bool sa_deferred = false;
-#define SA_RETIRE() { gemm_done.read(); ap_uint<2> t = sa_tok[sa_head]; sa_head++; sa_out--; \
-                      if (t[0]) g2l_dep_queue.write(1); if (t[1]) g2s_dep_queue.write(1); }
+#define SA_RETIRE() { gemm_done.read(); sa_out--; }
 #define SA_POLL() { if (sa_out != 0 && !gemm_done.empty()) SA_RETIRE(); }
 
   insn_T raw_insn;
@@ -659,14 +667,12 @@ PRAGMA_HLS(HLS INTERFACE s_axilite port = done bundle = CONTROL_BUS offset = VTA
     }
   } else if (insn.generic.opcode == VTA_OPCODE_GEMM) {
 #ifdef VTA_SYSTOLIC
-    if (sa_out == 15) SA_RETIRE();
     if (gemm_sa_issue(raw_copy, uop_mem, gemm_uop)) {
-      ap_uint<2> t; t[0] = insn.generic.push_prev_dep; t[1] = insn.generic.push_next_dep;
-      sa_tok[sa_tail] = t; sa_tail++; sa_out++; sa_deferred = true;
+      sa_out++; sa_deferred = true;   // its pushes ride on the last step
     }
 #ifndef __SYNTHESIS__
-    // C simulation: the C model runs the steps now and the tokens go out at once
-    gemm_sa_csim(gemm_uop, gemm_done, acc_mem, inp_mem, wgt_mem, out_mem);
+    // C simulation: the C model runs the steps (and pushes the tokens) now
+    gemm_sa_csim(gemm_uop, gemm_done, acc_mem, inp_mem, wgt_mem, out_mem, g2l_dep_queue, g2s_dep_queue);
     while (sa_out != 0) SA_RETIRE();
 #endif
 #else
@@ -708,7 +714,7 @@ PRAGMA_HLS(HLS INTERFACE s_axilite port = done bundle = CONTROL_BUS offset = VTA
 
   // Push dependence token if instructed
 #ifdef VTA_SYSTOLIC
-  if (!sa_deferred) {   //#### JO added: a GEMM's pushes go out with its gemm_done (SA_RETIRE)
+  if (!sa_deferred) {   //#### JO added: a GEMM's pushes are pushed by gemm_sa
 #endif
   if (insn.generic.push_prev_dep) {
     g2l_dep_queue.write(1);

@@ -68,6 +68,10 @@ set hp_split [expr {$pll_freq > $hp_freq}]
 set hp_clk  [expr {$hp_split ? "hp_clk" : "evta_clk"}]
 set hp_rstn [expr {$hp_split ? "hp_rstn" : "evta_rstn"}]
 if {$hp_split} { puts "HP ports on their own clock, $hp_freq MHz" }
+#### JO added (2026-10-28, systolic Phase D): SYSTOLIC=1 (env VTA_SYSTOLIC) -> each EVTA's GEMM in its own gemm_sa (RTL in
+#### $::env(VTA_SA_RTL) = vta-hw-zcu102-systolic/hardware/xilinx/rtl), acc_mem_<i> a BD BRAM, see vta-hw-zcu102-systolic vivado.tcl
+set systolic [expr {[info exists ::env(VTA_SYSTOLIC)] && $::env(VTA_SYSTOLIC) eq "1"}]
+puts "systolic GEMM (gemm_sa) $systolic"
 if { $TARGET ne "zcu102" } {
   puts "this script supports TARGET zcu102 only"
   return 1
@@ -97,6 +101,12 @@ update_ip_catalog
 foreach stage {fetch load compute store} {
   update_ip_catalog -add_ip "$ip_path/vta_$stage/soln/impl/ip/xilinx_com_hls_${stage}_1_0.zip" -repo_path $ip_lib
 }
+#### JO added (systolic Phase D): RTL sources of gemm_sa_bd (from vta-hw-zcu102-systolic, Makefile VTA_SA_RTL)
+if {$systolic} {
+  set rtl_dir $::env(VTA_SA_RTL)
+  add_files -norecurse [list $rtl_dir/sa_pe.v $rtl_dir/sa_array.v $rtl_dir/sa_ctrl.v $rtl_dir/sa_rmw.v $rtl_dir/gemm_sa.v $rtl_dir/gemm_sa_bd.v]
+  update_compile_order -fileset sources_1
+}
 
 ##################################################################
 # CONFIGURE BLOCK DIAGRAM DESIGN
@@ -120,7 +130,9 @@ proc init_fifo_property {fifo width_bytes depth} {
 }
 
 # Procedure to initialize BRAM
-proc init_bram_property {bram width depth} {
+#### JO changed (systolic Phase D): optional output registers (read latency 2) on port B / A
+#proc init_bram_property {bram width depth} {
+proc init_bram_property {bram width depth {regb false} {rega false}} {
   set_property -dict [ list \
     CONFIG.use_bram_block {Stand_Alone} \
     CONFIG.Assume_Synchronous_Clk {true} \
@@ -130,8 +142,8 @@ proc init_bram_property {bram width depth} {
     CONFIG.Memory_Type {True_Dual_Port_RAM} \
     CONFIG.Read_Width_A $width \
     CONFIG.Read_Width_B $width \
-    CONFIG.Register_PortA_Output_of_Memory_Primitives {false} \
-    CONFIG.Register_PortB_Output_of_Memory_Primitives {false} \
+    CONFIG.Register_PortA_Output_of_Memory_Primitives $rega \
+    CONFIG.Register_PortB_Output_of_Memory_Primitives $regb \
     CONFIG.Use_Byte_Write_Enable {true} \
     CONFIG.Use_RSTA_Pin {true} \
     CONFIG.Use_RSTB_Pin {true} \
@@ -173,8 +185,18 @@ set n_ctrl [expr {($profile ? 5 : 4) * $num_evta}]
 set axi_xbar [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_interconnect:2.1 axi_xbar ]
 set_property -dict [ list CONFIG.NUM_MI $n_ctrl CONFIG.NUM_SI {1} ] $axi_xbar
 
+#### JO changed (2026-10-28, systolic D8): with SYSTOLIC=1 above 333 MHz the 128 -> 32 bit downsizing of the register port is done
+#### by reg_dwc on the PS clock before axi_xbar (inside axi_xbar it sits on the EVTA clock: worst path at 400 MHz in the single)
+if {$systolic && $hp_split} {
+  set reg_dwc [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_dwidth_converter:2.1 reg_dwc ]
+  set_property -dict [ list CONFIG.SI_DATA_WIDTH {128} CONFIG.MI_DATA_WIDTH {32} ] $reg_dwc
+  connect_bd_intf_net -intf_net processing_system_m_axi [get_bd_intf_pins processing_system/M_AXI_HPM0_FPD] \
+    [get_bd_intf_pins reg_dwc/S_AXI]
+  connect_bd_intf_net -intf_net reg_dwc_m_axi [get_bd_intf_pins reg_dwc/M_AXI] [get_bd_intf_pins axi_xbar/S00_AXI]
+} else {
 connect_bd_intf_net -intf_net processing_system_m_axi [get_bd_intf_pins axi_xbar/S00_AXI] \
   [get_bd_intf_pins processing_system/M_AXI_HPM0_FPD]
+}
 connect_bd_net -net processing_system_reset [get_bd_pins processing_system/pl_resetn0] \
   [get_bd_pins proc_sys_reset/ext_reset_in]
 connect_bd_net -net ps_clk_net [get_bd_pins processing_system/pl_clk0] [get_bd_pins pll_clk/clk_in1]
@@ -201,6 +223,10 @@ connect_bd_net -net ps_clk_net [get_bd_pins proc_sys_reset_ps/slowest_sync_clk] 
   [get_bd_pins axi_xbar/S00_ACLK] [get_bd_pins processing_system/maxihpm0_fpd_aclk]
 connect_bd_net -net processing_system_reset [get_bd_pins proc_sys_reset_ps/ext_reset_in]
 connect_bd_net -net ps_rstn_100 [get_bd_pins proc_sys_reset_ps/peripheral_aresetn] [get_bd_pins axi_xbar/S00_ARESETN]
+if {$systolic && $hp_split} {
+  connect_bd_net -net ps_clk_net [get_bd_pins reg_dwc/s_axi_aclk]
+  connect_bd_net -net ps_rstn_100 [get_bd_pins reg_dwc/s_axi_aresetn]
+}
 
 # control crossbar master port k -> slave pin s (and its clock / reset)
 proc connect_ctrl {k s} {
@@ -215,7 +241,7 @@ proc add_evta {i} {
   global AXI_CACHE_BITS AXI_PROT_BITS INSN_BYTES INP_MEM_BANKS INP_MEM_WIDTH INP_MEM_DEPTH \
          WGT_MEM_BANKS WGT_MEM_WIDTH WGT_MEM_DEPTH OUT_MEM_BANKS OUT_MEM_WIDTH OUT_MEM_DEPTH \
          IP_REG_MAP_RANGE FETCH_BASE_ADDR LOAD_BASE_ADDR COMPUTE_BASE_ADDR STORE_BASE_ADDR evta_addr_stride \
-         hp_split hp_clk hp_rstn
+         hp_split hp_clk hp_rstn systolic
   set c $AXI_CACHE_BITS
   set p $AXI_PROT_BITS
   set fetch   [ create_bd_cell -type ip -vlnv xilinx.com:hls:fetch:1.0 fetch_$i ]
@@ -227,6 +253,25 @@ proc add_evta {i} {
                             CONFIG.C_M_AXI_UOP_PORT_CACHE_VALUE $c CONFIG.C_M_AXI_UOP_PORT_PROT_VALUE $p ] $compute
   set store   [ create_bd_cell -type ip -vlnv xilinx.com:hls:store:1.0 store_$i ]
   set_property -dict [ list CONFIG.C_M_AXI_DATA_PORT_CACHE_VALUE $c CONFIG.C_M_AXI_DATA_PORT_PROT_VALUE $p ] $store
+  #### JO added (2026-10-28, systolic Phase D): gemm_sa_<i> and acc_mem_<i> (both in pb_evta_<i> by their names)
+  if {$systolic} {
+    set sa_dw [expr {int(round(log($OUT_MEM_DEPTH) / log(2)))}]
+    set sa_sw [expr {int(round(log($INP_MEM_DEPTH) / log(2)))}]
+    set sa_ww [expr {int(round(log($WGT_MEM_DEPTH) / log(2)))}]
+    set sa [ create_bd_cell -type module -reference gemm_sa_bd gemm_sa_$i ]
+    set_property -dict [ list CONFIG.DW $sa_dw CONFIG.SW $sa_sw CONFIG.WW $sa_ww \
+      CONFIG.UB [expr {(($sa_dw + $sa_sw + $sa_ww + 5 + 7) / 8) * 8}] ] $sa
+    set acc [ create_bd_cell -type ip -vlnv xilinx.com:ip:blk_mem_gen:8.4 acc_mem_$i ]
+    init_bram_property $acc 512 $OUT_MEM_DEPTH true true
+    connect_bd_intf_net [get_bd_intf_pins gemm_sa_$i/mem_acc_a] [get_bd_intf_pins acc_mem_$i/BRAM_PORTA]
+    connect_bd_intf_net [get_bd_intf_pins gemm_sa_$i/mem_acc_b] [get_bd_intf_pins acc_mem_$i/BRAM_PORTB]
+    connect_bd_intf_net [get_bd_intf_pins compute_$i/acc_mem_V_PORTA] [get_bd_intf_pins gemm_sa_$i/hls_acc_a]
+    connect_bd_intf_net [get_bd_intf_pins compute_$i/acc_mem_V_PORTB] [get_bd_intf_pins gemm_sa_$i/hls_acc_b]
+    connect_bd_intf_net [get_bd_intf_pins compute_$i/gemm_uop_V_V] [get_bd_intf_pins gemm_sa_$i/s_uop]
+    connect_bd_intf_net [get_bd_intf_pins gemm_sa_$i/m_done] [get_bd_intf_pins compute_$i/gemm_done_V]
+    connect_bd_intf_net [get_bd_intf_pins compute_$i/g2l_dep_queue_V] [get_bd_intf_pins gemm_sa_$i/s_g2l]
+    connect_bd_intf_net [get_bd_intf_pins compute_$i/g2s_dep_queue_V] [get_bd_intf_pins gemm_sa_$i/s_g2s]
+  }
 
   # command queues carry whole instructions (INSN_BYTES, 32 B for the 256-bit EVTA ISA); dependence queues 1 B
   foreach q {load_queue gemm_queue store_queue} {
@@ -235,13 +280,16 @@ proc add_evta {i} {
   foreach q {l2g_queue g2l_queue g2s_queue s2g_queue} {
     init_fifo_property [ create_bd_cell -type ip -vlnv xilinx.com:ip:fifo_generator:13.2 ${q}_$i ] 1 1024
   }
+  #### JO changed (systolic Phase D): with gemm_sa the g2l / g2s queues are fed by gemm_sa_<i> (its tokens + compute's)
+  set g2l_src [expr {$systolic ? "gemm_sa_$i/m_g2l" : "compute_$i/g2l_dep_queue_V"}]
+  set g2s_src [expr {$systolic ? "gemm_sa_$i/m_g2s" : "compute_$i/g2s_dep_queue_V"}]
   foreach {q src_pin dst_pin} [list \
       load_queue  fetch_$i/load_queue_V_V      load_$i/load_queue_V_V \
       gemm_queue  fetch_$i/gemm_queue_V_V      compute_$i/gemm_queue_V_V \
       store_queue fetch_$i/store_queue_V_V     store_$i/store_queue_V_V \
       l2g_queue   load_$i/l2g_dep_queue_V      compute_$i/l2g_dep_queue_V \
-      g2l_queue   compute_$i/g2l_dep_queue_V   load_$i/g2l_dep_queue_V \
-      g2s_queue   compute_$i/g2s_dep_queue_V   store_$i/g2s_dep_queue_V \
+      g2l_queue   $g2l_src                     load_$i/g2l_dep_queue_V \
+      g2s_queue   $g2s_src                     store_$i/g2s_dep_queue_V \
       s2g_queue   store_$i/s2g_dep_queue_V     compute_$i/s2g_dep_queue_V ] {
     connect_bd_intf_net [get_bd_intf_pins $src_pin] [get_bd_intf_pins ${q}_$i/S_AXIS]
     connect_bd_intf_net [get_bd_intf_pins ${q}_$i/M_AXIS] [get_bd_intf_pins $dst_pin]
@@ -254,10 +302,21 @@ proc add_evta {i} {
       out_mem $OUT_MEM_BANKS $OUT_MEM_WIDTH $OUT_MEM_DEPTH compute_$i store_$i ] {
     for {set k 0} {$k < $banks} {incr k} {
       set bram [ create_bd_cell -type ip -vlnv xilinx.com:ip:blk_mem_gen:8.4 ${mem}_${i}_$k ]
-      init_bram_property $bram $width $depth
       set pin [expr {$banks > 1 ? "${mem}_${k}_V_PORTA" : "${mem}_V_PORTA"}]
-      connect_bd_intf_net [get_bd_intf_pins $bram/BRAM_PORTA] [get_bd_intf_pins $a/$pin]
-      connect_bd_intf_net [get_bd_intf_pins $bram/BRAM_PORTB] [get_bd_intf_pins $b/$pin]
+      set pa [get_bd_intf_pins $a/$pin]
+      set pb [get_bd_intf_pins $b/$pin]
+      #### JO changed (systolic Phase D): inp/wgt port B -> gemm_sa (output register on, latency 2), out port A <- gemm_sa
+      #### (compute's out port goes through gemm_sa_bd's mux)
+      set regb false
+      if {$systolic && $mem eq "inp_mem"} { set pb [get_bd_intf_pins gemm_sa_$i/mem_inp]; set regb true }
+      if {$systolic && $mem eq "wgt_mem"} { set pb [get_bd_intf_pins gemm_sa_$i/mem_wgt$k]; set regb true }
+      if {$systolic && $mem eq "out_mem"} {
+        connect_bd_intf_net $pa [get_bd_intf_pins gemm_sa_$i/hls_out]
+        set pa [get_bd_intf_pins gemm_sa_$i/mem_out]
+      }
+      init_bram_property $bram $width $depth $regb
+      connect_bd_intf_net [get_bd_intf_pins $bram/BRAM_PORTA] $pa
+      connect_bd_intf_net [get_bd_intf_pins $bram/BRAM_PORTB] $pb
     }
   }
 
@@ -303,6 +362,10 @@ proc add_evta {i} {
   foreach s [list fetch_$i load_$i compute_$i store_$i] {
     connect_bd_net -net evta_clk [get_bd_pins $s/ap_clk]
     connect_bd_net -net evta_rstn_$i [get_bd_pins $s/ap_rst_n]
+  }
+  if {$systolic} {
+    connect_bd_net -net evta_clk [get_bd_pins gemm_sa_$i/clk]
+    connect_bd_net -net evta_rstn_$i [get_bd_pins gemm_sa_$i/rstn]
   }
   foreach q {load_queue gemm_queue store_queue l2g_queue g2l_queue g2s_queue s2g_queue} {
     connect_bd_net -net evta_clk [get_bd_pins ${q}_$i/s_aclk]
@@ -380,6 +443,8 @@ save_bd_design
 make_wrapper -files \
   [get_files $proj_path/$proj_name.srcs/sources_1/bd/$proj_name/$proj_name.bd] -top
 add_files -norecurse $proj_path/$proj_name.srcs/sources_1/bd/$proj_name/hdl/${proj_name}_wrapper.v
+#### JO added (systolic Phase D): with the gemm_sa RTL in sources_1 the automatic top would be gemm_sa_bd
+set_property top ${proj_name}_wrapper [current_fileset]
 update_compile_order -fileset sources_1
 update_compile_order -fileset sim_1
 
@@ -459,6 +524,11 @@ if {$bram_fence eq "split" || $bram_fence eq "y219"} {
 } elseif {$bram_fence ne "none"} {
   puts "VTA_BRAM_FENCE must be split, y219, upper or none"
   return 1
+}
+#### JO added (2026-10-28): Makefile IMPL_STRATEGY -> implementation strategy
+if {[info exists ::env(VTA_IMPL_STRATEGY)] && $::env(VTA_IMPL_STRATEGY) ne ""} {
+  set_property strategy $::env(VTA_IMPL_STRATEGY) [get_runs impl_1]
+  puts "impl strategy $::env(VTA_IMPL_STRATEGY)"
 }
 launch_runs impl_1 -to_step write_bitstream -jobs $num_threads
 wait_on_run impl_1
