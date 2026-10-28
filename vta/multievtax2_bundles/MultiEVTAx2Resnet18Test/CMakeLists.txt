@@ -21,6 +21,17 @@ add_custom_command(
         DEPENDS image-classifier MxnetResnet18ONNXDownload
 )
 
+#### JO added (2026-10-29): skip list (preprocess, conv0, relu0 kept float) only with VTA_RESNET18_WITH_SKIPQUANT0, as
+#### vta/bundles/Resnet18Test; model-compiler reads ./VTASkipQuantizeNodes.txt, so OFF removes a stale copy
+if(VTA_RESNET18_WITH_SKIPQUANT0)
+    set(SKIPQ0_COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/VTASkipQuantizeNodes.txt
+        ${CMAKE_CURRENT_BINARY_DIR}/VTASkipQuantizeNodes.txt)
+    set(SKIPQ0_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/VTASkipQuantizeNodes.txt)
+else()
+    set(SKIPQ0_COMMAND ${CMAKE_COMMAND} -E remove -f ${CMAKE_CURRENT_BINARY_DIR}/VTASkipQuantizeNodes.txt)
+    set(SKIPQ0_DEPENDS)
+endif()
+
 foreach(copy 0 1)
     if(copy EQUAL 0)
         set(name mxnet_exported_resnet18)
@@ -37,9 +48,10 @@ foreach(copy 0 1)
             ${CMAKE_CURRENT_BINARY_DIR}/${name}.cpp
             ${CMAKE_CURRENT_BINARY_DIR}/${name}.h
             ${CMAKE_CURRENT_BINARY_DIR}/${name}.weights.bin
-            COMMAND ${CMAKE_COMMAND} -E copy
-            ${CMAKE_CURRENT_SOURCE_DIR}/VTASkipQuantizeNodes.txt
-            ${CMAKE_CURRENT_BINARY_DIR}/VTASkipQuantizeNodes.txt
+            #COMMAND ${CMAKE_COMMAND} -E copy
+            #${CMAKE_CURRENT_SOURCE_DIR}/VTASkipQuantizeNodes.txt
+            #${CMAKE_CURRENT_BINARY_DIR}/VTASkipQuantizeNodes.txt
+            COMMAND ${SKIPQ0_COMMAND}
             COMMAND
             model-compiler -g
             -model=${NESTC_BINARY_DIR}/models/mxnet_exported_resnet18.onnx
@@ -55,7 +67,8 @@ foreach(copy 0 1)
             DEPENDS
             model-compiler VTA MxnetResnet18ONNXDownload
             ${CMAKE_CURRENT_BINARY_DIR}/mxnet_exported_resnet18_calib_1.yaml
-            ${CMAKE_CURRENT_SOURCE_DIR}/VTASkipQuantizeNodes.txt ${after}
+            #${CMAKE_CURRENT_SOURCE_DIR}/VTASkipQuantizeNodes.txt ${after}
+            ${SKIPQ0_DEPENDS} ${after}
     )
 endforeach()
 

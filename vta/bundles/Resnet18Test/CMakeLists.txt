@@ -28,6 +28,8 @@ if(NOT NESTC_USE_PRECOMPILED_BUNDLE)
                 ${CMAKE_CURRENT_BINARY_DIR}/mxnet_exported_resnet18.h
                 ${CMAKE_CURRENT_BINARY_DIR}/mxnet_exported_resnet18.weights.bin
                 ${CMAKE_CURRENT_BINARY_DIR}/VTARuntime.h
+                #### JO added (2026-10-29): model-compiler reads ./VTASkipQuantizeNodes.txt; drop the one an ON build left here
+                COMMAND ${CMAKE_COMMAND} -E remove -f ${CMAKE_CURRENT_BINARY_DIR}/VTASkipQuantizeNodes.txt
                 COMMAND
                 model-compiler -g
                 -model=${NESTC_BINARY_DIR}/models/mxnet_exported_resnet18.onnx

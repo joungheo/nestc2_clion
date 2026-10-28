@@ -23,15 +23,27 @@ add_custom_target(singlevtaMxnetResnet18BundleONNX
         ${CMAKE_CURRENT_BINARY_DIR}/mxnet_exported_resnet18_calib_1.yaml
 )
 
+#### JO added (2026-10-29): skip list (preprocess, conv0, relu0 kept float) only with VTA_RESNET18_WITH_SKIPQUANT0, as
+#### vta/bundles/Resnet18Test; model-compiler reads ./VTASkipQuantizeNodes.txt, so OFF removes a stale copy
+if(VTA_RESNET18_WITH_SKIPQUANT0)
+    set(SKIPQ0_COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/VTASkipQuantizeNodes.txt
+        ${CMAKE_CURRENT_BINARY_DIR}/VTASkipQuantizeNodes.txt)
+    set(SKIPQ0_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/VTASkipQuantizeNodes.txt)
+else()
+    set(SKIPQ0_COMMAND ${CMAKE_COMMAND} -E remove -f ${CMAKE_CURRENT_BINARY_DIR}/VTASkipQuantizeNodes.txt)
+    set(SKIPQ0_DEPENDS)
+endif()
+
 if(NOT NESTC_USE_PRECOMPILED_BUNDLE)
         add_custom_command(
                 OUTPUT
                 ${CMAKE_CURRENT_BINARY_DIR}/mxnet_exported_resnet18.cpp
                 ${CMAKE_CURRENT_BINARY_DIR}/mxnet_exported_resnet18.h
                 ${CMAKE_CURRENT_BINARY_DIR}/mxnet_exported_resnet18.weights.bin
-                COMMAND ${CMAKE_COMMAND} -E copy
-                ${CMAKE_CURRENT_SOURCE_DIR}/VTASkipQuantizeNodes.txt
-                ${CMAKE_CURRENT_BINARY_DIR}/VTASkipQuantizeNodes.txt
+                #COMMAND ${CMAKE_COMMAND} -E copy
+                #${CMAKE_CURRENT_SOURCE_DIR}/VTASkipQuantizeNodes.txt
+                #${CMAKE_CURRENT_BINARY_DIR}/VTASkipQuantizeNodes.txt
+                COMMAND ${SKIPQ0_COMMAND}
                 COMMAND
                 model-compiler -g
                 -model=${NESTC_BINARY_DIR}/models/mxnet_exported_resnet18.onnx
@@ -52,9 +64,10 @@ if(NOT NESTC_USE_PRECOMPILED_BUNDLE)
                 ${CMAKE_CURRENT_BINARY_DIR}/mxnet_exported_resnet18_1.cpp
                 ${CMAKE_CURRENT_BINARY_DIR}/mxnet_exported_resnet18_1.h
                 ${CMAKE_CURRENT_BINARY_DIR}/mxnet_exported_resnet18_1.weights.bin
-                COMMAND ${CMAKE_COMMAND} -E copy
-                ${CMAKE_CURRENT_SOURCE_DIR}/VTASkipQuantizeNodes.txt
-                ${CMAKE_CURRENT_BINARY_DIR}/VTASkipQuantizeNodes.txt
+                #COMMAND ${CMAKE_COMMAND} -E copy
+                #${CMAKE_CURRENT_SOURCE_DIR}/VTASkipQuantizeNodes.txt
+                #${CMAKE_CURRENT_BINARY_DIR}/VTASkipQuantizeNodes.txt
+                COMMAND ${SKIPQ0_COMMAND}
                 COMMAND
                 model-compiler -g
                 -model=${NESTC_BINARY_DIR}/models/mxnet_exported_resnet18.onnx
@@ -78,9 +91,10 @@ if(NOT NESTC_USE_PRECOMPILED_BUNDLE)
                 ${CMAKE_CURRENT_BINARY_DIR}/mxnet_exported_resnet18_2.cpp
                 ${CMAKE_CURRENT_BINARY_DIR}/mxnet_exported_resnet18_2.h
                 ${CMAKE_CURRENT_BINARY_DIR}/mxnet_exported_resnet18_2.weights.bin
-                COMMAND ${CMAKE_COMMAND} -E copy
-                ${CMAKE_CURRENT_SOURCE_DIR}/VTASkipQuantizeNodes.txt
-                ${CMAKE_CURRENT_BINARY_DIR}/VTASkipQuantizeNodes.txt
+                #COMMAND ${CMAKE_COMMAND} -E copy
+                #${CMAKE_CURRENT_SOURCE_DIR}/VTASkipQuantizeNodes.txt
+                #${CMAKE_CURRENT_BINARY_DIR}/VTASkipQuantizeNodes.txt
+                COMMAND ${SKIPQ0_COMMAND}
                 COMMAND
                 model-compiler -g
                 -model=${NESTC_BINARY_DIR}/models/mxnet_exported_resnet18.onnx
@@ -104,9 +118,10 @@ if(NOT NESTC_USE_PRECOMPILED_BUNDLE)
                 ${CMAKE_CURRENT_BINARY_DIR}/mxnet_exported_resnet18_3.cpp
                 ${CMAKE_CURRENT_BINARY_DIR}/mxnet_exported_resnet18_3.h
                 ${CMAKE_CURRENT_BINARY_DIR}/mxnet_exported_resnet18_3.weights.bin
-                COMMAND ${CMAKE_COMMAND} -E copy
-                ${CMAKE_CURRENT_SOURCE_DIR}/VTASkipQuantizeNodes.txt
-                ${CMAKE_CURRENT_BINARY_DIR}/VTASkipQuantizeNodes.txt
+                #COMMAND ${CMAKE_COMMAND} -E copy
+                #${CMAKE_CURRENT_SOURCE_DIR}/VTASkipQuantizeNodes.txt
+                #${CMAKE_CURRENT_BINARY_DIR}/VTASkipQuantizeNodes.txt
+                COMMAND ${SKIPQ0_COMMAND}
                 COMMAND
                 model-compiler -g
                 -model=${NESTC_BINARY_DIR}/models/mxnet_exported_resnet18.onnx
