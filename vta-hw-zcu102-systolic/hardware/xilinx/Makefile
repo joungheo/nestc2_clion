@@ -55,7 +55,12 @@ FREQ ?=
 SYSTOLIC ?= 0
 #IP_NAME := $(CONF)$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(MEM_OREG)),_oreg)
 IP_NAME := $(CONF)$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(MEM_OREG)),_oreg)$(if $(filter 1,$(SYSTOLIC)),_sa)
-BUILD_NAME := $(IP_NAME)$(if $(FREQ),_$(FREQ)mhz)
+#### JO changed (2026-10-28, systolic D8): IMPL_STRATEGY=<Vivado impl strategy>, BUILD_TAG=<suffix of the vivado dir>
+#BUILD_NAME := $(IP_NAME)$(if $(FREQ),_$(FREQ)mhz)
+IMPL_STRATEGY ?=
+BUILD_TAG ?=
+BUILD_NAME := $(IP_NAME)$(if $(FREQ),_$(FREQ)mhz)$(if $(BUILD_TAG),_$(BUILD_TAG))
+export VTA_IMPL_STRATEGY := $(IMPL_STRATEGY)
 IP_BUILD_PATH := $(BUILD_DIR)/hls/$(IP_NAME)
 export VTA_MEM_OREG := $(MEM_OREG)
 export VTA_SYSTOLIC := $(SYSTOLIC)

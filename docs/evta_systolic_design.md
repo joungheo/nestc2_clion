@@ -251,6 +251,30 @@ uop 스트림 루프 II=1, ALU II=2(같음), acc_mem은 512비트 BRAM 포트 2�
   conv는 같다. Resnet50·Vgg16의 차이는 HP 포트 클럭(333 vs 380)으로 보인다(1x1 conv 등 load/store 비중이 큰 층; multi4 380의 Conv 번들과 같은 현상).
 - **정리: systolic GEMM은 같은 클럭에서 HLS GEMM과 같은 속도로 보드에서 동작한다. 이득은 HLS가 못 가는 클럭(400 이상, C안의 어레이 2배 클럭)에서만 나온다.**
 
+**400 MHz (B안 완성, 2026-10-28)**
+- 400 실패(gemm_sa 밖)를 고친 것:
+  - `axi_xbar`의 128 → 32비트 폭 변환이 클럭 변환기 뒤(EVTA 클럭)에 있었다 → 333 MHz 초과 빌드에서 PS와 xbar 사이에 `reg_dwc`(axi_dwidth_converter, PS 클럭 100 MHz).
+    PS 쪽 HPM0 폭은 그대로 128비트다(포트 폭은 부트 이미지가 정해서 비트스트림만 32비트로 바꾸면 레지스터 접근이 깨진다).
+  - HLS compute/load 경로(로직 6~7단, 배선 70%): HLS 목표는 이미 2 ns(`pkg_config.py fpga_per`)라 재합성 대신 구현 전략.
+    Makefile `IMPL_STRATEGY=<전략>`, `BUILD_TAG=<빌드 dir 접미사>`.
+- 명령: `make bin SYSTOLIC=1 FREQ=400 JOBS=8 IMPL_STRATEGY=Performance_ExtraTimingOpt BUILD_TAG=Performance_ExtraTimingOpt`
+  → **WNS +0.015, WHS +0.010, WPWS +0.001**(Performance_ExplorePostRoutePhysOpt는 +0.012). stuckchk 0 extra, Y219 PIP 0.
+- 보드 `bit/evta_single_systolic_261027/vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_400mhz.bin`(md5 `21f50187…`): probes 10/10, golden 30 PASS, Resnet18/Partition/50 → 281.
+- 속도(`run_prof.sh -s _sysprof all`, total_vta_time, 같은 날 333 MHz HLS `vtahw_single_y219`):
+
+| 번들 | 333 MHz HLS | **400 MHz systolic** | 시간 | 속도 |
+|---|---|---|---|---|
+| ResConv10 | 2.893 ms | 2.435 ms | −15.8% | +18.8% |
+| Conv4 | 3.564 ms | 3.008 ms | −15.6% | +18.5% |
+| ResConv4 | 3.189 ms | 2.681 ms | −15.9% | +18.9% |
+| Resnet18 | 48.54 ms | 41.10 ms | −15.3% | +18.1% |
+| Vgg16Cifar10 | 33.52 ms | 30.10 ms | −10.2% | +11.4% |
+| Resnet50 | 245.77 ms | 229.00 ms | −6.8% | +7.3% |
+
+  클럭 비율 기대치는 −16.7%(+20%). conv와 Resnet18은 거의 그만큼이다. Resnet50·Vgg16은 HP 포트(333 MHz)에 묶인 load/store 비중이 커서 덜 줄었다.
+- **B안 결론: systolic GEMM으로 HLS GEMM이 못 가는 400 MHz를 보드에서 동작시켰고, conv/Resnet18 EVTA 시간이 약 15.5% 줄었다.**
+  남은 것: multi2/multi4 적용, HP 포트 대역(load/store 병목 층), C안(어레이 2배 클럭).
+
 ## 13. 열린 문제
 
 1. HLS 2020.1: 512비트 2포트 외부 bram 인터페이스와 ALU 루프 II(§3). D5 전에 HLS만 따로 합성해 본다.

@@ -444,7 +444,17 @@ connect_bd_intf_net -intf_net compute_0_m_axi_uop_port [get_bd_intf_pins axi_smc
 connect_bd_intf_net -intf_net compute_0_m_axi_data_port [get_bd_intf_pins axi_smc0/S03_AXI] [get_bd_intf_pins compute_0/m_axi_data_port]
 connect_bd_intf_net -intf_net store_0_m_axi_data_port [get_bd_intf_pins axi_smc0/S04_AXI] [get_bd_intf_pins store_0/m_axi_data_port]
 connect_bd_intf_net -intf_net axi_smc0_M00_AXI [get_bd_intf_pins axi_smc0/M00_AXI] $saxi
+#### JO changed (2026-10-28, systolic D8): above 333 MHz (hp_split) the 128 -> 32 bit downsizing of the register port is done by
+#### reg_dwc on the PS clock, before axi_xbar; inside axi_xbar it sat after the clock converter on the EVTA clock and was the
+#### worst path at 400 MHz (-0.112 ns). The PS side stays 128 bits (its port width comes from the boot image, not the bitstream).
+if {$hp_split} {
+  set reg_dwc [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_dwidth_converter:2.1 reg_dwc ]
+  set_property -dict [ list CONFIG.SI_DATA_WIDTH {128} CONFIG.MI_DATA_WIDTH {32} ] $reg_dwc
+  connect_bd_intf_net -intf_net processing_system_m_axi $maxi [get_bd_intf_pins reg_dwc/S_AXI]
+  connect_bd_intf_net -intf_net reg_dwc_m_axi [get_bd_intf_pins reg_dwc/M_AXI] [get_bd_intf_pins axi_xbar/S00_AXI]
+} else {
 connect_bd_intf_net -intf_net processing_system_m_axi [get_bd_intf_pins axi_xbar/S00_AXI] $maxi
+}
 
 # Create port connections
 #### JO changed (2026-10-23): pll_clk/resetn removed from this net (see pll_clk above)
@@ -531,6 +541,10 @@ connect_bd_net -net ps_clk_net [get_bd_pins proc_sys_reset_ps/slowest_sync_clk] 
 connect_bd_net -net processing_system_reset [get_bd_pins proc_sys_reset_ps/ext_reset_in]
 connect_bd_net -net proc_sys_reset_ps_peripheral_aresetn \
   [get_bd_pins proc_sys_reset_ps/peripheral_aresetn] [get_bd_pins axi_xbar/S00_ARESETN]
+if {$hp_split} {
+  connect_bd_net -net ps_clk_net [get_bd_pins reg_dwc/s_axi_aclk]
+  connect_bd_net -net proc_sys_reset_ps_peripheral_aresetn [get_bd_pins reg_dwc/s_axi_aresetn]
+}
 
 #### JO added: AXI perf monitor (profile mode) for vtalib's PROFILE_ENABLE + PROFILE_AXI_MONITOR build.
 #### Profile-mode counters per slot: +0x00 wr bytes, +0x10 wr transactions, +0x20 wr latency,
@@ -662,6 +676,11 @@ if {$target eq "zcu102" && $bram_fence eq "y219"} {
 } elseif {$target eq "zcu102" && $bram_fence ne "none"} {
   puts "VTA_BRAM_FENCE must be y219, upper or none"
   return 1
+}
+#### JO added (2026-10-28, systolic D8): Makefile IMPL_STRATEGY -> implementation strategy (default: the run's default)
+if {[info exists ::env(VTA_IMPL_STRATEGY)] && $::env(VTA_IMPL_STRATEGY) ne ""} {
+  set_property strategy $::env(VTA_IMPL_STRATEGY) [get_runs impl_1]
+  puts "impl strategy $::env(VTA_IMPL_STRATEGY)"
 }
 launch_runs impl_1 -to_step write_bitstream -jobs $num_threads
 wait_on_run impl_1
