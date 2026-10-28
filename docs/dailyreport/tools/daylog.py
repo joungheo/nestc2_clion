@@ -1,6 +1,7 @@
 # Extract one report day (YYMMDD 07:00 KST to the next day 07:00) from the Claude Code transcripts of this repo:
 # user requests (typed or queued mid-turn) and the assistant's turn summaries, in time order, as markdown.
-# usage: python3 daylog.py YYMMDD > body.md        (exit 1 when the day has no requests)
+# usage: python3 daylog.py YYMMDD [session-id-prefix ...] > body.md   (exit 1 when the day has no requests)
+#        with prefixes, only those sessions are read
 import glob
 import json
 import os
@@ -11,6 +12,7 @@ from datetime import datetime, timedelta
 MARK = '[daily-report-auto]'   # prompt marker of daily_report.sh: its own sessions are skipped
 D = os.path.expanduser('~/.claude/projects/-home-ubuntu-npuprg-nestc2-clion-nest-compiler/')
 day = datetime.strptime(sys.argv[1], '%y%m%d')
+only = sys.argv[2:]
 lo = (day + timedelta(hours=7 - 9)).strftime('%Y-%m-%dT%H:%M')   # transcript timestamps are UTC
 hi = (day + timedelta(hours=31 - 9)).strftime('%Y-%m-%dT%H:%M')
 
@@ -23,6 +25,8 @@ def skip_user(x):
 ev = []
 for f in sorted(glob.glob(D + '*.jsonl')):
     sid = os.path.basename(f)[:8]
+    if only and not any(os.path.basename(f).startswith(p) for p in only):
+        continue
     rows = []
     auto = False
     for line in open(f, errors='replace'):
