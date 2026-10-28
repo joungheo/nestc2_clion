@@ -396,6 +396,40 @@ for v in prof_360mhz prof_380mhz prof_400mhz prof_oreg_360mhz prof_oreg_380mhz p
     333 MHz의 EVTA 시간 1.449 ms를 클럭 비율로 줄이면 1.271 ms, 여기에 CPU 간격을 더하면 1.338 ms로 측정값 1.349 ms와 거의 맞는다.
   - HP 클럭이 333으로 묶여도 ResConv10은 영향이 없다(GEMM 가동률 93.5%, load/store가 GEMM 뒤에 숨는다). Conv 번들이 안 빨라진 것(위 표)과 대조된다.
 
+**8) single, multi2 380 MHz(HP 333 분리)와 기본 비트스트림 변경** (2026-10-28)
+- single: `vta-hw-zcu102-systolic`을 `SYSTOLIC` 없이 빌드했다(HLS GEMM, 이 트리에 HP 분리와 `reg_dwc`가 있다).
+  `make ip CSIM=1`, `make bin FREQ=380 JOBS=4 IMPL_STRATEGY=Performance_ExtraTimingOpt BUILD_TAG=Performance_ExtraTimingOpt`.
+- multi2: `vta-hw-zcu102-multi4`를 `NUM_EVTA=2`로 빌드했다(같은 `vivado.tcl`, EVTA 2개면 fence `y219`). 명령은 위와 같고 `NUM_EVTA=2`를 더한다.
+- 기본 구현 전략으로는 둘 다 setup이 모자랐다(single −0.043, multi2 −0.023, AXI 인터커넥트·폭 변환 FIFO). `Performance_ExtraTimingOpt`로:
+
+| 판 | WNS | WHS | WPWS | BRAM / DSP | 검사 |
+|---|---|---|---|---|---|
+| single 380 | +0.041 | +0.010 | +0.001 | 258 / 268 | stuckchk 0 extra, Y219 PIP 0 |
+| multi2 380 | +0.009 | +0.010 | +0.001 | 290 / 536 | stuckchk 0 extra, Y219 PIP 0 |
+
+- 보드 `bit/evta_single_380MHz_pass_261028/vtahw_zcu102_1x16_i8w8a32_16_16_19_18_380mhz.bin`(md5 `9b3a1e02…`),
+  `bit/evta_multi2_380MHz_pass_261028/vtahw_zcu102_1x16_i8w8a32_16_15_18_17_2evta_380mhz_hp333.bin`(md5 `2d9519dd…`). `/lib/firmware`에 같은 이름, README 있음.
+  multi2의 `_hp333`은 10-27의 규격 밖 판(`..._2evta_380mhz.bin`, HP 380)과 구분하려고 붙였다.
+- probes: single 10/10, multi2 20/20. golden: single 30 PASS(Resnet18/Partition/50 → 281, Vgg16 → 0), multi2 3 PASS, Resnet18 multi/single 100회 모두 281.
+- 속도(`run_prof.sh`, total_vta_time, 같은 날 333 MHz와):
+
+| 번들 | 333 | 380 (HP 333) | 변화 |
+|---|---|---|---|
+| single ResConv10 | 2.894 ms | 2.561 ms | −11.5% |
+| single Conv4 | 3.547 ms | 3.134 ms | −11.6% |
+| single Resnet18 | 48.375 ms | 42.944 ms | −11.2% |
+| single Resnet50 | 252.154 ms | 246.106 ms | −2.4% |
+| single Vgg16Cifar10 | 33.533 ms | 31.087 ms | −7.3% |
+| multi2 Conv4 | 179.204 ms | 158.411 ms | −11.6% |
+| multi2 Resnet18 x2 | 1184.843 ms | 1053.490 ms | −11.1% |
+
+  Resnet50은 load/store 비중이 커서 HP 클럭(333)에 묶인다(systolic 400의 Resnet50 −6.8%와 같은 현상).
+- **기본 비트스트림을 380 MHz로 바꿨다.** `vtabundles_xcmpl/hw*/script/run_all.sh`의 `BIN`과 `collect_hw_bundles.py`의 `SETS`:
+  single `..._16_16_19_18_380mhz.bin`, multi2 `..._2evta_380mhz_hp333.bin`, multi4 `..._4evta_380mhz.bin`(7)).
+  systolic 판은 `SYS_BIN`(single `..._16_16_19_18_sa_400mhz.bin`, multi4 `..._4evta_sa_400mhz.bin`)이다.
+  `run_prof.sh -s _sys*`(vtalib-zcu102-systolic로 빌드한 실행 파일)는 `SYS_BIN`으로 돈다. `BIN=<file>`을 주면 그것이 우선이다.
+  333 MHz 판(`vtahw_*_y219.bin`)은 `BIN=`으로 계속 쓸 수 있다.
+
 ## 9. 조사 보고서: 외부 설계·논문·문서 분석 (2026-10-27)
 
 받은 원문은 `docs/ref/`에 있다(목록·라이선스·git 포함 여부는 `docs/ref/README.md`). 각 소스를 같은 틀로 정리했다:

@@ -163,6 +163,22 @@ conv 호출 wall 시간에서 같은 conv의 EVTA 시간을 뺐다(두 번째 ru
 - layout 유지와 정적 메모리 계획은 AOT 1·2단계의 전제이기도 하다. 버퍼 위치가 고정되어야 명령을 미리 만들 수 있다.
 - 순서는 conv0 → layout/메모리 계획 → AOT 1단계(필요하면 0단계를 시험대로) → HAL을 권한다.
 
+**conv0 양자화 측정 (2026-10-28, 보드 single 333 MHz, `vtahw_single_y219`)**
+- 지금 Resnet18 번들은 `VTA_RESNET18_WITH_SKIPQUANT0=ON`이라 `VTASkipQuantizeNodes.txt`가 전처리와 conv0, relu0을 양자화에서 뺀다 → `convolutionFloat`.
+- skip 파일 없이 보드 `Debug2_remote/glow/bin/model-compiler`로 번들을 다시 만들었다(cmake 옵션을 바꾸면 Glow 전체가 다시 빌드되므로).
+  결과는 `Debug2_remote/vta/bundles/Resnet18Test_q0/`, 보드 실행은 `vtabundles_xcmpl/hw/Resnet18Q0Test/`(빌드 명령은 build_timed, build_prof의 Resnet18 명령에서 경로만 바꿈).
+- conv0은 int8이 되지만 입력 3채널이라 EVTA 조건에 안 맞아 CPU `nonvtaconvolution`으로 간다(`VTA_BNN`이 꺼져 있으면 `VTASave.cpp:3108`).
+
+| | SKIPQUANT0=ON | SKIPQUANT0=OFF |
+|---|---|---|
+| 분류 (cat_285) | 281 | 281 |
+| conv0 | `convolutionFloat` 76.2 ms | `nonvtaconvolution` 1153.7 ms |
+| 추론 전체 (`_timed`, run 2) | 134.3 ms | 1210.3 ms |
+| EVTA 시간 (`_prof`) | 48.37 ms | 48.38 ms |
+
+- 양자화 자체는 이 이미지에서 결과를 바꾸지 않았다. 느려진 것은 CPU int8 conv가 최적화되지 않았기 때문이다(float 쪽은 1547 → 76 ms로 고쳐 둠).
+  conv0을 EVTA로 보내야(입력 0 채움 3 → 16채널, `saveFirstBNNVTAConvolutionInst`와 같은 방식) 의미가 있다. 예상 약 8 ms.
+
 ## 6. 정할 것
 
 1. AOT 0단계를 시험으로 먼저 할지, 아니면 conv0과 layout 작업을 먼저 할지.

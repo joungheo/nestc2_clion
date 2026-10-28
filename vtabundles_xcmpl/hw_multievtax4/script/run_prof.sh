@@ -20,14 +20,20 @@ HWD=$(basename "$PWD"); BLD=../build${HWD#hw}
 #BIN=zcu102_1x16_i8w8a32_16_16_19_18.bin
 #### JO changed (2026-10-26): run_all.sh has BIN=${BIN:-<file>} -> take <file>; BIN=<file> in the environment wins
 #BIN=$(sed -n "s/^BIN=//p" run_all.sh)
-BIN=${BIN:-$(sed -n 's/^BIN=\${BIN:-\(.*\)}$/\1/p; s/^BIN=\([^$].*\)$/\1/p' $RUN_ALL)}
-[ -f /lib/firmware/$BIN ] || { echo "bitstream /lib/firmware/$BIN not found"; exit 1; }
+#### JO changed (2026-10-28): after -s (below): -s _sys* takes SYS_BIN of run_all.sh (the systolic bitstream)
+#BIN=${BIN:-$(sed -n 's/^BIN=\${BIN:-\(.*\)}$/\1/p; s/^BIN=\([^$].*\)$/\1/p' $RUN_ALL)}
+#[ -f /lib/firmware/$BIN ] || { echo "bitstream /lib/firmware/$BIN not found"; exit 1; }
 [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
 #### JO added (2026-10-26): one EVTA run at a time on the board (the same lock as run_all.sh): each run reloads the
 #### PL, and two runs swap bitstreams under each other (SError, bus errors, mismatches)
 exec 9>/tmp/evta_run.lock; flock -n 9 || { echo "another EVTA run is active (/tmp/evta_run.lock)"; exit 1; }
 SUFFIX=_prof
 [ "${1:-}" = -s ] && { SUFFIX=$2; shift 2; }
+#### JO added (2026-10-28): _sys* executables are built with vtalib-zcu102-systolic (weight-stationary uop order)
+#### -> run them on the systolic bitstream SYS_BIN of run_all.sh; BIN=<file> in the environment still wins
+V=BIN; case $SUFFIX in _sys*) V=SYS_BIN;; esac
+BIN=${BIN:-$(sed -n 's/^'$V'=\${'$V':-\(.*\)}$/\1/p; s/^'$V'=\([^$].*\)$/\1/p' $RUN_ALL)}
+[ -n "$BIN" ] && [ -f /lib/firmware/$BIN ] || { echo "bitstream /lib/firmware/$BIN not found ($V in $RUN_ALL)"; exit 1; }
 LOG=${SUFFIX#_}.log
 #### JO changed: no Dir / "all" / "hw_bundles" runs every bundle listed in run_all.sh
 # [ $# -gt 0 ] || { echo "usage: sudo ./run_prof.sh [-s _timed] Dir [Dir ...]"; exit 1; }
