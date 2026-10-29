@@ -262,7 +262,7 @@ conv 호출 wall 시간에서 같은 conv의 EVTA 시간을 뺐다(두 번째 ru
   | conv0 | 12.81 → 9.49 ms | 12.43 → 9.13 ms |
   | 추론 1회 EVTA 시간(`_prof`) | 34.26 → 30.96 ms (150.3 GOPS) | 32.99 → 29.69 ms (156.6 GOPS) |
   | single 추론 전체(`_timed` run 2) | 78.35 → 75.01 ms | 77.27 → 74.00 ms |
-  | multi4 multi, copy 평균(`OMP_NUM_THREADS=1`) | 159.2 → 154.9 ms | 156.9 → 154.9 ms |
+  | multi4 multi, copy 평균(`OMP_NUM_THREADS=1`) | 159.2 → 155.0 ms | 156.9 → 154.9 ms |
   | multi4 single, run 100 | 153.33 → 149.87 ms | 153.05 → 149.05 ms |
 
 ## 6. 정할 것
