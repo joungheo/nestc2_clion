@@ -457,6 +457,12 @@ struct ThreadArg{
 int shared = 0;
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t mutex_init = PTHREAD_MUTEX_INITIALIZER;
+//#### JO added (2026-10-29): runs per copy and the per-run start barrier of the 4 threads
+pthread_barrier_t runBarrier;
+int multiRuns() {
+  const char *e = getenv("MULTI_RUNS");
+  return e && atoi(e) > 0 ? atoi(e) : 25;
+}
 
 
 void *thread_main(void *thread_arg) {
@@ -470,11 +476,18 @@ void *thread_main(void *thread_arg) {
 
   mxnet_exported_resnet18_load_module(constantWeightVarsAddr);
 
-  while(1){
+  //#### JO changed (2026-10-29): every copy runs the same number of inferences (MULTI_RUNS, default 25) and the
+  //#### four start each one together (barrier): with the shared counter a copy ran 24 or 25 of 99, started apart
+  // while(1){
+  //   pthread_mutex_lock(&mutex);
+  //   if(shared<1000) shared++;
+  //   pthread_mutex_unlock(&mutex);
+  //   if(shared>=100) break;
+  for (int run = 0; run < multiRuns(); run++) {
+    pthread_barrier_wait(&runBarrier);
     pthread_mutex_lock(&mutex);
-    if(shared<1000) shared++;
+    shared++;
     pthread_mutex_unlock(&mutex);
-    if(shared>=100) break;
     // Perform the computation.
     mxnet_exported_resnet18(constantWeightVarsAddr, mutableWeightVarsAddr,
                             activationsAddr);
@@ -484,7 +497,8 @@ void *thread_main(void *thread_arg) {
                                       "resnetv10_dense0_fwd__1");
     if (maxIdx != 281) {
       std::cout << "The maxIdx should be 281: " << maxIdx << "\n";
-      return nullptr;
+      //#### JO changed (2026-10-29): keep going, a thread that left would hang the others at the barrier
+      // return nullptr;
     }
     std::cout <<shared<<std::endl;
   }
@@ -514,11 +528,18 @@ void *thread_main1(void *thread_arg) {
 
   mxnet_exported_resnet18_1_load_module(constantWeightVarsAddr);
 
-  while(1){
+  //#### JO changed (2026-10-29): every copy runs the same number of inferences (MULTI_RUNS, default 25) and the
+  //#### four start each one together (barrier): with the shared counter a copy ran 24 or 25 of 99, started apart
+  // while(1){
+  //   pthread_mutex_lock(&mutex);
+  //   if(shared<100) shared++;
+  //   pthread_mutex_unlock(&mutex);
+  //   if(shared>=100) break;
+  for (int run = 0; run < multiRuns(); run++) {
+    pthread_barrier_wait(&runBarrier);
     pthread_mutex_lock(&mutex);
-    if(shared<100) shared++;
+    shared++;
     pthread_mutex_unlock(&mutex);
-    if(shared>=100) break;
     // Perform the computation.
     mxnet_exported_resnet18_1(constantWeightVarsAddr, mutableWeightVarsAddr,
                               activationsAddr);
@@ -528,7 +549,8 @@ void *thread_main1(void *thread_arg) {
                                       "resnetv10_dense0_fwd__1");
     if (maxIdx != 281) {
       std::cout << "The maxIdx should be 281: " << maxIdx << "\n";
-      return nullptr;
+      //#### JO changed (2026-10-29): keep going, a thread that left would hang the others at the barrier
+      // return nullptr;
     }
     std::cout <<shared<<std::endl;
   }
@@ -557,11 +579,18 @@ void *thread_main2(void *thread_arg) {
 
   mxnet_exported_resnet18_2_load_module(constantWeightVarsAddr);
 
-  while(1){
+  //#### JO changed (2026-10-29): every copy runs the same number of inferences (MULTI_RUNS, default 25) and the
+  //#### four start each one together (barrier): with the shared counter a copy ran 24 or 25 of 99, started apart
+  // while(1){
+  //   pthread_mutex_lock(&mutex);
+  //   if(shared<100) shared++;
+  //   pthread_mutex_unlock(&mutex);
+  //   if(shared>=100) break;
+  for (int run = 0; run < multiRuns(); run++) {
+    pthread_barrier_wait(&runBarrier);
     pthread_mutex_lock(&mutex);
-    if(shared<100) shared++;
+    shared++;
     pthread_mutex_unlock(&mutex);
-    if(shared>=100) break;
     // Perform the computation.
     mxnet_exported_resnet18_2(constantWeightVarsAddr, mutableWeightVarsAddr,
                               activationsAddr);
@@ -571,7 +600,8 @@ void *thread_main2(void *thread_arg) {
                                       "resnetv10_dense0_fwd__1");
     if (maxIdx != 281) {
       std::cout << "The maxIdx should be 281: " << maxIdx << "\n";
-      return nullptr;
+      //#### JO changed (2026-10-29): keep going, a thread that left would hang the others at the barrier
+      // return nullptr;
     }
     std::cout <<shared<<std::endl;
   }
@@ -599,11 +629,18 @@ void *thread_main3(void *thread_arg) {
 
   mxnet_exported_resnet18_3_load_module(constantWeightVarsAddr);
 
-  while(1){
+  //#### JO changed (2026-10-29): every copy runs the same number of inferences (MULTI_RUNS, default 25) and the
+  //#### four start each one together (barrier): with the shared counter a copy ran 24 or 25 of 99, started apart
+  // while(1){
+  //   pthread_mutex_lock(&mutex);
+  //   if(shared<100) shared++;
+  //   pthread_mutex_unlock(&mutex);
+  //   if(shared>=100) break;
+  for (int run = 0; run < multiRuns(); run++) {
+    pthread_barrier_wait(&runBarrier);
     pthread_mutex_lock(&mutex);
-    if(shared<100) shared++;
+    shared++;
     pthread_mutex_unlock(&mutex);
-    if(shared>=100) break;
     // Perform the computation.
     mxnet_exported_resnet18_3(constantWeightVarsAddr, mutableWeightVarsAddr,
                               activationsAddr);
@@ -613,7 +650,8 @@ void *thread_main3(void *thread_arg) {
                                       "resnetv10_dense0_fwd__1");
     if (maxIdx != 281) {
       std::cout << "The maxIdx should be 281: " << maxIdx << "\n";
-      return nullptr;
+      //#### JO changed (2026-10-29): keep going, a thread that left would hang the others at the barrier
+      // return nullptr;
     }
     std::cout <<shared<<std::endl;
   }
@@ -690,6 +728,7 @@ int main(int argc, char **argv) {
   gettimeofday(&t1, NULL);
   long t1s= t1.tv_sec;
   long t1u= t1.tv_usec;
+  pthread_barrier_init(&runBarrier, NULL, 4);  //#### JO added (2026-10-29)
   pthread_create(&thread[0],NULL,thread_main, (void*) &thread_arg);
   pthread_create(&thread[1],NULL,thread_main1, (void*) &thread_arg1);
   pthread_create(&thread[2],NULL,thread_main2, (void*) &thread_arg2);

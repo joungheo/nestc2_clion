@@ -463,7 +463,11 @@ int main(int argc, char **argv) {
   mxnet_exported_resnet18_load_module(constantWeightVarsAddr);
 
 
-  for(int i = 0; i < 100; i++) {
+  //#### JO changed (2026-10-29): 4 x MULTI_RUNS (default 25) = as many inferences as the 4-EVTA executable
+  // for(int i = 0; i < 100; i++) {
+  const char *mr = getenv("MULTI_RUNS");
+  int nRuns = 4 * (mr && atoi(mr) > 0 ? atoi(mr) : 25);
+  for(int i = 0; i < nRuns; i++) {
 
     // Perform the computation.
     mxnet_exported_resnet18(constantWeightVarsAddr, mutableWeightVarsAddr,

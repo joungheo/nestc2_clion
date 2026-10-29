@@ -29,13 +29,15 @@ HWD=$(basename "$PWD"); BLD=../build${HWD#hw}
 exec 9>/tmp/evta_run.lock; flock -n 9 || { echo "another EVTA run is active (/tmp/evta_run.lock)"; exit 1; }
 SUFFIX=_prof
 #### JO changed (2026-10-29): -n <runs> (default 25) = inferences per executable, through BUNDLE_RUNS (timed_bundle.py
-#### wrapper in the _prof and _timed builds); only for hw/ (single set): the multi-EVTA mains loop by themselves
+#### wrapper in the _prof and _timed builds) in hw/; in hw_<set>/ runs per EVTA copy (MULTI_RUNS, MultiEVTAResnet18Test)
 # [ "${1:-}" = -s ] && { SUFFIX=$2; shift 2; }
 RUNS=25
 while [ "${1:-}" = -s ] || [ "${1:-}" = -n ]; do
   [ "$1" = -s ] && SUFFIX=$2 || RUNS=$2; shift 2
 done
-[ "$HWD" = hw ] && export BUNDLE_RUNS=$RUNS || unset BUNDLE_RUNS
+#### JO changed (2026-10-29): hw_<set>/: MULTI_RUNS = runs per EVTA copy of the multi-EVTA mains (4 x for single_thread_main)
+# [ "$HWD" = hw ] && export BUNDLE_RUNS=$RUNS || unset BUNDLE_RUNS
+if [ "$HWD" = hw ]; then export BUNDLE_RUNS=$RUNS; unset MULTI_RUNS; else export MULTI_RUNS=$RUNS; unset BUNDLE_RUNS; fi
 #### JO added (2026-10-28): _sys* executables are built with vtalib-zcu102-systolic (weight-stationary uop order)
 #### -> run them on the systolic bitstream SYS_BIN of run_all.sh; BIN=<file> in the environment still wins
 V=BIN; case $SUFFIX in _sys*) V=SYS_BIN;; esac

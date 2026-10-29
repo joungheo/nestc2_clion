@@ -64,13 +64,19 @@ def main():
             if not os.path.basename(f).startswith('dump_') and any(RUN.match(l) for l in open(f))]
     #### JO changed (2026-10-29): VTA_SYNC lines per EVTA ("[profile] VTA<i> events" before each table;
     #### a log without that line is EVTA 0), matched to the .cpp whose calls go to that EVTA
-    ev, dev = {}, 0
+    #### JO changed (2026-10-29): VTA_SYNC / header anywhere in the line: the threads of a multi-EVTA executable print
+    #### while the others still run, so a line can start with another thread's output ("100VTA_SYNC 62 ...")
+    ev, ts, dev = {}, {}, 0
     for l in open(log):
-        m = re.match(r'^\[profile\] VTA(\d+) events$', l.strip())
+        m = re.search(r'\[profile\] VTA(\d+) events', l)
         if m:
             dev = int(m.group(1))
-        elif l.startswith('VTA_SYNC '):
-            ev.setdefault(dev, []).append(float(l.split()[13]))
+            continue
+        i = l.find('VTA_SYNC ')
+        if i >= 0:
+            f = l[i:].split()
+            ev.setdefault(dev, []).append(float(f[13]))
+            ts.setdefault(dev, []).append((int(f[14]), int(f[15])))
     if not ev:
         return
     bydev = {}
@@ -97,6 +103,26 @@ def main():
                        + ' / '.join(f'run{c + 1} {p:.3f}' for c, p in cols) + f'; last run {ops / (last * 1e6):.2f} GOPS')
         else:
             res.append(f'VTA{k} {runs} runs, last {last:.3f} ms {ops / (last * 1e6):.2f} GOPS')
+    #### JO added (2026-10-29): EVTAs that ran the same bundle together (multi-EVTA, same runs and calls): per conv of a
+    #### run, the window from the first start to the last end over the EVTAs; GOPS = ops of all EVTAs / window
+    conc = [k for k in sorted(ev) if len(bydev.get(k, [])) == 1 and len(ev[k]) % len(bydev[k][0][1]) == 0]
+    if len(conc) > 1 and len(set(len(ev[k]) for k in conc)) == 1:
+        calls = bydev[conc[0]][0][1]
+        n, runs = len(calls), len(ev[conc[0]]) // len(calls)
+        for r in sorted(set(x for x in (1, runs - 1) if 0 <= x < runs)):
+            print(f'---- {len(conc)} EVTAs at once, run {r + 1} (window = first start to last end of the conv) ----')
+            print(f'{"#":>3} {"Mops":>8} {"skew_ms":>8} {"window_ms":>10} {"max_exe":>8} {"GOPS":>8}  node')
+            tw = tops = 0
+            for i, (node, c, o, _) in enumerate(calls):
+                be = [ts[k][r * n + i] for k in conc]
+                b0, b1, e1 = min(b for b, _ in be), max(b for b, _ in be), max(e for _, e in be)
+                w = (e1 - b0) / 1000.0
+                ops = o * len(conc)
+                tw += w; tops += ops
+                print(f'{i:3d} {ops / 1e6:8.1f} {(b1 - b0) / 1000.0:8.3f} {w:10.3f} {max(ev[k][r * n + i] for k in conc):8.3f}'
+                      f' {ops / (w * 1e6) if w > 0 else 0:8.2f}  {node}')
+            print(f'{"sum":>3} {tops / 1e6:8.1f} {"":>8} {tw:10.3f} {"":>8} {tops / (tw * 1e6):8.2f}')
+        res.append(f'{len(conc)} EVTAs at once, run {runs}: {tops / 1e6:.1f} Mops in {tw:.3f} ms of conv windows = {tops / (tw * 1e6):.2f} GOPS')
     print('; '.join(res))
 
 
