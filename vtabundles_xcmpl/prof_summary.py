@@ -123,7 +123,24 @@ def main():
                 print(f'{i:3d} {ops / 1e6:8.1f} {(b1 - b0) / 1000.0:8.3f} {w:10.3f} {max(ev[k][r * n + i] for k in conc):8.3f}'
                       f' {ops / (w * 1e6) if w > 0 else 0:8.2f}  {node}')
             print(f'{"sum":>3} {tops / 1e6:8.1f} {"":>8} {tw:10.3f} {"":>8} {tops / (tw * 1e6):8.2f}')
-        res.append(f'{len(conc)} EVTAs at once, run {runs}: {tops / 1e6:.1f} Mops in {tw:.3f} ms of conv windows = {tops / (tw * 1e6):.2f} GOPS')
+        #### busy union: time at least one EVTA runs; sum of EVTA times / union = how many ran at once on average
+        un = []
+        for r in sorted(set(x for x in (1, runs - 1) if 0 <= x < runs)):
+            iv = sorted(ts[k][r * n + i] for k in conc for i in range(n))
+            u, cb, ce = 0, iv[0][0], iv[0][1]
+            for b, e in iv[1:]:
+                if b > ce:
+                    u += ce - cb; cb, ce = b, e
+                else:
+                    ce = max(ce, e)
+            u = (u + ce - cb) / 1000.0
+            busy = sum(ev[k][r * n + i] for k in conc for i in range(n))
+            ops = sum(c[2] for c in calls) * len(conc)
+            print(f'run {r + 1}: EVTA busy union {u:.3f} ms (sum of EVTA times {busy:.3f} ms, {busy / u:.2f} EVTAs at once on average)'
+                  f' -> {ops / 1e6:.1f} Mops / union = {ops / (u * 1e6):.2f} GOPS')
+            un.append((r, u, busy, ops))
+        r, u, busy, ops = un[-1]
+        res.append(f'{len(conc)} EVTAs, run {r + 1}: {ops / (u * 1e6):.2f} GOPS over the busy union {u:.3f} ms ({busy / u:.2f} at once)')
     print('; '.join(res))
 
 
