@@ -226,6 +226,17 @@ conv 호출 wall 시간에서 같은 conv의 EVTA 시간을 뺐다(두 번째 ru
 | multi4 Resnet18 single | 1157.39 ms | 1779.75 ms | 100회 4.08 s |
 
   EVTA 시간은 conv0이 더해진 만큼 늘었다. multi 번들의 추론 전체는 예전 값이 기록에 없어 비교하지 못했다.
+- systolic 400 MHz(`SYS_BIN`, `_sys*` 실행 파일): `build_sysprof`, `build_multievtax4_sys`의 `VTALIB`를 git 밖 사본
+  `/home/xilinx/JO/npuprg/systolic/vtalib-zcu102-systolic`(주석만 다름)에서 저장소의 `vtalib-zcu102-systolic`으로 바꿔 다시 빌드했다.
+  single `run_prof.sh -s _sysprof all` 30 PASS, Resnet18 281 / 0.656(HLS와 같음), multi4 `-s _sys all` PASS.
+
+  | | HLS 380 | systolic 400 | 변화 |
+  |---|---|---|---|
+  | single Resnet18 EVTA 시간(추론 2회) | 68.56 ms | 65.99 ms | −3.8 % |
+  | multi4 Resnet18 multi, 100회(`OMP_NUM_THREADS=1`, 2회 번갈아) | 4049 / 4033 ms | 4001 / 4004 ms | −1.0 % |
+  | multi4 Resnet18 single, 100회 | 15367 / 15367 ms | 15276 / 15283 ms | −0.6 % |
+
+  추론 전체는 CPU 몫(transpose, pool, fc 등)이 대부분이라 EVTA 클럭 이득이 거의 보이지 않는다.
 
 ## 6. 정할 것
 

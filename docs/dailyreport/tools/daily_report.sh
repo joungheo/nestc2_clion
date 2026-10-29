@@ -16,7 +16,9 @@ case $SET in
 esac
 R=$N/docs/dailyreport/$SET; mkdir -p "$R"
 CLAUDE=${CLAUDE:-/home/ubuntu/.local/bin/claude}
-W=${TMPDIR:-/tmp}/daily_report_$USER; mkdir -p "$W"
+#### JO changed (2026-10-29): cron has no $USER (set -u stopped the 07:00 run of 10-29)
+# W=${TMPDIR:-/tmp}/daily_report_$USER; mkdir -p "$W"
+W=${TMPDIR:-/tmp}/daily_report_${USER:-$(id -un)}; mkdir -p "$W"
 export TZ=Asia/Seoul
 
 if [ $# -gt 0 ]; then
