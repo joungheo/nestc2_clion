@@ -13,6 +13,8 @@
 #### build dirs build_<set>_prof / build_<set>_timed. An executable with several timed .cpp (one per EVTA or VTA
 #### partition) prints one table each (header names the .cpp) and writes timing_<cpp>.csv each.
 set -u
+#### JO added (2026-10-29): files written here are not writable by group / others
+umask 022
 #### JO changed (2026-10-27): this script is in <hw dir>/script/ (the part of the hw dir in git); runs in the hw dir
 #cd "$(dirname "$0")"
 cd "$(dirname "$0")/.."; RUN_ALL=script/run_all.sh
@@ -100,7 +102,10 @@ for D in "$@"; do
   sed -n "/^==== timing/,\$p" $D/$LOG
   echo "  VTA events: $(grep -c '^VTA_SYNC' $D/$LOG)   full log: $D/$LOG"
   #### JO added (2026-10-29): _prof logs: runs, VTA time per run and GOPS (ops from the bundle .cpp; ../prof_summary.py)
-  ps=""; grep -q '^VTA_SYNC' $D/$LOG && { python3 ../prof_summary.py $D $D/$LOG > $D/$LOG.sum 2>&1; cat $D/$LOG.sum; ps=$(tail -1 $D/$LOG.sum); }
+  #### JO changed (2026-10-29): <log>.sum owned like the Dir (run_prof.sh runs as root), group/others read only
+  # ps=""; grep -q '^VTA_SYNC' $D/$LOG && { python3 ../prof_summary.py $D $D/$LOG > $D/$LOG.sum 2>&1; cat $D/$LOG.sum; ps=$(tail -1 $D/$LOG.sum); }
+  ps=""; grep -q 'VTA_SYNC' $D/$LOG && { python3 ../prof_summary.py $D $D/$LOG > $D/$LOG.sum 2>&1; chown --reference=$D $D/$LOG.sum
+                                          chmod 644 $D/$LOG.sum; cat $D/$LOG.sum; ps=$(tail -1 $D/$LOG.sum); }
   # summary: total of the last run (_timed) or the VTA total_time line (_prof)
   #### JO changed: a partitioned bundle prints one timing table per VTA partition .cpp -> sum the last run of each
   # t=$(grep -E "^run #[0-9]+: total" $D/$LOG | tail -1 | sed "s/, statements.*//"); [ -n "$t" ] || t=$(grep -m1 total_time $D/$LOG)
