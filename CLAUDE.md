@@ -173,6 +173,11 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
 - Default bitstreams of `vtabundles_xcmpl/hw*/script/run_all.sh` (2026-10-28, `docs/evta_systolic.md` §8 8)): 380 MHz HLS GEMM with the
   HP ports on a separate 333 MHz clock (single `..._16_16_19_18_380mhz`, multi2 `..._2evta_380mhz_hp333`, multi4 `..._4evta_380mhz`);
   `SYS_BIN` = systolic 400 MHz (single, multi4), used by `run_prof.sh -s _sys*` (executables built with `-DVTALIB=<vtalib-zcu102-systolic>`).
+- Measuring (2026-10-29, `vtabundles_xcmpl/README.md`): `hw*/script/run_prof.sh -s _prof|_timed|_sysprof|_systimed` (build dirs
+  `build[_<set>]<suffix>`), `-n <runs>` (default 25), `-l` lockstep of the multi-EVTA copies, `-r` `chrt -f 10`; multi-EVTA with
+  `OMP_NUM_THREADS=1`. `_prof` = EVTA time per conv (`prof_summary.py` adds GOPS), `_timed` = wall time per statement.
+- Resnet18 conv0 runs on EVTA (`VTA_RESNET18_WITH_SKIPQUANT0=OFF`, zero-filled to 16 channels, schedule 2 virtual threads 8x16
+  in `include/Backends/VTA/VTASchedules.h`); `Resnet18PartitionTest` keeps conv0 float (`docs/evta_runtime_aot.md` §5.3).
   The 333 MHz `vtahw_*_y219.bin` stay usable with `BIN=<file>`.
   The PS register port (`M_AXI_HPM0`) runs on `pl_clk0` 100 MHz; at 333 MHz it missed timing.
 - The lab board's PL has a defective configuration row (tile row SLICE Y219, cells stuck at 0; `log/BOARD_TODO.md`
