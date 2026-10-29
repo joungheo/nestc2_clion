@@ -52,6 +52,12 @@ convTune.ConvolutionTune_.clear();
 
 // inputN, inputH, inputW, inputC, filterN, filterH, filterW, filterC, stride,
 // pad, nVirtualThread, tileHSize, tileWSize
+//#### JO added (2026-10-29): the image conv0 (3 channels zero-filled to 16, generateFirstBNNVTAConvolutionCall);
+//#### its default 1, 8, 8 took 12.81 ms on the board (380 MHz), 2, 8, 16 takes 9.48 ms (same output).
+//#### Input tile 21 x 37 = 777 entries fits one half of the inp SRAM (1024) of the multi-EVTA buffers too;
+//#### 14 x 14 (9.30 ms) needs 33 x 33 = 1089, and tiles that do not divide 112 changed the result (16 x 11).
+convTune.ConvolutionTune_.push_back({1, 224, 224, 16, 64, 7, 7, 16, 2, 3, 2, 8,
+                                     16});
 convTune.ConvolutionTune_.push_back({1, 56, 56, 64, 64, 3, 3, 64, 1, 1, 2, 8,
                                      56});
 convTune.ConvolutionTune_.push_back({1, 56, 56, 64, 128, 1, 1, 64, 2, 0, 2, 7,
