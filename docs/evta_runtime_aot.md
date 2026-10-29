@@ -237,6 +237,18 @@ conv 호출 wall 시간에서 같은 conv의 EVTA 시간을 뺐다(두 번째 ru
   | multi4 Resnet18 single, 100회 | 15367 / 15367 ms | 15276 / 15283 ms | −0.6 % |
 
   추론 전체는 CPU 몫(transpose, pool, fc 등)이 대부분이라 EVTA 클럭 이득이 거의 보이지 않는다.
+- `_systimed`(문장별 시간, systolic 400): `build_systimed`, `build_multievtax4_systimed`를 새로 만들었다(`vtabundles_xcmpl/README.md`).
+  `run_prof.sh -s _systimed`가 `SYS_BIN`으로 돈다. 같은 날 `_timed`(HLS 380)와:
+
+  | | HLS 380 `_timed` | systolic 400 `_systimed` | 변화 |
+  |---|---|---|---|
+  | single Resnet18 run 2 전체 | 78.35 ms | 77.27 ms | −1.4 % |
+  | 그중 `convolution_wo_tr` 합 | 36.64 ms | 35.49 ms | −3.1 % |
+  | 그 밖 (CPU) | 41.67 ms | 41.72 ms | 0 |
+  | multi4 Resnet18 multi, 마지막 run copy 0~3 (`OMP_NUM_THREADS=1`) | 161.8 / 159.3 / 157.1 / 158.8 ms | 156.9 / 156.4 / 159.0 / 155.4 ms | −1.4 % (평균 159.2 → 156.9) |
+  | multi4 Resnet18 single, run 100 | 153.33 ms | 153.05 ms | −0.2 % |
+
+  multi4 번들은 `OMP_NUM_THREADS=1`이라 CPU 몫이 single 셋(기본 OpenMP 4스레드)보다 커서 한 번에 약 150 ms다. 결과는 모두 281.
 
 ## 6. 정할 것
 

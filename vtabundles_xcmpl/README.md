@@ -3,6 +3,11 @@
 Location: `nest-compiler/vtabundles_xcmpl/` (the NEST-C root is the parent directory; no absolute paths).
 Build directories are not kept in git (`.gitignore`): create them with the `cmake` lines below.
 `build_timed/`: `cmake -DBUNDLE_TIMED=ON -DBUNDLE_EXE_SUFFIX=_timed ..` (per-statement timing, `hw/script/run_prof.sh -s _timed`).
+#### JO added (2026-10-29): systolic bitstreams (`SYS_BIN` of run_all.sh, picked by `run_prof.sh -s _sys*`), vtalib `vtalib-zcu102-systolic`:
+`build_sysprof/` (`-DNESTC_EVTA_PROFILE=ON -DBUNDLE_EXE_SUFFIX=_sysprof`), `build_systimed/` (`-DBUNDLE_TIMED=ON -DBUNDLE_EXE_SUFFIX=_systimed`),
+`build_multievtax4_sys/` (`-DBUNDLE_EXE_SUFFIX=_sys`), `build_multievtax4_systimed/` (`-DBUNDLE_TIMED=ON -DBUNDLE_EXE_SUFFIX=_systimed`);
+each with `-DVTALIB=<NEST-C root>/vtalib-zcu102-systolic`, the multi4 ones also `-DBUNDLE_SET=multievtax4 -DNESTC_EVTA_MULTI=ON -DNESTC_EVTA_MAX_XFER=4194304`.
+Run e.g. `sudo hw/script/run_prof.sh -s _systimed Resnet18Test`, `sudo OMP_NUM_THREADS=1 hw_multievtax4/script/run_prof.sh -s _systimed MultiEVTAResnet18Test`.
 
 Bundle sources are generated in the simulator build, then compiled for the board here.
 
