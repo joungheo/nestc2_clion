@@ -4,7 +4,7 @@
 #   _timed           built in ../build_timed (-DBUNDLE_TIMED=ON -DBUNDLE_EXE_SUFFIX=_timed): per statement,
 #                    also <Dir>/timing.csv
 # Executable, input and golden come from the "run <dir> <exe> <input> <golden>" lines of run_all.sh. Reloads the bitstream before each run.
-# usage: sudo hw/script/run_prof.sh [-s _timed] [-n <runs, default 25>] [-l] Dir [Dir ...]     (or hw_<set>/script/run_prof.sh)
+# usage: sudo hw/script/run_prof.sh [-s _timed] [-n <runs, default 25>] [-l] [-r] Dir [Dir ...]     (or hw_<set>/script/run_prof.sh)
 #        sudo hw/script/run_prof.sh [-s _timed] [all|hw_bundles]   (no Dir = every run line of run_all.sh)
 # One line per Dir (exit, golden check, total time) is also written to result/<suffix>_summary.txt, printed at the end.
 #### JO added (2026-10-26): also in hw_multievtax2/ and hw_multievtax4/ (copied there by collect_hw_bundles.py):
@@ -36,8 +36,12 @@ RUNS=25
 # while [ "${1:-}" = -s ] || [ "${1:-}" = -n ]; do
 #   [ "$1" = -s ] && SUFFIX=$2 || RUNS=$2; shift 2
 # done
-while [ "${1:-}" = -s ] || [ "${1:-}" = -n ] || [ "${1:-}" = -l ]; do
-  case $1 in -l) export MULTI_LOCKSTEP=1; shift;; -s) SUFFIX=$2; shift 2;; *) RUNS=$2; shift 2;; esac
+#### JO changed (2026-10-29): -r = run the executable with SCHED_FIFO priority 10 (chrt -f 10): other processes do not take
+#### a core from the EVTA polling threads (a late completion costs a 4 ms tick, CONFIG_HZ=250); the kernel still keeps
+#### 5 % of the CPU for the others (sched_rt_runtime_us 950000)
+RT=""
+while [ "${1:-}" = -s ] || [ "${1:-}" = -n ] || [ "${1:-}" = -l ] || [ "${1:-}" = -r ]; do
+  case $1 in -l) export MULTI_LOCKSTEP=1; shift;; -r) RT="chrt -f 10"; shift;; -s) SUFFIX=$2; shift 2;; *) RUNS=$2; shift 2;; esac
 done
 #### JO changed (2026-10-29): hw_<set>/: MULTI_RUNS = runs per EVTA copy of the multi-EVTA mains (4 x for single_thread_main)
 # [ "$HWD" = hw ] && export BUNDLE_RUNS=$RUNS || unset BUNDLE_RUNS
@@ -82,7 +86,9 @@ for D in "$@"; do
   #### JO changed: keep exit code and golden result for the summary
   # ( cd $D && rm -f output.bin && timeout 300 ./$EXE $IN > $LOG 2>&1; echo "exit=$? (124 = timeout)" )
   # [ -n "$GOLD" ] && [ -f $D/output.bin ] && { cmp -s $D/output.bin $D/$GOLD && echo "RESULT: PASS" || echo "RESULT: MISMATCH"; }
-  ( cd $D && rm -f output.bin && timeout 300 ./$EXE $IN > $LOG 2>&1 ); rc=$?
+  #### JO changed (2026-10-29): + $RT (-r)
+  # ( cd $D && rm -f output.bin && timeout 300 ./$EXE $IN > $LOG 2>&1 ); rc=$?
+  ( cd $D && rm -f output.bin && timeout 300 $RT ./$EXE $IN > $LOG 2>&1 ); rc=$?
   echo "exit=$rc (124 = timeout)"
   res="no golden"
   [ -n "$GOLD" ] && { [ -f $D/output.bin ] && cmp -s $D/output.bin $D/$GOLD && res=PASS || res=MISMATCH; }
