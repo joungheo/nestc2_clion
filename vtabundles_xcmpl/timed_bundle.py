@@ -10,6 +10,11 @@ one line per statement in execution order with one time/GOPS column per run.
 Files without //Run blocks (mains, helpers) are copied unchanged.
 
 usage: timed_bundle.py <in.cpp> <out.cpp> [<csv name>]
+       timed_bundle.py --repeat-only <in.cpp> <out.cpp>
+#### JO added (2026-10-29): every inference function (one with //Run blocks) is renamed <name>__once and wrapped:
+#### with BUNDLE_RUNS=<n> (n > 2) in the environment its first call runs it n - 1 times, later calls once, so the
+#### stock mains (warm-up call + timed call) run n inferences; unset = unchanged. --repeat-only adds just the wrapper
+#### (the _prof builds, NESTC_EVTA_PROFILE=ON); hw*/script/run_prof.sh -n <n> sets BUNDLE_RUNS (single set only).
 #### JO added (2026-10-26): <csv name> (default timing.csv) for executables with several timed .cpp (multi-EVTA
 #### copies, VTA partitions), which would otherwise overwrite one file; the table header names the .cpp.
 """
@@ -161,12 +166,57 @@ def call_name(stmt):
     return 'assign'
 
 
+DEF = re.compile(r'^(\w[\w\s\*]*?)\b(\w+)\((.*)\)\s*\{\s*$')
+
+
+#### JO added (2026-10-29): BUNDLE_RUNS repeat wrapper (see the usage above)
+def add_repeat(lines):
+    """Rename each inference function to <name>__once; return (lines, wrapper lines to append)."""
+    out, wrap = [], []
+    for i, l in enumerate(lines):
+        m = DEF.match(l)
+        if m:
+            body = []
+            for k in range(i + 1, len(lines)):
+                if lines[k].startswith('}'):
+                    break
+                body.append(lines[k])
+            if any(RUN.match(b) for b in body):
+                ret, name, params = m.group(1).strip(), m.group(2), m.group(3)
+                args = ', '.join(re.findall(r'\w+', a)[-1] for a in params.split(',') if a.strip())
+                once = f'{name}__once({args})'
+                wrap += ['', '// ---- BUNDLE_RUNS repeat wrapper (inserted by timed_bundle.py) ----',
+                         f'{ret} {name}({params}) {{',
+                         '  static int __rp_calls = 0;',
+                         '  int __rp_n = 1;',
+                         '  if (__rp_calls++ == 0) {',
+                         '    const char *__rp_e = getenv("BUNDLE_RUNS");',
+                         '    if (__rp_e && atoi(__rp_e) > 2) __rp_n = atoi(__rp_e) - 1;',
+                         '  }',
+                         f'  for (int __rp_i = 1; __rp_i < __rp_n; __rp_i++) {once};',
+                         f'  return {once};' if ret != 'void' else f'  {once};',
+                         '}']
+                l = l.replace(f'{name}(', f'{name}__once(', 1)
+        out.append(l)
+    return out, wrap
+
+
 def main():
+    #### JO added (2026-10-29): --repeat-only
+    repeat_only = sys.argv[1] == '--repeat-only'
+    if repeat_only:
+        del sys.argv[1]
     src, dst = sys.argv[1], sys.argv[2]
     csv = sys.argv[3] if len(sys.argv) > 3 else 'timing.csv'
     lines = open(src).read().split('\n')
     if not any(RUN.match(l) for l in lines):
         open(dst, 'w').write('\n'.join(lines))
+        return
+    lines, wrap = add_repeat(lines)
+    if repeat_only:
+        last_inc = max(i for i, l in enumerate(lines[:50]) if l.startswith('#include'))
+        lines[last_inc + 1:last_inc + 1] = ['#include <stdlib.h>  // getenv, atoi (BUNDLE_RUNS wrapper)']
+        open(dst, 'w').write('\n'.join(lines + wrap) + '\n')
         return
     out, tab = [], []
     kind = node = None
@@ -211,7 +261,7 @@ def main():
     out.append('};')
     out.append(f'const int __pt_n = {len(tab)};')
     out.append('} // namespace')
-    open(dst, 'w').write('\n'.join(out) + '\n')
+    open(dst, 'w').write('\n'.join(out + wrap) + '\n')
 
 
 if __name__ == '__main__':

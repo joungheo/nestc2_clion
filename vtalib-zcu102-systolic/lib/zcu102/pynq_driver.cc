@@ -150,7 +150,9 @@ static int log_count = 0;
 #ifndef PROFILE_AXI_MONITOR
 #define PROFILE_AXI_MONITOR 0
 #endif
-#define PROFILE_MAX_EVENTS 1024
+//#### JO changed (2026-10-29): 8192 (heap, ~80 B each): run_prof.sh -n 25 runs Resnet50 = 1300 VTA_SYNC events
+//#define PROFILE_MAX_EVENTS 1024
+#define PROFILE_MAX_EVENTS 8192
 
 // device handle
 static VTADeviceHandle createdVTADeviceHandle[VTA_DEVICE_NUM] = {};

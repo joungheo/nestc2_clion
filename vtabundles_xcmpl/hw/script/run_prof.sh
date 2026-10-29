@@ -4,7 +4,7 @@
 #   _timed           built in ../build_timed (-DBUNDLE_TIMED=ON -DBUNDLE_EXE_SUFFIX=_timed): per statement,
 #                    also <Dir>/timing.csv
 # Executable, input and golden come from the "run <dir> <exe> <input> <golden>" lines of run_all.sh. Reloads the bitstream before each run.
-# usage: sudo hw/script/run_prof.sh [-s _timed] Dir [Dir ...]     (or hw_<set>/script/run_prof.sh)
+# usage: sudo hw/script/run_prof.sh [-s _timed] [-n <runs, default 25>] Dir [Dir ...]     (or hw_<set>/script/run_prof.sh)
 #        sudo hw/script/run_prof.sh [-s _timed] [all|hw_bundles]   (no Dir = every run line of run_all.sh)
 # One line per Dir (exit, golden check, total time) is also written to result/<suffix>_summary.txt, printed at the end.
 #### JO added (2026-10-26): also in hw_multievtax2/ and hw_multievtax4/ (copied there by collect_hw_bundles.py):
@@ -28,7 +28,14 @@ HWD=$(basename "$PWD"); BLD=../build${HWD#hw}
 #### PL, and two runs swap bitstreams under each other (SError, bus errors, mismatches)
 exec 9>/tmp/evta_run.lock; flock -n 9 || { echo "another EVTA run is active (/tmp/evta_run.lock)"; exit 1; }
 SUFFIX=_prof
-[ "${1:-}" = -s ] && { SUFFIX=$2; shift 2; }
+#### JO changed (2026-10-29): -n <runs> (default 25) = inferences per executable, through BUNDLE_RUNS (timed_bundle.py
+#### wrapper in the _prof and _timed builds); only for hw/ (single set): the multi-EVTA mains loop by themselves
+# [ "${1:-}" = -s ] && { SUFFIX=$2; shift 2; }
+RUNS=25
+while [ "${1:-}" = -s ] || [ "${1:-}" = -n ]; do
+  [ "$1" = -s ] && SUFFIX=$2 || RUNS=$2; shift 2
+done
+[ "$HWD" = hw ] && export BUNDLE_RUNS=$RUNS || unset BUNDLE_RUNS
 #### JO added (2026-10-28): _sys* executables are built with vtalib-zcu102-systolic (weight-stationary uop order)
 #### -> run them on the systolic bitstream SYS_BIN of run_all.sh; BIN=<file> in the environment still wins
 V=BIN; case $SUFFIX in _sys*) V=SYS_BIN;; esac

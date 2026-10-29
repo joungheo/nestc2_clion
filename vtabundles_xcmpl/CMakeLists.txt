@@ -123,6 +123,15 @@ function(add_bundle dir target)
         COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/timed_bundle.py ${HW_DIR}/${dir}/${f} ${timed} ${csv}
         DEPENDS ${HW_DIR}/${dir}/${f} ${CMAKE_CURRENT_SOURCE_DIR}/timed_bundle.py)
       list(APPEND srcs ${timed})
+    #### JO added (2026-10-29): profiling builds compile a copy with only the BUNDLE_RUNS repeat wrapper
+    #### (timed_bundle.py --repeat-only), so run_prof.sh -n <n> runs n inferences
+    elseif(NESTC_EVTA_PROFILE AND f MATCHES "\\.cpp$" AND NOT f MATCHES "([Mm]ain)[^/]*\\.cpp$")
+      set(rep ${CMAKE_CURRENT_BINARY_DIR}/repeat/${dir}/${target}/${f})
+      add_custom_command(OUTPUT ${rep}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/repeat/${dir}/${target}
+        COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/timed_bundle.py --repeat-only ${HW_DIR}/${dir}/${f} ${rep}
+        DEPENDS ${HW_DIR}/${dir}/${f} ${CMAKE_CURRENT_SOURCE_DIR}/timed_bundle.py)
+      list(APPEND srcs ${rep})
     else()
       list(APPEND srcs ${HW_DIR}/${dir}/${f})
     endif()

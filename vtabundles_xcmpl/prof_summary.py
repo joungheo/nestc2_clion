@@ -5,7 +5,7 @@ The log has one VTA_SYNC line per EVTA run (exe_time in ms; its GOPS column is 0
 bitstream). Each EVTA call of the bundle .cpp (a statement with vtaCmdH, i.e. convolution_wo_tr) is one
 VTA_SYNC, in order, so events / calls = inference runs; the ops of each call come from its shape
 arguments (timed_bundle.call_ops, 2 per MAC; a zero-filled conv such as conv0 counts the filled channels).
-Prints a per-call table of the last run and, last, one summary line (run_prof.sh puts it in the summary).
+Prints a per-call table (runs 1, 2, 3 and the last side by side) and, last, one summary line (run_prof.sh puts it in the summary).
 
 usage: prof_summary.py <Dir> <log>
 #### JO added (2026-10-29)
@@ -47,15 +47,21 @@ def main():
         return
     runs = len(ev) // n
     ops = sum(c[2] for c in calls)
-    last = ev[-n:]
-    print(f'---- EVTA calls of the last run ({os.path.basename(cpps[0])}) ----')
-    print(f'{"#":>3} {"ms":>8} {"Mops":>9} {"GOPS":>7}  node')
-    for i, ((node, c, o), t) in enumerate(zip(calls, last)):
-        print(f'{i:3d} {t:8.3f} {o / 1e6:9.1f} {o / (t * 1e6) if t > 0 else 0:7.2f}  {node}')
     per = [sum(ev[r * n:(r + 1) * n]) for r in range(runs)]
+    #### JO changed (2026-10-29): runs 1, 2, 3 and the last side by side (as the _timed table), ms then GOPS
+    cols = sorted(set(r for r in (0, 1, 2, runs - 1) if r < runs))
+    print(f'---- EVTA calls per run ({os.path.basename(cpps[0])}, {runs} run(s)) ----')
+    print(f'{"#":>3} {"Mops":>8}' + ''.join(f' {"run" + str(r + 1) + "_ms":>10}' for r in cols)
+          + ''.join(f' {"GOPS" + str(r + 1):>7}' for r in cols) + '  node')
+    for i, (node, c, o) in enumerate(calls):
+        t = [ev[r * n + i] for r in cols]
+        print(f'{i:3d} {o / 1e6:8.1f}' + ''.join(f' {x:10.3f}' for x in t)
+              + ''.join(f' {o / (x * 1e6) if x > 0 else 0:7.2f}' for x in t) + f'  {node}')
+    print(f'{"sum":>3} {ops / 1e6:8.1f}' + ''.join(f' {per[r]:10.3f}' for r in cols)
+          + ''.join(f' {ops / (per[r] * 1e6):7.2f}' for r in cols))
     print(f'{runs} run(s) x {n} EVTA calls, {ops / 1e6:.1f} Mops per run; VTA ms per run: '
-          + ' / '.join(f'{p:.3f}' for p in per) + f'; last run {ops / (per[-1] * 1e6):.2f} GOPS')
-
+          + ' / '.join(f'run{r + 1} {per[r]:.3f}' for r in cols)
+          + f'; last run {ops / (per[-1] * 1e6):.2f} GOPS')
 
 if __name__ == '__main__':
     main()
