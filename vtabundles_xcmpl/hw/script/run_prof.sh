@@ -6,6 +6,8 @@
 # Executable, input and golden come from the "run <dir> <exe> <input> <golden>" lines of run_all.sh. Reloads the bitstream before each run.
 # usage: sudo hw/script/run_prof.sh [-s _timed] [-n <runs, default 25>] [-l] [-r] Dir [Dir ...]     (or hw_<set>/script/run_prof.sh)
 #        sudo hw/script/run_prof.sh [-s _timed] [all|hw_bundles]   (no Dir = every run line of run_all.sh)
+# e.g.:  sudo /bin/sh -c "OMP_NUM_THREADS=1 hw_multievtax4/script/run_prof.sh -s _sysprof -n 25 -l -r MultiEVTAResnet18Test"
+#        (-s suffix: _prof _timed _sysprof _systimed _sys; -n runs; -l lockstep (multi-EVTA); -r chrt -f 10)
 # One line per Dir (exit, golden check, total time) is also written to result/<suffix>_summary.txt, printed at the end.
 #### JO added (2026-10-26): also in hw_multievtax2/ and hw_multievtax4/ (copied there by collect_hw_bundles.py):
 #### build dirs build_<set>_prof / build_<set>_timed. An executable with several timed .cpp (one per EVTA or VTA

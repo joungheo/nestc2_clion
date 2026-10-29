@@ -212,9 +212,12 @@ conv 호출 wall 시간에서 같은 conv의 EVTA 시간을 뺐다(두 번째 ru
   `Resnet18PartitionTest`는 그대로 skip 목록을 쓴다(분할 계획이 conv0 float를 전제로 한다).
 - x4(`MultiEVTAResnet18Test`)는 sim 빌드의 target이 아니다(`NESTC_EVTA_MULTI=OFF`). copy 0/1은 x2에서 복사하고, 2/3은 model-compiler를
   `-index-multi-evta=4|8 -network-name=mxnet_exported_resnet18_2|_3`으로 직접 돌려 만들었다(skip 파일 없는 dir에서).
+  예) 보드 `Debug2_remote/vta/multievta_bundles/MultiEVTAResnet18Test`에서 copy 2(EVTA 2):
+  `../../../glow/bin/model-compiler -g -model=../../../models/mxnet_exported_resnet18.onnx -backend=VTA -emit-bundle=. -bundle-api=dynamic -model-input=data,float,[1,224,224,3] -load-profile=mxnet_exported_resnet18_calib_1.yaml -quantization-schema=symmetric_with_power2_scale -index-multi-evta=4 -network-name=mxnet_exported_resnet18_2 -main-entry-name=mxnet_exported_resnet18_2`
   예전 번들 소스는 보드 `/home/xilinx/JO/skipq0_backup/`.
 - `vtabundles_xcmpl/build_multievtax4{,_prof,_timed}`의 캐시에 지운 `vtalib-zcu102-multi4/lib/acl`의 `EXTERN_ACL_*` 경로가 남아 링크가 깨졌다.
   `cmake -UEXTERN_ACL_* -Uvta_runtime_LIB_DEPENDS .`로 고쳤다(나머지 build dir은 해당 없음).
+  예) `VTALIB`을 바꿀 때: `cd vtabundles_xcmpl/build_sysprof && cmake -DVTALIB=$PWD/../../vtalib-zcu102-systolic -UEXTERN_ACL_* -Uvta_runtime_LIB_DEPENDS . && make -j2 hw_bundles`
 - 보드 결과(380 MHz 기본 비트스트림): golden single 30 PASS(Resnet18 281 / 0.656, Resnet18Partition·Resnet50 281), multi2·multi4 PASS,
   Resnet18 multi/single 100회 모두 281(rc 0, "maxIdx" 0줄).
 
@@ -239,6 +242,7 @@ conv 호출 wall 시간에서 같은 conv의 EVTA 시간을 뺐다(두 번째 ru
   추론 전체는 CPU 몫(transpose, pool, fc 등)이 대부분이라 EVTA 클럭 이득이 거의 보이지 않는다.
 - `_systimed`(문장별 시간, systolic 400): `build_systimed`, `build_multievtax4_systimed`를 새로 만들었다(`vtabundles_xcmpl/README.md`).
   `run_prof.sh -s _systimed`가 `SYS_BIN`으로 돈다. 같은 날 `_timed`(HLS 380)와:
+  예) `cd vtabundles_xcmpl && sudo hw/script/run_prof.sh -s _systimed -n 25 -r Resnet18Test`
 
   | | HLS 380 `_timed` | systolic 400 `_systimed` | 변화 |
   |---|---|---|---|
@@ -253,6 +257,8 @@ conv 호출 wall 시간에서 같은 conv의 EVTA 시간을 뺐다(두 번째 ru
 **conv0 schedule: 가상 스레드 2, tile 8×16** (2026-10-29, `VTASchedules.h` `fa996be`)
 - 생성 기본값(가상 스레드 1, tile 8×8)을 sweep으로 바꿨다(`/tmp/jo_conv0_sweep.sh`, 보드 HLS 380, conv0 VTA_SYNC):
   1/8×8 12.81 ms, 2/8×8 11.17, 1/11×16 10.51, 2/16×8 10.37, 2/7×16 9.62, 2/8×14 9.72, **2/8×16 9.48**, 2/14×14 9.30, 2/4×28 15.31.
+  - sweep은 번들 .cpp의 conv0 줄 끝 인자(`vtaCmdH, <가상 스레드>, <tileH>, <tileW>, <EVTA>`)만 바꿔 다시 빌드한다.
+    예) `sed -i '/resnetv10_conv0_fwd__2_output_bef_transpose, 1, 224/s/vtaCmdH, [0-9]*, [0-9]*, [0-9]*, 0);/vtaCmdH, 2, 8, 16, 0);/' hw/Resnet18Q0ETest/mxnet_exported_resnet18.cpp`
   - 14×14는 입력 tile 33×33 = 1089 entry로 `conv_kernel`의 inp 한 영역(1024)을 넘는다(single SRAM 4096이라 돌았을 뿐, multi 2048에서는 넘침).
   - 2/16×11은 confidence가 0.6276으로 달라졌다. 112를 나누지 않는 W 경계 tile 처리가 의심된다(확인 안 함). 약수 tile만 쓴다.
 - 재생성(single, x2, x4) 뒤 golden: single 30 PASS(HLS, systolic `_sysprof` 모두), multi2·multi4 3 PASS, Resnet18 281 / 0.6555 그대로, multi "maxIdx" 0줄.
@@ -274,6 +280,7 @@ conv 호출 wall 시간에서 같은 conv의 EVTA 시간을 뺐다(두 번째 ru
 **multi4 Resnet18, EVTA 4개 동시** (2026-10-29, systolic 400 `..._4evta_sa_400mhz.bin`, `_sysprof`, `OMP_NUM_THREADS=1`)
 - `MultiEVTAResnet18Test`: copy마다 `MULTI_RUNS`(25)번, run마다 시작 barrier. `run_prof.sh -l`(`MULTI_LOCKSTEP=1`)은
   EVTA 호출마다 copy들을 barrier에서 만나게 하고, `-r`은 실행 파일을 `chrt -f 10`으로 띄운다.
+  예) `cd vtabundles_xcmpl && sudo /bin/sh -c "OMP_NUM_THREADS=1 hw_multievtax4/script/run_prof.sh -s _sysprof -n 25 -l -r MultiEVTAResnet18Test"`
 - 4개 동시 GOPS = copy 4개의 연산량 / EVTA가 하나라도 도는 시간(busy union), run마다:
   - lockstep 없음: 366 GOPS(평균 2.35개 동시). conv 사이 CPU 연산 때문에 conv 시작이 2.5~7 ms씩 어긋난다.
   - lockstep: 대부분의 run 617 GOPS(3.98개 동시, stage4 3×3 conv 745~753 GOPS = 4 × 204.8의 92 %).

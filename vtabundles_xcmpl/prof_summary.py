@@ -8,6 +8,7 @@ arguments (timed_bundle.call_ops, 2 per MAC; a zero-filled conv such as conv0 co
 Prints a per-call table (runs 1, 2, 3 and the last side by side) and, last, one summary line (run_prof.sh puts it in the summary).
 
 usage: prof_summary.py <Dir> <log>
+e.g.:  cd hw_multievtax4 && python3 ../prof_summary.py MultiEVTAResnet18Test MultiEVTAResnet18Test/sysprof_multivtaMxnetResnet18Bundle.log
 #### JO added (2026-10-29)
 """
 import glob, os, re, sys

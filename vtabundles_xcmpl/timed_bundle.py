@@ -11,6 +11,7 @@ Files without //Run blocks (mains, helpers) are copied unchanged.
 
 usage: timed_bundle.py <in.cpp> <out.cpp> [<csv name>]
        timed_bundle.py --repeat-only <in.cpp> <out.cpp>
+e.g.:  timed_bundle.py hw/Resnet18Test/mxnet_exported_resnet18.cpp /tmp/timed.cpp timing.csv   (CMake does this per build dir)
 #### JO added (2026-10-29): every inference function (one with //Run blocks) is renamed <name>__once and wrapped:
 #### with BUNDLE_RUNS=<n> (n > 2) in the environment its first call runs it n - 1 times, later calls once, so the
 #### stock mains (warm-up call + timed call) run n inferences; unset = unchanged. --repeat-only adds just the wrapper

@@ -5,6 +5,7 @@
 #   0 7 * * * /home/ubuntu/npuprg/nestc2_clion/nest-compiler/docs/dailyreport/tools/daily_report.sh >> ~/.cache/daily_report.log 2>&1
 # Manual: daily_report.sh [YYMMDD ...]   (regenerates the given days)
 # Report set: SET=vta_systolic (default, all sessions) or SET=vta_synth (the bitstream-synthesis session only)
+# e.g.: SET=vta_synth CLAUDE=/home/ubuntu/.local/bin/claude docs/dailyreport/tools/daily_report.sh 261027 261028
 set -u
 N=/home/ubuntu/npuprg/nestc2_clion/nest-compiler
 T=$N/docs/dailyreport/tools
