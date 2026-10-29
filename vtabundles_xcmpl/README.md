@@ -5,7 +5,7 @@ Build directories are not kept in git (`.gitignore`): create them with the `cmak
 `build_timed/`: `cmake -DBUNDLE_TIMED=ON -DBUNDLE_EXE_SUFFIX=_timed ..` (per-statement timing, `hw/script/run_prof.sh -s _timed`).
 #### JO added (2026-10-29): systolic bitstreams (`SYS_BIN` of run_all.sh, picked by `run_prof.sh -s _sys*`), vtalib `vtalib-zcu102-systolic`:
 `build_sysprof/` (`-DNESTC_EVTA_PROFILE=ON -DBUNDLE_EXE_SUFFIX=_sysprof`), `build_systimed/` (`-DBUNDLE_TIMED=ON -DBUNDLE_EXE_SUFFIX=_systimed`),
-`build_multievtax4_sys/` (`-DBUNDLE_EXE_SUFFIX=_sys`), `build_multievtax4_systimed/` (`-DBUNDLE_TIMED=ON -DBUNDLE_EXE_SUFFIX=_systimed`);
+`build_multievtax4_sys/` (`-DBUNDLE_EXE_SUFFIX=_sys`), `build_multievtax4_sysprof/` (`-DNESTC_EVTA_PROFILE=ON -DBUNDLE_EXE_SUFFIX=_sysprof`, 2026-10-29), `build_multievtax4_systimed/` (`-DBUNDLE_TIMED=ON -DBUNDLE_EXE_SUFFIX=_systimed`);
 each with `-DVTALIB=<NEST-C root>/vtalib-zcu102-systolic`, the multi4 ones also `-DBUNDLE_SET=multievtax4 -DNESTC_EVTA_MULTI=ON -DNESTC_EVTA_MAX_XFER=4194304`.
 Run e.g. `sudo hw/script/run_prof.sh -s _systimed Resnet18Test`, `sudo OMP_NUM_THREADS=1 hw_multievtax4/script/run_prof.sh -s _systimed MultiEVTAResnet18Test`.
 
@@ -18,7 +18,7 @@ Bundle sources are generated in the simulator build, then compiled for the board
 | 3a. Compile for the board | `vtabundles_xcmpl/build/` | `make -j2 hw_bundles` or `make -j2 <target>` |
 | 3b. Compile with HW profiling | `vtabundles_xcmpl/build_prof/` | `make -j2 <target>` → `hw/<Dir>/<target>_prof` |
 | 4a. Run all + compare with golden | `vtabundles_xcmpl/` | `sudo hw/script/run_all.sh [Dir ...]` → `hw/result/results.txt` |
-| 4b. Run profiling bundles | `vtabundles_xcmpl/` | `sudo hw/script/run_prof.sh [-s _timed] [Dir ...]` (no Dir, `all` or `hw_bundles` = every bundle) → `hw/<Dir>/prof.log` (`timed.log`, `timing.csv`; `prof_<exe>.log` when a Dir has several executables); `_prof` logs also get `prof_summary.py`: runs, per-conv ms and GOPS of runs 1, 2, 3 and the last side by side (`<log>.sum`). `-n <runs>` (default 25, hw/ only) = inferences per executable: the `_prof` and `_timed` builds wrap each inference function (`timed_bundle.py`, `BUNDLE_RUNS`), the multi-EVTA mains keep their own loop, one line per Dir in `hw/result/prof_summary.txt` (`timed_summary.txt`) |
+| 4b. Run profiling bundles | `vtabundles_xcmpl/` | `sudo hw/script/run_prof.sh [-s _timed] [Dir ...]` (no Dir, `all` or `hw_bundles` = every bundle) → `hw/<Dir>/prof.log` (`timed.log`, `timing.csv`; `prof_<exe>.log` when a Dir has several executables; multi-EVTA `_prof` logs are split per EVTA by the `[profile] VTA<i> events` line); `_prof` logs also get `prof_summary.py`: runs, per-conv ms and GOPS of runs 1, 2, 3 and the last side by side (`<log>.sum`). `-n <runs>` (default 25, hw/ only) = inferences per executable: the `_prof` and `_timed` builds wrap each inference function (`timed_bundle.py`, `BUNDLE_RUNS`), the multi-EVTA mains keep their own loop, one line per Dir in `hw/result/prof_summary.txt` (`timed_summary.txt`) |
 
 - Step 1 runs `make <target>` in the existing Debug2_remote build (no new cmake); outputs go to
   `Debug2_remote/vta/bundles/<Dir>/`, logs to `Debug2_remote/bundle_logs/`.

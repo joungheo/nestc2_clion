@@ -246,6 +246,9 @@ class VTADevice {
     if (PROFILE_ENABLE && current_event_index_ > 0) {
       if (dropped_events_)
         printf("[profile] VTA%u: event buffer full, %u later events not recorded\n", vta_index_, dropped_events_);
+      //#### JO added (2026-10-29): which EVTA the table below belongs to (multi-EVTA executables print one per EVTA;
+      //#### vtabundles_xcmpl/prof_summary.py splits the log by this line)
+      printf("[profile] VTA%u events\n", vta_index_);
       PrintProfilingInfo();
 
       double total_time = 0.0;

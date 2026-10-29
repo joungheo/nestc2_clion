@@ -101,6 +101,9 @@ for D in "$@"; do
   #### JO added: VTA partitions run one after another (sum = the run), multi-EVTA copies at once (max = the run)
   [ -n "$t" ] || t=$(grep -m1 total_time $D/$LOG)
   [ -n "$ps" ] && t="$t; $ps"
+  #### JO added (2026-10-29): _timed with one table: EVTA calls / CPU conv/fc of the last run (timed_bundle.py summary)
+  [ "$(grep -c '^==== timing' $D/$LOG)" = 1 ] && { e=$(grep '^run #[0-9]* ops:' $D/$LOG | tail -1 | sed 's/^run #[0-9]* ops: //; s/; whole run.*//')
+                                                 [ -n "$e" ] && t="$t; $e"; }
   #### JO changed: executable column, end of the per-line loop
   # printf "%-30s exit=%-3s %-10s %s\n" $D $rc "$res" "$t" >> $SUM
   printf "%-30s %-34s exit=%-3s %-10s %s\n" $D $EXE $rc "$res" "$t" >> $SUM

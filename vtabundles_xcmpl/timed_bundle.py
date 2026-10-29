@@ -38,7 +38,8 @@ PRELUDE = r'''
 #define PT_NAME ""
 #endif
 namespace {
-struct PtEntry { const char *kind, *node, *call; double ms, start, ops; };
+//#### JO changed (2026-10-29): + evta (the statement passes vtaCmdH: an EVTA call) for the split summary
+struct PtEntry { const char *kind, *node, *call; double ms, start, ops; int evta; };
 extern PtEntry __pt_tab[];
 extern const int __pt_n;
 // per-run copies: runs 1..PT_MAXRUNS-1 keep their own column, later runs share the last one
@@ -78,13 +79,20 @@ void __pt_summary() {
     }
     printf("  %-18s %-24s %s\n", e.kind, e.call, e.node);
   }
+  //#### JO changed (2026-10-29): EVTA calls and CPU conv/fc apart (fc on the CPU took 4.4 ms of Resnet18's "conv/fc")
   for (int r = 0; r < nc; r++) {
-    double convOps = 0, convMs = 0;
+    double eOps = 0, eMs = 0, cOps = 0, cMs = 0;
     for (int i = 0; i < __pt_n; i++)
-      if (__pt_tab[i].ops > 0) { convOps += __pt_tab[i].ops; convMs += __pt_ms[r][i]; }
-    if (convOps > 0)
-      printf("run #%d ops (conv/fc): %.1f Mops in %.3f ms of those calls = %.2f GOPS; over the whole run %.3f ms = %.2f GOPS\n",
-             __pt_runno[r], convOps * 1e-6, convMs, convOps / (convMs * 1e6), __pt_tot[r], convOps / (__pt_tot[r] * 1e6));
+      if (__pt_tab[i].ops > 0) {
+        if (__pt_tab[i].evta) { eOps += __pt_tab[i].ops; eMs += __pt_ms[r][i]; }
+        else { cOps += __pt_tab[i].ops; cMs += __pt_ms[r][i]; }
+      }
+    if (eOps + cOps > 0) {
+      printf("run #%d ops:", __pt_runno[r]);
+      if (eOps > 0) printf(" EVTA calls %.1f Mops in %.3f ms = %.2f GOPS;", eOps * 1e-6, eMs, eOps / (eMs * 1e6));
+      if (cOps > 0) printf(" CPU conv/fc %.1f Mops in %.3f ms = %.2f GOPS;", cOps * 1e-6, cMs, cOps / (cMs * 1e6));
+      printf(" whole run %.3f ms = %.2f GOPS\n", __pt_tot[r], (eOps + cOps) / (__pt_tot[r] * 1e6));
+    }
   }
   printf("per statement and run: %s (start_ms column above is from the last run)\n", PT_CSV);
 }
@@ -247,7 +255,7 @@ def main():
                 continue
             if s and not s.startswith('//') and s.endswith(';'):
                 c = call_name(s)
-                tab.append((kind, node, c, call_ops(s, c)))
+                tab.append((kind, node, c, call_ops(s, c), int('vtaCmdH' in s)))
                 out += ['  __pt_t0 = __pt_now();', l, f'  __pt_add({len(tab) - 1}, __pt_t0);']
                 continue
         out.append(l)
@@ -257,7 +265,7 @@ def main():
     out[last_inc + 1:last_inc + 1] = [f'#define PT_CSV "{csv}"', f'#define PT_NAME "{src.split("/")[-1]}"'] + PRELUDE.split('\n')
     out.append('namespace {')
     out.append('PtEntry __pt_tab[] = {')
-    out += [f'  {{"{k}", "{n}", "{c}", 0, 0, {o}}},' for k, n, c, o in tab]
+    out += [f'  {{"{k}", "{n}", "{c}", 0, 0, {o}, {e}}},' for k, n, c, o, e in tab]
     out.append('};')
     out.append(f'const int __pt_n = {len(tab)};')
     out.append('} // namespace')
