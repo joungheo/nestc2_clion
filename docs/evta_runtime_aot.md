@@ -271,13 +271,13 @@ conv 호출 wall 시간에서 같은 conv의 EVTA 시간을 뺐다(두 번째 ru
 2. vtalib 사본 4개를 하나로 합칠지. runtime을 고치기 전에 합치면 이후 수정이 한 번으로 끝난다.
 3. 명령 생성 시간을 더 정확히 나눠 잴지. `Synchronize` 진입 시각을 찍는 계측 빌드가 필요하고, 0.5일 정도 걸린다.
 
-**multi4 Resnet18, 4 EVTAs at once** (2026-10-29, systolic 400 `..._4evta_sa_400mhz.bin`, `_sysprof`, `OMP_NUM_THREADS=1`)
-- `MultiEVTAResnet18Test`: every copy runs `MULTI_RUNS` (25) inferences with a start barrier per run; `run_prof.sh -l`
-  (`MULTI_LOCKSTEP=1`) also makes the copies meet before every EVTA call; `-r` runs the executable with `chrt -f 10`.
-- GOPS of the 4 at once = ops of the 4 copies / time at least one EVTA runs (busy union), per run:
-  - no lockstep: 366 GOPS (2.35 EVTAs at once; the convs drift 2.5-7 ms apart through the CPU work between them).
-  - lockstep: 617 GOPS in most runs (3.98 at once; stage4 3x3 convs 745-753 GOPS = 92 % of 4 x 204.8), but 6-9 of 25 runs
-    drop to 340-560: one EVTA completion seen 2.7-4.1 ms late (a polling thread off its core for a tick, CONFIG_HZ=250,
-    no kernel preemption) and the other three wait at the next barrier.
-  - lockstep + `chrt -f 10`: 1 and 0 of 25 runs below 600 (two runs each way, alternating); median 617.2 GOPS.
-- Each EVTA alone stays at 29.75-30.0 ms per inference (156 GOPS) with the four running: no DDR / HP contention.
+**multi4 Resnet18, EVTA 4개 동시** (2026-10-29, systolic 400 `..._4evta_sa_400mhz.bin`, `_sysprof`, `OMP_NUM_THREADS=1`)
+- `MultiEVTAResnet18Test`: copy마다 `MULTI_RUNS`(25)번, run마다 시작 barrier. `run_prof.sh -l`(`MULTI_LOCKSTEP=1`)은
+  EVTA 호출마다 copy들을 barrier에서 만나게 하고, `-r`은 실행 파일을 `chrt -f 10`으로 띄운다.
+- 4개 동시 GOPS = copy 4개의 연산량 / EVTA가 하나라도 도는 시간(busy union), run마다:
+  - lockstep 없음: 366 GOPS(평균 2.35개 동시). conv 사이 CPU 연산 때문에 conv 시작이 2.5~7 ms씩 어긋난다.
+  - lockstep: 대부분의 run 617 GOPS(3.98개 동시, stage4 3×3 conv 745~753 GOPS = 4 × 204.8의 92 %).
+    25개 중 6~9개 run은 340~560으로 떨어진다. EVTA 하나의 완료를 2.7~4.1 ms 늦게 본다(폴링 스레드가 tick 하나 동안
+    코어를 못 받음, CONFIG_HZ=250, 커널 선점 없음). 나머지 셋은 다음 barrier에서 기다린다.
+  - lockstep + `chrt -f 10`: 600 미만 run이 25개 중 1개, 0개(번갈아 2번씩). 중앙값 617.2 GOPS.
+- 4개가 같이 돌아도 EVTA 하나의 시간은 추론당 29.75~30.0 ms(156 GOPS)로 그대로다. DDR / HP 경쟁이 없다.
