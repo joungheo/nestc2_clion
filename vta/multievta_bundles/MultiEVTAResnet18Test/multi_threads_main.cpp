@@ -463,6 +463,14 @@ int multiRuns() {
   const char *e = getenv("MULTI_RUNS");
   return e && atoi(e) > 0 ? atoi(e) : 25;
 }
+//#### JO added (2026-10-29): MULTI_LOCKSTEP=1 -> the 4 copies also meet before every EVTA call, so each conv runs on
+//#### the 4 EVTAs at once. The _prof/_timed builds call this hook before each EVTA call (timed_bundle.py); the other
+//#### builds do not call it.
+pthread_barrier_t convBarrier;
+bool lockstepOn = false;
+extern "C" void evta_lockstep_hook() {
+  if (lockstepOn) pthread_barrier_wait(&convBarrier);
+}
 
 
 void *thread_main(void *thread_arg) {
@@ -729,6 +737,12 @@ int main(int argc, char **argv) {
   long t1s= t1.tv_sec;
   long t1u= t1.tv_usec;
   pthread_barrier_init(&runBarrier, NULL, 4);  //#### JO added (2026-10-29)
+  {  //#### JO added (2026-10-29): lockstep (see evta_lockstep_hook)
+    const char *e = getenv("MULTI_LOCKSTEP");
+    lockstepOn = e && atoi(e) > 0;
+    pthread_barrier_init(&convBarrier, NULL, 4);
+    if (lockstepOn) std::cout << "MULTI_LOCKSTEP: the 4 copies start every EVTA call together\n";
+  }
   pthread_create(&thread[0],NULL,thread_main, (void*) &thread_arg);
   pthread_create(&thread[1],NULL,thread_main1, (void*) &thread_arg1);
   pthread_create(&thread[2],NULL,thread_main2, (void*) &thread_arg2);

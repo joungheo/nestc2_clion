@@ -15,6 +15,7 @@ usage: timed_bundle.py <in.cpp> <out.cpp> [<csv name>]
 #### with BUNDLE_RUNS=<n> (n > 2) in the environment its first call runs it n - 1 times, later calls once, so the
 #### stock mains (warm-up call + timed call) run n inferences; unset = unchanged. --repeat-only adds just the wrapper
 #### (the _prof builds, NESTC_EVTA_PROFILE=ON); hw*/script/run_prof.sh -n <n> sets BUNDLE_RUNS (single set only).
+#### JO added (2026-10-29): both modes also call evta_lockstep_hook() (weak) before every EVTA call (MULTI_LOCKSTEP).
 #### JO added (2026-10-26): <csv name> (default timing.csv) for executables with several timed .cpp (multi-EVTA
 #### copies, VTA partitions), which would otherwise overwrite one file; the table header names the .cpp.
 """
@@ -209,6 +210,31 @@ def add_repeat(lines):
     return out, wrap
 
 
+#### JO added (2026-10-29): lockstep hook before every EVTA call (a statement passing vtaCmdH). The multi-EVTA main
+#### defines evta_lockstep_hook() (a barrier of the copies when MULTI_LOCKSTEP=1); elsewhere the weak symbol is 0.
+LOCKSTEP_DECL = 'extern "C" void evta_lockstep_hook() __attribute__((weak));  // lockstep hook (timed_bundle.py)'
+LOCKSTEP_CALL = '  if (evta_lockstep_hook) evta_lockstep_hook();'
+
+
+def add_lockstep(lines):
+    out, in_fn = [], False
+    for i, l in enumerate(lines):
+        if not in_fn and DEF.match(l):
+            body = []
+            for k in range(i + 1, len(lines)):
+                if lines[k].startswith('}'):
+                    break
+                body.append(lines[k])
+            in_fn = any(RUN.match(b) for b in body)
+        elif in_fn and l.startswith('}'):
+            in_fn = False
+        s = l.strip()
+        if in_fn and 'vtaCmdH' in s and s.endswith(';') and not s.startswith('//'):
+            out.append(LOCKSTEP_CALL)
+        out.append(l)
+    return out
+
+
 def main():
     #### JO added (2026-10-29): --repeat-only
     repeat_only = sys.argv[1] == '--repeat-only'
@@ -221,9 +247,10 @@ def main():
         open(dst, 'w').write('\n'.join(lines))
         return
     lines, wrap = add_repeat(lines)
+    lines = add_lockstep(lines)
     if repeat_only:
         last_inc = max(i for i, l in enumerate(lines[:50]) if l.startswith('#include'))
-        lines[last_inc + 1:last_inc + 1] = ['#include <stdlib.h>  // getenv, atoi (BUNDLE_RUNS wrapper)']
+        lines[last_inc + 1:last_inc + 1] = ['#include <stdlib.h>  // getenv, atoi (BUNDLE_RUNS wrapper)', LOCKSTEP_DECL]
         open(dst, 'w').write('\n'.join(lines + wrap) + '\n')
         return
     out, tab = [], []
@@ -262,7 +289,7 @@ def main():
     # prelude after the last leading #include, table at the end of the file
     last_inc = max(i for i, l in enumerate(out[:50]) if l.startswith('#include'))
     #out[last_inc + 1:last_inc + 1] = PRELUDE.split('\n')
-    out[last_inc + 1:last_inc + 1] = [f'#define PT_CSV "{csv}"', f'#define PT_NAME "{src.split("/")[-1]}"'] + PRELUDE.split('\n')
+    out[last_inc + 1:last_inc + 1] = [f'#define PT_CSV "{csv}"', f'#define PT_NAME "{src.split("/")[-1]}"', LOCKSTEP_DECL] + PRELUDE.split('\n')
     out.append('namespace {')
     out.append('PtEntry __pt_tab[] = {')
     out += [f'  {{"{k}", "{n}", "{c}", 0, 0, {o}, {e}}},' for k, n, c, o, e in tab]

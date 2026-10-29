@@ -4,7 +4,7 @@
 #   _timed           built in ../build_timed (-DBUNDLE_TIMED=ON -DBUNDLE_EXE_SUFFIX=_timed): per statement,
 #                    also <Dir>/timing.csv
 # Executable, input and golden come from the "run <dir> <exe> <input> <golden>" lines of run_all.sh. Reloads the bitstream before each run.
-# usage: sudo hw/script/run_prof.sh [-s _timed] [-n <runs, default 25>] Dir [Dir ...]     (or hw_<set>/script/run_prof.sh)
+# usage: sudo hw/script/run_prof.sh [-s _timed] [-n <runs, default 25>] [-l] Dir [Dir ...]     (or hw_<set>/script/run_prof.sh)
 #        sudo hw/script/run_prof.sh [-s _timed] [all|hw_bundles]   (no Dir = every run line of run_all.sh)
 # One line per Dir (exit, golden check, total time) is also written to result/<suffix>_summary.txt, printed at the end.
 #### JO added (2026-10-26): also in hw_multievtax2/ and hw_multievtax4/ (copied there by collect_hw_bundles.py):
@@ -32,8 +32,12 @@ SUFFIX=_prof
 #### wrapper in the _prof and _timed builds) in hw/; in hw_<set>/ runs per EVTA copy (MULTI_RUNS, MultiEVTAResnet18Test)
 # [ "${1:-}" = -s ] && { SUFFIX=$2; shift 2; }
 RUNS=25
-while [ "${1:-}" = -s ] || [ "${1:-}" = -n ]; do
-  [ "$1" = -s ] && SUFFIX=$2 || RUNS=$2; shift 2
+#### JO changed (2026-10-29): -l = MULTI_LOCKSTEP=1 (multi-EVTA _prof/_timed: the copies start every EVTA call together)
+# while [ "${1:-}" = -s ] || [ "${1:-}" = -n ]; do
+#   [ "$1" = -s ] && SUFFIX=$2 || RUNS=$2; shift 2
+# done
+while [ "${1:-}" = -s ] || [ "${1:-}" = -n ] || [ "${1:-}" = -l ]; do
+  case $1 in -l) export MULTI_LOCKSTEP=1; shift;; -s) SUFFIX=$2; shift 2;; *) RUNS=$2; shift 2;; esac
 done
 #### JO changed (2026-10-29): hw_<set>/: MULTI_RUNS = runs per EVTA copy of the multi-EVTA mains (4 x for single_thread_main)
 # [ "$HWD" = hw ] && export BUNDLE_RUNS=$RUNS || unset BUNDLE_RUNS

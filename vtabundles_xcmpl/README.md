@@ -97,6 +97,8 @@ Bundle sources are generated in the simulator build, then compiled for the board
   (2026-10-29, MultiEVTAResnet18Test) Now every copy runs `MULTI_RUNS` inferences (default 25; `run_prof.sh -n`) and the
   four start each run together (`pthread_barrier`); `single*` runs 4 x `MULTI_RUNS`. The `_prof` summary then adds a table of
   the 4 EVTAs at once: per conv the window from the first start to the last end, GOPS = ops of all 4 / window.
+  `run_prof.sh -l` (`MULTI_LOCKSTEP=1`, `_prof`/`_timed` builds): the copies also meet at a barrier before every EVTA call
+  (`evta_lockstep_hook`, inserted by `timed_bundle.py`, defined in `multi_threads_main.cpp`), so each conv runs on the 4 EVTAs at once.
 - `OMP_NUM_THREADS`: the CPU ops of vtalib (`CPUBundle_generic.cpp`: transposes, elemadd, relu, maxpool, fc, quantize) are
   OpenMP loops; each pthread opens its own team. Resnet18 x 100 on multi4, systolic 400 (2026-10-29):
   threaded 4014 / 4955 / 5813 / 6025 ms and single 15276 / 10285 / 8638 / 7989 ms for 1 / 2 / 3 / 4 threads.
