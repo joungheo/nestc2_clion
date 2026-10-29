@@ -270,3 +270,14 @@ conv 호출 wall 시간에서 같은 conv의 EVTA 시간을 뺐다(두 번째 ru
 1. AOT 0단계를 시험으로 먼저 할지, 아니면 conv0과 layout 작업을 먼저 할지.
 2. vtalib 사본 4개를 하나로 합칠지. runtime을 고치기 전에 합치면 이후 수정이 한 번으로 끝난다.
 3. 명령 생성 시간을 더 정확히 나눠 잴지. `Synchronize` 진입 시각을 찍는 계측 빌드가 필요하고, 0.5일 정도 걸린다.
+
+**multi4 Resnet18, 4 EVTAs at once** (2026-10-29, systolic 400 `..._4evta_sa_400mhz.bin`, `_sysprof`, `OMP_NUM_THREADS=1`)
+- `MultiEVTAResnet18Test`: every copy runs `MULTI_RUNS` (25) inferences with a start barrier per run; `run_prof.sh -l`
+  (`MULTI_LOCKSTEP=1`) also makes the copies meet before every EVTA call; `-r` runs the executable with `chrt -f 10`.
+- GOPS of the 4 at once = ops of the 4 copies / time at least one EVTA runs (busy union), per run:
+  - no lockstep: 366 GOPS (2.35 EVTAs at once; the convs drift 2.5-7 ms apart through the CPU work between them).
+  - lockstep: 617 GOPS in most runs (3.98 at once; stage4 3x3 convs 745-753 GOPS = 92 % of 4 x 204.8), but 6-9 of 25 runs
+    drop to 340-560: one EVTA completion seen 2.7-4.1 ms late (a polling thread off its core for a tick, CONFIG_HZ=250,
+    no kernel preemption) and the other three wait at the next barrier.
+  - lockstep + `chrt -f 10`: 1 and 0 of 25 runs below 600 (two runs each way, alternating); median 617.2 GOPS.
+- Each EVTA alone stays at 29.75-30.0 ms per inference (156 GOPS) with the four running: no DDR / HP contention.
