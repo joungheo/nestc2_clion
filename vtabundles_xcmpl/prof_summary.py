@@ -75,8 +75,9 @@ def main():
         i = l.find('VTA_SYNC ')
         if i >= 0:
             f = l[i:].split()
-            ev.setdefault(dev, []).append(float(f[13]))
-            ts.setdefault(dev, []).append((int(f[14]), int(f[15])))
+            k = int(f[16]) if len(f) > 16 and f[16].isdigit() else dev  # evta column (vtalib 2026-10-29)
+            ev.setdefault(k, []).append(float(f[13]))
+            ts.setdefault(k, []).append((int(f[14]), int(f[15])))
     if not ev:
         return
     bydev = {}

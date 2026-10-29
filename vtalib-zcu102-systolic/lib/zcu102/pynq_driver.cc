@@ -22,6 +22,7 @@
 
 #include <vta/driver.h>
 #include <thread>
+#include <mutex>  //#### JO added (2026-10-29): profile tables of several EVTAs one after another
 #include "pynq_driver.h"
 #include <sys/time.h>
 
@@ -244,6 +245,10 @@ class VTADevice {
     //#### JO changed: nothing recorded -> event_buffer_[-1] below; also report dropped events
     //if (PROFILE_ENABLE) {
     if (PROFILE_ENABLE && current_event_index_ > 0) {
+      //#### JO added (2026-10-29): the threads of a multi-EVTA executable end together; print each table whole
+      static std::mutex print_mutex;
+      std::lock_guard<std::mutex> print_lock(print_mutex);
+      fflush(stdout);
       if (dropped_events_)
         printf("[profile] VTA%u: event buffer full, %u later events not recorded\n", vta_index_, dropped_events_);
       //#### JO added (2026-10-29): which EVTA the table below belongs to (multi-EVTA executables print one per EVTA;
@@ -259,16 +264,18 @@ class VTADevice {
       total_time = double(event_buffer_[current_event_index_ - 1].end_timestamp_us - event_buffer_[0].begin_timestamp_us) / 1000.0;
 
       printf("total_time : %.3f ms, total_vta_time : %.3f ms\n", total_time, total_vta_time);
+      fflush(stdout);
 
 
     }
   }
 
   void PrintProfilingInfo() {
-    printf("event_type event_num GOPS Gbits read_latency read_bytes read_transactions write_latency write_bytes write_transactions gemm_count alu_count load_count exe_time begin_timestamp_us end_timestamp_us\n");
+    //#### JO changed (2026-10-29): + evta column (index of the EVTA) at the end of every line
+    printf("event_type event_num GOPS Gbits read_latency read_bytes read_transactions write_latency write_bytes write_transactions gemm_count alu_count load_count exe_time begin_timestamp_us end_timestamp_us evta\n");
     for (int i = 0; i < current_event_index_; i++) {
       struct ProfileEvent *e = &event_buffer_[i];
-      printf("%s %d %.3f %.3f %d %d %d %d %d %d %d %d %d %.3f %lld %lld\n",
+      printf("%s %d %.3f %.3f %d %d %d %d %d %d %d %d %d %.3f %lld %lld %u\n",
              e->event_type == ProfileEvent::EventType::VTA_SYNC ? "VTA_SYNC" : "Unknown",
              e->event_num,
              (double)e->ops / e->exe_time / 1000000,
@@ -284,7 +291,8 @@ class VTADevice {
              e->load_count,
              e->exe_time,
              e->begin_timestamp_us,
-             e->end_timestamp_us
+             e->end_timestamp_us,
+             vta_index_
       );
     }
   }
