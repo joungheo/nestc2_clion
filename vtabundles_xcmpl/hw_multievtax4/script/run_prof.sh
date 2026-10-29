@@ -34,7 +34,8 @@ SUFFIX=_prof
 V=BIN; case $SUFFIX in _sys*) V=SYS_BIN;; esac
 BIN=${BIN:-$(sed -n 's/^'$V'=\${'$V':-\(.*\)}$/\1/p; s/^'$V'=\([^$].*\)$/\1/p' $RUN_ALL)}
 [ -n "$BIN" ] && [ -f /lib/firmware/$BIN ] || { echo "bitstream /lib/firmware/$BIN not found ($V in $RUN_ALL)"; exit 1; }
-LOG=${SUFFIX#_}.log
+#### JO changed (2026-10-29): set per run line below
+# LOG=${SUFFIX#_}.log
 #### JO changed: no Dir / "all" / "hw_bundles" runs every bundle listed in run_all.sh
 # [ $# -gt 0 ] || { echo "usage: sudo ./run_prof.sh [-s _timed] Dir [Dir ...]"; exit 1; }
 if [ $# = 0 ] || [ "$1" = all ] || [ "$1" = hw_bundles ]; then
@@ -52,6 +53,10 @@ for D in "$@"; do
   while read -r line <&3; do
   eval "set -- $line"     # -> run dir exe input golden
   EXE=$3$SUFFIX; IN=$4; GOLD=$5
+  #### JO added (2026-10-29): a Dir with several run lines (multi-EVTA: threaded + single-thread executable) gets one log
+  #### per executable, <suffix>_<exe>.log; with one shared <suffix>.log the second executable overwrote the first
+  LOG=${SUFFIX#_}.log
+  [ $(grep -cE "^run $D " $RUN_ALL) -gt 1 ] && LOG=${SUFFIX#_}_$3.log
   echo "================ $D ($EXE)"
   #### JO changed: also record it in the summary
   # [ -x $D/$EXE ] || { echo "$D/$EXE not built (cd ../build${SUFFIX} && make $3)"; continue; }

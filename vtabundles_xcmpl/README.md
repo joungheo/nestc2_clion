@@ -18,7 +18,7 @@ Bundle sources are generated in the simulator build, then compiled for the board
 | 3a. Compile for the board | `vtabundles_xcmpl/build/` | `make -j2 hw_bundles` or `make -j2 <target>` |
 | 3b. Compile with HW profiling | `vtabundles_xcmpl/build_prof/` | `make -j2 <target>` → `hw/<Dir>/<target>_prof` |
 | 4a. Run all + compare with golden | `vtabundles_xcmpl/` | `sudo hw/script/run_all.sh [Dir ...]` → `hw/result/results.txt` |
-| 4b. Run profiling bundles | `vtabundles_xcmpl/` | `sudo hw/script/run_prof.sh [-s _timed] [Dir ...]` (no Dir, `all` or `hw_bundles` = every bundle) → `hw/<Dir>/prof.log` (`timed.log`, `timing.csv`), one line per Dir in `hw/result/prof_summary.txt` (`timed_summary.txt`) |
+| 4b. Run profiling bundles | `vtabundles_xcmpl/` | `sudo hw/script/run_prof.sh [-s _timed] [Dir ...]` (no Dir, `all` or `hw_bundles` = every bundle) → `hw/<Dir>/prof.log` (`timed.log`, `timing.csv`; `prof_<exe>.log` when a Dir has several executables), one line per Dir in `hw/result/prof_summary.txt` (`timed_summary.txt`) |
 
 - Step 1 runs `make <target>` in the existing Debug2_remote build (no new cmake); outputs go to
   `Debug2_remote/vta/bundles/<Dir>/`, logs to `Debug2_remote/bundle_logs/`.
@@ -89,6 +89,15 @@ Bundle sources are generated in the simulator build, then compiled for the board
   (`-DBUNDLE_SET=<set> -DBUNDLE_TIMED=ON -DBUNDLE_EXE_SUFFIX=_timed`);
   then `sudo hw_<set>/script/run_prof.sh [-s _timed] [Dir ...]`. Each timed .cpp (one per EVTA copy) prints its own table
   and writes `timing_<cpp>.csv` (a single timed .cpp still writes `timing.csv`).
+  A Dir with several run lines (threaded `multi*` + single-thread `single*` executable) logs each executable to
+  `<suffix>_<exe>.log` (2026-10-29; before, both wrote `<suffix>.log` and the second overwrote the first).
+  The threaded executable runs one bundle copy per EVTA in its own pthread; the copies take inferences from one shared
+  counter (100 in all, ~25 each), so each timed table says how many runs that copy did. Tables print at exit (atexit).
+  `single*` runs copy 0 (EVTA 0) alone 100 times, the 1-EVTA reference.
+- `OMP_NUM_THREADS`: the CPU ops of vtalib (`CPUBundle_generic.cpp`: transposes, elemadd, relu, maxpool, fc, quantize) are
+  OpenMP loops; each pthread opens its own team. Resnet18 x 100 on multi4, systolic 400 (2026-10-29):
+  threaded 4014 / 4955 / 5813 / 6025 ms and single 15276 / 10285 / 8638 / 7989 ms for 1 / 2 / 3 / 4 threads.
+  So the threaded executable with `OMP_NUM_THREADS=1` (4 pthreads already fill the 4 cores), the single one with the default 4.
 - Each bundle is pinned to one EVTA at code generation (`-index-multi-evta` mask 1/2/4/8 -> EVTA 0..3,
   `VTASave.cpp` ~line 4958); a multi-EVTA executable runs one bundle per thread.
 - The conv tile schedules (`include/Backends/VTA/VTASchedules.h`) were tuned for the single-EVTA buffers;
