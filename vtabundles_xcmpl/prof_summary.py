@@ -139,8 +139,24 @@ def main():
             print(f'run {r + 1}: EVTA busy union {u:.3f} ms (sum of EVTA times {busy:.3f} ms, {busy / u:.2f} EVTAs at once on average)'
                   f' -> {ops / 1e6:.1f} Mops / union = {ops / (u * 1e6):.2f} GOPS')
             un.append((r, u, busy, ops))
-        r, u, busy, ops = un[-1]
-        res.append(f'{len(conc)} EVTAs, run {r + 1}: {ops / (u * 1e6):.2f} GOPS over the busy union {u:.3f} ms ({busy / u:.2f} at once)')
+        #### JO changed (2026-10-29): every run, then the median in the summary: one late completion (the polling thread off
+        #### the CPU for a 4 ms tick, CONFIG_HZ=250) costs a whole run in lockstep, so a single run is noisy
+        # r, u, busy, ops = un[-1]
+        # res.append(f'{len(conc)} EVTAs, run {r + 1}: {ops / (u * 1e6):.2f} GOPS over the busy union {u:.3f} ms ({busy / u:.2f} at once)')
+        allg = []
+        for r in range(runs):
+            iv = sorted(ts[k][r * n + i] for k in conc for i in range(n))
+            u, cb, ce = 0, iv[0][0], iv[0][1]
+            for b, e in iv[1:]:
+                if b > ce:
+                    u += ce - cb; cb, ce = b, e
+                else:
+                    ce = max(ce, e)
+            allg.append(ops / ((u + ce - cb) / 1000.0 * 1e6))
+        print('GOPS over the busy union, every run: ' + ' '.join(f'{g:.0f}' for g in allg))
+        sg = sorted(allg)
+        res.append(f'{len(conc)} EVTAs at once over the busy union: median {sg[len(sg) // 2]:.2f} GOPS'
+                   f' (min {sg[0]:.1f}, max {sg[-1]:.1f}, {runs} runs)')
     print('; '.join(res))
 
 
