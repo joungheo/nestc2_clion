@@ -250,6 +250,21 @@ conv 호출 wall 시간에서 같은 conv의 EVTA 시간을 뺐다(두 번째 ru
 
   multi4 번들은 `OMP_NUM_THREADS=1`이라 CPU 몫이 single 셋(기본 OpenMP 4스레드)보다 커서 한 번에 약 150 ms다. 결과는 모두 281.
 
+**conv0 schedule: 가상 스레드 2, tile 8×16** (2026-10-29, `VTASchedules.h` `fa996be`)
+- 생성 기본값(가상 스레드 1, tile 8×8)을 sweep으로 바꿨다(`/tmp/jo_conv0_sweep.sh`, 보드 HLS 380, conv0 VTA_SYNC):
+  1/8×8 12.81 ms, 2/8×8 11.17, 1/11×16 10.51, 2/16×8 10.37, 2/7×16 9.62, 2/8×14 9.72, **2/8×16 9.48**, 2/14×14 9.30, 2/4×28 15.31.
+  - 14×14는 입력 tile 33×33 = 1089 entry로 `conv_kernel`의 inp 한 영역(1024)을 넘는다(single SRAM 4096이라 돌았을 뿐, multi 2048에서는 넘침).
+  - 2/16×11은 confidence가 0.6276으로 달라졌다. 112를 나누지 않는 W 경계 tile 처리가 의심된다(확인 안 함). 약수 tile만 쓴다.
+- 재생성(single, x2, x4) 뒤 golden: single 30 PASS(HLS, systolic `_sysprof` 모두), multi2·multi4 3 PASS, Resnet18 281 / 0.6555 그대로, multi "maxIdx" 0줄.
+
+  | | HLS 380 | systolic 400 |
+  |---|---|---|
+  | conv0 | 12.81 → 9.49 ms | 12.43 → 9.13 ms |
+  | 추론 1회 EVTA 시간(`_prof`) | 34.26 → 30.96 ms (150.3 GOPS) | 32.99 → 29.69 ms (156.6 GOPS) |
+  | single 추론 전체(`_timed` run 2) | 78.35 → 75.01 ms | 77.27 → 74.00 ms |
+  | multi4 multi, copy 평균(`OMP_NUM_THREADS=1`) | 159.2 → 154.9 ms | 156.9 → 154.9 ms |
+  | multi4 single, run 100 | 153.33 → 149.87 ms | 153.05 → 149.05 ms |
+
 ## 6. 정할 것
 
 1. AOT 0단계를 시험으로 먼저 할지, 아니면 conv0과 layout 작업을 먼저 할지.
