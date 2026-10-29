@@ -78,6 +78,8 @@ for D in "$@"; do
   grep -E "event buffer full|total_time|^run [0-9]+ \(" $D/$LOG
   sed -n "/^==== timing/,\$p" $D/$LOG
   echo "  VTA events: $(grep -c '^VTA_SYNC' $D/$LOG)   full log: $D/$LOG"
+  #### JO added (2026-10-29): _prof logs: runs, VTA time per run and GOPS (ops from the bundle .cpp; ../prof_summary.py)
+  ps=""; grep -q '^VTA_SYNC' $D/$LOG && { python3 ../prof_summary.py $D $D/$LOG > $D/$LOG.sum 2>&1; cat $D/$LOG.sum; ps=$(tail -1 $D/$LOG.sum); }
   # summary: total of the last run (_timed) or the VTA total_time line (_prof)
   #### JO changed: a partitioned bundle prints one timing table per VTA partition .cpp -> sum the last run of each
   # t=$(grep -E "^run #[0-9]+: total" $D/$LOG | tail -1 | sed "s/, statements.*//"); [ -n "$t" ] || t=$(grep -m1 total_time $D/$LOG)
@@ -91,6 +93,7 @@ for D in "$@"; do
                                  printf "%d timed .cpp, last run: %s ms (sum %.3f)\n", n, l, s}}' $D/$LOG)
   #### JO added: VTA partitions run one after another (sum = the run), multi-EVTA copies at once (max = the run)
   [ -n "$t" ] || t=$(grep -m1 total_time $D/$LOG)
+  [ -n "$ps" ] && t="$t; $ps"
   #### JO changed: executable column, end of the per-line loop
   # printf "%-30s exit=%-3s %-10s %s\n" $D $rc "$res" "$t" >> $SUM
   printf "%-30s %-34s exit=%-3s %-10s %s\n" $D $EXE $rc "$res" "$t" >> $SUM
