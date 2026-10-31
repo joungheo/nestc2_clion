@@ -91,6 +91,11 @@ def main():
                 cps.append((n, tot, conv, ops, eops))
     if not cps:
         return
+    #### JO added (2026-10-31): copies in EVTA order (<name>.cpp = EVTA 0, <name>_<i>.cpp = EVTA i), not the order they finished
+    def copy_no(c):
+        m = re.search(r'_(\d+)\.csv$', c[0])
+        return (int(m.group(1)) if m else 0, c[0])
+    cps.sort(key=copy_no)
     res = []
     multi = len(cps) > 1
     for n, tot, conv, ops, eops in cps:
