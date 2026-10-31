@@ -341,6 +341,37 @@ bias(ADD), requant(SHR), clip(MAX/MIN)을 한다(`conv_kernel`). Resnet18 v1 blo
   처리량은 `_sys` 100회 wall(1471 ms = copy당 58.8 ms/run)로 보는 것이 맞다.
 - 이제 CPU에 남은 것(OMP 1, single 52.5 ms − EVTA call 33.4 ms 중): conv0 입력 zerofill, fc 4.4 ms, 전처리, `VTABufferAlloc`/Free, avgpool.
 
+### 7.4 CPU transpose를 16바이트 복사로 (2026-11-01, vtalib `CPUBundle_generic.cpp`)
+
+NHWC와 EVTA layout N{C/16}HW16 사이 변환은 픽셀마다 연속된 16바이트를 옮기는 것뿐인데, vtalib은 바이트 단위
+(`transpose_nhwc2vtaio_zerofill`은 malloc한 NCHW 버퍼를 거치는 2단계)로 옮기고 있었다. 보드 빌드는
+`NESTC_EVTA_RUN_WITH_GENERIC_BUNDLE=ON`이라 `CPUBundle_generic.cpp`를 쓴다(`CPUBundle_aarch64.cpp`도 같이 고침).
+결과는 예전 코드와 같다(N = 1; `_zerofill`의 예전 코드는 N > 1에서 batch를 섞었다). systolic 복사본도 같다.
+
+| transpose (run당) | 예전 | 16바이트 복사 |
+|---|---|---|
+| `transpose_nhwc2vtaio` 56×56×64, OMP 1 | 1.75 ms | 0.20 ms |
+| `transpose_vtaio2nhwc` 56×56×64, OMP 1 | 3.31 ms | 0.26 ms |
+| `transpose_nhwc2vtaio_zerofill` Resnet18 conv0 224×224×3 → 16, OMP 4 | 6.8 ms | 0.2 ms |
+
+CMA 버퍼는 cache가 켜져 있어 malloc 메모리와 속도가 같다. 느렸던 것은 코드였다.
+
+| 경우 (systolic 400 MHz, `-r`, run 2~25 median) | 7.3 후 | + 16바이트 transpose | 변화 |
+|---|---|---|---|
+| Resnet18 single, OMP 1, 전체 run | 52.48 ms | **46.90 ms** (99.2 GOPS) | −10.6 % |
+| Resnet18 single, OMP 4, 전체 run | 48.71 ms | **41.81 ms** (111.3 GOPS) | −14.2 % |
+| Resnet18 multi4 copy 하나, 4개 동시 | ~56.3 ms | **49.5 ms** | −12 % |
+| Resnet18 multi4 4 copy 100회 wall (`_sys`) | 1471 ms (68.0/s) | **1314 ms (76.1/s)** | −10.7 % |
+| Resnet18 multi4 비트스트림, single-thread exe 100회 | 5393 ms | **4724 ms** | −12.4 % |
+| Conv4Test (56×56×64) 4 EVTA 100회 전체 (380 MHz, OMP 1) | 757 ms (122 GOPS) | **316 ms (293 GOPS)** | −58 % |
+| Conv4Test 1 EVTA 100회 전체 | 703 ms | **243 ms** | −65 % |
+| ResConv10Test 4 EVTA 100회 전체 | – | 161 ms (574 GOPS) | |
+
+- EVTA 하드웨어 시간(`_sysprof` 31.98 ms, 4 EVTA lockstep 571.5 GOPS)은 그대로다. Result 281, Confidence 0.655530.
+- Conv4Test는 conv만(`conv` 인자) 1.66 ms/run에 alloc/free와 transpose 0.75 ms가 남는다. 4 EVTA 전체(316 ms)가
+  1 EVTA(243 ms)보다 느린 이유(CPU 쪽이 동시에 돌 때)는 아직 보지 않았다.
+- multi4 `_systimed`의 "4 copy 합"(run마다 가장 느린 copy)이 49.7 ms로 copy마다의 median(49.5 ms)과 거의 같아졌다(7.3에서는 78.0 ms).
+
 ## 8. 하드웨어도 같이 비교해야 하나
 
 해야 한다. 다만 §7의 ①~④를 가르는 것은 어레이가 아니라 다음 네 가지다.

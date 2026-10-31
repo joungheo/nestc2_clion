@@ -193,6 +193,9 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
 - Max pool on the EVTA (2026-10-31, `-vta-evta-maxpool`, default on, vtalib `maxpool_evta`, `findEvtaMaxPools`): input >= 0 only
   (written by an EVTA conv with relu or a relu; LOAD pads with 0), output tiles with the input halo re-read, identity GEMM, one ALU MAX
   instruction per window position. Resnet18 single OMP 1 67.1 -> 52.5 ms, multi4 100 inferences 1.85 -> 1.47 s (§7.3).
+- NHWC <-> EVTA layout transposes as 16-byte copies (2026-11-01, vtalib `CPUBundle_generic.cpp`, the file the board builds with
+  `NESTC_EVTA_RUN_WITH_GENERIC_BUNDLE=ON`; conv0 `_zerofill` 6.8 -> 0.2 ms): Resnet18 single OMP 1 52.5 -> 46.9 ms, multi4 100 inferences
+  1.47 -> 1.31 s; Conv4Test 4 EVTAs end-to-end 757 -> 316 ms (§7.4).
 - The lab board's PL has a defective configuration row (tile row SLICE Y219, cells stuck at 0; `log/BOARD_TODO.md`
   2026-10-23/24). `vivado.tcl` on zcu102 fences the design below it by default (`VTA_BRAM_FENCE=y219|upper|none`).
   multi2 fits below it and works (2026-10-24); multi4 needs more BRAM than the rows below, so it crosses the row with
