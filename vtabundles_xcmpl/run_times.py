@@ -76,8 +76,9 @@ def stat(name, per, o):
 
 def main():
     d, log = sys.argv[1], sys.argv[2]
-    names = []
+    names, lock = [], False
     for l in open(log, errors='replace'):
+        lock = lock or l.startswith('MULTI_LOCKSTEP:')   # multi_threads_main.cpp with MULTI_LOCKSTEP=1
         m = re.search(r'per statement and run: (\S+)', l)
         if m and m.group(1) not in names:
             names.append(m.group(1))
@@ -124,8 +125,8 @@ def main():
         mo = median(cs[1:] if len(cs) > 1 else cs) / mu if mu > 0 else 0.0
         print(f'{rng}: {lw}; {lc}; {mo:.2f} EVTAs at once on average')
         print(f'  ({ops / 1e6:.1f} Mops per run of all copies, of which EVTA {eops / 1e6:.1f}; lockstep (-l): '
-              f'{"on" if os.environ.get("MULTI_LOCKSTEP") == "1" else "off"})')
-        res.append(f'{k} copies, {rng}: {sw}; {sc}')
+              f'{"on" if lock else "off"})')
+        res.append(f'{k} copies{" lockstep" if lock else ""}, {rng}: {sw}; {sc}')
     elif multi:
         res.append('copies with different runs: no combined numbers')
     print('; '.join(res))
