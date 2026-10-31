@@ -264,6 +264,46 @@ relu 2.5, `VTABufferAlloc` 2.2, fc 1.2, 전처리(elemsub/elemdiv/quantize) 2.2,
   maxpool이 채널 16 안쪽 루프로 바뀌어 조금 느려졌기 때문으로 보인다(이전 maxpool 단독 값은 남아 있지 않다).
 - 다음은 ②(elemadd/relu/maxpool 11.3 ms를 EVTA ALU로)와 ④(conv0 zerofill 6.2 ms).
 
+### 7.2 ② 결과: conv + elemadd + relu를 EVTA 한 번에 (2026-10-31, `-vta-fuse-residual`, 기본 켜짐)
+
+**어떻게 되나.** EVTA conv는 출력 tile마다 입력 채널 전체의 reduction을 acc SRAM 안에서 끝내고, store 전에 ALU로
+bias(ADD), requant(SHR), clip(MAX/MIN)을 한다(`conv_kernel`). Resnet18 v1 block의 `relu(conv(x) + residual)`은 그 자리에 몇 단계를 더 붙여 한 call로 한다
+(`convolution_wo_tr_res`, vtalib `VTABundle.cpp` `ConvResidual`; `vtalib-zcu102-systolic`도 같다).
+1. conv requant까지는 그대로 한다(conv 출력 int8 값 = 이전에 DDR에 쓰던 값).
+2. `acc <<= convShl`(ALU ADD acc, acc).
+3. residual tile을 inp SRAM에 출력 tile과 같은 배치로 LOAD한다(store와 같은 주소, conv GEMM이 끝난 inp 자리).
+4. `acc += residual × (2^resShl·I)`(마지막 wgt entry의 단위행렬 weight로 GEMM).
+5. `acc = (acc + 2^(m-1)) >> m`, `MAX 0`, `MIN 127` 뒤 STORE.
+
+- scale이 2의 거듭제곱이라 곱셈이 필요 없고, 쓰는 opcode는 MIN, MAX, ADD, SHR(2비트로 됨)와 GEMM뿐이다. 하드웨어는 그대로다.
+- 반올림은 EVTA가 .5 올림, CPU `std::round`가 0에서 먼 쪽이다. 음수 합에서만 다른데 relu가 0으로 만들어 결과가 같다.
+  그래서 relu가 붙은 elemadd만 fusion한다.
+- VTASave `findResidualFusions` 조건: conv 출력이 그 elemadd에서만 쓰이고, 피연산자가 모두 EVTA layout(①)이고, scale 비가 2^k이고, 출력이 conv 입력이 아니어야 한다.
+  conv → elemadd → relu 사이에는 alloc/dealloc만 있어야 하고, relu 출력의 alloc이 conv 뒤에 있으면 conv 앞으로 옮긴다.
+  Resnet18은 8개 elemadd+relu가 모두 fusion되어 CPU elemadd/relu가 없다. `-vta-fuse-residual=false`면 이전 코드가 그대로 나온다.
+- 검증: `EVTA_RES_CHECK=1`이면 fused 출력을 일반 conv + CPU elemadd/relu와 원소 단위로 비교한다.
+  single과 multi4(4 copy, single-thread exe 포함)에서 8개 모두 0개 불일치였다. Result 281, Confidence 0.655530은 이전과 같다.
+
+**측정 (systolic 400 MHz, `run_prof.sh -r`, 25 run, run 2~25의 median; 같은 날 같은 보드에서 이전 bundle과 이어서 측정).**
+
+| 경우 | 이전 (①만) | ② 후 | 변화 |
+|---|---|---|---|
+| single, OMP 1, 전체 run (`_systimed`) | 90.93 ms (51.2 GOPS) | **67.13 ms** (69.3 GOPS) | −26.2 % |
+| single, OMP 4, 전체 run (`_systimed -t 4`) | 56.64 ms (82.1 GOPS) | **50.23 ms** (92.6 GOPS) | −11.3 % |
+| single, EVTA call 합 (CPU에서 본 wall, OMP 1) | 32.07 ms | 33.37 ms | +1.3 ms |
+| single, EVTA 하드웨어 시간 (`_sysprof`) | 29.68 ms (156.7 GOPS) | 30.80 ms (151.0 GOPS) | +1.1 ms |
+| multi4 copy 하나, 4개 동시, 전체 run (`_systimed`) | 95.6 ms | **70.7 ms** | −26 % |
+| multi4 4 copy 합, 전체 run | 194.6 GOPS | **262.7 GOPS** | +35 % |
+| multi4 4 copy 합, conv busy union (`_systimed`) | 525.3 GOPS | 509.0 GOPS | −3 % |
+| multi4 4 EVTA 동시, lockstep (`_sysprof -l`) | 616.6 GOPS | 593.9 GOPS | −4 % |
+| multi4 4 copy 100회 wall (`_sys`) | 2470 ms (40.5 추론/s) | **1851 ms (54.0 추론/s)** | −25 % |
+| multi4 비트스트림, single-thread exe 100회 (`_sys`) | 9231 ms | 6818 ms | −26 % |
+
+- GOPS의 ops는 conv MAC만 센다(더하기는 넣지 않았다). 그래서 EVTA 시간이 1.1 ms 늘어난 만큼 EVTA GOPS는 조금 내려간다.
+  1.1 ms는 8개 conv의 residual LOAD, 단위행렬 GEMM, ALU 명령에 든 시간이다.
+- CPU에서 elemadd와 relu가 빠져 OMP 1에서 23.8 ms, OMP 4에서 6.4 ms가 줄었다. 처리량이 중요한 multi4(OMP 1)에서 효과가 크다.
+- 아직 CPU에 남은 것: maxpool(conv0 뒤 하나), conv0 입력 zerofill, `VTABufferAlloc`, 전처리, fc.
+
 ## 8. 하드웨어도 같이 비교해야 하나
 
 해야 한다. 다만 §7의 ①~④를 가르는 것은 어레이가 아니라 다음 네 가지다.

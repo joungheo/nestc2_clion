@@ -50,7 +50,8 @@ static llvm::cl::opt<bool> vtaFuseResidual(
     "vta-fuse-residual",
     llvm::cl::desc("Run an elementadd + relu that follows an EVTA conv in the "
                    "conv (convolution_wo_tr_res); needs -vta-keep-layout"),
-    llvm::cl::init(false));
+    //#### default on since the board check (2026-10-31: bit-exact, docs/evta_runtime_compare.md 7.2)
+    llvm::cl::init(true));
 
 namespace vta_save{
 

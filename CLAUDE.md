@@ -186,6 +186,10 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
 - Activations between EVTA convs stay in the EVTA layout N{C/16}HW16 (2026-10-31, `VTASave.cpp` `findPackedActivations`,
   model-compiler `-vta-keep-layout`, default on): no transpose between layers, elemadd/relu as is, pools with the
   16-channel blocks as the batch; Resnet18 single 73.6 -> 56.4 ms, multi4 100 inferences 3.9 -> 2.8 s (`docs/evta_runtime_compare.md` §7.1).
+- EVTA conv + elementadd + relu in one call (2026-10-31, `VTASave.cpp` `findResidualFusions`, model-compiler `-vta-fuse-residual`,
+  default on; vtalib `convolution_wo_tr_res`, also in `vtalib-zcu102-systolic`): residual LOADed into inp, identity-weight GEMM, ALU
+  ADD/SHR/MAX/MIN before the store, power-of-two scales only; bit-exact with the CPU path (`EVTA_RES_CHECK=1` compares at run time).
+  Resnet18 (all 8 fused) single OMP 1 90.9 -> 67.1 ms, OMP 4 56.6 -> 50.2 ms, multi4 100 inferences 2.47 -> 1.85 s (§7.2).
 - The lab board's PL has a defective configuration row (tile row SLICE Y219, cells stuck at 0; `log/BOARD_TODO.md`
   2026-10-23/24). `vivado.tcl` on zcu102 fences the design below it by default (`VTA_BRAM_FENCE=y219|upper|none`).
   multi2 fits below it and works (2026-10-24); multi4 needs more BRAM than the rows below, so it crosses the row with
