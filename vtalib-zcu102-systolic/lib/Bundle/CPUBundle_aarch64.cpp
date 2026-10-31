@@ -5082,13 +5082,13 @@ void transpose_vtak2nhwc(int8_t* input, int8_t* output, int KN, int KH, int KW, 
 
 
 //#### JO added (2026-10-31): 16-byte copies (see transpose_nhwc2vtaio); C % 16 channels of the last block byte by byte.
-//#### The old code read every batch from batch 0 of the input; this one reads batch b at b * C/16 blocks (N = 1 the same).
+//#### Same mapping as before, including the input index not depending on the batch b.
 void transpose_vtaio2nhwc(int8_t* input, int8_t* output, int N, int H, int W, int C){
   const int CB = (C + 15) / 16;
   for (int b = 0; b < N; b++)
     for (int c_ = 0; c_ < CB; c_++) {
       const int nc = std::min(16, C - c_ * 16);
-      const int8_t *src = input + ((size_t)b * CB + c_) * H * W * 16;
+      const int8_t *src = input + (size_t)c_ * H * W * 16;
       int8_t *dst = output + (size_t)b * H * W * C + c_ * 16;
       if (nc == 16)
         for (int p = 0; p < H * W; p++)

@@ -1281,14 +1281,18 @@ void transpose_nhwc2vtaio(int8_t* input, int8_t* output, int N, int H, int W, in
   // NHWC -> N{C/16}HW16 in one pass (was NHWC -> NCHW in a malloc'ed buffer, then -> N{C/16}HW16).
   const int CB = C / 16;
   const int rows = N * CB * H;
+  //#### JO changed (2026-10-31): 16-byte copies (the 16 channels of a block are contiguous in both layouts); the byte
+  //#### loop took 1.75 ms for 56x56x64 on one A53 core
 #pragma omp parallel for schedule(static)
   for (int r = 0; r < rows; r++) {
     const int n = r / (CB * H), c_ = (r / H) % CB, h = r % H;
     const int8_t *in = input + n*H*W*C + h*W*C + c_*16;
     int8_t *out = output + n*CB*H*W*16 + c_*H*W*16 + h*W*16;
     for (int w = 0; w < W; w++)
-      for (int c = 0; c < 16; c++)
-        out[w*16 + c] = in[w*C + c];
+      memcpy(out + w*16, in + w*C, 16);
+    // for (int w = 0; w < W; w++)
+    //   for (int c = 0; c < 16; c++)
+    //     out[w*16 + c] = in[w*C + c];
   }
 }
 
@@ -1351,15 +1355,28 @@ void transpose_vtak2nhwc(int8_t* input, int8_t* output, int KN, int KH, int KW, 
 void transpose_vtaio2nhwc(int8_t* input, int8_t* output, int N, int H, int W, int C){
   // Same mapping as before (including the input index not depending on the batch b),
   // walked with the channel innermost so the NHWC output is written contiguously.
-  const int rows = N * H;
+  //#### JO changed (2026-10-31): 16-byte copies per channel block (C % 16 channels of the last block: that many bytes);
+  //#### the byte loop with f / 16, f % 16 took 3.3 ms for 56x56x64 on one A53 core
+  const int rows = N * H, CB = (C + 15) / 16;
 #pragma omp parallel for schedule(static)
   for (int r = 0; r < rows; r++) {
     const int b = r / H, i = r % H;
-    for (int j = 0; j < W; j++) {
-      int8_t *out = output + b * H * W * C + i * W * C + j * C;
-      for (int f = 0; f < C; f++)
-        out[f] = *(input + ((f / 16) * H * W * 16 + i * W * 16 + j * 16 + f % 16));
+    for (int c_ = 0; c_ < CB; c_++) {
+      const int nc = std::min(16, C - c_ * 16);
+      const int8_t *in = input + c_ * H * W * 16 + i * W * 16;
+      int8_t *out = output + b * H * W * C + i * W * C + c_ * 16;
+      if (nc == 16)
+        for (int j = 0; j < W; j++)
+          memcpy(out + j * C, in + j * 16, 16);
+      else
+        for (int j = 0; j < W; j++)
+          memcpy(out + j * C, in + j * 16, nc);
     }
+    // for (int j = 0; j < W; j++) {
+    //   int8_t *out = output + b * H * W * C + i * W * C + j * C;
+    //   for (int f = 0; f < C; f++)
+    //     out[f] = *(input + ((f / 16) * H * W * 16 + i * W * 16 + j * 16 + f % 16));
+    // }
   }
 }
 
