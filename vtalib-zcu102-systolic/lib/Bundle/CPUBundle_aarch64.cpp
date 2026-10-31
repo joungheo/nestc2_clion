@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <fstream>
 #include <vector>
+#include <algorithm>
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -4987,7 +4988,21 @@ void debugprint(int8_t *input, unsigned_t size, std::string filename, bool isInt
 }
 
 
+//#### JO added (2026-10-31): NHWC <-> N{C/16}HW16 as one pass of 16-byte copies (the 16 channels of a block are
+//#### contiguous in both layouts); was a malloc + NHWC -> NCHW -> N{C/16}HW16 byte by byte (Conv4Test 56x56x64:
+//#### both transposes ~5.3 ms per run on the A53). Same channels as before (blocks c_ < C/16).
 void transpose_nhwc2vtaio(int8_t* input, int8_t* output, int N, int H, int W, int C){
+  const int CB = C / 16;
+  for (int n = 0; n < N; n++)
+    for (int c_ = 0; c_ < CB; c_++) {
+      const int8_t *src = input + (size_t)n * H * W * C + c_ * 16;
+      int8_t *dst = output + ((size_t)n * CB + c_) * H * W * 16;
+      for (int p = 0; p < H * W; p++)
+        memcpy(dst + (size_t)p * 16, src + (size_t)p * C, 16);
+    }
+}
+
+void transpose_nhwc2vtaio_old(int8_t* input, int8_t* output, int N, int H, int W, int C){
   int8_t *IN_NHWC = input;
 
   int8_t *IN_NCHW = (int8_t *)malloc(N*C*H*W);
@@ -5066,7 +5081,25 @@ void transpose_vtak2nhwc(int8_t* input, int8_t* output, int KN, int KH, int KW, 
 }
 
 
+//#### JO added (2026-10-31): 16-byte copies (see transpose_nhwc2vtaio); C % 16 channels of the last block byte by byte.
+//#### The old code read every batch from batch 0 of the input; this one reads batch b at b * C/16 blocks (N = 1 the same).
 void transpose_vtaio2nhwc(int8_t* input, int8_t* output, int N, int H, int W, int C){
+  const int CB = (C + 15) / 16;
+  for (int b = 0; b < N; b++)
+    for (int c_ = 0; c_ < CB; c_++) {
+      const int nc = std::min(16, C - c_ * 16);
+      const int8_t *src = input + ((size_t)b * CB + c_) * H * W * 16;
+      int8_t *dst = output + (size_t)b * H * W * C + c_ * 16;
+      if (nc == 16)
+        for (int p = 0; p < H * W; p++)
+          memcpy(dst + (size_t)p * C, src + (size_t)p * 16, 16);
+      else
+        for (int p = 0; p < H * W; p++)
+          memcpy(dst + (size_t)p * C, src + (size_t)p * 16, nc);
+    }
+}
+
+void transpose_vtaio2nhwc_old(int8_t* input, int8_t* output, int N, int H, int W, int C){
   for (int b = 0; b < N; b++) {
     for (int f = 0; f < C; f++) {
       for (int i = 0; i < H; i++) {    //h
