@@ -20,7 +20,14 @@ from timed_bundle import RUN, call_args, call_name, call_ops
 def evta_calls(cpp):
     """(node, call, ops, EVTA index) of every EVTA call in the bundle .cpp, in execution order."""
     calls, node = [], '-'
+    #### JO added (2026-10-31): skip <entry>_convonly (make_multi4conv4.py: the conv alone in a loop, not run with the entry)
+    skip = False
     for l in open(cpp):
+        if re.match(r'^(extern "C" )?\w[\w\s\*]*_convonly\(', l):
+            skip = True
+        if skip:
+            skip = l.rstrip() != '}'
+            continue
         m = RUN.match(l)
         if m:
             node = m.group(2)
