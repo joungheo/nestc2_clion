@@ -232,6 +232,38 @@ conv별 `_sysprof` 시간을, 연산은 1/4로 줄이고 DRAM 대역(HP 포트 �
   (conv0 뒤 maxpool, 끝의 avgpool·fc가 경계).
 - 각 숫자는 위 측정에서 해당 항목을 빼거나 비율로 줄인 추정이다. ②는 EVTA 시간이 조금 늘어난다(ALU 명령). ③의 conv 경계 이득은 측정하지 않았다.
 
+### 7.1 ① 결과 (2026-10-31, `VTASave.cpp` `-vta-keep-layout`, 기본 켜짐)
+
+**어떻게 되나.** EVTA layout은 N{C/16}HW16(NCHWc, c = 16 고정)이다. conv 출력이 이 layout으로 나오고 다음 conv도 이
+layout을 읽으므로, 채널 수가 64 → 128처럼 바뀌어도 16채널 블록의 개수만 달라질 뿐 변환이 필요 없다(H, W 변화도
+layout 안에 들어 있다). 그래서 `transpose_vtaio2nhwc` → `transpose_nhwc2vtaio` 짝은 항등 변환이었다. CPU 연산은:
+- elemadd, relu: 같은 모양끼리 원소별이라 layout과 무관 — 그대로 호출.
+- maxpool, avgpool: N{C/16}HW16 = "배치 N·C/16, 채널 16인 NHWC"이므로 `maxpool(.., N*C/16, H, W, 16, ..)`로 그대로 호출.
+  avgpool의 1x1 출력은 두 layout이 같아서 fc가 그대로 읽는다.
+
+`findPackedActivations`가 activation(4-D, N = 1, int8, C % 16 = 0, H·W > 1) 중 쓰는 명령이 모두 EVTA conv, elemadd,
+relu, maxpool, avgpool인 것만 EVTA layout으로 두고(원소별 연산·pool의 피연산자는 함께), 그 activation을 처음부터
+VTA 버퍼(`<name>_vbuf`, `<name>` = 가상 주소)로 잡는다. conv는 그 버퍼를 바로 읽고 쓰며, conv 뒤에 invalidate,
+CPU 연산 뒤에 flush를 한다. 그래프 입출력, tensor view, 다른 연산이 닿는 activation은 NHWC 그대로라 다른 모델에서도 안전하다.
+Resnet18에서 남은 transpose는 conv0 입력(`transpose_nhwc2vtaio_zerofill`) 하나다.
+
+**측정 (systolic 400 MHz, `-n 25 -r`, 마지막 run).** 결과는 이전과 같다(Result 281, Confidence 0.655530 동일; multi4 4개 copy 모두 281).
+
+| 경우 | 이전 | ① 후 | 변화 |
+|---|---|---|---|
+| single, OMP 4 (`_systimed`, 1회) | 73.6 ms | **56.4 ms** | −23 % |
+| single, HLS 380 (`_timed`, 1회) | - | 57.6 ms | |
+| multi4 copy 하나, OMP 1 (`_systimed`) | 153~160 ms | **94.9 ms** | −39 % |
+| multi4 4 copy 100회 (`_sys`, OMP 1) | 3909 ms | **2793 ms** (35.8 추론/s) | −29 % |
+| single exe 100회 (`_sys`, OMP 1) | 14959 ms | 9227 ms | −38 % |
+| single, OMP 1 (`_systimed`, 1회) | 148.7 ms | 91.1 ms | −39 % |
+
+single OMP 4 한 번(56.4 ms)의 내역: conv 호출 32.1(EVTA + JIT), conv0 입력 zerofill 6.2, elemadd 4.7, maxpool 4.1,
+relu 2.5, `VTABufferAlloc` 2.2, fc 1.2, 전처리(elemsub/elemdiv/quantize) 2.2, Free 0.4, flush/invalidate 0.4, avgpool 0.2.
+- 예상 53 ms보다 3 ms 많은 것은 버퍼 할당이 남았고(activation마다 `VTABufferAlloc` 2.2 ms — 한 번 잡아 두는 pool로 없앨 수 있다)
+  maxpool이 채널 16 안쪽 루프로 바뀌어 조금 느려졌기 때문으로 보인다(이전 maxpool 단독 값은 남아 있지 않다).
+- 다음은 ②(elemadd/relu/maxpool 11.3 ms를 EVTA ALU로)와 ④(conv0 zerofill 6.2 ms).
+
 ## 8. 하드웨어도 같이 비교해야 하나
 
 해야 한다. 다만 §7의 ①~④를 가르는 것은 어레이가 아니라 다음 네 가지다.
