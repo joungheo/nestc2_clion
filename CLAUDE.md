@@ -181,10 +181,10 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
 - Resnet18 conv0 runs on EVTA (`VTA_RESNET18_WITH_SKIPQUANT0=OFF`, zero-filled to 16 channels, schedule 2 virtual threads 8x16
   in `include/Backends/VTA/VTASchedules.h`); `Resnet18PartitionTest` keeps conv0 float (`docs/evta_runtime_aot.md` §5.3).
   예) regenerate it in the simulator build: `cd Debug2_remote && cmake -DVTA_RESNET18_WITH_SKIPQUANT0=OFF . && ./build_sim_bundles.sh vtaMxnetResnet18Bundle`
+  The PS register port (`M_AXI_HPM0`) runs on `pl_clk0` 100 MHz; at 333 MHz it missed timing.
 - Activations between EVTA convs stay in the EVTA layout N{C/16}HW16 (2026-10-31, `VTASave.cpp` `findPackedActivations`,
   model-compiler `-vta-keep-layout`, default on): no transpose between layers, elemadd/relu as is, pools with the
   16-channel blocks as the batch; Resnet18 single 73.6 -> 56.4 ms, multi4 100 inferences 3.9 -> 2.8 s (`docs/evta_runtime_compare.md` §7.1).
-  The PS register port (`M_AXI_HPM0`) runs on `pl_clk0` 100 MHz; at 333 MHz it missed timing.
 - The lab board's PL has a defective configuration row (tile row SLICE Y219, cells stuck at 0; `log/BOARD_TODO.md`
   2026-10-23/24). `vivado.tcl` on zcu102 fences the design below it by default (`VTA_BRAM_FENCE=y219|upper|none`).
   multi2 fits below it and works (2026-10-24); multi4 needs more BRAM than the rows below, so it crosses the row with
