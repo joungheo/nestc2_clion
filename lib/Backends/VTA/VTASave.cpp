@@ -24,8 +24,10 @@
 #include "glow/IR/Instrs.h"
 #include "glow/Optimizer/IROptimizer/IROptimizer.h"
 #include "llvm/Support/CommandLine.h"
+#include <cmath>
 #include <cstring>
 #include <fstream>
+#include <map>
 #include <set>
 #include <vector>
 
@@ -43,7 +45,21 @@ static llvm::cl::opt<bool> vtaKeepLayout(
                    "layers instead of transposing around every conv"),
     llvm::cl::init(true));
 
+//#### JO added (2026-10-31): conv + elementadd + relu in one EVTA call (findResidualFusions)
+static llvm::cl::opt<bool> vtaFuseResidual(
+    "vta-fuse-residual",
+    llvm::cl::desc("Run an elementadd + relu that follows an EVTA conv in the "
+                   "conv (convolution_wo_tr_res); needs -vta-keep-layout"),
+    llvm::cl::init(false));
+
 namespace vta_save{
+
+//#### JO added (2026-10-31): an EVTA conv that also does the elementadd and the relu after it
+struct ResidualFusion {
+  const Value *residual; // the other elementadd operand
+  const Value *out;      // relu dest: written by the fused call
+  int convShl, resShl, sumShr;
+};
 
 class VTASaveContext {
 public:
@@ -67,6 +83,14 @@ public:
   //#### JO added (2026-10-31): activations kept in the EVTA layout (findPackedActivations)
   std::set<const Value *> *getPacked() { return &packed; }
   bool isPacked(const Value *v) const { return packed.count(v) != 0; }
+  //#### JO added (2026-10-31): fused conv + elementadd + relu (findResidualFusions)
+  std::map<const Instruction *, ResidualFusion> *getFusions() { return &fusions; }
+  std::set<const Instruction *> *getFusedAway() { return &fusedAway; }
+  const ResidualFusion *getFusion(const Instruction *I) const {
+    auto it = fusions.find(I);
+    return it == fusions.end() ? nullptr : &it->second;
+  }
+  bool isFusedAway(const Instruction *I) const { return fusedAway.count(I) != 0; }
 
 private:
   IRFunction::VariableMap *variable_map;
@@ -78,6 +102,8 @@ private:
   std::ofstream *wfos;
   uint32_t idxMultiEVTA;
   std::set<const Value *> packed;
+  std::map<const Instruction *, ResidualFusion> fusions;
+  std::set<const Instruction *> fusedAway;
 };
 
 struct SymbolTableEntry {
@@ -2058,11 +2084,13 @@ void declareOutputTranspose(const glow::ConvolutionInst *Inst,
   int outW = destDims[2];
   int outC = destDims[3];
   //#### JO added (2026-10-31): the EVTA writes straight into the activation kept in its layout
+  //#### JO changed (2026-10-31): a fused conv writes the dest of the relu (findResidualFusions)
   if (ctx->isPacked(dest)) {
+    auto *fu = ctx->getFusion(Inst);
     bundle->append("  int8_t* ");
     bundle->append(Inst->getName());
     bundle->append("_output_bef_transpose = ");
-    bundle->append(dest->getName());
+    bundle->append(fu ? fu->out->getName() : dest->getName());
     bundle->append("_vbuf;\n");
     return;
   }
@@ -2173,7 +2201,10 @@ void generateVTAConvolutionCall(const glow::ConvolutionInst *Inst,
   int shift = getExpofPowerofTwo(scale);
 
   auto filterSte = addConstantSymbolEntry(filter, ctx);
-  bundle->append("  convolution_wo_tr(");
+  //#### JO changed (2026-10-31): conv + elementadd + relu (findResidualFusions)
+  // bundle->append("  convolution_wo_tr(");
+  auto *fu = ctx->getFusion(Inst);
+  bundle->append(fu ? "  convolution_wo_tr_res(" : "  convolution_wo_tr(");
   bundle->append(Inst->getName());
   bundle->append("_input_transpose, ");
   bundle->append(filterSte.name);
@@ -2214,6 +2245,17 @@ void generateVTAConvolutionCall(const glow::ConvolutionInst *Inst,
   bundle->append(std::to_string(dest->dims()[1]));
   bundle->append(", ");
   bundle->append(std::to_string(dest->dims()[2]));
+  if (fu) {
+    bundle->append(", ");
+    bundle->append(fu->residual->getName());
+    bundle->append("_vbuf, ");
+    bundle->append(std::to_string(fu->convShl));
+    bundle->append(", ");
+    bundle->append(std::to_string(fu->resShl));
+    bundle->append(", ");
+    bundle->append(std::to_string(fu->sumShr));
+    bundle->append(", 1");
+  }
   bundle->append(", vtaCmdH");
   uint32_t idxMultiEVTA = ctx->getIdxMultiEVTA();
   if (idxMultiEVTA) {
@@ -3268,6 +3310,98 @@ void findPackedActivations(const IRFunction *IR, VTASaveContext *ctx) {
         for (const auto &op : I.getOperands())
           unpack(op.first);
     }
+  }
+}
+
+//#### JO added (2026-10-31): conv + elementadd + relu in one EVTA call (-vta-fuse-residual, convolution_wo_tr_res):
+//####   EVTA conv C -> D;  elementadd E(D, R) -> O;  relu(O) -> O'
+//#### with only deallocactivations between them becomes one call at the place of C that writes O' (C, E and the relu
+//#### then emit nothing else). Needs D, R, O, O' in the EVTA layout (findPackedActivations), power-of-two ratios of
+//#### the scales (sD / sO = 2^-a, sR / sO = 2^-b, offsets 0), the relu with equal scales, O' not the conv input,
+//#### O' allocated before C, and no other user of D (unless D is O or O') or of O (unless O is O').
+//#### With m = max(a, b, 0): O' = relu(round((D << (m - a)) + (R << (m - b))) >> m), exactly the CPU elemadd + relu
+//#### (the EVTA rounds .5 up, the CPU away from zero: they differ only for negative sums, which the relu makes 0).
+static bool powerOfTwoExp(float r, int *e) {
+  int ex;
+  float m = std::frexp(r, &ex);
+  if (m != 0.5f)
+    return false;
+  *e = ex - 1; // r = 2^(ex - 1)
+  return true;
+}
+
+void findResidualFusions(const IRFunction *IR, VTASaveContext *ctx) {
+  ctx->getFusions()->clear();
+  ctx->getFusedAway()->clear();
+  if (!vtaFuseResidual || ctx->getPacked()->empty())
+    return;
+  std::vector<const Instruction *> ins;
+  std::map<const Value *, size_t> allocAt;
+  std::map<const Value *, int> users; // instructions other than alloc/dealloc that use a value
+  for (const auto &I : IR->getInstrs()) {
+    if (auto *A = llvm::dyn_cast<AllocActivationInst>(&I))
+      allocAt[A] = ins.size();
+    if (!llvm::isa<AllocActivationInst>(&I) && !llvm::isa<DeallocActivationInst>(&I)) {
+      std::set<const Value *> ops; // once per instruction (relu in place lists its value twice)
+      for (const auto &op : I.getOperands())
+        ops.insert(op.first);
+      for (auto *v : ops)
+        users[v]++;
+    }
+    ins.push_back(&I);
+  }
+  auto next = [&](size_t i) {
+    for (i++; i < ins.size(); i++)
+      if (!llvm::isa<DeallocActivationInst>(ins[i]))
+        return i;
+    return ins.size();
+  };
+  for (size_t i = 0; i < ins.size(); i++) {
+    auto *C = llvm::dyn_cast<ConvolutionInst>(ins[i]);
+    if (!C || getConvPath(C) != ConvPath::VTA || !ctx->isPacked(C->getDest()))
+      continue;
+    size_t j = next(i);
+    if (j >= ins.size())
+      continue;
+    auto *E = llvm::dyn_cast<ElementAddInst>(ins[j]);
+    if (!E)
+      continue;
+    const Value *D = C->getDest();
+    const Value *R = E->getLHS() == D ? E->getRHS() : E->getRHS() == D ? E->getLHS() : nullptr;
+    const Value *O = E->getDest();
+    if (!R || R == D)
+      continue;
+    size_t k = next(j);
+    if (k >= ins.size())
+      continue;
+    auto *Rl = llvm::dyn_cast<ReluInst>(ins[k]);
+    if (!Rl || Rl->getSrc() != O)
+      continue;
+    const Value *O2 = Rl->getDest();
+    if (!ctx->isPacked(R) || !ctx->isPacked(O) || !ctx->isPacked(O2) || O2 == C->getSrc() ||
+        O->dims() != D->dims() || O2->dims() != D->dims() || R->dims() != D->dims())
+      continue;
+    if (O2 != D && O2 != R && (!allocAt.count(O2) || allocAt[O2] > i))
+      continue;
+    if (D != O && D != O2 && users[D] != 2) // C, E
+      continue;
+    if (O != O2 && users[O] != 2) // E, relu
+      continue;
+    auto tD = D->getType(), tR = R->getType(), tO = O->getType(), tO2 = O2->getType();
+    if (tD->getOffset() || tR->getOffset() || tO->getOffset() || tO2->getOffset() ||
+        tO->getScale() != tO2->getScale())
+      continue;
+    int eD, eR; // sD / sO = 2^eD, sR / sO = 2^eR
+    if (!powerOfTwoExp(tD->getScale() / tO->getScale(), &eD) ||
+        !powerOfTwoExp(tR->getScale() / tO->getScale(), &eR))
+      continue;
+    int m = std::max(0, std::max(-eD, -eR));
+    ResidualFusion f = {R, O2, m + eD, m + eR, m};
+    if (f.convShl > 8 || f.resShl > 6 || f.sumShr > 15)
+      continue;
+    (*ctx->getFusions())[C] = f;
+    ctx->getFusedAway()->insert(E);
+    ctx->getFusedAway()->insert(Rl);
   }
 }
 
@@ -5147,6 +5281,7 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
 
   initBundleSave(bundleCtx, bundleName, mainEntryName);
   findPackedActivations(IR.get(), &ctx);
+  findResidualFusions(IR.get(), &ctx);
 
   for (const auto &I : IR->getInstrs()) {
 
@@ -5163,6 +5298,12 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
     bundle.append(" : ");
     bundle.append(I.getName());
     bundle.append("\n");
+
+    //#### JO added (2026-10-31): elementadd / relu done by the fused conv before them
+    if (ctx.isFusedAway(&I)) {
+      bundle.append("  // done by the EVTA conv before (convolution_wo_tr_res)\n");
+      continue;
+    }
 
     switch (I.getKind()) {
     case Kinded::Kind::ConvolutionInstKind: {

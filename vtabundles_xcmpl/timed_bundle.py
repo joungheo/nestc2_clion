@@ -151,7 +151,8 @@ def call_ops(stmt, name):
     try:
         a = call_args(stmt, name)
         n = lambda k: int(a[k])
-        if name in ('convolution_wo_tr', 'convolution_wo_tr_scale'):
+        #### JO changed (2026-10-31): + convolution_wo_tr_res (conv + elementadd + relu; the add is not counted)
+        if name in ('convolution_wo_tr', 'convolution_wo_tr_scale', 'convolution_wo_tr_res'):
             # (in, ker, bias, out, N, H, W, C, KN, KH, KW, pad, stride, relu, bias, shift, out_h, out_w, ...)
             return 2 * n(4) * n(16) * n(17) * n(8) * n(9) * n(10) * n(7)
         if name == 'convolutionFloat':

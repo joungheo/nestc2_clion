@@ -14,6 +14,11 @@ int convolution(int8_t* input, int8_t *kernel, int8_t *output, int N, int H, int
 
 int convolution_wo_tr(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *output, int N, int H, int W, int C, int KN, int KH, int KW, int pad_size,
                        int stride_size, bool doRelu, bool doBias, uint8_t shift, int out_h, int out_w, void* vtaCmdH, int nVirtualThread = 1, int tileHSize = 14, int tileWSize = 14, uint32_t idEVTA = 0);
+//#### JO added (2026-10-31): conv + elementadd (+ relu) in one EVTA call (power-of-two scales, see VTABundle.cpp)
+int convolution_wo_tr_res(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *output, int N, int H, int W, int C, int KN, int KH, int KW, int pad_size,
+                          int stride_size, bool doRelu, bool doBias, uint8_t shift, int out_h, int out_w,
+                          int8_t *residual, int convShl, int resShl, int sumShr, bool sumRelu,
+                          void* vtaCmdH, int nVirtualThread = 1, int tileHSize = 14, int tileWSize = 14, uint32_t idEVTA = 0);
 
 int xp_convolution_wo_tr(int8_t* input, int8_t *kernel, int32_t *bias, int32_t *scalingfactor, int8_t *output, int N, int H, int W, int C, int KN, int KH, int KW, int pad_size, int stride_size, bool doRelu, bool doBias, uint8_t shift, int out_h, int out_w, void* vtaCmdH, int nVirtualThread = 1, int tileHSize = 14, int tileWSize = 14, uint32_t idEVTA = 0, bool mul = false);
 

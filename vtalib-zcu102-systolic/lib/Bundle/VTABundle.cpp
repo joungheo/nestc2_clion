@@ -380,6 +380,130 @@ struct MulUopHandle{
 
 std::vector<MulUopHandle*> vMulUopHandle[4];
 
+
+//#### JO added (2026-10-31): residual of a conv fused with the elementadd (+ relu) after it (convolution_wo_tr_res).
+//#### After the conv's own requantization (bias, >> shift, clip to int8), still in the acc buffer:
+//####   acc = conv << convShl                                  (ALU ADD acc, acc; convShl times)
+//####   acc += residual * (2^resShl I)                         (residual tile LOADed into the inp buffer at the acc layout
+//####                                                           of the output tile, GEMM with a scaled identity weight)
+//####   acc = (acc + 2^(sumShr-1)) >> sumShr                   (ALU ADD imm, SHR)
+//####   acc = min(max(acc, relu ? 0 : -128), 127)              (ALU MAX, MIN)
+//#### = round(conv * 2^convShl + residual * 2^resShl) / 2^sumShr) as the CPU elemadd for power-of-two scales (rounding
+//#### up at .5 where the CPU rounds away from zero: equal for a non-negative sum, and with relu for every sum).
+//#### Only ALU MIN / MAX / ADD / SHR (2-bit alu_opcode) and GEMM; the identity weight goes to the last wgt entry and
+//#### the residual to the inp buffer after the conv's GEMMs of the tile (load waits on them), so the schedule is unchanged.
+struct ConvResidual {
+  void *buf;          // residual, EVTA layout, the shape of the output
+  void *idWgt;        // 2^k I, k = 0..RES_MAX_SHL, one wgt entry each
+  uint32_t resShl;
+  uint32_t convShl;
+  uint32_t sumShr;
+  bool relu;
+};
+#define RES_MAX_SHL 6
+#define RES_WGT_ENTRY 1023  // last entry of WGT_MEM_ENTRY (1024) in conv_kernel
+// alu_opcode as the alu_* functions above use them (hw_spec.h VTA_ALU_OPCODE_*)
+#define RES_ALU_MIN 0
+#define RES_ALU_MAX 1
+#define RES_ALU_ADD 2
+#define RES_ALU_SHR 3
+
+static void *getIdentityWeights(uint32_t idEVTA) {
+  static void *idWgt[4] = {nullptr, nullptr, nullptr, nullptr};
+  if (!idWgt[idEVTA]) {
+    const size_t esz = 16 * 16;
+    void *b = VTABufferAlloc(esz * (RES_MAX_SHL + 1));
+    int8_t *p = (int8_t *)VTABufferGetVirtAddr(b);
+    for (uint32_t k = 0; k <= RES_MAX_SHL; k++)
+      for (int i = 0; i < 16; i++)
+        for (int j = 0; j < 16; j++)
+          p[k * esz + i * 16 + j] = i == j ? (int8_t)(1 << k) : 0;
+    VTABufferFlush(b, 0, esz * (RES_MAX_SHL + 1));
+    idWgt[idEVTA] = b;
+  }
+  return idWgt[idEVTA];
+}
+
+// one ALU op over size acc entries: acc[base + i] = op(acc[base + i], use_imm ? imm : acc[src + i])
+struct AluContext {
+  uint32_t base_;
+  uint32_t src_;
+  uint32_t size_;
+  int opcode_;
+  int useImm_;
+  int imm_;
+  bool operator==(AluContext &op) {
+    return base_ == op.base_ && src_ == op.src_ && size_ == op.size_ && opcode_ == op.opcode_ &&
+           useImm_ == op.useImm_ && imm_ == op.imm_;
+  }
+};
+int alu_generic(void *param, VTACommandHandle cmdh) {
+  AluContext *p = (AluContext *)(param);
+  VTAUopLoopBegin(cmdh, p->size_, 1, 1, 0);
+  VTAUopPush(cmdh, 1, 0, p->base_, p->src_, 0, p->opcode_, p->useImm_, p->imm_);
+  VTAUopLoopEnd(cmdh);
+  return 0;
+}
+struct AluUopHandle {
+  AluContext ctx;
+  void *uopHandle[2];
+  AluUopHandle() { uopHandle[0] = nullptr; }
+};
+std::vector<AluUopHandle *> vAluUopHandle[4];
+
+static void pushAlu(VTACommandHandle &cmdh, uint32_t idEVTA, uint32_t base, uint32_t src, uint32_t size, int opcode,
+                    int useImm, int imm) {
+  AluContext ctx = {base, src, size, opcode, useImm, imm};
+  void **h = nullptr;
+  for (auto u : vAluUopHandle[idEVTA])
+    if (u->ctx == ctx) { h = u->uopHandle; break; }
+  if (!h) {
+    auto u = new AluUopHandle();
+    u->ctx = ctx;
+    h = u->uopHandle;
+    vAluUopHandle[idEVTA].push_back(u);
+  }
+  VTAPushALUOp(cmdh, h, &alu_generic, &ctx, 0);
+}
+
+// acc[acc + i] += inp[inp + i] x wgt[wgt], i < size
+struct ResGemmContext {
+  uint32_t acc_;
+  uint32_t inp_;
+  uint32_t wgt_;
+  uint32_t size_;
+  bool operator==(ResGemmContext &op) {
+    return acc_ == op.acc_ && inp_ == op.inp_ && wgt_ == op.wgt_ && size_ == op.size_;
+  }
+};
+int gemm_res(void *param, VTACommandHandle cmdh) {
+  ResGemmContext *p = (ResGemmContext *)(param);
+  VTAUopLoopBegin(cmdh, p->size_, 1, 1, 0);
+  VTAUopPush(cmdh, 0, 0, p->acc_, p->inp_, p->wgt_, 0, 0, 0);
+  VTAUopLoopEnd(cmdh);
+  return 0;
+}
+struct ResGemmUopHandle {
+  ResGemmContext ctx;
+  void *uopHandle[2];
+  ResGemmUopHandle() { uopHandle[0] = nullptr; }
+};
+std::vector<ResGemmUopHandle *> vResGemmUopHandle[4];
+
+static void pushResGemm(VTACommandHandle &cmdh, uint32_t idEVTA, uint32_t acc, uint32_t inp, uint32_t size) {
+  ResGemmContext ctx = {acc, inp, RES_WGT_ENTRY, size};
+  void **h = nullptr;
+  for (auto u : vResGemmUopHandle[idEVTA])
+    if (u->ctx == ctx) { h = u->uopHandle; break; }
+  if (!h) {
+    auto u = new ResGemmUopHandle();
+    u->ctx = ctx;
+    h = u->uopHandle;
+    vResGemmUopHandle[idEVTA].push_back(u);
+  }
+  VTAPushGEMMOp(cmdh, h, &gemm_res, &ctx, 0);
+}
+
 void conv_kernel(uint32_t sizeOutTileH,
                  uint32_t sizeOutTileW,
                  uint32_t pad_size,
@@ -409,7 +533,8 @@ void conv_kernel(uint32_t sizeOutTileH,
                  void *vta_bias_buf,
                  VTACommandHandle& vtaCmdH,
                  uint32_t idEVTA = 0,
-                 uint32_t nVirtualThread = 1) {
+                 uint32_t nVirtualThread = 1,
+                 const ConvResidual *res = nullptr) {  //#### JO added (2026-10-31): res
 
   uint32_t resizedOutTileH = (sizeInTileH-KH) / stride_size + 1;
   uint32_t resizedOutTileW = (sizeInTileW-KW) / stride_size + 1;
@@ -601,6 +726,35 @@ void conv_kernel(uint32_t sizeOutTileH,
       VTADepPop(vtaCmdH, 2, 1);
     }
 
+    //#### JO added (2026-10-31): residual of the fused elementadd (ConvResidual): the identity weight, then per thread the
+    //#### residual tile into the inp buffer at the acc layout of the output tile (the addresses of the store below);
+    //#### the pops above make these loads wait for the GEMMs of this tile
+    if (res) {
+      VTALoadBuffer2D(vtaCmdH, res->idWgt, res->resShl, 1, 1, 1, 0, 0, 0, 0, RES_WGT_ENTRY, 1);
+      for (uint32_t threadIdx = 0; threadIdx < nVirtualThread; threadIdx++) {
+        uint32_t resSramBaseAddr = threadIdx * (INP_MEM_ENTRY / nVirtualThread);
+        if (outDummyW == 0) {
+          for (uint32_t fIdx = 0; fIdx < nFilterinLoop; fIdx++)
+            VTALoadBuffer2D(vtaCmdH, res->buf,
+                            (filterIdx * nVirtualThread + threadIdx) * nFilterinLoop * out_w * out_h +
+                                outputHOffset * out_w + outputWOffset + fIdx * out_w * out_h,
+                            sizeOutTileW, sizeOutTileH, out_w, 0, 0, 0, 0,
+                            resSramBaseAddr + fIdx * resizedOutTileH * resizedOutTileW, 2);
+        } else {
+          for (uint32_t fIdx = 0; fIdx < nFilterinLoop; fIdx++)
+            for (uint32_t hIdx = 0; hIdx < sizeOutTileH; hIdx++)
+              VTALoadBuffer2D(vtaCmdH, res->buf,
+                              ((filterIdx + fIdx) * nVirtualThread + threadIdx) * out_w * out_h +
+                                  (outputHOffset + hIdx) * out_w + outputWOffset,
+                              sizeOutTileW, 1, out_w, 0, 0, 0, 0,
+                              resSramBaseAddr + (hIdx + fIdx * sizeOutTileH) * resizedOutTileW +
+                                  fIdx * outDummyH * resizedOutTileH,
+                              2);
+        }
+        VTADepPush(vtaCmdH, 1, 2);
+      }
+    }
+
     // Push operations for adding bias, shifting and relu
     for (uint32_t threadIdx = 0; threadIdx < nVirtualThread; threadIdx++) {
 
@@ -737,6 +891,23 @@ void conv_kernel(uint32_t sizeOutTileH,
           vMinUopHandle[idEVTA].push_back(newHandle);
         }
         VTAPushALUOp(vtaCmdH, uopHandle_reset, &alu_min, &alu_ctx, 0);
+      }
+      //#### JO added (2026-10-31): fused elementadd (+ relu) on the requantized conv output (ConvResidual)
+      if (res) {
+        uint32_t size = resizedOutTileH * resizedOutTileW * nFilterinLoop;
+        uint32_t resSramBaseAddr = threadIdx * (INP_MEM_ENTRY / nVirtualThread);
+        for (uint32_t i = 0; i < res->convShl; i++)
+          pushAlu(vtaCmdH, idEVTA, outputSramBaseAddr, outputSramBaseAddr, size, RES_ALU_ADD, 0, 0);
+        VTADepPop(vtaCmdH, 1, 2);
+        pushResGemm(vtaCmdH, idEVTA, outputSramBaseAddr, resSramBaseAddr, size);
+        if (res->sumShr) {
+          pushAlu(vtaCmdH, idEVTA, outputSramBaseAddr, outputSramBaseAddr, size, RES_ALU_ADD, 1,
+                  1 << (res->sumShr - 1));
+          pushAlu(vtaCmdH, idEVTA, outputSramBaseAddr, outputSramBaseAddr, size, RES_ALU_SHR, 1, res->sumShr);
+        }
+        pushAlu(vtaCmdH, idEVTA, outputSramBaseAddr, outputSramBaseAddr, size, RES_ALU_MAX, 1,
+                res->relu ? 0 : -128);
+        pushAlu(vtaCmdH, idEVTA, outputSramBaseAddr, outputSramBaseAddr, size, RES_ALU_MIN, 1, 127);
       }
       VTADepPush(vtaCmdH, 2, 3);
     }
@@ -2585,8 +2756,10 @@ int convolution_wo_tr_wo_ch(int8_t* input, int8_t *kernel, int32_t *bias, int8_t
   return 0;
 }
 
-int convolution_wo_tr(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *output, int N, int H, int W, int C, int KN, int KH, int KW, int pad_size,
-                      int stride_size, bool doRelu, bool doBias, uint8_t shift, int out_h, int out_w, void* vtaCmdH, int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA) {
+//#### JO changed (2026-10-31): body of convolution_wo_tr and convolution_wo_tr_res (res = nullptr: plain conv)
+static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *output, int N, int H, int W, int C, int KN, int KH, int KW, int pad_size,
+                      int stride_size, bool doRelu, bool doBias, uint8_t shift, int out_h, int out_w, void* vtaCmdH, int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA,
+                      const ConvResidual *res) {
 
   int8_t *in_NC_HW16 = input;
   int8_t *filter_N_C_HW1616 = kernel;
@@ -2719,7 +2892,7 @@ int convolution_wo_tr(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *outp
                     outputWOffset, outputHOffset, resizedInTileH, sizeInTileW,
                     C, H, W, vta_input_buf, KN, KH, KW, vta_filter_buf, out_h,
                     out_w, vta_output_buf, doRelu, shift, doBias, vta_bias_buf,
-                    vtaCmdH, idEVTA, nVirtualThread);
+                    vtaCmdH, idEVTA, nVirtualThread, res);
       } else {
         uint32_t sizeOutTileBoundaryW = out_w - tileWIdx * sizeOutTileW;
 #ifdef NESTC_EVTA_PROFILE_AUTOTUNE
@@ -2733,7 +2906,7 @@ int convolution_wo_tr(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *outp
                     y_pad_after, outputWOffset, outputHOffset, resizedInTileH,
                     sizeInTileBoundaryW, C, H, W, vta_input_buf, KN, KH, KW,
                     vta_filter_buf, out_h, out_w, vta_output_buf, doRelu, shift,
-                    doBias, vta_bias_buf, vtaCmdH, idEVTA, nVirtualThread);
+                    doBias, vta_bias_buf, vtaCmdH, idEVTA, nVirtualThread, res);
       }
     }
   }
@@ -2832,6 +3005,32 @@ int convolution_wo_tr(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *outp
     std::cout<<f0<<","<<f1<<","<<f2<<","<<f3<<","<<f4<<","<<f5<<","<<f6<<","<<f7<<","<<f8<<","<<f9<<","<<f10<<","<<f11<<","<<f12<<","<<f13<<","<<f14<<","<<f15<<","<<f16<<","<<f17<<endl;
 #endif
   return 0;
+}
+
+
+
+int convolution_wo_tr(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *output, int N, int H, int W, int C, int KN, int KH, int KW, int pad_size,
+                      int stride_size, bool doRelu, bool doBias, uint8_t shift, int out_h, int out_w, void* vtaCmdH, int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA) {
+  return convolution_wo_tr_impl(input, kernel, bias, output, N, H, W, C, KN, KH, KW, pad_size, stride_size, doRelu,
+                                doBias, shift, out_h, out_w, vtaCmdH, nVirtualThread, tileHSize, tileWSize, idEVTA,
+                                nullptr);
+}
+
+//#### JO added (2026-10-31): conv + elementadd (+ relu) in one EVTA call, see ConvResidual. output may be residual
+//#### (in place: each tile reads its residual before it stores), not input.
+int convolution_wo_tr_res(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *output, int N, int H, int W, int C, int KN, int KH, int KW, int pad_size,
+                          int stride_size, bool doRelu, bool doBias, uint8_t shift, int out_h, int out_w,
+                          int8_t *residual, int convShl, int resShl, int sumShr, bool sumRelu,
+                          void* vtaCmdH, int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA) {
+  if (convShl < 0 || convShl > 8 || resShl < 0 || resShl > RES_MAX_SHL || sumShr < 0 || sumShr > 15 || N != 1) {
+    printf("convolution_wo_tr_res: unsupported shifts conv %d residual %d sum %d (N %d)\n", convShl, resShl, sumShr, N);
+    return -1;
+  }
+  ConvResidual res = {residual, getIdentityWeights(idEVTA), (uint32_t)resShl, (uint32_t)convShl, (uint32_t)sumShr,
+                      sumRelu};
+  return convolution_wo_tr_impl(input, kernel, bias, output, N, H, W, C, KN, KH, KW, pad_size, stride_size, doRelu,
+                                doBias, shift, out_h, out_w, vtaCmdH, nVirtualThread, tileHSize, tileWSize, idEVTA,
+                                &res);
 }
 
 
