@@ -23,8 +23,10 @@
 #include "glow/IR/IR.h"
 #include "glow/IR/Instrs.h"
 #include "glow/Optimizer/IROptimizer/IROptimizer.h"
+#include "llvm/Support/CommandLine.h"
 #include <cstring>
 #include <fstream>
+#include <set>
 #include <vector>
 
 //#define VTA_PROFILE
@@ -33,6 +35,13 @@
 //#define VTA_MEMOPT_DISABLE
 
 using namespace glow;
+
+//#### JO added (2026-10-31): keep the activations between EVTA convs in the EVTA layout (findPackedActivations)
+static llvm::cl::opt<bool> vtaKeepLayout(
+    "vta-keep-layout",
+    llvm::cl::desc("Keep activations in the EVTA layout N{C/16}HW16 between "
+                   "layers instead of transposing around every conv"),
+    llvm::cl::init(true));
 
 namespace vta_save{
 
@@ -55,6 +64,9 @@ public:
   IRFunction::VariableMap *getVariableMap() { return variable_map; }
   void setIdxMultiEVTA(uint32_t idx) { idxMultiEVTA = idx; }
   uint32_t getIdxMultiEVTA() { return idxMultiEVTA; }
+  //#### JO added (2026-10-31): activations kept in the EVTA layout (findPackedActivations)
+  std::set<const Value *> *getPacked() { return &packed; }
+  bool isPacked(const Value *v) const { return packed.count(v) != 0; }
 
 private:
   IRFunction::VariableMap *variable_map;
@@ -65,6 +77,7 @@ private:
   uint64_t mutableWeightVarsMemSize;
   std::ofstream *wfos;
   uint32_t idxMultiEVTA;
+  std::set<const Value *> packed;
 };
 
 struct SymbolTableEntry {
@@ -1665,6 +1678,15 @@ void generateInputTranspose(const glow::ConvolutionInst *Inst,
   int H = srcDims[1];
   int W = srcDims[2];
   int C = srcDims[3];
+  //#### JO added (2026-10-31): the input is already in the EVTA layout (flushed by the CPU op that wrote it)
+  if (ctx->isPacked(src)) {
+    bundle->append("  int8_t* ");
+    bundle->append(Inst->getName());
+    bundle->append("_input_transpose = ");
+    bundle->append(src->getName());
+    bundle->append("_vbuf;\n");
+    return;
+  }
 #ifdef VTA_PROFILE
   bundle->append("  clock_t ");
   bundle->append(Inst->getName());
@@ -2025,7 +2047,8 @@ void generatezeroFillBNNInputTranspose(const glow::BNNConvolutionInst *Inst,
 }
 
 void declareOutputTranspose(const glow::ConvolutionInst *Inst,
-                            std::string *bundle, std::string *initConst) {
+                            std::string *bundle, std::string *initConst,
+                            VTASaveContext *ctx) {
   // TODO : consider group
   // auto group = Inst->getGroup();
   auto dest = Inst->getDest();
@@ -2034,6 +2057,15 @@ void declareOutputTranspose(const glow::ConvolutionInst *Inst,
   int outH = destDims[1];
   int outW = destDims[2];
   int outC = destDims[3];
+  //#### JO added (2026-10-31): the EVTA writes straight into the activation kept in its layout
+  if (ctx->isPacked(dest)) {
+    bundle->append("  int8_t* ");
+    bundle->append(Inst->getName());
+    bundle->append("_output_bef_transpose = ");
+    bundle->append(dest->getName());
+    bundle->append("_vbuf;\n");
+    return;
+  }
 
   bundle->append("  int8_t* ");
   bundle->append(Inst->getName());
@@ -2690,6 +2722,9 @@ void generateOutputTranspose(const glow::ConvolutionInst *Inst,
   bundle->append("_output_bef_transpose, 0, ");
   bundle->append(std::to_string(outN * outH * outW * outC));
   bundle->append(");\n");
+  //#### JO added (2026-10-31): an output kept in the EVTA layout is not transposed
+  if (ctx->isPacked(dest))
+    return;
   bundle->append("  transpose_vtaio2nhwc(");
   bundle->append("(int8_t* )VTABufferGetVirtAddr(");
   bundle->append(Inst->getName());
@@ -2864,14 +2899,19 @@ void generateEVTAOutputTranspose(const glow::VTAConvolutionInst *Inst,
 }
 
 void generateVTABufferFree(const glow::ConvolutionInst *Inst,
-                           std::string *bundle) {
-  bundle->append("  VTABufferFree(");
-  bundle->append(Inst->getName());
-  bundle->append("_input_transpose);\n");
+                           std::string *bundle, VTASaveContext *ctx) {
+  //#### JO changed (2026-10-31): activations kept in the EVTA layout are freed by their deallocactivation
+  if (!ctx->isPacked(Inst->getSrc())) {
+    bundle->append("  VTABufferFree(");
+    bundle->append(Inst->getName());
+    bundle->append("_input_transpose);\n");
+  }
 
-  bundle->append("  VTABufferFree(");
-  bundle->append(Inst->getName());
-  bundle->append("_output_bef_transpose);\n");
+  if (!ctx->isPacked(Inst->getDest())) {
+    bundle->append("  VTABufferFree(");
+    bundle->append(Inst->getName());
+    bundle->append("_output_bef_transpose);\n");
+  }
 }
 
 void generateEVTABufferFree(const glow::VTAConvolutionInst *Inst,
@@ -2900,7 +2940,7 @@ void saveVTAConvolutionInst(const glow::ConvolutionInst *Inst,
                             VTASaveContext *ctx) {
   prepareVTAConvolutionInst(Inst, bundle, initConst, ctx);
   generateInputTranspose(Inst, bundle, initConst, ctx);
-  declareOutputTranspose(Inst, bundle, initConst);
+  declareOutputTranspose(Inst, bundle, initConst, ctx);
 
 #ifdef VTA_PROFILE
   bundle->append("  clock_t ");
@@ -2927,7 +2967,7 @@ void saveVTAConvolutionInst(const glow::ConvolutionInst *Inst,
 #endif
 
   generateOutputTranspose(Inst, bundle, initConst, ctx);
-  generateVTABufferFree(Inst, bundle);
+  generateVTABufferFree(Inst, bundle, ctx);
 
   return;
 }
@@ -3053,18 +3093,20 @@ void saveFirstBNNVTAConvolutionInst(const glow::ConvolutionInst *Inst,
                                     VTASaveContext *ctx){
   prepareFirstBNNVTAConvolutionInst(Inst, bundle, initConst, ctx);
   generateFirstBNNInputTranspose(Inst, bundle, initConst, ctx);
-  declareOutputTranspose(Inst, bundle, initConst);
+  declareOutputTranspose(Inst, bundle, initConst, ctx);
 
   generateFirstBNNVTAConvolutionCall(Inst, bundle, initConst, ctx);
 
   generateOutputTranspose(Inst, bundle, initConst, ctx);
-  generateVTABufferFree(Inst, bundle);
+  generateVTABufferFree(Inst, bundle, ctx);
 
   return;
 }
 
-void saveConvolutionInst(const glow::ConvolutionInst *Inst, std::string *bundle,
-                         std::string *initConst, VTASaveContext *ctx) {
+//#### JO changed (2026-10-31): the choice of saveConvolutionInst as a function, also used by findPackedActivations
+enum class ConvPath { Float, VTA, DepthwiseCPU, FirstBNN, Other };
+
+ConvPath getConvPath(const glow::ConvolutionInst *Inst) {
   auto src = Inst->getSrc();
   auto srcDims = src->dims();
   auto filter = Inst->getFilter();
@@ -3073,51 +3115,158 @@ void saveConvolutionInst(const glow::ConvolutionInst *Inst, std::string *bundle,
   auto bias = Inst->getBias();
   assert(bias->dims()[0] == filterDims[0]);
 
-  if (!Inst->getSrc()->getType()->isQuantizedType()) {
+  if (!Inst->getSrc()->getType()->isQuantizedType())
+    return ConvPath::Float;
+
+  float inScale = src->getType()->getScale();
+  float filterScale = filter->getType()->getScale();
+  float outScale = Inst->getDest()->getType()->getScale();
+  float biasScale = bias->getType()->getScale();
+
+  int32_t outOffset = Inst->getDest()->getType()->getOffset();
+  int32_t inOffset = src->getType()->getOffset();
+  int32_t filterOffset = filter->getType()->getOffset();
+  int32_t biasOffset = bias->getType()->getOffset();
+
+  filterScale = 1 / filterScale;
+  inScale = 1 / inScale;
+  biasScale = 1 / biasScale;
+  outScale = 1 / outScale;
+  float matMulScale = inScale * filterScale;
+  float scale = matMulScale / outScale;
+
+  int shift = getExpofPowerofTwo(scale);
+
+  if (Inst->getGroup() == 1 && scale > 1 && srcDims[3] % 16 == 0 &&
+      filterDims[0] % 16 == 0 && biasScale == matMulScale && outOffset == 0 &&
+      inOffset == 0 && filterOffset == 0 && biasOffset == 0 && shift >= 0) {
+    return ConvPath::VTA;
+  } else if (Inst->getGroup() == srcDims[3] && scale > 1 &&
+             biasScale == matMulScale && outOffset == 0 && inOffset == 0 &&
+             filterOffset == 0 && biasOffset == 0 && shift >= 0) {
+    return ConvPath::DepthwiseCPU;
+  //#### JO added (2026-10-29): a quantized 3-channel conv (the image conv0 when it is not skipped from
+  //#### quantization) runs on EVTA with its input and filter zero-filled to 16 channels, the path of the
+  //#### first BNN conv; it is plain int8 (convolution_wo_tr), so it does not need VTA_BNN
+  } else if (Inst->getGroup() == 1 && scale > 1 && srcDims[3] == 3 &&
+             filterDims[3] == 3 && filterDims[0] % 16 == 0 &&
+             biasScale == matMulScale && outOffset == 0 && inOffset == 0 &&
+             filterOffset == 0 && biasOffset == 0 && shift >= 0) {
+    return ConvPath::FirstBNN;
+  }
+  return ConvPath::Other;
+}
+
+void saveConvolutionInst(const glow::ConvolutionInst *Inst, std::string *bundle,
+                         std::string *initConst, VTASaveContext *ctx) {
+  switch (getConvPath(Inst)) {
+  case ConvPath::Float:
     saveFloatConvolutionInst(Inst, bundle, ctx);
-  } else {
-    float inScale = src->getType()->getScale();
-    float filterScale = filter->getType()->getScale();
-    float outScale = Inst->getDest()->getType()->getScale();
-    float biasScale = bias->getType()->getScale();
-
-    int32_t outOffset = Inst->getDest()->getType()->getOffset();
-    int32_t inOffset = src->getType()->getOffset();
-    int32_t filterOffset = filter->getType()->getOffset();
-    int32_t biasOffset = bias->getType()->getOffset();
-
-    filterScale = 1 / filterScale;
-    inScale = 1 / inScale;
-    biasScale = 1 / biasScale;
-    outScale = 1 / outScale;
-    float matMulScale = inScale * filterScale;
-    float scale = matMulScale / outScale;
-
-    int shift = getExpofPowerofTwo(scale);
-
-    if (Inst->getGroup() == 1 && scale > 1 && srcDims[3] % 16 == 0 &&
-        filterDims[0] % 16 == 0 && biasScale == matMulScale && outOffset == 0 &&
-        inOffset == 0 && filterOffset == 0 && biasOffset == 0 && shift >= 0) {
-      saveVTAConvolutionInst(Inst, bundle, initConst, ctx);
-    } else if (Inst->getGroup() == srcDims[3] && scale > 1 &&
-               biasScale == matMulScale && outOffset == 0 && inOffset == 0 &&
-               filterOffset == 0 && biasOffset == 0 && shift >= 0) {
-      // saveVTADWConvolutionInst(Inst, bundle, initConst, ctx);
-      saveNonVTAConvolutionInst(Inst, bundle, initConst, ctx);
-    //#### JO added (2026-10-29): a quantized 3-channel conv (the image conv0 when it is not skipped from
-    //#### quantization) runs on EVTA with its input and filter zero-filled to 16 channels, the path of the
-    //#### first BNN conv; it is plain int8 (convolution_wo_tr), so it does not need VTA_BNN
-    } else if (Inst->getGroup() == 1 && scale > 1 && srcDims[3] == 3 &&
-               filterDims[3] == 3 && filterDims[0] % 16 == 0 &&
-               biasScale == matMulScale && outOffset == 0 && inOffset == 0 &&
-               filterOffset == 0 && biasOffset == 0 && shift >= 0) {
-      saveFirstBNNVTAConvolutionInst(Inst, bundle, initConst, ctx);
-    } else {
+    break;
+  case ConvPath::VTA:
+    saveVTAConvolutionInst(Inst, bundle, initConst, ctx);
+    break;
+  case ConvPath::DepthwiseCPU:
+    // saveVTADWConvolutionInst(Inst, bundle, initConst, ctx);
+    saveNonVTAConvolutionInst(Inst, bundle, initConst, ctx);
+    break;
+  case ConvPath::FirstBNN:
+    saveFirstBNNVTAConvolutionInst(Inst, bundle, initConst, ctx);
+    break;
+  case ConvPath::Other:
 #if defined(VTA_BNN)
-      saveFirstBNNVTAConvolutionInst(Inst, bundle, initConst, ctx);
+    saveFirstBNNVTAConvolutionInst(Inst, bundle, initConst, ctx);
 #else
-      saveNonVTAConvolutionInst(Inst, bundle, initConst, ctx);
+    saveNonVTAConvolutionInst(Inst, bundle, initConst, ctx);
 #endif
+    break;
+  }
+}
+
+//#### JO added (2026-10-31): activations kept in the EVTA layout N{C/16}HW16 between the layers
+//#### (-vta-keep-layout, default on). The EVTA conv reads its input and writes its output in that layout, so
+//#### conv -> conv needs no transpose whatever the channel counts are (C only sets the number of 16-channel
+//#### blocks); elementadd and relu are elementwise on equal shapes, so they run unchanged; maxpool and avgpool
+//#### run with the 16-channel blocks as the batch (N*C/16, H, W, 16), and a 1x1 output of a pool is the same
+//#### in both layouts. An activation (4-D, N = 1, int8, C % 16 = 0, H*W > 1) is kept packed only if every
+//#### instruction that uses it is one of those; the 4-D operands of one elementwise op or pool are packed
+//#### together or not at all. Everything else (graph inputs/outputs, tensor views, other ops) stays NHWC.
+//#### A packed activation is a VTA buffer (<name>_vbuf, <name> = its virtual address).
+static bool isPackCandidate(const Value *v) {
+  if (!llvm::isa<AllocActivationInst>(v))
+    return false;
+  auto ty = v->getType();
+  auto d = ty->dims();
+  return ty->getElementType() == ElemKind::Int8QTy && d.size() == 4 &&
+         d[0] == 1 && d[3] % 16 == 0 && d[1] * d[2] > 1;
+}
+
+static bool isLayoutNeutral(const Value *v) {
+  auto d = v->dims();
+  return d.size() == 4 && d[1] == 1 && d[2] == 1;
+}
+
+void findPackedActivations(const IRFunction *IR, VTASaveContext *ctx) {
+  auto &packed = *ctx->getPacked();
+  packed.clear();
+#ifdef VTA_MEMOPT_DISABLE
+  return;
+#endif
+  if (!vtaKeepLayout)
+    return;
+  for (const auto &I : IR->getInstrs())
+    for (const auto &op : I.getOperands())
+      if (isPackCandidate(op.first))
+        packed.insert(op.first);
+
+  bool changed = true;
+  auto unpack = [&](const Value *v) {
+    if (packed.erase(v))
+      changed = true;
+  };
+  while (changed) {
+    changed = false;
+    for (const auto &I : IR->getInstrs()) {
+      bool group = false;
+      switch (I.getKind()) {
+      case Kinded::Kind::AllocActivationInstKind:
+      case Kinded::Kind::DeallocActivationInstKind:
+        continue;
+      case Kinded::Kind::ConvolutionInstKind: {
+        auto *C = llvm::cast<ConvolutionInst>(&I);
+        auto path = getConvPath(C);
+        if (path == ConvPath::VTA)
+          continue;
+        // the zero-filled first conv reads NHWC but writes the EVTA layout
+        if (path == ConvPath::FirstBNN) {
+          for (const auto &op : I.getOperands())
+            if (op.first != C->getDest())
+              unpack(op.first);
+          continue;
+        }
+        break;
+      }
+      case Kinded::Kind::ElementAddInstKind:
+      case Kinded::Kind::ReluInstKind:
+      case Kinded::Kind::MaxPoolInstKind:
+      case Kinded::Kind::AvgPoolInstKind:
+        group = true;
+        break;
+      default:
+        break;
+      }
+      if (!group) {
+        for (const auto &op : I.getOperands())
+          unpack(op.first);
+        continue;
+      }
+      bool all = true;
+      for (const auto &op : I.getOperands())
+        if (!isLayoutNeutral(op.first) && !packed.count(op.first))
+          all = false;
+      if (!all)
+        for (const auto &op : I.getOperands())
+          unpack(op.first);
     }
   }
 }
@@ -3397,21 +3546,30 @@ void saveAvgPoolInst(const glow::AvgPoolInst *Inst, std::string *bundle,
   bundle->append(std::to_string(outScale));
   bundle->append(", 0, ");
 
-  bundle->append(std::to_string(srcDims[0]));
+  //#### JO added (2026-10-31): EVTA layout N{C/16}HW16 = NHWC with the 16-channel blocks as the batch
+  //#### (a 1x1 output is then plain NHWC)
+  dim_t inN = srcDims[0], inC = srcDims[3], outN = destDims[0], outC = destDims[3];
+  if (ctx->isPacked(src)) {
+    inN = inN * inC / 16;
+    inC = 16;
+    outN = outN * outC / 16;
+    outC = 16;
+  }
+  bundle->append(std::to_string(inN));
   bundle->append(", ");
   bundle->append(std::to_string(srcDims[1]));
   bundle->append(", ");
   bundle->append(std::to_string(srcDims[2]));
   bundle->append(", ");
-  bundle->append(std::to_string(srcDims[3]));
+  bundle->append(std::to_string(inC));
   bundle->append(", ");
-  bundle->append(std::to_string(destDims[0]));
+  bundle->append(std::to_string(outN));
   bundle->append(", ");
   bundle->append(std::to_string(destDims[1]));
   bundle->append(", ");
   bundle->append(std::to_string(destDims[2]));
   bundle->append(", ");
-  bundle->append(std::to_string(destDims[3]));
+  bundle->append(std::to_string(outC));
   bundle->append(", ");
   bundle->append(std::to_string(KH));
   bundle->append(", ");
@@ -3469,6 +3627,11 @@ void saveMaxPoolInst(const glow::MaxPoolInst *Inst, std::string *bundle,
 
   int pad_size = pad[0];
   int stride_size = strides[0];
+  //#### JO added (2026-10-31): EVTA layout N{C/16}HW16 = NHWC with the 16-channel blocks as the batch
+  if (ctx->isPacked(src)) {
+    N = N * C / 16;
+    C = 16;
+  }
 
   auto srcWeight = static_cast<WeightVar *>(src);
   if (srcWeight->getMutability() == glow::WeightVar::MutabilityKind::Mutable) {
@@ -4983,6 +5146,7 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
   auto &destroyConst = bundleCtx.destroyConst;
 
   initBundleSave(bundleCtx, bundleName, mainEntryName);
+  findPackedActivations(IR.get(), &ctx);
 
   for (const auto &I : IR->getInstrs()) {
 
@@ -5019,11 +5183,25 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
     case Kinded::Kind::AllocActivationInstKind: {
       auto I2 = llvm::cast<AllocActivationInst>(&I);
 #ifndef VTA_MEMOPT_DISABLE
-      bundle.append("  int8_t *");
-      bundle.append(I2->getName());
-      bundle.append(" = (int8_t *)malloc(");
-      bundle.append(std::to_string(I2->getSizeInBytes()));
-      bundle.append(");\n");
+      //#### JO added (2026-10-31): an activation kept in the EVTA layout is a VTA buffer
+      if (ctx.isPacked(I2)) {
+        bundle.append("  int8_t *");
+        bundle.append(I2->getName());
+        bundle.append("_vbuf = (int8_t *)VTABufferAlloc(");
+        bundle.append(std::to_string(I2->getSizeInBytes()));
+        bundle.append(");\n");
+        bundle.append("  int8_t *");
+        bundle.append(I2->getName());
+        bundle.append(" = (int8_t *)VTABufferGetVirtAddr(");
+        bundle.append(I2->getName());
+        bundle.append("_vbuf);\n");
+      } else {
+        bundle.append("  int8_t *");
+        bundle.append(I2->getName());
+        bundle.append(" = (int8_t *)malloc(");
+        bundle.append(std::to_string(I2->getSizeInBytes()));
+        bundle.append(");\n");
+      }
 #endif
       // for not constant but represented as a constant value
       auto csyms = ctx.getConstantSymbols();
@@ -5034,9 +5212,15 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
     case Kinded::Kind::DeallocActivationInstKind: {
 #ifndef VTA_MEMOPT_DISABLE
       auto I2 = llvm::cast<DeallocActivationInst>(&I);
-      bundle.append("  free(");
-      bundle.append(I2->getSrc()->getName());
-      bundle.append(");\n");
+      if (ctx.isPacked(I2->getSrc())) {
+        bundle.append("  VTABufferFree(");
+        bundle.append(I2->getSrc()->getName());
+        bundle.append("_vbuf);\n");
+      } else {
+        bundle.append("  free(");
+        bundle.append(I2->getSrc()->getName());
+        bundle.append(");\n");
+      }
 #endif
       break;
     }
@@ -5140,6 +5324,22 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
       msg.append(" is an unhandled instruction");
 
       llvm_unreachable(msg.c_str());
+    }
+    //#### JO added (2026-10-31): a CPU op that wrote an activation kept in the EVTA layout flushes it
+    //#### for the EVTA (non-coherent; the EVTA conv invalidates its output for the CPU)
+    if (I.getKind() == Kinded::Kind::ElementAddInstKind ||
+        I.getKind() == Kinded::Kind::ReluInstKind ||
+        I.getKind() == Kinded::Kind::MaxPoolInstKind ||
+        I.getKind() == Kinded::Kind::AvgPoolInstKind) {
+      for (const auto &op : I.getOperands()) {
+        if (op.second != OperandKind::In && ctx.isPacked(op.first)) {
+          bundle.append("  VTABufferFlush(");
+          bundle.append(op.first->getName());
+          bundle.append("_vbuf, 0, ");
+          bundle.append(std::to_string(op.first->getSizeInBytes()));
+          bundle.append(");\n");
+        }
+      }
     }
 #ifdef VTA_PROFILE
     if (I.getKind() != Kinded::Kind::DebugPrintInstKind) {
