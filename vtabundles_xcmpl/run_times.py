@@ -45,8 +45,9 @@ def main():
         g = f', {ops / (avg * 1e6):.2f} GOPS' if ops > 0 else ''
         tag = '' if len(names) == 1 else f'{n}: '
         print(f'{tag}whole run ms per run: ' + ' '.join(f'{x:.3f}' for x in t))
-        print(f'{tag}average {rng}: {avg:.3f} ms (min {min(avg_runs):.3f}, max {max(avg_runs):.3f}){g}')
-        res.append(f'{tag}avg {rng} {avg:.3f} ms{g}')
+        med = sorted(avg_runs)[len(avg_runs) // 2]
+        print(f'{tag}average {rng}: {avg:.3f} ms (median {med:.3f}, min {min(avg_runs):.3f}, max {max(avg_runs):.3f}){g}')
+        res.append(f'{tag}avg {rng} {avg:.3f} ms{g} (median {med:.3f} ms)')
     if res:
         print('; '.join(res))
 
