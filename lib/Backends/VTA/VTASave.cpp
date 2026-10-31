@@ -58,7 +58,8 @@ static llvm::cl::opt<bool> vtaEvtaMaxPool(
     "vta-evta-maxpool",
     llvm::cl::desc("Run a max pool of an activation in the EVTA layout whose "
                    "producer ends with relu on the EVTA (maxpool_evta)"),
-    llvm::cl::init(false));
+    //#### default on since the board check (2026-10-31: bit-exact, docs/evta_runtime_compare.md 7.3)
+    llvm::cl::init(true));
 
 namespace vta_save{
 

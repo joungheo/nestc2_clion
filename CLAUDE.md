@@ -190,6 +190,9 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   default on; vtalib `convolution_wo_tr_res`, also in `vtalib-zcu102-systolic`): residual LOADed into inp, identity-weight GEMM, ALU
   ADD/SHR/MAX/MIN before the store, power-of-two scales only; bit-exact with the CPU path (`EVTA_RES_CHECK=1` compares at run time).
   Resnet18 (all 8 fused) single OMP 1 90.9 -> 67.1 ms, OMP 4 56.6 -> 50.2 ms, multi4 100 inferences 2.47 -> 1.85 s (§7.2).
+- Max pool on the EVTA (2026-10-31, `-vta-evta-maxpool`, default on, vtalib `maxpool_evta`, `findEvtaMaxPools`): input >= 0 only
+  (written by an EVTA conv with relu or a relu; LOAD pads with 0), output tiles with the input halo re-read, identity GEMM, one ALU MAX
+  instruction per window position. Resnet18 single OMP 1 67.1 -> 52.5 ms, multi4 100 inferences 1.85 -> 1.47 s (§7.3).
 - The lab board's PL has a defective configuration row (tile row SLICE Y219, cells stuck at 0; `log/BOARD_TODO.md`
   2026-10-23/24). `vivado.tcl` on zcu102 fences the design below it by default (`VTA_BRAM_FENCE=y219|upper|none`).
   multi2 fits below it and works (2026-10-24); multi4 needs more BRAM than the rows below, so it crosses the row with

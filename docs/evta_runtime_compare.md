@@ -302,7 +302,44 @@ bias(ADD), requant(SHR), clip(MAX/MIN)을 한다(`conv_kernel`). Resnet18 v1 blo
 - GOPS의 ops는 conv MAC만 센다(더하기는 넣지 않았다). 그래서 EVTA 시간이 1.1 ms 늘어난 만큼 EVTA GOPS는 조금 내려간다.
   1.1 ms는 8개 conv의 residual LOAD, 단위행렬 GEMM, ALU 명령에 든 시간이다.
 - CPU에서 elemadd와 relu가 빠져 OMP 1에서 23.8 ms, OMP 4에서 6.4 ms가 줄었다. 처리량이 중요한 multi4(OMP 1)에서 효과가 크다.
-- 아직 CPU에 남은 것: maxpool(conv0 뒤 하나), conv0 입력 zerofill, `VTABufferAlloc`, 전처리, fc.
+- 아직 CPU에 남은 것: maxpool(conv0 뒤 하나, → 7.3에서 EVTA로), conv0 입력 zerofill, `VTABufferAlloc`, 전처리, fc.
+
+### 7.3 ② 나머지: maxpool을 EVTA로 (2026-10-31, `-vta-evta-maxpool`, 기본 켜짐)
+
+**어떻게 되나** (`maxpool_evta`, vtalib `VTABundle.cpp`).
+- 출력을 16채널 블록 하나의 oh × ow tile로 나눈다. ACC/INP의 반(1024 entry)에 들어가는 가장 큰 tile이고, Resnet18 pool0(112×112 → 56×56)은 3행 × 56열이다.
+- tile마다 다음 순서로 한다.
+  1. 입력 창 ((oh-1)·s+K) × ((ow-1)·s+K)를 LOAD한다.
+  2. 단위행렬 GEMM으로 acc에 옮긴다.
+  3. 출력 자리를 0으로 둔다.
+  4. 창의 K×K 위치마다 ALU MAX(acc, acc) 명령을 하나씩 낸다. 명령 하나는 출력 pixel 전체를 도는 2단 loop이고 uop는 1개다.
+  5. STORE한다.
+- 같은 dst를 연달아 쓰는 uop 순서는 ALU pipeline에서 위험할 수 있어 피했다.
+- tile 두 개를 inp/acc의 두 반쪽에서 동시에 처리해 load, compute, store가 겹친다.
+- **tile 경계**: 출력 tile은 서로 겹치지 않는다. 입력은 tile마다 halo까지 DDR에서 다시 읽는다(3×3 s2이면 이웃 tile과 입력 1행이 겹친다).
+  입력이 DDR에 있으므로 tile 사이에 넘길 상태가 없다.
+- **이미지 가장자리**: LOAD의 padding 0으로 채운다. 입력이 0 이상일 때만 CPU(창 안의 유효한 값만으로 구하는 max)와 같다.
+  그래서 입력을 마지막으로 쓴 명령이 relu가 붙은 EVTA conv(zero-fill conv0 포함)나 relu일 때만 EVTA로 보낸다(`findEvtaMaxPools`).
+- conv0 안에 붙이면 DDR 왕복(0.8 MB 쓰기와 읽기)이 없어지지만, conv tile에 halo를 다시 계산해야 해서 하지 않았다.
+- 검증: `EVTA_RES_CHECK=1`이면 CPU maxpool과 비교한다. single과 multi4에서 0개 불일치였고, Result 281과 Confidence 0.655530도 같다.
+
+**측정** (7.2와 같은 조건; 왼쪽부터 ①만, ①+fusion, ①+fusion+EVTA maxpool)
+
+| 경우 | ①만 | + conv/elemadd/relu fusion | + EVTA maxpool | ① 대비 |
+|---|---|---|---|---|
+| single, OMP 1, 전체 run | 90.93 ms | 67.13 ms | **52.48 ms** (88.6 GOPS) | −42 % |
+| single, OMP 4, 전체 run | 56.64 ms | 50.23 ms | **48.71 ms** (95.5 GOPS) | −14 % |
+| single, EVTA 하드웨어 시간 (`_sysprof`) | 29.68 ms | 30.80 ms | 31.98 ms (145.4 GOPS) | +2.3 ms |
+| multi4 copy 하나, 4개 동시, 전체 run median | 95.6 ms | 70.7 ms | **56.1~56.5 ms** | −41 % |
+| multi4 4 EVTA 동시, lockstep (`_sysprof -l`, conv MAC 기준) | 616.6 GOPS | 593.9 GOPS | 571.5 GOPS | −7 % |
+| multi4 4 copy 100회 wall (`_sys`) | 2470 ms (40.5/s) | 1851 ms (54.0/s) | **1471 ms (68.0/s)** | −40 % |
+| multi4 비트스트림, single-thread exe 100회 (`_sys`) | 9231 ms | 6818 ms | **5393 ms** | −42 % |
+
+- maxpool은 OMP 1의 CPU에서 약 15 ms, OMP 4에서 약 3 ms였다. EVTA에서는 1.2 ms(21번째 EVTA call)다.
+- multi4 `_systimed`(lockstep 없음)의 "4 copy 합"(run마다 가장 느린 copy)은 78.0 ms, 238.5 GOPS로 나왔다.
+  copy마다의 median(56 ms)보다 크다. run마다 한 copy씩 늦는 run이 섞이기 때문이다(마지막 run에서 copy 1이 92 ms). 원인은 아직 보지 않았다.
+  처리량은 `_sys` 100회 wall(1471 ms = copy당 58.8 ms/run)로 보는 것이 맞다.
+- 이제 CPU에 남은 것(OMP 1, single 52.5 ms − EVTA call 33.4 ms 중): conv0 입력 zerofill, fc 4.4 ms, 전처리, `VTABufferAlloc`/Free, avgpool.
 
 ## 8. 하드웨어도 같이 비교해야 하나
 
