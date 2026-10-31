@@ -4,10 +4,12 @@
 #   _timed           built in ../build_timed (-DBUNDLE_TIMED=ON -DBUNDLE_EXE_SUFFIX=_timed): per statement,
 #                    also <Dir>/timing.csv
 # Executable, input and golden come from the "run <dir> <exe> <input> <golden>" lines of run_all.sh. Reloads the bitstream before each run.
-# usage: sudo hw/script/run_prof.sh [-s _timed] [-n <runs, default 25>] [-l] [-r] Dir [Dir ...]     (or hw_<set>/script/run_prof.sh)
+# usage: sudo hw/script/run_prof.sh [-s _timed] [-n <runs, default 25>] [-l] [-r] [-t <threads>] Dir [Dir ...]     (or hw_<set>/script/run_prof.sh)
 #        sudo hw/script/run_prof.sh [-s _timed] [all|hw_bundles]   (no Dir = every run line of run_all.sh)
-# e.g.:  sudo /bin/sh -c "OMP_NUM_THREADS=1 hw_multievtax4/script/run_prof.sh -s _sysprof -n 25 -l -r MultiEVTAResnet18Test"
-#        (-s suffix: _prof _timed _sysprof _systimed _sys; -n runs; -l lockstep (multi-EVTA); -r chrt -f 10)
+# e.g.:  sudo hw_multievtax4/script/run_prof.sh -s _sysprof -n 25 -l -r MultiEVTAResnet18Test
+#        sudo hw/script/run_prof.sh -s _systimed -r -t 4 Resnet18Test
+#        (-s suffix: _prof _timed _sysprof _systimed _sys; -n runs; -l lockstep (multi-EVTA); -r chrt -f 10;
+#         -t OMP_NUM_THREADS, default 1 or OMP_NUM_THREADS of the environment)
 # One line per Dir (exit, golden check, total time) is also written to result/<suffix>_summary.txt, printed at the end.
 #### JO added (2026-10-26): also in hw_multievtax2/ and hw_multievtax4/ (copied there by collect_hw_bundles.py):
 #### build dirs build_<set>_prof / build_<set>_timed. An executable with several timed .cpp (one per EVTA or VTA
@@ -44,9 +46,17 @@ RUNS=25
 #### a core from the EVTA polling threads (a late completion costs a 4 ms tick, CONFIG_HZ=250); the kernel still keeps
 #### 5 % of the CPU for the others (sched_rt_runtime_us 950000)
 RT=""
-while [ "${1:-}" = -s ] || [ "${1:-}" = -n ] || [ "${1:-}" = -l ] || [ "${1:-}" = -r ]; do
-  case $1 in -l) export MULTI_LOCKSTEP=1; shift;; -r) RT="chrt -f 10"; shift;; -s) SUFFIX=$2; shift 2;; *) RUNS=$2; shift 2;; esac
+#### JO changed (2026-10-31): -t <threads> = OMP_NUM_THREADS of the executable, default 1 for every set (single EVTA too;
+#### OMP_NUM_THREADS in the environment is the default instead): the multi-EVTA copies already fill the 4 cores, and the
+#### single-EVTA numbers are then comparable with one copy of them; -t 4 for the CPU ops of a single EVTA on 4 cores
+# while [ "${1:-}" = -s ] || [ "${1:-}" = -n ] || [ "${1:-}" = -l ] || [ "${1:-}" = -r ]; do
+#   case $1 in -l) export MULTI_LOCKSTEP=1; shift;; -r) RT="chrt -f 10"; shift;; -s) SUFFIX=$2; shift 2;; *) RUNS=$2; shift 2;; esac
+# done
+OMP=${OMP_NUM_THREADS:-1}
+while [ "${1:-}" = -s ] || [ "${1:-}" = -n ] || [ "${1:-}" = -l ] || [ "${1:-}" = -r ] || [ "${1:-}" = -t ]; do
+  case $1 in -l) export MULTI_LOCKSTEP=1; shift;; -r) RT="chrt -f 10"; shift;; -s) SUFFIX=$2; shift 2;; -t) OMP=$2; shift 2;; *) RUNS=$2; shift 2;; esac
 done
+export OMP_NUM_THREADS=$OMP
 #### JO changed (2026-10-29): hw_<set>/: MULTI_RUNS = runs per EVTA copy of the multi-EVTA mains (4 x for single_thread_main)
 # [ "$HWD" = hw ] && export BUNDLE_RUNS=$RUNS || unset BUNDLE_RUNS
 if [ "$HWD" = hw ]; then export BUNDLE_RUNS=$RUNS; unset MULTI_RUNS; else export MULTI_RUNS=$RUNS; unset BUNDLE_RUNS; fi
@@ -125,7 +135,9 @@ for D in "$@"; do
                                                  [ -n "$e" ] && t="$t; $e"; }
   #### JO changed: executable column, end of the per-line loop
   # printf "%-30s exit=%-3s %-10s %s\n" $D $rc "$res" "$t" >> $SUM
-  printf "%-30s %-34s exit=%-3s %-10s %s\n" $D $EXE $rc "$res" "$t" >> $SUM
+  #### JO changed (2026-10-31): + omp=<OMP_NUM_THREADS>
+  # printf "%-30s %-34s exit=%-3s %-10s %s\n" $D $EXE $rc "$res" "$t" >> $SUM
+  printf "%-30s %-34s exit=%-3s omp=%-2s %-10s %s\n" $D $EXE $rc $OMP "$res" "$t" >> $SUM
   done 3< <(grep -E "^run $D " $RUN_ALL)
 done
 echo; echo "== summary ($SUM)"; cat $SUM

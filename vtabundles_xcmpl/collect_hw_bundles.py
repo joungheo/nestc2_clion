@@ -202,6 +202,8 @@ def main():
                 f'set -u\ncd "$(dirname "$0")/.."\nBIN=${{BIN:-{BIN}}}\n'
                 #### JO added (2026-10-28): systolic bitstream for run_prof.sh -s _sys*
                 + (f'SYS_BIN=${{SYS_BIN:-{SYS_BINS[SET]}}}\n' if SET in SYS_BINS else '') +
+                #### JO added (2026-10-31): OpenMP threads of the CPU ops, 1 by default for every set (as run_prof.sh -t)
+                'export OMP_NUM_THREADS=${OMP_NUM_THREADS:-1}\n'
                 '[ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }\n'
                 #### JO added (2026-10-26): one EVTA run at a time on the board (each run reloads the PL; two runs
                 #### swap bitstreams under each other -> SError / bus errors); run_prof.sh takes the same lock

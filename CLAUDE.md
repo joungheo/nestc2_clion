@@ -175,9 +175,10 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   `SYS_BIN` = systolic 400 MHz (single, multi4), used by `run_prof.sh -s _sys*` (executables built with `-DVTALIB=<vtalib-zcu102-systolic>`).
   The 333 MHz `vtahw_*_y219.bin` stay usable with `BIN=<file>`.
 - Measuring (2026-10-29, `vtabundles_xcmpl/README.md`): `hw*/script/run_prof.sh -s _prof|_timed|_sysprof|_systimed` (build dirs
-  `build[_<set>]<suffix>`), `-n <runs>` (default 25), `-l` lockstep of the multi-EVTA copies, `-r` `chrt -f 10`; multi-EVTA with
-  `OMP_NUM_THREADS=1`. `_prof` = EVTA time per conv (`prof_summary.py` adds GOPS), `_timed` = wall time per statement.
-  예) `cd vtabundles_xcmpl && sudo /bin/sh -c "OMP_NUM_THREADS=1 hw_multievtax4/script/run_prof.sh -s _sysprof -n 25 -l -r MultiEVTAResnet18Test"`
+  `build[_<set>]<suffix>`), `-n <runs>` (default 25), `-l` lockstep of the multi-EVTA copies, `-r` `chrt -f 10`, `-t <threads>`
+  `OMP_NUM_THREADS` (default **1 for every set**, single EVTA too, since 2026-10-31; `-t 4` for 4 cores; `run_all.sh` the same).
+  `_prof` = EVTA time per conv (`prof_summary.py` adds GOPS), `_timed` = wall time per statement.
+  예) `cd vtabundles_xcmpl && sudo /bin/sh -c "hw_multievtax4/script/run_prof.sh -s _sysprof -n 25 -l -r MultiEVTAResnet18Test"`
 - Resnet18 conv0 runs on EVTA (`VTA_RESNET18_WITH_SKIPQUANT0=OFF`, zero-filled to 16 channels, schedule 2 virtual threads 8x16
   in `include/Backends/VTA/VTASchedules.h`); `Resnet18PartitionTest` keeps conv0 float (`docs/evta_runtime_aot.md` §5.3).
   예) regenerate it in the simulator build: `cd Debug2_remote && cmake -DVTA_RESNET18_WITH_SKIPQUANT0=OFF . && ./build_sim_bundles.sh vtaMxnetResnet18Bundle`

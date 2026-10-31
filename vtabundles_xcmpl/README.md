@@ -7,7 +7,8 @@ Build directories are not kept in git (`.gitignore`): create them with the `cmak
 `build_sysprof/` (`-DNESTC_EVTA_PROFILE=ON -DBUNDLE_EXE_SUFFIX=_sysprof`), `build_systimed/` (`-DBUNDLE_TIMED=ON -DBUNDLE_EXE_SUFFIX=_systimed`),
 `build_multievtax4_sys/` (`-DBUNDLE_EXE_SUFFIX=_sys`), `build_multievtax4_sysprof/` (`-DNESTC_EVTA_PROFILE=ON -DBUNDLE_EXE_SUFFIX=_sysprof`, 2026-10-29), `build_multievtax4_systimed/` (`-DBUNDLE_TIMED=ON -DBUNDLE_EXE_SUFFIX=_systimed`);
 each with `-DVTALIB=<NEST-C root>/vtalib-zcu102-systolic`, the multi4 ones also `-DBUNDLE_SET=multievtax4 -DNESTC_EVTA_MULTI=ON -DNESTC_EVTA_MAX_XFER=4194304`.
-Run e.g. `sudo hw/script/run_prof.sh -s _systimed Resnet18Test`, `sudo OMP_NUM_THREADS=1 hw_multievtax4/script/run_prof.sh -s _systimed MultiEVTAResnet18Test`.
+Run e.g. `sudo hw/script/run_prof.sh -s _systimed Resnet18Test`, `sudo hw_multievtax4/script/run_prof.sh -s _systimed MultiEVTAResnet18Test`
+(`OMP_NUM_THREADS=1` by default, `-t 4` for 4 OpenMP threads).
 예) configure and build the multi4 systolic per-statement dir (all options):
 `mkdir build_multievtax4_systimed && cd build_multievtax4_systimed && cmake -DBUNDLE_SET=multievtax4 -DNESTC_EVTA_MULTI=ON -DNESTC_EVTA_MAX_XFER=4194304 -DBUNDLE_TIMED=ON -DBUNDLE_EXE_SUFFIX=_systimed -DVTALIB=$PWD/../../vtalib-zcu102-systolic .. && make -j2 hw_bundles`
 
@@ -103,12 +104,15 @@ Bundle sources are generated in the simulator build, then compiled for the board
   (`evta_lockstep_hook`, inserted by `timed_bundle.py`, defined in `multi_threads_main.cpp`), so each conv runs on the 4 EVTAs at once.
   `run_prof.sh -r` runs the executable with `chrt -f 10` (SCHED_FIFO): without it 7-9 of 25 lockstep runs lost a 4 ms
   scheduler tick on one EVTA's completion (CONFIG_HZ=250), with it 0-1 (`../docs/evta_runtime_aot.md`, 2026-10-29).
-  예) `sudo /bin/sh -c "OMP_NUM_THREADS=1 hw_multievtax4/script/run_prof.sh -s _sysprof -n 25 -l -r MultiEVTAResnet18Test"`
+  예) `sudo /bin/sh -c "hw_multievtax4/script/run_prof.sh -s _sysprof -n 25 -l -r MultiEVTAResnet18Test"`
   (25 runs per copy, lockstep, chrt; `sudo VAR=... cmd` asks for a password, `sudo /bin/sh -c "..."` does not)
 - `OMP_NUM_THREADS`: the CPU ops of vtalib (`CPUBundle_generic.cpp`: transposes, elemadd, relu, maxpool, fc, quantize) are
   OpenMP loops; each pthread opens its own team. Resnet18 x 100 on multi4, systolic 400 (2026-10-29):
   threaded 4014 / 4955 / 5813 / 6025 ms and single 15276 / 10285 / 8638 / 7989 ms for 1 / 2 / 3 / 4 threads.
   So the threaded executable with `OMP_NUM_THREADS=1` (4 pthreads already fill the 4 cores), the single one with the default 4.
+  Since 2026-10-31 `run_prof.sh` and `run_all.sh` run every set with `OMP_NUM_THREADS=1` unless told otherwise
+  (`run_prof.sh -t <threads>`, or `OMP_NUM_THREADS` in the environment); the `_summary.txt` line shows `omp=`.
+  Resnet18 single EVTA, systolic 400, keep-layout: 91.1 ms with 1 thread, 56.4 ms with `-t 4`.
   예) by hand: `sudo /bin/sh -c "hw/script/load_bit.sh vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz.bin && cd hw_multievtax4/MultiEVTAResnet18Test && OMP_NUM_THREADS=1 MULTI_RUNS=25 MULTI_LOCKSTEP=1 chrt -f 10 ./multivtaMxnetResnet18Bundle_sysprof ../../../glow/tests/images/imagenet/cat_285.png"`
 - Each bundle is pinned to one EVTA at code generation (`-index-multi-evta` mask 1/2/4/8 -> EVTA 0..3,
   `VTASave.cpp` ~line 4958); a multi-EVTA executable runs one bundle per thread.
