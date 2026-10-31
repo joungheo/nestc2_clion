@@ -1,4 +1,6 @@
 #include <cstdint>
+#include <cmath>
+#include <cstdlib>
 #include <vector>
 #include <fstream>
 #include <iostream>
@@ -3028,9 +3030,48 @@ int convolution_wo_tr_res(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *
   }
   ConvResidual res = {residual, getIdentityWeights(idEVTA), (uint32_t)resShl, (uint32_t)convShl, (uint32_t)sumShr,
                       sumRelu};
-  return convolution_wo_tr_impl(input, kernel, bias, output, N, H, W, C, KN, KH, KW, pad_size, stride_size, doRelu,
-                                doBias, shift, out_h, out_w, vtaCmdH, nVirtualThread, tileHSize, tileWSize, idEVTA,
-                                &res);
+  //#### EVTA_RES_CHECK=1: also run the plain conv into a scratch buffer and the CPU elemadd + relu on it
+  //#### (std::round as CPUBundle elemadd), compare with the fused output and print the mismatches
+  static int check = -1;
+  if (check < 0) {
+    const char *e = getenv("EVTA_RES_CHECK");
+    check = e && atoi(e) > 0;
+  }
+  if (!check)
+    return convolution_wo_tr_impl(input, kernel, bias, output, N, H, W, C, KN, KH, KW, pad_size, stride_size, doRelu,
+                                  doBias, shift, out_h, out_w, vtaCmdH, nVirtualThread, tileHSize, tileWSize, idEVTA,
+                                  &res);
+  size_t n = (size_t)out_h * out_w * KN;
+  VTABufferInvalidate(residual, 0, n);
+  std::vector<int8_t> r((int8_t *)VTABufferGetVirtAddr(residual), (int8_t *)VTABufferGetVirtAddr(residual) + n);
+  int rc = convolution_wo_tr_impl(input, kernel, bias, output, N, H, W, C, KN, KH, KW, pad_size, stride_size, doRelu,
+                                  doBias, shift, out_h, out_w, vtaCmdH, nVirtualThread, tileHSize, tileWSize, idEVTA,
+                                  &res);
+  void *tmp = VTABufferAlloc(n);
+  convolution_wo_tr_impl(input, kernel, bias, (int8_t *)tmp, N, H, W, C, KN, KH, KW, pad_size, stride_size, doRelu,
+                         doBias, shift, out_h, out_w, vtaCmdH, nVirtualThread, tileHSize, tileWSize, idEVTA, nullptr);
+  VTABufferInvalidate(output, 0, n);
+  VTABufferInvalidate(tmp, 0, n);
+  const int8_t *o = (const int8_t *)VTABufferGetVirtAddr(output), *c = (const int8_t *)VTABufferGetVirtAddr(tmp);
+  size_t bad = 0, first = n;
+  for (size_t i = 0; i < n; i++) {
+    float v = std::round(std::ldexp((float)c[i], convShl - sumShr) + std::ldexp((float)r[i], resShl - sumShr));
+    v = v > 127 ? 127 : (v < -128 ? -128 : v);
+    if (sumRelu && v < 0)
+      v = 0;
+    if ((int8_t)v != o[i]) {
+      if (!bad)
+        first = i;
+      bad++;
+    }
+  }
+  printf("EVTA_RES_CHECK %dx%dx%d -> %d, shl %d/%d shr %d: %zu of %zu differ", H, W, C, KN, convShl, resShl, sumShr,
+         bad, n);
+  if (bad)
+    printf(" (first at %zu: fused %d, conv %d residual %d)", first, o[first], c[first], r[first]);
+  printf("\n");
+  VTABufferFree(tmp);
+  return rc;
 }
 
 
