@@ -9,7 +9,12 @@ BIN=${1:?usage: sudo $0 <file in /lib/firmware>}
 [ -f /lib/firmware/$BIN ] || { echo "bitstream /lib/firmware/$BIN not found"; exit 1; }
 [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
 exec 9>/tmp/evta_run.lock; flock -n 9 || { echo "another EVTA run is active (/tmp/evta_run.lock)"; exit 1; }
-echo 0 > /sys/class/fpga_manager/fpga0/flags; echo $BIN > /sys/class/fpga_manager/fpga0/firmware
+#### JO changed (2026-11-01): record the loaded bitstream in /tmp/evta_bitstream (vtalib's pynq_driver.cc checks the
+#### EVTA count of its name before mapping the registers: a missing EVTA is an SError, not a clean error)
+# echo 0 > /sys/class/fpga_manager/fpga0/flags; echo $BIN > /sys/class/fpga_manager/fpga0/firmware
+echo 0 > /sys/class/fpga_manager/fpga0/flags
+if echo $BIN > /sys/class/fpga_manager/fpga0/firmware; then echo $BIN > /tmp/evta_bitstream
+else echo "FAILED $BIN" > /tmp/evta_bitstream; echo "bitstream $BIN: load failed"; fi
 mkdir -p trace; chown --reference=. trace
 ( cd trace && python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" )
 echo "$BIN: fpga state $(cat /sys/class/fpga_manager/fpga0/state)"

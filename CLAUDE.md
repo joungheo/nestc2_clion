@@ -134,6 +134,11 @@ from CLion over remote.
 - **Reload the bitstream before every EVTA run** (by hand: `sudo vtabundles_xcmpl/hw/script/load_bit.sh <bin>`; `fpga_manager` firmware write, then
   `Xlnk().xlnk_reset()`): a hung run leaves the auto-restart EVTA blocks deadlocked and all later runs hang.
   The runtime pre-allocates 64 MB of the 128 MB CMA pool per command handle. Other users share this board.
+  The run scripts (`run_all.sh`, `run_prof.sh`, `load_bit.sh`, `hwtest/*.sh`) write the loaded bitstream's name to
+  `/tmp/evta_bitstream`; vtalib (`pynq_driver.cc` `CheckLoadedBitstream`) exits before touching EVTA i's registers if that bitstream
+  has fewer EVTAs (`<n>evta` / `multi<n>` in the name, else 1), if the load failed or nothing was recorded since boot (`EVTA_NO_BIT_CHECK=1`
+  skips it). A multi-EVTA executable on a single-EVTA bitstream is an AXI SError: kernel Oops, CMA fragmented, bitstream loads fail
+  with ENOMEM until a reboot (2026-10-31).
 - With `NESTC_EVTA_RUN_ON_ZCU102=ON`, `cmake/glow/CMakeLists.txt` skips `lib`/`tools`, so VTASaverTest /
   model-compiler are not built there: generate bundle sources in the simulator build (`Debug2_remote`) and
   build them for the board with the standalone CMake project in `vtabundles_xcmpl/` (not part of the NEST-C

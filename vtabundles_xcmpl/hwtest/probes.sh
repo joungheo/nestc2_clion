@@ -17,7 +17,7 @@ for BIN in "$@"; do
   for s in $SFX; do
     for t in "gemmprobe$s reset" "gemmprobe$s zero" "gemmprobe$s ident" "gemmprobe$s perm" "gemmprobe$s ones" \
              "sramscan$s wgt" "sramscan$s wgt invert" "sramscan$s inp" "sramscan$s inp invert" "donerace$s 16"; do
-      echo 0 > /sys/class/fpga_manager/fpga0/flags; echo $BIN > /sys/class/fpga_manager/fpga0/firmware
+      echo 0 > /sys/class/fpga_manager/fpga0/flags; echo $BIN > /sys/class/fpga_manager/fpga0/firmware && echo $BIN > /tmp/evta_bitstream || echo "FAILED $BIN" > /tmp/evta_bitstream  #### JO changed (2026-11-01): record it (vtalib checks the EVTA count)
       mkdir -p /tmp/xlnk_trace; ( cd /tmp/xlnk_trace && python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" 2>/dev/null )
       out=$(timeout 60 ./$t 2>&1); rc=$?
       printf "%-30s rc=%s  %s\n" "$t" $rc "$(echo "$out" | grep -E -i 'RESULT|wrong|match|PASS|FAIL' | tail -2 | tr '\n' ' ')"

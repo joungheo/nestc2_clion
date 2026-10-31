@@ -25,6 +25,9 @@
 #include <mutex>  //#### JO added (2026-10-29): profile tables of several EVTAs one after another
 #include "pynq_driver.h"
 #include <sys/time.h>
+#include <cstdio>   //#### JO added (2026-11-01): CheckLoadedBitstream
+#include <cstdlib>
+#include <cstring>
 
 
 void* VTAMemAlloc(size_t size, int cached) {
@@ -158,12 +161,51 @@ static int log_count = 0;
 // device handle
 static VTADeviceHandle createdVTADeviceHandle[VTA_DEVICE_NUM] = {};
 
+//#### JO added (2026-11-01): EVTA <index> must exist in the loaded bitstream before its registers are touched: on a
+//#### bitstream with fewer EVTAs the access is an AXI SError (kernel Oops, processes killed, CMA left fragmented until a
+//#### reboot). The register map gives no safe way to probe, so the run scripts (hw*/script/run_all.sh, run_prof.sh,
+//#### load_bit.sh) write the name of the bitstream they loaded to /tmp/evta_bitstream ("FAILED <name>" if the load
+//#### failed); the EVTA count comes from the name ("<n>evta" or "multi<n>", else 1). No file (nothing loaded by the
+//#### scripts since boot) or a failed load -> exit. EVTA_NO_BIT_CHECK=1 skips the check (a bitstream loaded another way).
+static void CheckLoadedBitstream(int index) {
+  const char *skip = getenv("EVTA_NO_BIT_CHECK");
+  if (skip && atoi(skip) > 0)
+    return;
+  const char *path = "/tmp/evta_bitstream";
+  char name[256] = {0};
+  FILE *f = fopen(path, "r");
+  if (!f || !fgets(name, sizeof(name), f)) {
+    fprintf(stderr, "EVTA%d: no bitstream recorded in %s (load one with vtabundles_xcmpl/hw/script/load_bit.sh, "
+                    "or EVTA_NO_BIT_CHECK=1 if it was loaded another way)\n", index, path);
+    if (f) fclose(f);
+    exit(3);
+  }
+  fclose(f);
+  name[strcspn(name, "\r\n")] = 0;
+  if (!strncmp(name, "FAILED", 6)) {
+    fprintf(stderr, "EVTA%d: the last bitstream load failed (%s: %s); reload it (a reboot if it keeps failing)\n",
+            index, path, name);
+    exit(3);
+  }
+  int n = 1;
+  for (const char *q = name; *q; q++) {
+    if (q[0] >= '1' && q[0] <= '9' && !strncmp(q + 1, "evta", 4)) { n = q[0] - '0'; break; }
+    if (!strncmp(q, "multi", 5) && q[5] >= '1' && q[5] <= '9') { n = q[5] - '0'; break; }
+  }
+  if (index >= n) {
+    fprintf(stderr, "EVTA%d: the loaded bitstream %s has %d EVTA(s) (%s); load a bitstream with more EVTAs "
+                    "(e.g. hw_multievtax4/script/run_all.sh, or load_bit.sh <..._4evta_...bin>)\n", index, name, n, path);
+    exit(3);
+  }
+}
+
 
 class VTADevice {
  public:
   VTADevice(int index=0) {      
 
     assert(index < VTA_DEVICE_NUM);
+    CheckLoadedBitstream(index);  //#### JO added (2026-11-01)
 
     uint32_t fetch_addr;
     uint32_t load_addr;

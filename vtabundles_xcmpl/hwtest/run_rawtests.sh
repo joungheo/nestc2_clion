@@ -13,7 +13,7 @@ if [ "$(id -u)" != 0 ]; then echo "run with sudo"; exit 1; fi
 for mode in 1 32 16; do
   echo "================ rawtest $mode ================"
   echo 0 > /sys/class/fpga_manager/fpga0/flags
-  echo $BIN > /sys/class/fpga_manager/fpga0/firmware
+  echo $BIN > /sys/class/fpga_manager/fpga0/firmware && echo $BIN > /tmp/evta_bitstream || echo "FAILED $BIN" > /tmp/evta_bitstream  #### JO changed (2026-11-01): record it (vtalib checks the EVTA count)
   echo "fpga state: $(cat /sys/class/fpga_manager/fpga0/state)"
   #### JO changed (2026-10-27): in trace/ (libcma.so writes sds_trace_data.dat to the working dir)
   #python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" 2>/dev/null

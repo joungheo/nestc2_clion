@@ -10,7 +10,7 @@ if [ "$(id -u)" != 0 ]; then echo "run with sudo"; exit 1; fi
 for a in "1 0 0" "1 0 1" "3 0 0" "3 1 0" "3 1 1" "3 1 1 32 32 14"; do
   echo "================ convvar $a ================"
   echo 0 > /sys/class/fpga_manager/fpga0/flags
-  echo $BIN > /sys/class/fpga_manager/fpga0/firmware
+  echo $BIN > /sys/class/fpga_manager/fpga0/firmware && echo $BIN > /tmp/evta_bitstream || echo "FAILED $BIN" > /tmp/evta_bitstream  #### JO changed (2026-11-01): record it (vtalib checks the EVTA count)
   #### JO changed (2026-10-27): in trace/ (libcma.so writes sds_trace_data.dat to the working dir)
   #python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" 2>/dev/null
   ( mkdir -p trace && cd trace && python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" 2>/dev/null )

@@ -218,7 +218,11 @@ def main():
                 'run() {  # dir exe input golden\n'
                 '  [ -n "$ONLY" ] && [[ " $ONLY " != *" $1 "* ]] && return\n'
                 '  echo "================ $1 ($2)"\n'
-                '  echo 0 > /sys/class/fpga_manager/fpga0/flags; echo $BIN > /sys/class/fpga_manager/fpga0/firmware\n'
+                #### JO changed (2026-11-01): record the loaded bitstream (vtalib pynq_driver.cc checks the EVTA count)
+                # '  echo 0 > /sys/class/fpga_manager/fpga0/flags; echo $BIN > /sys/class/fpga_manager/fpga0/firmware\n'
+                '  echo 0 > /sys/class/fpga_manager/fpga0/flags\n'
+                '  if echo $BIN > /sys/class/fpga_manager/fpga0/firmware; then echo $BIN > /tmp/evta_bitstream\n'
+                '  else echo "FAILED $BIN" > /tmp/evta_bitstream; echo "bitstream $BIN: load failed"; fi\n'
                 #### JO changed (2026-10-27): in trace/ (libcma.so writes sds_trace_data.dat to the working dir)
                 # '  python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" 2>/dev/null\n'
                 '  ( cd trace && python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" 2>/dev/null )\n'
@@ -228,7 +232,11 @@ def main():
                 '  elif [ $rc != 0 ]; then res="FAIL(rc=$rc)"\n'
                 '  elif [ -n "$4" ]; then cmp -s $1/output.bin $1/$4 && res=PASS || res=MISMATCH\n'
                 '  else res="RAN (no golden; see $1/$(LOG $2))"; fi\n'
-                '  tail -3 $1/$(LOG $2); printf "%-30s %-34s %s\\n" $1 $2 "$res" | tee -a result/results.txt\n}\n')
+                #### JO changed (2026-10-31): multi4conv4 bundles: every EVTA line and the RESULT line, RESULT on the summary line
+                # '  tail -3 $1/$(LOG $2); printf "%-30s %-34s %s\\n" $1 $2 "$res" | tee -a result/results.txt\n}\n')
+                "  r=$(grep -a '^RESULT mask' $1/$(LOG $2) | sed 's/^RESULT mask [^:]*: //; s/, all = golden//')\n"
+                "  if [ -n \"$r\" ]; then grep -aE '^(EVTA[0-9]+: |RESULT mask)' $1/$(LOG $2); else tail -3 $1/$(LOG $2); fi\n"
+                '  printf "%-30s %-34s %s\\n" $1 $2 "$res${r:+  $r}" | tee -a result/results.txt\n}\n')
         #### JO changed: write the merged lines, sorted by dir
         # for d, exe, inp, gold in runs:
         #     f.write(f'run {d} {exe} {shlex.quote(inp)} {shlex.quote(gold)}\n')

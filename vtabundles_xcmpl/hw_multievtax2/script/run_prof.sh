@@ -93,7 +93,12 @@ for D in "$@"; do
   # [ -x $D/$EXE ] || { echo "$D/$EXE not built (cd ../build${SUFFIX} && make $3)"; continue; }
   [ -x $D/$EXE ] || { echo "$D/$EXE not built (cd ${BLD}${SUFFIX} && make $3)"
                       printf "%-30s %-34s NOT BUILT\n" $D $EXE >> $SUM; continue; }
-  echo 0 > /sys/class/fpga_manager/fpga0/flags; echo $BIN > /sys/class/fpga_manager/fpga0/firmware
+  #### JO changed (2026-11-01): record the loaded bitstream in /tmp/evta_bitstream (vtalib's pynq_driver.cc checks the
+  #### EVTA count of its name before mapping the registers: a missing EVTA is an SError, not a clean error)
+  # echo 0 > /sys/class/fpga_manager/fpga0/flags; echo $BIN > /sys/class/fpga_manager/fpga0/firmware
+  echo 0 > /sys/class/fpga_manager/fpga0/flags
+  if echo $BIN > /sys/class/fpga_manager/fpga0/firmware; then echo $BIN > /tmp/evta_bitstream
+  else echo "FAILED $BIN" > /tmp/evta_bitstream; echo "bitstream $BIN: load failed"; fi
   #### JO changed (2026-10-27): in trace/ (libcma.so writes sds_trace_data.dat to the working dir)
   #python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" 2>/dev/null
   ( cd trace && python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" 2>/dev/null )
