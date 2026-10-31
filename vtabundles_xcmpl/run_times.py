@@ -104,8 +104,11 @@ def main():
         _, lw, sw = stat('whole run', whole, ops)
         _, lc, sc = stat('conv', cv, eops)
         print(f'{tag}{rng}: {lw}; {lc}')
-        if not multi:
-            res.append(f'{rng}: {sw}; {sc}')
+        #### JO changed (2026-10-31): every copy in the summary too (first), the copies at once after them
+        # if not multi:
+        #     res.append(f'{rng}: {sw}; {sc}')
+        cp = re.sub(r'^timing_?|\.csv$', '', n) or 'timing'
+        res.append(f'{cp + " " if multi else ""}{rng}: {sw}; {sc}')
     #### copies at once: the same runs in every csv
     if multi and len(set(tuple(sorted(c[1])) for c in cps)) == 1:
         rs = sorted(cps[0][1])
