@@ -59,6 +59,7 @@ struct ResidualFusion {
   const Value *residual; // the other elementadd operand
   const Value *out;      // relu dest: written by the fused call
   int convShl, resShl, sumShr;
+  bool hoistOut;         // out is allocated after the conv: its allocation is emitted before the conv
 };
 
 class VTASaveContext {
@@ -91,6 +92,7 @@ public:
     return it == fusions.end() ? nullptr : &it->second;
   }
   bool isFusedAway(const Instruction *I) const { return fusedAway.count(I) != 0; }
+  std::set<const Value *> *getHoisted() { return &hoisted; }
 
 private:
   IRFunction::VariableMap *variable_map;
@@ -104,6 +106,7 @@ private:
   std::set<const Value *> packed;
   std::map<const Instruction *, ResidualFusion> fusions;
   std::set<const Instruction *> fusedAway;
+  std::set<const Value *> hoisted; // allocations already emitted before a fused conv
 };
 
 struct SymbolTableEntry {
@@ -3319,6 +3322,7 @@ void findPackedActivations(const IRFunction *IR, VTASaveContext *ctx) {
 //#### then emit nothing else). Needs D, R, O, O' in the EVTA layout (findPackedActivations), power-of-two ratios of
 //#### the scales (sD / sO = 2^-a, sR / sO = 2^-b, offsets 0), the relu with equal scales, O' not the conv input,
 //#### O' allocated before C, and no other user of D (unless D is O or O') or of O (unless O is O').
+//#### (An allocation of O' between C and the relu is moved before C.)
 //#### With m = max(a, b, 0): O' = relu(round((D << (m - a)) + (R << (m - b))) >> m), exactly the CPU elemadd + relu
 //#### (the EVTA rounds .5 up, the CPU away from zero: they differ only for negative sums, which the relu makes 0).
 static bool powerOfTwoExp(float r, int *e) {
@@ -3330,9 +3334,24 @@ static bool powerOfTwoExp(float r, int *e) {
   return true;
 }
 
+//#### JO added (2026-10-31): <name>_vbuf (VTA buffer) and <name> (its virtual address) of an activation in the EVTA layout
+static void emitPackedAlloc(const Value *v, std::string *bundle) {
+  bundle->append("  int8_t *");
+  bundle->append(v->getName());
+  bundle->append("_vbuf = (int8_t *)VTABufferAlloc(");
+  bundle->append(std::to_string(v->getSizeInBytes()));
+  bundle->append(");\n");
+  bundle->append("  int8_t *");
+  bundle->append(v->getName());
+  bundle->append(" = (int8_t *)VTABufferGetVirtAddr(");
+  bundle->append(v->getName());
+  bundle->append("_vbuf);\n");
+}
+
 void findResidualFusions(const IRFunction *IR, VTASaveContext *ctx) {
   ctx->getFusions()->clear();
   ctx->getFusedAway()->clear();
+  ctx->getHoisted()->clear();
   if (!vtaFuseResidual || ctx->getPacked()->empty())
     return;
   std::vector<const Instruction *> ins;
@@ -3352,7 +3371,7 @@ void findResidualFusions(const IRFunction *IR, VTASaveContext *ctx) {
   }
   auto next = [&](size_t i) {
     for (i++; i < ins.size(); i++)
-      if (!llvm::isa<DeallocActivationInst>(ins[i]))
+      if (!llvm::isa<DeallocActivationInst>(ins[i]) && !llvm::isa<AllocActivationInst>(ins[i]))
         return i;
     return ins.size();
   };
@@ -3381,7 +3400,10 @@ void findResidualFusions(const IRFunction *IR, VTASaveContext *ctx) {
     if (!ctx->isPacked(R) || !ctx->isPacked(O) || !ctx->isPacked(O2) || O2 == C->getSrc() ||
         O->dims() != D->dims() || O2->dims() != D->dims() || R->dims() != D->dims())
       continue;
-    if (O2 != D && O2 != R && (!allocAt.count(O2) || allocAt[O2] > i))
+    if (O2 != D && O2 != R && !allocAt.count(O2))
+      continue;
+    bool hoist = O2 != D && O2 != R && allocAt[O2] > i;
+    if (hoist && allocAt[O2] > k)
       continue;
     if (D != O && D != O2 && users[D] != 2) // C, E
       continue;
@@ -3396,7 +3418,7 @@ void findResidualFusions(const IRFunction *IR, VTASaveContext *ctx) {
         !powerOfTwoExp(tR->getScale() / tO->getScale(), &eR))
       continue;
     int m = std::max(0, std::max(-eD, -eR));
-    ResidualFusion f = {R, O2, m + eD, m + eR, m};
+    ResidualFusion f = {R, O2, m + eD, m + eR, m, hoist};
     if (f.convShl > 8 || f.resShl > 6 || f.sumShr > 15)
       continue;
     (*ctx->getFusions())[C] = f;
@@ -5308,6 +5330,10 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
     switch (I.getKind()) {
     case Kinded::Kind::ConvolutionInstKind: {
       auto I2 = llvm::cast<ConvolutionInst>(&I);
+      //#### JO added (2026-10-31): the dest of the relu of a fused conv, allocated after the conv in the IR
+      if (auto *fu = ctx.getFusion(I2))
+        if (fu->hoistOut && ctx.getHoisted()->insert(fu->out).second)
+          emitPackedAlloc(fu->out, &bundle);
       saveConvolutionInst(I2, &bundle, &initConst, &ctx);
       break;
     }
@@ -5325,17 +5351,11 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
       auto I2 = llvm::cast<AllocActivationInst>(&I);
 #ifndef VTA_MEMOPT_DISABLE
       //#### JO added (2026-10-31): an activation kept in the EVTA layout is a VTA buffer
-      if (ctx.isPacked(I2)) {
-        bundle.append("  int8_t *");
-        bundle.append(I2->getName());
-        bundle.append("_vbuf = (int8_t *)VTABufferAlloc(");
-        bundle.append(std::to_string(I2->getSizeInBytes()));
-        bundle.append(");\n");
-        bundle.append("  int8_t *");
-        bundle.append(I2->getName());
-        bundle.append(" = (int8_t *)VTABufferGetVirtAddr(");
-        bundle.append(I2->getName());
-        bundle.append("_vbuf);\n");
+      //#### JO changed (2026-10-31): not again if a fused conv emitted it before (ResidualFusion::hoistOut)
+      if (ctx.getHoisted()->count(I2)) {
+        bundle.append("  // allocated before the fused conv\n");
+      } else if (ctx.isPacked(I2)) {
+        emitPackedAlloc(I2, &bundle);
       } else {
         bundle.append("  int8_t *");
         bundle.append(I2->getName());
