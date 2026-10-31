@@ -4,6 +4,7 @@ set -u
 cd "$(dirname "$0")/.."
 BIN=${BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_380mhz.bin}
 SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz.bin}
+export OMP_NUM_THREADS=${OMP_NUM_THREADS:-1}
 [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
 exec 9>/tmp/evta_run.lock; flock -n 9 || { echo "another EVTA run is active (/tmp/evta_run.lock)"; exit 1; }
 ONLY="$*"
