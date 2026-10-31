@@ -114,8 +114,16 @@ for D in "$@"; do
   #### JO added (2026-10-29): _prof logs: runs, VTA time per run and GOPS (ops from the bundle .cpp; ../prof_summary.py)
   #### JO changed (2026-10-29): <log>.sum owned like the Dir (run_prof.sh runs as root), group/others read only
   # ps=""; grep -q '^VTA_SYNC' $D/$LOG && { python3 ../prof_summary.py $D $D/$LOG > $D/$LOG.sum 2>&1; cat $D/$LOG.sum; ps=$(tail -1 $D/$LOG.sum); }
-  ps=""; grep -q 'VTA_SYNC' $D/$LOG && { python3 ../prof_summary.py $D $D/$LOG > $D/$LOG.sum 2>&1; chown --reference=$D $D/$LOG.sum
-                                          chmod 644 $D/$LOG.sum; cat $D/$LOG.sum; ps=$(tail -1 $D/$LOG.sum); }
+  #### JO changed (2026-10-31): SUM: lines of prof_summary.py; one -> on the summary line, several (multi-EVTA) -> a line each below it
+  # ps=""; grep -q 'VTA_SYNC' $D/$LOG && { python3 ../prof_summary.py $D $D/$LOG > $D/$LOG.sum 2>&1; chown --reference=$D $D/$LOG.sum
+  #                                         chmod 644 $D/$LOG.sum; cat $D/$LOG.sum; ps=$(tail -1 $D/$LOG.sum); }
+  ps=""; more=""
+  if grep -q 'VTA_SYNC' $D/$LOG; then
+    python3 ../prof_summary.py $D $D/$LOG > $D/$LOG.sum 2>&1; chown --reference=$D $D/$LOG.sum; chmod 644 $D/$LOG.sum
+    grep -v '^SUM: ' $D/$LOG.sum
+    if [ "$(grep -c '^SUM: ' $D/$LOG.sum)" = 1 ]; then ps=$(sed -n 's/^SUM: //p' $D/$LOG.sum)
+    else more=$(sed -n 's/^SUM: /    /p' $D/$LOG.sum); fi
+  fi
   # summary: total of the last run (_timed) or the VTA total_time line (_prof)
   #### JO changed: a partitioned bundle prints one timing table per VTA partition .cpp -> sum the last run of each
   # t=$(grep -E "^run #[0-9]+: total" $D/$LOG | tail -1 | sed "s/, statements.*//"); [ -n "$t" ] || t=$(grep -m1 total_time $D/$LOG)
@@ -135,7 +143,6 @@ for D in "$@"; do
                                                  [ -n "$e" ] && t="$t; $e"; }
   #### JO added (2026-10-31): _timed: whole-run ms of every run (timing csv), then the median of runs 2..n and its GOPS
   #### (../run_times.py); the per-run line goes to the output, the medians to the summary
-  more=""
   if grep -q 'per statement and run:' $D/$LOG; then
     python3 ../run_times.py $D $D/$LOG > $D/$LOG.runs 2>&1; chown --reference=$D $D/$LOG.runs; chmod 644 $D/$LOG.runs
     #### JO changed (2026-10-31): SUM: lines; one -> on the summary line, several (multi-EVTA copies) -> a line each below it

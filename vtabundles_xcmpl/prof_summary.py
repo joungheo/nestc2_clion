@@ -168,7 +168,10 @@ def main():
         sg = sorted(allg)
         res.append(f'{len(conc)} EVTAs at once over the busy union: median {sg[len(sg) // 2]:.2f} GOPS'
                    f' (min {sg[0]:.1f}, max {sg[-1]:.1f}, {runs} runs)')
-    print('; '.join(res))
+    #### JO changed (2026-10-31): one SUM: line per entry (run_prof.sh: one -> on the summary line, several -> a line each below it)
+    # print('; '.join(res))
+    for x in res:
+        print('SUM: ' + x)
 
 
 if __name__ == '__main__':
