@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Whole-run time of every inference of a _timed / _systimed log, then the average and GOPS, printed by hw*/script/run_prof.sh.
+"""Whole-run time of every inference of a _timed / _systimed log, then the median and GOPS, printed by hw*/script/run_prof.sh.
 
 Reads the timing csv(s) the log names ("per statement and run: <csv>", one per timed .cpp, in <Dir>): the
-"total" row of each run and the ops of the statements. Run 1 is the warm-up of the stock mains, so the average
-is over runs 2..n (all runs if there is only one); GOPS = ops of one run / average ms.
-Prints one line per csv; the last line (summary of run_prof.sh) has the averages only.
+"total" row of each run and the ops of the statements. Run 1 is the warm-up of the stock mains, so the median
+is over runs 2..n (all runs if there is only one); GOPS = ops of one run / median ms.
+Prints one line per csv; the last line (summary of run_prof.sh) has the medians only.
 
 usage: run_times.py <Dir> <log>
 #### JO added (2026-10-31)
@@ -39,15 +39,16 @@ def main():
         t, ops = runs_of(p)
         if not t:
             continue
-        avg_runs = t[1:] if len(t) > 1 else t
-        avg = sum(avg_runs) / len(avg_runs)
+        #### JO changed (2026-10-31): median instead of the average (one late run, e.g. without -r, moves the average)
+        rr = t[1:] if len(t) > 1 else t
         rng = f'runs 2-{len(t)}' if len(t) > 1 else 'run 1'
-        g = f', {ops / (avg * 1e6):.2f} GOPS' if ops > 0 else ''
+        sr = sorted(rr)
+        med = sr[len(sr) // 2] if len(sr) % 2 else (sr[len(sr) // 2 - 1] + sr[len(sr) // 2]) / 2
+        g = f', {ops / (med * 1e6):.2f} GOPS' if ops > 0 else ''
         tag = '' if len(names) == 1 else f'{n}: '
         print(f'{tag}whole run ms per run: ' + ' '.join(f'{x:.3f}' for x in t))
-        med = sorted(avg_runs)[len(avg_runs) // 2]
-        print(f'{tag}average {rng}: {avg:.3f} ms (median {med:.3f}, min {min(avg_runs):.3f}, max {max(avg_runs):.3f}){g}')
-        res.append(f'{tag}avg {rng} {avg:.3f} ms{g} (median {med:.3f} ms)')
+        print(f'{tag}median {rng}: {med:.3f} ms (min {sr[0]:.3f}, max {sr[-1]:.3f}){g}')
+        res.append(f'{tag}median {rng} {med:.3f} ms{g}')
     if res:
         print('; '.join(res))
 

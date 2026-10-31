@@ -56,11 +56,11 @@ def table(name, calls, ev):
               + ''.join(f' {o / (x * 1e6) if x > 0 else 0:7.2f}' for x in t) + f'  {node}')
     print(f'{"sum":>3} {ops / 1e6:8.1f}' + ''.join(f' {per[r]:10.3f}' for r in cols)
           + ''.join(f' {ops / (per[r] * 1e6):7.2f}' for r in cols))
-    #### JO added (2026-10-31): VTA ms of every run, then the average of runs 2..n (run 1 = warm-up) and its GOPS
-    av = per[1:] if runs > 1 else per
-    avg = sum(av) / len(av)
+    #### JO added (2026-10-31): VTA ms of every run, then the median of runs 2..n (run 1 = warm-up) and its GOPS
+    av = sorted(per[1:] if runs > 1 else per)
+    avg = av[len(av) // 2] if len(av) % 2 else (av[len(av) // 2 - 1] + av[len(av) // 2]) / 2   # median
     print(f'VTA ms per run: ' + ' '.join(f'{x:.3f}' for x in per))
-    print(f'average runs {"2-" + str(runs) if runs > 1 else "1"}: {avg:.3f} ms (min {min(av):.3f}, max {max(av):.3f}), '
+    print(f'median runs {"2-" + str(runs) if runs > 1 else "1"}: {avg:.3f} ms (min {av[0]:.3f}, max {av[-1]:.3f}), '
           f'{ops / (avg * 1e6):.2f} GOPS')
     # return runs, n, ops, [(r, per[r]) for r in cols]
     return runs, n, ops, [(r, per[r]) for r in cols], avg
@@ -109,12 +109,12 @@ def main():
         last = cols[-1][1]
         rng = f'runs 2-{runs}' if runs > 1 else 'run 1'
         if len(ev) == 1:
-            #### JO changed (2026-10-31): + the average of runs 2..n
+            #### JO changed (2026-10-31): + the median of runs 2..n
             res.append(f'{runs} run(s) x {n} EVTA calls, {ops / 1e6:.1f} Mops per run; VTA ms per run: '
                        + ' / '.join(f'run{c + 1} {p:.3f}' for c, p in cols) + f'; last run {ops / (last * 1e6):.2f} GOPS'
-                       + f'; avg {rng} {avg:.3f} ms {ops / (avg * 1e6):.2f} GOPS')
+                       + f'; median {rng} {avg:.3f} ms {ops / (avg * 1e6):.2f} GOPS')
         else:
-            res.append(f'VTA{k} {runs} runs, last {last:.3f} ms {ops / (last * 1e6):.2f} GOPS, avg {rng} {avg:.3f} ms')
+            res.append(f'VTA{k} {runs} runs, last {last:.3f} ms {ops / (last * 1e6):.2f} GOPS, median {rng} {avg:.3f} ms {ops / (avg * 1e6):.2f} GOPS')
     #### JO added (2026-10-29): EVTAs that ran the same bundle together (multi-EVTA, same runs and calls): per conv of a
     #### run, the window from the first start to the last end over the EVTAs; GOPS = ops of all EVTAs / window
     conc = [k for k in sorted(ev) if len(bydev.get(k, [])) == 1 and len(ev[k]) % len(bydev[k][0][1]) == 0]

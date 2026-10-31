@@ -133,8 +133,8 @@ for D in "$@"; do
   #### JO added (2026-10-29): _timed with one table: EVTA calls / CPU conv/fc of the last run (timed_bundle.py summary)
   [ "$(grep -c '^==== timing' $D/$LOG)" = 1 ] && { e=$(grep '^run #[0-9]* ops:' $D/$LOG | tail -1 | sed 's/^run #[0-9]* ops: //; s/; whole run.*//')
                                                  [ -n "$e" ] && t="$t; $e"; }
-  #### JO added (2026-10-31): _timed: whole-run ms of every run (timing csv), then the average of runs 2..n and its GOPS
-  #### (../run_times.py); the per-run line goes to the output, the averages to the summary
+  #### JO added (2026-10-31): _timed: whole-run ms of every run (timing csv), then the median of runs 2..n and its GOPS
+  #### (../run_times.py); the per-run line goes to the output, the medians to the summary
   if grep -q 'per statement and run:' $D/$LOG; then
     python3 ../run_times.py $D $D/$LOG > $D/$LOG.runs 2>&1; chown --reference=$D $D/$LOG.runs; chmod 644 $D/$LOG.runs
     cat $D/$LOG.runs; a=$(tail -1 $D/$LOG.runs); [ -n "$a" ] && t="$t; $a"
