@@ -31,8 +31,9 @@ def is_evta(call):
 
 
 def runs_of(path):
-    """{run: total ms}, {run: [(start, ms)] of the EVTA calls}, ops of one run, EVTA ops of one run."""
-    tot, conv, ops, eops = {}, {}, 0.0, 0.0
+    """{run: total ms}, {run: [(start, ms)] of the EVTA calls}, ops of one run, EVTA ops of one run,
+    {run: ms of the CPU conv/fc calls}, ops of the CPU conv/fc calls of one run."""
+    tot, conv, ops, eops, cpu, cops = {}, {}, 0.0, 0.0, {}, 0.0
     for row in csv.DictReader(open(path)):
         r = int(row['run'])
         if row['idx'] == '-1':
@@ -40,11 +41,16 @@ def runs_of(path):
             continue
         if is_evta(row['call']):
             conv.setdefault(r, []).append((float(row['start_ms']), float(row['ms'])))
+        #### JO added (2026-10-31): CPU conv/fc = statements with ops that are not EVTA calls (timed_bundle.py)
+        elif row['ops'] and float(row['ops']) > 0:
+            cpu[r] = cpu.get(r, 0.0) + float(row['ms'])
         if r == 1 and row['ops']:
             ops += float(row['ops'])
             if is_evta(row['call']):
                 eops += float(row['ops'])
-    return tot, conv, ops, eops
+            else:
+                cops += float(row['ops'])
+    return tot, conv, ops, eops, cpu, cops
 
 
 def union(iv):
@@ -86,9 +92,9 @@ def main():
     for n in names:
         p = os.path.join(d, n)
         if os.path.isfile(p):
-            tot, conv, ops, eops = runs_of(p)
+            tot, conv, ops, eops, cpu, cops = runs_of(p)
             if tot:
-                cps.append((n, tot, conv, ops, eops))
+                cps.append((n, tot, conv, ops, eops, cpu, cops))
     if not cps:
         return
     #### JO added (2026-10-31): copies in EVTA order (<name>.cpp = EVTA 0, <name>_<i>.cpp = EVTA i), not the order they finished
@@ -98,7 +104,7 @@ def main():
     cps.sort(key=copy_no)
     res = []
     multi = len(cps) > 1
-    for n, tot, conv, ops, eops in cps:
+    for n, tot, conv, ops, eops, cpu, cops in cps:
         rs = sorted(tot)
         rng = f'runs 2-{len(rs)}' if len(rs) > 1 else 'run 1'
         tag = f'{n}: ' if multi else ''
@@ -108,12 +114,15 @@ def main():
         print(f'{tag}conv (EVTA calls) ms per run: ' + ' '.join(f'{x:.3f}' for x in cv))
         _, lw, sw = stat('whole run', whole, ops)
         _, lc, sc = stat('conv', cv, eops)
-        print(f'{tag}{rng}: {lw}; {lc}')
+        cc = [cpu.get(r, 0.0) for r in rs]
+        _, lp, sp = stat('cpu conv/fc', cc, cops)
+        print(f'{tag}cpu conv/fc ms per run: ' + ' '.join(f'{x:.3f}' for x in cc))
+        print(f'{tag}{rng}: {lw}; {lc}; {lp}')
         #### JO changed (2026-10-31): every copy in the summary too (first), the copies at once after them
         # if not multi:
         #     res.append(f'{rng}: {sw}; {sc}')
         cp = re.sub(r'^timing_?|\.csv$', '', n) or 'timing'
-        res.append(f'{cp + " " if multi else ""}{rng}: {sw}; {sc}')
+        res.append(f'{cp + " " if multi else ""}{rng}: {sw}; {sc}' + (f'; {sp}' if cops > 0 else ''))
     #### copies at once: the same runs in every csv
     if multi and len(set(tuple(sorted(c[1])) for c in cps)) == 1:
         rs = sorted(cps[0][1])
@@ -124,6 +133,9 @@ def main():
         whole = [max(c[1][r] for c in cps) for r in rs]
         cu = [union([iv for c in cps for iv in c[2].get(r, [])]) for r in rs]
         cs = [sum(m for c in cps for _, m in c[2].get(r, [])) for r in rs]
+        #### CPU conv/fc of the copies run on their own cores at once: the slowest copy per run
+        cops = sum(c[6] for c in cps)
+        cc = [max(c[5].get(r, 0.0) for c in cps) for r in rs]
         print(f'---- {k} copies at once ----')
         print(f'whole run (slowest copy) ms per run: ' + ' '.join(f'{x:.3f}' for x in whole))
         print(f'conv busy union of the {k} EVTAs ms per run: ' + ' '.join(f'{x:.3f}' for x in cu))
@@ -131,10 +143,11 @@ def main():
         _, lc, sc = stat(f'conv x{k} (busy union)', cu, eops)
         mu = median(cu[1:] if len(cu) > 1 else cu)
         mo = median(cs[1:] if len(cs) > 1 else cs) / mu if mu > 0 else 0.0
-        print(f'{rng}: {lw}; {lc}; {mo:.2f} EVTAs at once on average')
+        _, lp, sp = stat(f'cpu conv/fc x{k} (slowest copy)', cc, cops)
+        print(f'{rng}: {lw}; {lc}; {lp}; {mo:.2f} EVTAs at once on average')
         print(f'  ({ops / 1e6:.1f} Mops per run of all copies, of which EVTA {eops / 1e6:.1f}; lockstep (-l): '
               f'{"on" if lock else "off"})')
-        res.append(f'{k} copies{" lockstep" if lock else ""}, {rng}: {sw}; {sc}')
+        res.append(f'{k} copies{" lockstep" if lock else ""}, {rng}: {sw}; {sc}' + (f'; {sp}' if cops > 0 else ''))
     elif multi:
         res.append('copies with different runs: no combined numbers')
     #### JO changed (2026-10-31): one "SUM: " line per item (run_prof.sh: one csv -> on the summary line, several -> one
