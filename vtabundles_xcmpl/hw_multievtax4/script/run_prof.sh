@@ -135,15 +135,21 @@ for D in "$@"; do
                                                  [ -n "$e" ] && t="$t; $e"; }
   #### JO added (2026-10-31): _timed: whole-run ms of every run (timing csv), then the median of runs 2..n and its GOPS
   #### (../run_times.py); the per-run line goes to the output, the medians to the summary
+  more=""
   if grep -q 'per statement and run:' $D/$LOG; then
     python3 ../run_times.py $D $D/$LOG > $D/$LOG.runs 2>&1; chown --reference=$D $D/$LOG.runs; chmod 644 $D/$LOG.runs
-    cat $D/$LOG.runs; a=$(tail -1 $D/$LOG.runs); [ -n "$a" ] && t="$t; $a"
+    #### JO changed (2026-10-31): SUM: lines; one -> on the summary line, several (multi-EVTA copies) -> a line each below it
+    # cat $D/$LOG.runs; a=$(tail -1 $D/$LOG.runs); [ -n "$a" ] && t="$t; $a"
+    grep -v '^SUM: ' $D/$LOG.runs
+    if [ "$(grep -c '^SUM: ' $D/$LOG.runs)" = 1 ]; then t="$t; $(sed -n 's/^SUM: //p' $D/$LOG.runs)"
+    else more=$(sed -n 's/^SUM: /    /p' $D/$LOG.runs); fi
   fi
   #### JO changed: executable column, end of the per-line loop
   # printf "%-30s exit=%-3s %-10s %s\n" $D $rc "$res" "$t" >> $SUM
   #### JO changed (2026-10-31): + omp=<OMP_NUM_THREADS>
   # printf "%-30s %-34s exit=%-3s %-10s %s\n" $D $EXE $rc "$res" "$t" >> $SUM
   printf "%-30s %-34s exit=%-3s omp=%-2s %-10s %s\n" $D $EXE $rc $OMP "$res" "$t" >> $SUM
+  [ -n "$more" ] && echo "$more" >> $SUM
   done 3< <(grep -E "^run $D " $RUN_ALL)
 done
 echo; echo "== summary ($SUM)"; cat $SUM

@@ -12,7 +12,7 @@ barrier of the copies, multi_threads_main.cpp): per run
               run), GOPS = EVTA ops of all copies / union.
 Lockstep (run_prof.sh -l) makes every conv start on all EVTAs together: the conv GOPS is then that of the EVTAs
 at once, while the whole run gets slower by the waits; measure the throughput (whole run) without -l.
-The last line (summary of run_prof.sh) has the medians only.
+The SUM: lines (summary of run_prof.sh) have the medians only, the copies at once last.
 
 usage: run_times.py <Dir> <log>
 #### JO added (2026-10-31)
@@ -137,7 +137,11 @@ def main():
         res.append(f'{k} copies{" lockstep" if lock else ""}, {rng}: {sw}; {sc}')
     elif multi:
         res.append('copies with different runs: no combined numbers')
-    print('; '.join(res))
+    #### JO changed (2026-10-31): one "SUM: " line per item (run_prof.sh: one csv -> on the summary line, several -> one
+    #### line each under it, the copies at once last)
+    # print('; '.join(res))
+    for r in res:
+        print('SUM: ' + r)
 
 
 if __name__ == '__main__':
