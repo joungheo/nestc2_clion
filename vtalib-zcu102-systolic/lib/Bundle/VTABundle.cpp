@@ -3075,6 +3075,174 @@ int convolution_wo_tr_res(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *
 }
 
 
+//#### JO added (2026-10-31): max pool on the EVTA (maxpool_evta), for an input >= 0 (the output of a conv with relu).
+//#### Input and output in the EVTA layout N{C/16}HW16 (VTA buffers). The output is cut into tiles of oh x ow pixels of
+//#### one 16-channel block; a tile LOADs its input window ((oh-1)*s+K) x ((ow-1)*s+K) with the halo (neighbouring
+//#### tiles read the overlapping rows/columns again, the outputs do not overlap) and the zero padding of the image
+//#### border (LOAD pad = 0: the same max as the CPU's in-bounds max because the input is >= 0), moves it into the acc
+//#### buffer with the identity-weight GEMM, sets the output to 0 and takes ALU MAX (acc, acc) over the K x K window
+//#### positions, then STOREs the output. One ALU instruction per window position (a 2-level loop over the output
+//#### pixels, one uop): consecutive uops then write different acc entries, as in the conv's ALU instructions
+//#### (K x K uops in one loop iteration would write the same entry back to back through the ALU pipeline).
+//#### Two tiles at a time in the two halves of inp / acc (load, compute and store of the two overlap).
+struct PoolMaxContext {
+  uint32_t out_, in_, oh_, ow_, iw_, stride_;  // in_ = input entry of window position (dy, dx) of output pixel 0
+  bool operator==(PoolMaxContext &op) {
+    return out_ == op.out_ && in_ == op.in_ && oh_ == op.oh_ && ow_ == op.ow_ && iw_ == op.iw_ &&
+           stride_ == op.stride_;
+  }
+};
+int alu_poolmax(void *param, VTACommandHandle cmdh) {
+  PoolMaxContext *p = (PoolMaxContext *)(param);
+  VTAUopLoopBegin(cmdh, p->oh_, p->ow_, p->stride_ * p->iw_, 0);
+  VTAUopLoopBegin(cmdh, p->ow_, 1, p->stride_, 0);
+  VTAUopPush(cmdh, 1, 0, p->out_, p->in_, 0, RES_ALU_MAX, 0, 0);
+  VTAUopLoopEnd(cmdh);
+  VTAUopLoopEnd(cmdh);
+  return 0;
+}
+struct PoolMaxUopHandle {
+  PoolMaxContext ctx;
+  void *uopHandle[2];
+  PoolMaxUopHandle() { uopHandle[0] = nullptr; }
+};
+std::vector<PoolMaxUopHandle *> vPoolMaxUopHandle[4];
+
+static void pushReset(VTACommandHandle &cmdh, uint32_t idEVTA, uint32_t base, uint32_t size) {
+  ResetAcc reset;
+  reset.base_ = base;
+  reset.size_ = size;
+  void **h = nullptr;
+  for (auto u : vResetUopHandle[idEVTA])
+    if (u->strReset == reset) { h = u->uopHandle_reset; break; }
+  if (!h) {
+    auto u = new ResetUopHandle();
+    u->strReset = reset;
+    h = u->uopHandle_reset;
+    vResetUopHandle[idEVTA].push_back(u);
+  }
+  VTAPushGEMMOp(cmdh, h, &reset_acc, &reset, 0);
+}
+
+static void pushPoolMax(VTACommandHandle &cmdh, uint32_t idEVTA, const PoolMaxContext &c) {
+  PoolMaxContext ctx = c;
+  void **h = nullptr;
+  for (auto u : vPoolMaxUopHandle[idEVTA])
+    if (u->ctx == ctx) { h = u->uopHandle; break; }
+  if (!h) {
+    auto u = new PoolMaxUopHandle();
+    u->ctx = ctx;
+    h = u->uopHandle;
+    vPoolMaxUopHandle[idEVTA].push_back(u);
+  }
+  VTAPushALUOp(cmdh, h, &alu_poolmax, &ctx, 0);
+}
+
+static int maxpool_evta_run(int8_t *input, int8_t *output, int H, int W, int C, int K, int pad, int stride,
+                            VTACommandHandle vtaCmdH, uint32_t idEVTA) {
+  const uint32_t ACC_HALF = 2048 / 2, INP_HALF = 2048 / 2;  // as conv_kernel (ACC_MEM_ENTRY, INP_MEM_ENTRY)
+  const int OH = (H + 2 * pad - K) / stride + 1, OW = (W + 2 * pad - K) / stride + 1;
+  // the largest tile (full rows first) whose input window and output fit one half of acc (and of inp)
+  int ow = OW, oh = 0;
+  for (; ow > 0; ow--) {
+    uint32_t iw = (ow - 1) * stride + K;
+    for (oh = OH; oh > 0; oh--) {
+      uint32_t ih = (oh - 1) * stride + K;
+      if (ih * iw <= INP_HALF && ih * iw + oh * ow <= ACC_HALF)
+        break;
+    }
+    if (oh > 0)
+      break;
+  }
+  if (ow == 0)
+    return -1;
+  struct Tile { int cb, oy, ox, oh, ow; };
+  std::vector<Tile> tiles;
+  for (int cb = 0; cb < C / 16; cb++)
+    for (int oy = 0; oy < OH; oy += oh)
+      for (int ox = 0; ox < OW; ox += ow)
+        tiles.push_back({cb, oy, ox, std::min(oh, OH - oy), std::min(ow, OW - ox)});
+
+  VTASetDebugMode(vtaCmdH, 0);
+  VTALoadBuffer2D(vtaCmdH, getIdentityWeights(idEVTA), 0, 1, 1, 1, 0, 0, 0, 0, RES_WGT_ENTRY, 1);
+  for (size_t g = 0; g < tiles.size(); g += 2) {
+    size_t n = std::min<size_t>(2, tiles.size() - g);
+    for (size_t t = 0; t < n; t++)
+      VTADepPush(vtaCmdH, 2, 1);
+    for (size_t t = 0; t < n; t++) {
+      const Tile &T = tiles[g + t];
+      int iw = (T.ow - 1) * stride + K, ih = (T.oh - 1) * stride + K;
+      int y0 = T.oy * stride - pad, x0 = T.ox * stride - pad;
+      int yb = std::max(0, -y0), xb = std::max(0, -x0);
+      int ys = std::min(H, y0 + ih) - std::max(0, y0), xs = std::min(W, x0 + iw) - std::max(0, x0);
+      VTADepPop(vtaCmdH, 2, 1);
+      VTALoadBuffer2D(vtaCmdH, input, (uint32_t)(T.cb * H * W + std::max(0, y0) * W + std::max(0, x0)), xs, ys, W,
+                      xb, yb, iw - xb - xs, ih - yb - ys, t * INP_HALF, 2);
+      VTADepPush(vtaCmdH, 1, 2);
+    }
+    for (size_t t = 0; t < n; t++) {
+      const Tile &T = tiles[g + t];
+      uint32_t iw = (T.ow - 1) * stride + K, ih = (T.oh - 1) * stride + K;
+      uint32_t aIn = t * ACC_HALF, aOut = aIn + ih * iw;
+      VTADepPop(vtaCmdH, 1, 2);
+      pushReset(vtaCmdH, idEVTA, aIn, ih * iw + T.oh * T.ow);
+      pushResGemm(vtaCmdH, idEVTA, aIn, t * INP_HALF, ih * iw);
+      for (int dy = 0; dy < K; dy++)
+        for (int dx = 0; dx < K; dx++)
+          pushPoolMax(vtaCmdH, idEVTA, {aOut, aIn + dy * iw + dx, (uint32_t)T.oh, (uint32_t)T.ow, iw, (uint32_t)stride});
+      VTADepPush(vtaCmdH, 2, 3);
+    }
+    for (size_t t = 0; t < n; t++) {
+      const Tile &T = tiles[g + t];
+      uint32_t iw = (T.ow - 1) * stride + K, ih = (T.oh - 1) * stride + K;
+      VTADepPop(vtaCmdH, 2, 3);
+      VTAStoreBuffer2D(vtaCmdH, t * ACC_HALF + ih * iw, 4, output, (uint32_t)(T.cb * OH * OW + T.oy * OW + T.ox),
+                       T.ow, T.oh, OW);
+      VTADepPush(vtaCmdH, 3, 2);
+    }
+    for (size_t t = 0; t < n; t++)
+      VTADepPop(vtaCmdH, 3, 2);
+  }
+  VTASynchronize(vtaCmdH, 1 << 31);
+  return 0;
+}
+
+int maxpool_evta(int8_t *input, int8_t *output, int N, int H, int W, int C, int KH, int KW, int pad_size,
+                 int stride_size, void *vtaCmdH, uint32_t idEVTA) {
+  if (N != 1 || C % 16 || KH != KW) {
+    printf("maxpool_evta: unsupported N %d C %d kernel %dx%d\n", N, C, KH, KW);
+    return -1;
+  }
+  int rc = maxpool_evta_run(input, output, H, W, C, KH, pad_size, stride_size, (VTACommandHandle)vtaCmdH, idEVTA);
+  if (rc)
+    printf("maxpool_evta: window does not fit the buffers (%dx%d, kernel %d, stride %d)\n", H, W, KH, stride_size);
+  //#### EVTA_RES_CHECK=1: compare with the CPU maxpool (16-channel blocks as the batch)
+  const char *e = getenv("EVTA_RES_CHECK");
+  if (!rc && e && atoi(e) > 0) {
+    int OH = (H + 2 * pad_size - KH) / stride_size + 1, OW = (W + 2 * pad_size - KW) / stride_size + 1;
+    size_t ni = (size_t)H * W * C, no = (size_t)OH * OW * C;
+    VTABufferInvalidate(input, 0, ni);
+    VTABufferInvalidate(output, 0, no);
+    std::vector<int8_t> ref(no);
+    maxpool((int8_t *)VTABufferGetVirtAddr(input), ref.data(), C / 16, H, W, 16, KH, KW, pad_size, stride_size);
+    const int8_t *o = (const int8_t *)VTABufferGetVirtAddr(output);
+    size_t bad = 0, first = no;
+    for (size_t i = 0; i < no; i++)
+      if (o[i] != ref[i]) {
+        if (!bad)
+          first = i;
+        bad++;
+      }
+    printf("EVTA_RES_CHECK maxpool %dx%dx%d k%d s%d p%d: %zu of %zu differ", H, W, C, KH, stride_size, pad_size, bad,
+           no);
+    if (bad)
+      printf(" (first at %zu: evta %d, cpu %d)", first, o[first], ref[first]);
+    printf("\n");
+  }
+  return rc;
+}
+
+
 int convolution_wo_tr_scale(int8_t* input, int8_t *kernel, int32_t *bias, int32_t *scalingfactor, int8_t *output, int N, int H, int W, int C, int KN, int KH, int KW, int pad_size,
                       int stride_size, bool doRelu, bool doBias, uint8_t shift, int out_h, int out_w, void* vtaCmdH, int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA) {
 

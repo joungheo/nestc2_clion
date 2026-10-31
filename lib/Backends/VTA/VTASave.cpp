@@ -53,6 +53,13 @@ static llvm::cl::opt<bool> vtaFuseResidual(
     //#### default on since the board check (2026-10-31: bit-exact, docs/evta_runtime_compare.md 7.2)
     llvm::cl::init(true));
 
+//#### JO added (2026-10-31): max pool on the EVTA (maxpool_evta) when its input is >= 0 (findEvtaMaxPools)
+static llvm::cl::opt<bool> vtaEvtaMaxPool(
+    "vta-evta-maxpool",
+    llvm::cl::desc("Run a max pool of an activation in the EVTA layout whose "
+                   "producer ends with relu on the EVTA (maxpool_evta)"),
+    llvm::cl::init(false));
+
 namespace vta_save{
 
 //#### JO added (2026-10-31): an EVTA conv that also does the elementadd and the relu after it
@@ -94,6 +101,8 @@ public:
   }
   bool isFusedAway(const Instruction *I) const { return fusedAway.count(I) != 0; }
   std::set<const Value *> *getHoisted() { return &hoisted; }
+  std::set<const Instruction *> *getEvtaMaxPools() { return &evtaMaxPools; }
+  bool isEvtaMaxPool(const Instruction *I) const { return evtaMaxPools.count(I) != 0; }
 
 private:
   IRFunction::VariableMap *variable_map;
@@ -108,6 +117,7 @@ private:
   std::map<const Instruction *, ResidualFusion> fusions;
   std::set<const Instruction *> fusedAway;
   std::set<const Value *> hoisted; // allocations already emitted before a fused conv
+  std::set<const Instruction *> evtaMaxPools; // max pools run by maxpool_evta
 };
 
 struct SymbolTableEntry {
@@ -3428,6 +3438,49 @@ void findResidualFusions(const IRFunction *IR, VTASaveContext *ctx) {
   }
 }
 
+//#### JO added (2026-10-31): max pools run on the EVTA (-vta-evta-maxpool, maxpool_evta): input and output in the EVTA
+//#### layout, N = 1, square kernel, equal pads and strides, and the input >= 0: the instruction that last wrote it
+//#### before the pool is an EVTA conv (also the zero-filled conv0) with relu, a fused conv + elementadd + relu, or a relu (the EVTA LOAD pads with
+//#### 0, which then gives the CPU's max over the in-bounds window).
+void findEvtaMaxPools(const IRFunction *IR, VTASaveContext *ctx) {
+  ctx->getEvtaMaxPools()->clear();
+  if (!vtaEvtaMaxPool || ctx->getPacked()->empty())
+    return;
+  std::map<const Value *, const Instruction *> writer;
+  for (const auto &I : IR->getInstrs()) {
+    if (auto *P = llvm::dyn_cast<MaxPoolInst>(&I)) {
+      auto src = P->getSrc(), dest = P->getDest();
+      auto k = P->getKernels(), pads = P->getPads(), st = P->getStrides();
+      bool nonneg = false;
+      if (writer.count(src)) {
+        auto *W = writer[src];
+        if (auto *C = llvm::dyn_cast<ConvolutionInst>(W))
+          //#### FirstBNN: the zero-filled image conv0 (also an EVTA conv, convolution_wo_tr)
+          nonneg = (getConvPath(C) == ConvPath::VTA || getConvPath(C) == ConvPath::FirstBNN) &&
+                   (C->getFusedActivation() == RELU || ctx->getFusion(C));
+        else if (llvm::isa<ReluInst>(W))
+          nonneg = true;
+      }
+      bool sq = k.size() == 2 && k[0] == k[1] && st.size() == 2 && st[0] == st[1];
+      for (auto p : pads)
+        sq = sq && p == pads[0];
+      if (nonneg && sq && ctx->isPacked(src) && ctx->isPacked(dest) && src->dims()[0] == 1 &&
+          src->getType()->getScale() == dest->getType()->getScale() && !src->getType()->getOffset() &&
+          !dest->getType()->getOffset())
+        ctx->getEvtaMaxPools()->insert(P);
+    }
+    for (const auto &op : I.getOperands())
+      if (op.second != OperandKind::In) {
+        //#### a fused conv writes the relu dest, not its own dest
+        const Instruction *w = &I;
+        writer[op.first] = w;
+      }
+    if (auto *C = llvm::dyn_cast<ConvolutionInst>(&I))
+      if (auto *fu = ctx->getFusion(C))
+        writer[fu->out] = C;
+  }
+}
+
 void saveBNNConvolutionInst(const glow::BNNConvolutionInst *Inst,
                             std::string *bundle,
                             std::string *initConst,
@@ -3784,6 +3837,31 @@ void saveMaxPoolInst(const glow::MaxPoolInst *Inst, std::string *bundle,
 
   int pad_size = pad[0];
   int stride_size = strides[0];
+  //#### JO added (2026-10-31): on the EVTA (findEvtaMaxPools)
+  if (ctx->isEvtaMaxPool(Inst)) {
+    uint32_t idx = ctx->getIdxMultiEVTA();
+    bundle->append("  maxpool_evta(");
+    bundle->append(src->getName());
+    bundle->append("_vbuf, ");
+    bundle->append(dest->getName());
+    bundle->append("_vbuf, ");
+    for (int v : {N, H, W, C, KH, KW, pad_size, stride_size}) {
+      bundle->append(std::to_string(v));
+      bundle->append(", ");
+    }
+    bundle->append("vtaCmdH");
+    if (idx)
+      bundle->append(std::to_string(idx));
+    bundle->append(", ");
+    bundle->append(std::to_string(idx));
+    bundle->append(");\n");
+    bundle->append("  VTABufferInvalidate(");
+    bundle->append(dest->getName());
+    bundle->append("_vbuf, 0, ");
+    bundle->append(std::to_string(dest->getSizeInBytes()));
+    bundle->append(");\n");
+    return;
+  }
   //#### JO added (2026-10-31): EVTA layout N{C/16}HW16 = NHWC with the 16-channel blocks as the batch
   if (ctx->isPacked(src)) {
     N = N * C / 16;
@@ -5305,6 +5383,7 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
   initBundleSave(bundleCtx, bundleName, mainEntryName);
   findPackedActivations(IR.get(), &ctx);
   findResidualFusions(IR.get(), &ctx);
+  findEvtaMaxPools(IR.get(), &ctx);
 
   for (const auto &I : IR->getInstrs()) {
 
@@ -5489,10 +5568,11 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
     }
     //#### JO added (2026-10-31): a CPU op that wrote an activation kept in the EVTA layout flushes it
     //#### for the EVTA (non-coherent; the EVTA conv invalidates its output for the CPU)
-    if (I.getKind() == Kinded::Kind::ElementAddInstKind ||
-        I.getKind() == Kinded::Kind::ReluInstKind ||
-        I.getKind() == Kinded::Kind::MaxPoolInstKind ||
-        I.getKind() == Kinded::Kind::AvgPoolInstKind) {
+    if ((I.getKind() == Kinded::Kind::ElementAddInstKind ||
+         I.getKind() == Kinded::Kind::ReluInstKind ||
+         I.getKind() == Kinded::Kind::MaxPoolInstKind ||
+         I.getKind() == Kinded::Kind::AvgPoolInstKind) &&
+        !ctx.isEvtaMaxPool(&I)) {
       for (const auto &op : I.getOperands()) {
         if (op.second != OperandKind::In && ctx.isPacked(op.first)) {
           bundle.append("  VTABufferFlush(");
