@@ -2,6 +2,10 @@
 #include <cstring>
 #include <vector>
 #include <memory>
+#include <cstdlib>
+#include <map>
+#include <mutex>
+#include <unordered_map>
 
 #include <vta/driver.h>
 #include <vta/hw_spec.h>
@@ -13,12 +17,55 @@
 #include "uop_kernel.h"
 #include "api.h"
 
+//#### JO added (2026-11-01): VTABufferFree keeps the buffer in a free list by size and VTABufferAlloc of the same size
+//#### takes it from there, so a bundle that allocates the same buffers in every run (activations, 23 per Resnet18 run,
+//#### 2.6 ms of cma_alloc / cma_free ioctls) only calls cma_alloc in its first run. A reused buffer keeps the data of
+//#### its last user (cma_alloc does not clear either). At most EVTA_BUF_POOL_MB (default 32) MB are kept, the rest is
+//#### freed; EVTA_BUF_POOL_MB=0 frees at once as before. The kept buffers are released when the process exits.
+static std::mutex buf_pool_mutex;
+static std::multimap<size_t, vta::DataBuffer*> buf_pool;     // free buffers by size
+static std::unordered_map<vta::DataBuffer*, size_t> buf_size; // size of every buffer from VTABufferAlloc
+static size_t buf_pool_bytes = 0;
+
+static size_t BufPoolLimit() {
+  static size_t limit = [] {
+    const char* e = getenv("EVTA_BUF_POOL_MB");
+    return (size_t)(e ? atoi(e) : 32) << 20;
+  }();
+  return limit;
+}
+
 void* VTABufferAlloc(size_t size) {
-  return vta::DataBuffer::Alloc(size);
+  {
+    std::lock_guard<std::mutex> lock(buf_pool_mutex);
+    auto it = buf_pool.find(size);
+    if (it != buf_pool.end()) {
+      vta::DataBuffer* b = it->second;
+      buf_pool.erase(it);
+      buf_pool_bytes -= size;
+      return b;
+    }
+  }
+  vta::DataBuffer* b = vta::DataBuffer::Alloc(size);
+  std::lock_guard<std::mutex> lock(buf_pool_mutex);
+  buf_size[b] = size;
+  return b;
 }
 
 void VTABufferFree(void* buffer) {
-  vta::DataBuffer::Free(vta::DataBuffer::FromHandle(buffer));
+  vta::DataBuffer* b = vta::DataBuffer::FromHandle(buffer);
+  {
+    std::lock_guard<std::mutex> lock(buf_pool_mutex);
+    auto it = buf_size.find(b);
+    if (it != buf_size.end() && buf_pool_bytes + it->second <= BufPoolLimit()) {
+      buf_pool.emplace(it->second, b);
+      buf_pool_bytes += it->second;
+      return;
+    }
+    if (it != buf_size.end())
+      buf_size.erase(it);
+  }
+  vta::DataBuffer::Free(b);
 }
 
 void VTABufferCopy(const void* from,
