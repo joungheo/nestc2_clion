@@ -13,9 +13,6 @@ LOG() { echo $1.log; }  # log name for executable $1
 run() {  # dir exe input golden
   [ -n "$ONLY" ] && [[ " $ONLY " != *" $1 "* ]] && return
   echo "================ $1 ($2)"
-  #### JO changed (2026-11-01): record the loaded bitstream in /tmp/evta_bitstream (vtalib's pynq_driver.cc checks the
-  #### EVTA count of its name before mapping the registers: a missing EVTA is an SError, not a clean error)
-  # echo 0 > /sys/class/fpga_manager/fpga0/flags; echo $BIN > /sys/class/fpga_manager/fpga0/firmware
   echo 0 > /sys/class/fpga_manager/fpga0/flags
   if echo $BIN > /sys/class/fpga_manager/fpga0/firmware || { sleep 5; echo $BIN > /sys/class/fpga_manager/fpga0/firmware; } || { sleep 10; echo $BIN > /sys/class/fpga_manager/fpga0/firmware; }; then echo $BIN > /tmp/evta_bitstream
   else echo "FAILED $BIN" > /tmp/evta_bitstream; echo "bitstream $BIN: load failed"; fi
@@ -26,9 +23,6 @@ run() {  # dir exe input golden
   elif [ $rc != 0 ]; then res="FAIL(rc=$rc)"
   elif [ -n "$4" ]; then cmp -s $1/output.bin $1/$4 && res=PASS || res=MISMATCH
   else res="RAN (no golden; see $1/$(LOG $2))"; fi
-  #### JO changed (2026-10-31): multi4conv4 bundles: every EVTA line and the RESULT line (tail -3 cut EVTA0/1),
-  #### the RESULT wall time and GOPS also on the summary line
-  # tail -3 $1/$(LOG $2); printf "%-30s %-34s %s\n" $1 $2 "$res" | tee -a result/results.txt
   r=$(grep -a '^RESULT mask' $1/$(LOG $2) | sed 's/^RESULT mask [^:]*: //; s/, all = golden//')
   if [ -n "$r" ]; then grep -aE '^(EVTA[0-9]+: |RESULT mask)' $1/$(LOG $2); else tail -3 $1/$(LOG $2); fi
   printf "%-30s %-34s %s\n" $1 $2 "$res${r:+  $r}" | tee -a result/results.txt

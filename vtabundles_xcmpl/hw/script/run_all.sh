@@ -13,9 +13,6 @@ LOG() { echo run.log; }  # log name for executable $1
 run() {  # dir exe input golden
   [ -n "$ONLY" ] && [[ " $ONLY " != *" $1 "* ]] && return
   echo "================ $1 ($2)"
-  #### JO changed (2026-11-01): record the loaded bitstream in /tmp/evta_bitstream (vtalib's pynq_driver.cc checks the
-  #### EVTA count of its name before mapping the registers: a missing EVTA is an SError, not a clean error)
-  # echo 0 > /sys/class/fpga_manager/fpga0/flags; echo $BIN > /sys/class/fpga_manager/fpga0/firmware
   echo 0 > /sys/class/fpga_manager/fpga0/flags
   if echo $BIN > /sys/class/fpga_manager/fpga0/firmware || { sleep 5; echo $BIN > /sys/class/fpga_manager/fpga0/firmware; } || { sleep 10; echo $BIN > /sys/class/fpga_manager/fpga0/firmware; }; then echo $BIN > /tmp/evta_bitstream
   else echo "FAILED $BIN" > /tmp/evta_bitstream; echo "bitstream $BIN: load failed"; fi
