@@ -4,6 +4,12 @@
 #include <cstdint>
 #include <fstream>
 #include <vector>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+#if defined(__aarch64__)
+#include <arm_neon.h>
+#endif
 //#### JO added: std::fill in convolutionFloat
 #include <algorithm>
 
@@ -381,41 +387,133 @@ int nonvtaconvolution(int8_t* input, float inputScale, int32_t inputOffset, int8
 //    return 0;
 //
 //}
+//#### JO changed (2026-11-01): cpuFullyConnected reads the kernel rows in order (the kernel is not in the cache after the
+//#### convs: Resnet18 dense 512 x 1000 = 512 KB, the 64-byte pieces 1000 bytes apart did not prefetch). Each thread takes
+//#### a contiguous range of outputs; per FC_KB kernel rows and 64 outputs the sums stay in 16 NEON registers
+//#### (int8 x int8 -> int16 -> int32, exact when both offsets are 0, else scalar), the next FC_KB rows are prefetched.
+//#### Bit-identical (integer sums). Board bench, cold cache: OMP 1 1.92 -> 0.69 ms, OMP 4 0.60 -> 0.23 ms. Previous version:
+//int cpuFullyConnected(int8_t* input, float inputScale, int32_t inputOffset, int8_t *kernel, float kernelScale, int32_t kernelOffset,
+//                         int8_t *bias, float biasScale, int32_t biasOffset, int8_t *output, float outputScale, int32_t outputOffset,
+//                      dim_t inputDim0, dim_t inputDim1, dim_t kernelDim0, dim_t kernelDim1, dim_t outputDim0, dim_t outputDim1, bool doBias) {
+//    // Integer accumulation (order-independent, so results are identical); kernel rows are read
+//    // contiguously (j innermost) and output columns are split over the OpenMP threads.
+//    float matMulScale = inputScale * kernelScale;
+//    const ssize_t J = outputDim1;
+//    for (dim_t i = 0; i < inputDim0; i++) {
+//        const int8_t *a = input + i * inputDim1;
+//#pragma omp parallel
+//        {
+//            std::vector<int32_t> sum;
+//#pragma omp for schedule(static)
+//            for (ssize_t j0 = 0; j0 < J; j0 += 64) {
+//                const ssize_t nj = std::min<ssize_t>(64, J - j0);
+//                sum.assign(nj, 0);
+//                for (dim_t k = 0; k < inputDim1; k++) {
+//                    const int32_t A = (int32_t)a[k] - inputOffset;
+//                    const int8_t *w = kernel + k * kernelDim1 + j0;
+//                    for (ssize_t j = 0; j < nj; j++)
+//                        sum[j] += ((int32_t)w[j] - kernelOffset) * A;
+//                }
+//                for (ssize_t j = 0; j < nj; j++) {
+//                    // Scale the bias to match the scale of the matrix multiplication.
+//                    int32_t B = std::round(float(*((int32_t *)bias + j0 + j) - biasOffset) *
+//                                           (biasScale / matMulScale));
+//                    int32_t s = sum[j] + B;
+//                    // Scale the result back to the expected destination scale.
+//                    int32_t out32 = std::round(float(s) * (matMulScale / outputScale) + outputOffset);
+//                    int8_t out8;
+//                    if(out32>127) out8=127;
+//                    else if(out32<-128) out8=-128;
+//                    else out8=(int8_t)out32;
+//                    *(output + i*outputDim1 + j0 + j) = out8;
+//                }
+//            }
+//        }
+//    }
+//    return 0;
+//}
+static const ssize_t FC_KB = 8;
 int cpuFullyConnected(int8_t* input, float inputScale, int32_t inputOffset, int8_t *kernel, float kernelScale, int32_t kernelOffset,
                          int8_t *bias, float biasScale, int32_t biasOffset, int8_t *output, float outputScale, int32_t outputOffset,
                       dim_t inputDim0, dim_t inputDim1, dim_t kernelDim0, dim_t kernelDim1, dim_t outputDim0, dim_t outputDim1, bool doBias) {
-    // Integer accumulation (order-independent, so results are identical); kernel rows are read
-    // contiguously (j innermost) and output columns are split over the OpenMP threads.
     float matMulScale = inputScale * kernelScale;
-    const ssize_t J = outputDim1;
+    const ssize_t J = outputDim1, K = inputDim1;
     for (dim_t i = 0; i < inputDim0; i++) {
         const int8_t *a = input + i * inputDim1;
 #pragma omp parallel
         {
-            std::vector<int32_t> sum;
-#pragma omp for schedule(static)
-            for (ssize_t j0 = 0; j0 < J; j0 += 64) {
-                const ssize_t nj = std::min<ssize_t>(64, J - j0);
-                sum.assign(nj, 0);
-                for (dim_t k = 0; k < inputDim1; k++) {
+#ifdef _OPENMP
+            const int nt = omp_get_num_threads(), t = omp_get_thread_num();
+#else
+            const int nt = 1, t = 0;
+#endif
+            const ssize_t per = ((J + nt - 1) / nt + 15) / 16 * 16;
+            const ssize_t jb = std::min<ssize_t>(J, t * per), n = std::min<ssize_t>(J, jb + per) - jb;
+            std::vector<int32_t> sum(n, 0);
+            int32_t *s = sum.data();
+#if defined(__aarch64__)
+            const bool vec = inputOffset == 0 && kernelOffset == 0;
+#else
+            const bool vec = false;
+#endif
+            const ssize_t n64 = vec ? n / 64 * 64 : 0, n16 = vec ? n / 16 * 16 : 0;
+            for (ssize_t k0 = 0; k0 < K; k0 += FC_KB) {
+                const ssize_t k1 = std::min<ssize_t>(K, k0 + FC_KB);
+                for (ssize_t k = k1; k < std::min<ssize_t>(K, k1 + FC_KB); k++)
+                    for (ssize_t j = 0; j < n; j += 64)
+                        __builtin_prefetch(kernel + k * kernelDim1 + jb + j);
+#if defined(__aarch64__)
+                for (ssize_t j = 0; j < n64; j += 64) {
+                    int32x4_t c[16];
+                    for (int q = 0; q < 16; q++) c[q] = vld1q_s32(s + j + 4 * q);
+                    for (ssize_t k = k0; k < k1; k++) {
+                        const int8_t *w = kernel + k * kernelDim1 + jb + j;
+                        const int8x8_t av = vdup_n_s8(a[k]);
+                        const int8x16_t avq = vcombine_s8(av, av);
+                        for (int q = 0; q < 4; q++) {
+                            const int8x16_t wv = vld1q_s8(w + 16 * q);
+                            const int16x8_t lo = vmull_s8(vget_low_s8(wv), av), hi = vmull_high_s8(wv, avq);
+                            c[4 * q] = vaddw_s16(c[4 * q], vget_low_s16(lo));
+                            c[4 * q + 1] = vaddw_high_s16(c[4 * q + 1], lo);
+                            c[4 * q + 2] = vaddw_s16(c[4 * q + 2], vget_low_s16(hi));
+                            c[4 * q + 3] = vaddw_high_s16(c[4 * q + 3], hi);
+                        }
+                    }
+                    for (int q = 0; q < 16; q++) vst1q_s32(s + j + 4 * q, c[q]);
+                }
+#endif
+                for (ssize_t k = k0; k < k1; k++) {
+                    const int8_t *w = kernel + k * kernelDim1 + jb;
+#if defined(__aarch64__)
+                    const int8x8_t av = vdup_n_s8(a[k]);
+                    const int8x16_t avq = vcombine_s8(av, av);
+                    for (ssize_t j = n64; j < n16; j += 16) {
+                        const int8x16_t wv = vld1q_s8(w + j);
+                        const int16x8_t lo = vmull_s8(vget_low_s8(wv), av), hi = vmull_high_s8(wv, avq);
+                        vst1q_s32(s + j, vaddw_s16(vld1q_s32(s + j), vget_low_s16(lo)));
+                        vst1q_s32(s + j + 4, vaddw_high_s16(vld1q_s32(s + j + 4), lo));
+                        vst1q_s32(s + j + 8, vaddw_s16(vld1q_s32(s + j + 8), vget_low_s16(hi)));
+                        vst1q_s32(s + j + 12, vaddw_high_s16(vld1q_s32(s + j + 12), hi));
+                    }
+#endif
                     const int32_t A = (int32_t)a[k] - inputOffset;
-                    const int8_t *w = kernel + k * kernelDim1 + j0;
-                    for (ssize_t j = 0; j < nj; j++)
-                        sum[j] += ((int32_t)w[j] - kernelOffset) * A;
+                    for (ssize_t j = n16; j < n; j++)
+                        s[j] += ((int32_t)w[j] - kernelOffset) * A;
                 }
-                for (ssize_t j = 0; j < nj; j++) {
-                    // Scale the bias to match the scale of the matrix multiplication.
-                    int32_t B = std::round(float(*((int32_t *)bias + j0 + j) - biasOffset) *
-                                           (biasScale / matMulScale));
-                    int32_t s = sum[j] + B;
-                    // Scale the result back to the expected destination scale.
-                    int32_t out32 = std::round(float(s) * (matMulScale / outputScale) + outputOffset);
-                    int8_t out8;
-                    if(out32>127) out8=127;
-                    else if(out32<-128) out8=-128;
-                    else out8=(int8_t)out32;
-                    *(output + i*outputDim1 + j0 + j) = out8;
-                }
+            }
+            for (ssize_t jj = 0; jj < n; jj++) {
+                const ssize_t j = jb + jj;
+                // Scale the bias to match the scale of the matrix multiplication.
+                int32_t B = std::round(float(*((int32_t *)bias + j) - biasOffset) *
+                                       (biasScale / matMulScale));
+                int32_t sj = s[jj] + B;
+                // Scale the result back to the expected destination scale.
+                int32_t out32 = std::round(float(sj) * (matMulScale / outputScale) + outputOffset);
+                int8_t out8;
+                if(out32>127) out8=127;
+                else if(out32<-128) out8=-128;
+                else out8=(int8_t)out32;
+                *(output + i*outputDim1 + j) = out8;
             }
         }
     }
