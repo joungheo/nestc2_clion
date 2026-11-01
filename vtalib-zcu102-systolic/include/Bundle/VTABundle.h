@@ -17,6 +17,12 @@ int convolution_wo_tr(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *outp
 //#### JO added (2026-10-31): max pool on the EVTA, input >= 0, EVTA layout (see VTABundle.cpp)
 int maxpool_evta(int8_t *input, int8_t *output, int N, int H, int W, int C, int KH, int KW, int pad_size,
                  int stride_size, void *vtaCmdH, uint32_t idEVTA = 0);
+//#### JO added (2026-11-02): fully connected layer on the EVTA, the arguments of fullyconnected (see VTABundle.cpp)
+int fullyconnected_evta(int8_t *input, float inputScale, int32_t inputOffset, int8_t *kernel, float kernelScale,
+                        int32_t kernelOffset, int8_t *bias, float biasScale, int32_t biasOffset, int8_t *output,
+                        float outputScale, int32_t outputOffset, dim_t inputDim0, dim_t inputDim1, dim_t kernelDim0,
+                        dim_t kernelDim1, dim_t outputDim0, dim_t outputDim1, bool doBias, void *vtaCmdH,
+                        uint32_t idEVTA = 0);
 //#### JO added (2026-10-31): conv + elementadd (+ relu) in one EVTA call (power-of-two scales, see VTABundle.cpp)
 int convolution_wo_tr_res(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *output, int N, int H, int W, int C, int KN, int KH, int KW, int pad_size,
                           int stride_size, bool doRelu, bool doBias, uint8_t shift, int out_h, int out_w,

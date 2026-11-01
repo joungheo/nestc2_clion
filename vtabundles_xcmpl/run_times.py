@@ -2,7 +2,7 @@
 """Time of every inference of a _timed / _systimed log, then medians and GOPS, printed by hw*/script/run_prof.sh.
 
 Reads the timing csv(s) the log names ("per statement and run: <csv>", one per timed .cpp, in <Dir>): the
-"total" row of each run (whole run, CPU included) and the EVTA conv calls (convolution_wo_tr*, the statements
+"total" row of each run (whole run, CPU included) and the EVTA conv calls (convolution_wo_tr*, fullyconnected_evta, the statements
 with vtaCmdH). Run 1 is the warm-up of the stock mains, so medians are over runs 2..n (all runs if there is
 only one); GOPS = ops / median ms (whole run: ops of all statements, conv: ops of the EVTA calls).
 Several csv with the same runs = the copies of a multi-EVTA executable, run at once (each run starts at a
@@ -32,8 +32,10 @@ def median(x):
     return s[k] if len(s) % 2 else (s[k - 1] + s[k]) / 2
 
 
+#### JO changed (2026-11-02): + fullyconnected_evta
 def is_evta(call):
-    return 'convolution_wo_tr' in call
+    # return 'convolution_wo_tr' in call
+    return 'convolution_wo_tr' in call or call == 'fullyconnected_evta'
 
 
 def runs_of(path):

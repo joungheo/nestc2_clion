@@ -162,7 +162,8 @@ def call_ops(stmt, name):
         if name == 'nonvtaconvolution':
             # (in,s,o, ker,s,o, bias,s,o, out,s,o, N, H, W, C, KN, KH, KW, pad, stride, group, dilation, relu, bias, out_h, out_w)
             return 2 * n(12) * n(25) * n(26) * n(16) * n(17) * n(18) * n(15) // n(21)
-        if name == 'fullyconnected':
+        #### JO changed (2026-11-02): + fullyconnected_evta (same arguments, then the command handle)
+        if name in ('fullyconnected', 'fullyconnected_evta'):
             # (in,s,o, ker,s,o, bias,s,o, out,s,o, inDim0, inDim1, kerDim0, kerDim1, ...)
             return 2 * n(12) * n(13) * n(15)
     except (ValueError, IndexError):

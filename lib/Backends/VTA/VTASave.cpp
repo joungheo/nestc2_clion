@@ -61,6 +61,13 @@ static llvm::cl::opt<bool> vtaEvtaMaxPool(
     //#### default on since the board check (2026-10-31: bit-exact, docs/evta_runtime_compare.md 7.3)
     llvm::cl::init(true));
 
+//#### JO added (2026-11-02): fully connected layer on the EVTA (fullyconnected_evta; falls back to the CPU fullyconnected
+//#### at run time when its quantization does not fit the EVTA)
+static llvm::cl::opt<bool> vtaEvtaFc(
+    "vta-evta-fc",
+    llvm::cl::desc("Run fully connected layers on the EVTA (fullyconnected_evta)"),
+    llvm::cl::init(true));
+
 namespace vta_save{
 
 //#### JO added (2026-10-31): an EVTA conv that also does the elementadd and the relu after it
@@ -3628,7 +3635,9 @@ void saveFullyConnectedInst(const glow::FullyConnectedInst *Inst,
     addSymbolEntryGenBundle(destWeight, bundle, ctx);
   }
 
-  bundle->append("  fullyconnected(");
+  //#### JO changed (2026-11-02): on the EVTA (-vta-evta-fc), the same arguments plus the command handle
+  // bundle->append("  fullyconnected(");
+  bundle->append(vtaEvtaFc ? "  fullyconnected_evta(" : "  fullyconnected(");
 
   if (srcWeight->getMutability() == glow::WeightVar::MutabilityKind::Mutable) {
     auto ste = addSymbolEntry(srcWeight, ctx);
@@ -3693,6 +3702,14 @@ void saveFullyConnectedInst(const glow::FullyConnectedInst *Inst,
   bundle->append(std::to_string(destDims[1]));
   bundle->append(", ");
   bundle->append(std::to_string(1)); // doBias
+  if (vtaEvtaFc) {
+    uint32_t idx = ctx->getIdxMultiEVTA();
+    bundle->append(", vtaCmdH");
+    if (idx)
+      bundle->append(std::to_string(idx));
+    bundle->append(", ");
+    bundle->append(std::to_string(idx));
+  }
   bundle->append(" );\n");
 }
 
