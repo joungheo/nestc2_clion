@@ -4,6 +4,10 @@
 
 #include <unistd.h>
 #include <cstdio>
+#include <cstdlib>
+#include <algorithm>
+#include <sys/mman.h>
+#include <fcntl.h>
 #include <vta/driver.h>
 #include "uop_kernel.h"
 
@@ -187,6 +191,8 @@ class CommandQueue {
     CHECK(insn_queue_.count() * sizeof(VTAGenericInsn) < VTA_MAX_XFER);
     //printf(" -- DONE\n");
 
+    //#### JO added (2026-11-01): EVTA_STORE_SENTINEL=1 fills the DRAM the STOREs of this run write with 0xA5 first
+    StoreSentinelFill();
     //printf("[Synchronize] device run. device=%p", device_);
     int timeout = VTADeviceRun(
         device_,
@@ -209,6 +215,7 @@ class CommandQueue {
       }
       insn_queue_.CompareDram("insn");
       uop_queue_.CompareDram("uop");
+      StoreSentinelReport();
       //#### exit at once (not the CHECK's abort: apport takes the core dump of the process for minutes, and the CMA
       //#### stays allocated until it is done, so the next bitstream load fails with ENOMEM)
       fflush(stdout);
@@ -602,6 +609,92 @@ class CommandQueue {
   InsnQueue<VTA_MAX_XFER, kBufferCoherent, kAlwaysCache> insn_queue_;
   // Device handle
   VTADeviceHandle device_{nullptr};
+
+  //#### JO added (2026-11-01): EVTA_STORE_SENTINEL=1 (hang hunt): before each run, the DRAM its STOREs write is filled with
+  //#### 0xA5 through /dev/mem (uncached); on a timeout every STORE reports how many of its 16-byte vectors are no longer all
+  //#### 0xA5, i.e. how far the stores got. Skipped for a run whose STORE span overlaps one of its LOADs. Costs time per run.
+  static int SentinelOn() {
+    static int on = -1;
+    if (on < 0) {
+      const char *e = getenv("EVTA_STORE_SENTINEL");
+      on = e && atoi(e) ? 1 : 0;
+    }
+    return on;
+  }
+  // DRAM bytes [first, last) of a LOAD / STORE
+  void MemSpan(const VTAMemInsn &m, uint64_t *first, uint64_t *last) {
+    uint64_t eb = m.opcode == VTA_OPCODE_STORE ? GetElemBytes(VTA_MEM_ID_OUT) : GetElemBytes(m.memory_type);
+    *first = (uint64_t)m.dram_base * eb;
+    *last = *first + ((uint64_t)(m.y_size ? m.y_size - 1 : 0) * m.x_stride + m.x_size) * eb;
+  }
+  void StoreSentinelFill() {
+    if (sent_map_) munmap(const_cast<uint64_t*>(sent_map_), sent_len_);
+    sent_map_ = nullptr;
+    if (!SentinelOn()) return;
+    const VTAMemInsn *in = reinterpret_cast<const VTAMemInsn*>(insn_queue_.data());
+    uint32_t n = insn_queue_.count();
+    uint64_t lo = ~0ull, hi = 0, f, l;
+    for (uint32_t i = 0; i < n; i++)
+      if (in[i].opcode == VTA_OPCODE_STORE && in[i].x_size && in[i].y_size) {
+        MemSpan(in[i], &f, &l);
+        lo = std::min(lo, f);
+        hi = std::max(hi, l);
+      }
+    if (hi <= lo || hi - lo > (64u << 20)) return;
+    for (uint32_t i = 0; i < n; i++)
+      if (in[i].opcode == VTA_OPCODE_LOAD && in[i].memory_type != VTA_MEM_ID_UOP && in[i].x_size && in[i].y_size) {
+        MemSpan(in[i], &f, &l);
+        if (f < hi && l > lo) return;
+      }
+    if (sent_fd_ < 0) sent_fd_ = open("/dev/mem", O_RDWR | O_SYNC);
+    if (sent_fd_ < 0) return;
+    uint64_t pg = getpagesize(), base = lo & ~(pg - 1);
+    sent_len_ = hi - base;
+    void *m = mmap(NULL, sent_len_, PROT_READ | PROT_WRITE, MAP_SHARED, sent_fd_, base);
+    if (m == MAP_FAILED) return;
+    sent_map_ = static_cast<volatile uint64_t*>(m);
+    sent_base_ = base;
+    for (uint32_t i = 0; i < n; i++)
+      if (in[i].opcode == VTA_OPCODE_STORE) {
+        MemSpan(in[i], &f, &l);
+        for (uint32_t y = 0; y < in[i].y_size; y++)
+          for (uint32_t x = 0; x < in[i].x_size; x++) {
+            uint64_t a = (f + ((uint64_t)y * in[i].x_stride + x) * VTA_INP_ELEM_BYTES - base) / 8;
+            for (uint32_t k = 0; k < VTA_INP_ELEM_BYTES / 8; k++) sent_map_[a + k] = 0xA5A5A5A5A5A5A5A5ull;
+          }
+      }
+    // the mapping stays until the next run (StoreSentinelReport reads it on a timeout)
+    __sync_synchronize();
+  }
+  void StoreSentinelReport() {
+    if (!sent_map_) {
+      if (SentinelOn()) fprintf(stderr, "store sentinel: not set for this run\n");
+      return;
+    }
+    const VTAMemInsn *in = reinterpret_cast<const VTAMemInsn*>(insn_queue_.data());
+    uint32_t n = insn_queue_.count(), k = 0;
+    uint64_t f, l;
+    for (uint32_t i = 0; i < n; i++)
+      if (in[i].opcode == VTA_OPCODE_STORE) {
+        MemSpan(in[i], &f, &l);
+        uint32_t tot = in[i].y_size * in[i].x_size, wr = 0, firstun = tot;
+        for (uint32_t y = 0; y < in[i].y_size; y++)
+          for (uint32_t x = 0; x < in[i].x_size; x++) {
+            uint64_t a = (f + ((uint64_t)y * in[i].x_stride + x) * VTA_INP_ELEM_BYTES - sent_base_) / 8;
+            bool s = true;
+            for (uint32_t j = 0; j < VTA_INP_ELEM_BYTES / 8; j++) s = s && sent_map_[a + j] == 0xA5A5A5A5A5A5A5A5ull;
+            if (!s) wr++;
+            else if (firstun == tot) firstun = y * in[i].x_size + x;
+          }
+        fprintf(stderr, "store sentinel: STORE %u (insn %u, dram 0x%08llx, %ux%u): %u of %u vectors written%s", k, i,
+                (unsigned long long)f, in[i].y_size, in[i].x_size, wr, tot, wr == tot ? "\n" : "");
+        if (wr != tot) fprintf(stderr, ", first unwritten %u\n", firstun);
+        k++;
+      }
+  }
+  int sent_fd_{-1};
+  volatile uint64_t *sent_map_{nullptr};
+  uint64_t sent_base_{0}, sent_len_{0};
 };
 
 }
