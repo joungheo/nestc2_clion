@@ -66,7 +66,9 @@ def table(name, calls, ev):
     #### JO added (2026-10-31): VTA ms of every run, then the median of runs 2..n (run 1 = warm-up) and its GOPS
     av = sorted(per[1:] if runs > 1 else per)
     avg = av[len(av) // 2] if len(av) % 2 else (av[len(av) // 2 - 1] + av[len(av) // 2]) / 2   # median
-    print(f'VTA ms per run: ' + ' '.join(f'{x:.3f}' for x in per))
+    #### JO changed (2026-11-01): more than 30 runs: the first 10 and the last 5
+    sh = per if runs <= 30 else per[:10] + [None] + per[-5:]
+    print(f'VTA ms per run: ' + ' '.join('...' if x is None else f'{x:.3f}' for x in sh))
     print(f'median runs {"2-" + str(runs) if runs > 1 else "1"}: {avg:.3f} ms (min {av[0]:.3f}, max {av[-1]:.3f}), '
           f'{ops / (avg * 1e6):.2f} GOPS')
     # return runs, n, ops, [(r, per[r]) for r in cols]

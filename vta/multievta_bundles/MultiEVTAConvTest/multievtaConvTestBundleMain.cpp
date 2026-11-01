@@ -24,6 +24,7 @@
 #include <string>
 #include <assert.h>
 #include <inttypes.h>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -246,6 +247,16 @@ static int8_t *initActivations(const BundleConfig &config) {
 }
 
 
+//#### JO changed (2026-11-01): runs per EVTA from MULTI_RUNS (run_prof.sh -n, default 25 there), 10000 when unset as before
+//#### (with _prof, 10000 runs fill the 8192 profile events)
+static int multiRuns() {
+  static int n = [] {
+    const char *e = getenv("MULTI_RUNS");
+    return e && atoi(e) > 0 ? atoi(e) : 10000;
+  }();
+  return n;
+}
+
 void *evta0(void *arg) {
   //parseCommandLineOptions(argc, argv);
   initVTARuntime();
@@ -258,7 +269,7 @@ void *evta0(void *arg) {
   multievtaConvTestMainEntry0_load_module((uint8_t*)constantWeightVarsAddr);
 
   // Perform the computation.
-  for(int i = 0; i< 10000; i++) {
+  for(int i = 0; i< multiRuns(); i++) {
     int errCode =
         multievtaConvTestMainEntry0((uint8_t *) constantWeightVarsAddr,
                                     (uint8_t *) mutableWeightVarsAddr,
@@ -292,7 +303,7 @@ void *evta1(void *arg) {
   multievtaConvTestMainEntry1_load_module((uint8_t*)constantWeightVarsAddr);
 
   // Perform the computation.
-  for(int i = 0; i< 10000; i++) {
+  for(int i = 0; i< multiRuns(); i++) {
     int errCode =
         multievtaConvTestMainEntry1((uint8_t *) constantWeightVarsAddr,
                                     (uint8_t *) mutableWeightVarsAddr,
@@ -326,7 +337,7 @@ void *evta2(void *arg) {
   multievtaConvTestMainEntry2_load_module((uint8_t*)constantWeightVarsAddr);
 
   // Perform the computation.
-  for(int i = 0; i< 10000; i++) {
+  for(int i = 0; i< multiRuns(); i++) {
     int errCode =
         multievtaConvTestMainEntry2((uint8_t *) constantWeightVarsAddr,
                                     (uint8_t *) mutableWeightVarsAddr,
@@ -359,7 +370,7 @@ void *evta3(void *arg) {
   multievtaConvTestMainEntry3_load_module((uint8_t*)constantWeightVarsAddr);
 
   // Perform the computation.
-  for(int i = 0; i< 10000; i++) {
+  for(int i = 0; i< multiRuns(); i++) {
     int errCode =
         multievtaConvTestMainEntry3((uint8_t *) constantWeightVarsAddr,
                                     (uint8_t *) mutableWeightVarsAddr,
