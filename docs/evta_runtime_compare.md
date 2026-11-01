@@ -372,6 +372,27 @@ CMA 버퍼는 cache가 켜져 있어 malloc 메모리와 속도가 같다. 느�
   1 EVTA(243 ms)보다 느린 이유(CPU 쪽이 동시에 돌 때)는 아직 보지 않았다.
 - multi4 `_systimed`의 "4 copy 합"(run마다 가장 느린 copy)이 49.7 ms로 copy마다의 median(49.5 ms)과 거의 같아졌다(7.3에서는 78.0 ms).
 
+### 7.5 VTA buffer pool (2026-11-01, vtalib `lib/zcu102/api.cc`)
+
+bundle은 run마다 activation buffer를 `VTABufferAlloc`/`VTABufferFree`로 잡고 놓는다(Resnet18 23개). 매번 `cma_alloc`/`cma_free`
+ioctl이라 run당 alloc 2.3 ms + free 0.4 ms였다. 이제 `VTABufferFree`는 buffer를 크기별 free list에 남기고 같은 크기의
+`VTABufferAlloc`이 꺼내 쓴다(mutex, multi4의 thread 4개가 같은 list를 쓴다). list에 남기는 양은 `EVTA_BUF_POOL_MB`(기본 32) MB까지,
+`EVTA_BUF_POOL_MB=0`이면 예전처럼 바로 해제한다. 남은 buffer는 process가 끝날 때 해제된다. 재사용 buffer에는 이전 내용이 남아
+있다(`cma_alloc`도 지우지 않는다). bundle 재생성 없이 vtalib만 바뀐다. systolic 복사본도 같다.
+
+| 경우 (systolic 400 MHz, `-r`, run 2~25 median) | pool 끔 | pool 켬 | 변화 |
+|---|---|---|---|
+| Resnet18 single, OMP 1, 전체 run | 46.97 ms | **44.27 ms** (105.1 GOPS) | −5.7 % |
+| Resnet18 single, OMP 4, 전체 run | 41.89 ms | **39.07 ms** (119.0 GOPS) | −6.7 % |
+| run당 `VTABufferAlloc` + `Free` (23 + 23) | 2.7 ms | 0.05 ms | |
+| Resnet18 multi4 4 copy 100회 wall (`_sys`) | 1286 ms | **1189 ms (84.1/s)** | −7.5 % |
+| Resnet18 multi4 비트스트림, single-thread exe 100회 | 4740 ms | **4460 ms** | −5.9 % |
+| Conv4Test 4 EVTA 100회 전체 (380 MHz, OMP 1, 3번) | 322~325 ms | **243~254 ms** (~375 GOPS) | −23 % |
+| ResConv10Test 4 EVTA 100회 전체 (3번) | 172~189 ms | 147~176 ms | 흔들림이 더 크다 |
+
+- OMP 4에서 첫 run의 alloc이 200 ms 걸린다(OMP 1은 1.5 ms). pool이 없으면 run 2에도 생겼다. pool로는 run 1만 남는다.
+- run_all.sh hw 전부 PASS, multi4 전부 PASS. Result 281, Confidence 0.655530 그대로.
+
 ## 8. 하드웨어도 같이 비교해야 하나
 
 해야 한다. 다만 §7의 ①~④를 가르는 것은 어레이가 아니라 다음 네 가지다.

@@ -201,6 +201,9 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
 - NHWC <-> EVTA layout transposes as 16-byte copies (2026-11-01, vtalib `CPUBundle_generic.cpp`, the file the board builds with
   `NESTC_EVTA_RUN_WITH_GENERIC_BUNDLE=ON`; conv0 `_zerofill` 6.8 -> 0.2 ms): Resnet18 single OMP 1 52.5 -> 46.9 ms, multi4 100 inferences
   1.47 -> 1.31 s; Conv4Test 4 EVTAs end-to-end 757 -> 316 ms (§7.4).
+- VTA buffer pool (2026-11-01, vtalib `lib/zcu102/api.cc`): `VTABufferFree` keeps the buffer in a free list by size, `VTABufferAlloc`
+  of the same size reuses it (no `cma_alloc` ioctl after the first run; up to `EVTA_BUF_POOL_MB`, default 32, `0` = off): Resnet18
+  single OMP 1 46.9 -> 44.3 ms, multi4 100 inferences 1.29 -> 1.19 s (§7.5). Reused buffers keep their old contents.
 - The lab board's PL has a defective configuration row (tile row SLICE Y219, cells stuck at 0; `log/BOARD_TODO.md`
   2026-10-23/24). `vivado.tcl` on zcu102 fences the design below it by default (`VTA_BRAM_FENCE=y219|upper|none`).
   multi2 fits below it and works (2026-10-24); multi4 needs more BRAM than the rows below, so it crosses the row with
