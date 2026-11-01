@@ -30,6 +30,7 @@ class CommandQueue {
     insn_queue_.InitSpace();
     device_ = VTADeviceAlloc(index);
     CHECK(device_ != nullptr);
+    evta_index_ = index;
   }
 
   ~CommandQueue() {
@@ -715,19 +716,24 @@ class CommandQueue {
     fprintf(stderr, "store sentinel (insn 0x%08x): %u STOREs, %u written, %u partly, %u not at all\n%s", q, k, full, part,
             none, det.c_str());
   }
-  //#### JO added (2026-11-01): EVTA_PRE_RUN_US=<n>: busy wait n us before each run (hang hunt: start timing only)
-  static void PreRunWait() {
-    static long us = -1;
+  //#### JO added (2026-11-01): EVTA_PRE_RUN_US=<n>: busy wait n us before each run (hang hunt: start timing only);
+  //#### EVTA_PRE_RUN_MASK=<bits> (default all): only on the EVTAs whose bit is set (2026-11-02)
+  void PreRunWait() {
+    static long us = -1, mask = -1;
     if (us < 0) {
       const char *e = getenv("EVTA_PRE_RUN_US");
       us = e ? atol(e) : 0;
+      e = getenv("EVTA_PRE_RUN_MASK");
+      mask = e ? strtol(e, nullptr, 0) : -1;
+      if (mask < 0) mask = 0x7fffffff;
     }
-    if (us <= 0) return;
+    if (us <= 0 || !((mask >> evta_index_) & 1)) return;
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     do clock_gettime(CLOCK_MONOTONIC, &t1);
     while ((t1.tv_sec - t0.tv_sec) * 1000000L + (t1.tv_nsec - t0.tv_nsec) / 1000 < us);
   }
+  int evta_index_{0};
   int sent_fd_{-1};
   volatile uint64_t *sent_map_{nullptr};
   uint64_t sent_base_{0}, sent_len_{0};
