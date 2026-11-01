@@ -3255,9 +3255,10 @@ int maxpool_evta(int8_t *input, int8_t *output, int N, int H, int W, int C, int 
 //#### buffer, then: bias -> acc[o]; per chunk of g output blocks (one half of the wgt buffer) LOAD the weights in one
 //#### contiguous transfer (the other half is loaded while this one is in the GEMM) and GEMM acc[o] += inp[c] x wgt[o][c]
 //#### (loop over c, one uop per o: the same acc entry comes back every g uops); then round half away from zero with the
-//#### ALU only (MIN / MAX / ADD / SHR): s = acc >> 31 (-1 if negative), acc = (acc + s + 2^(shift-1)) >> shift, clip;
+//#### ALU only (MIN / MAX / ADD / SHR): s = max(min(acc, 0), -1) (-1 if negative), acc = (acc + s + 2^(shift-1)) >> shift,
+//#### clip;
 //#### STORE, copy the OUT bytes out. Not on the EVTA (falls back to the CPU fullyconnected): offsets, a scale ratio that
-//#### is not 2^-shift (0..16), batch > 1, IN not a multiple of 16, chunks under 8 output blocks.
+//#### is not 2^-shift (0..15), batch > 1, IN not a multiple of 16, chunks under 8 output blocks.
 struct FcGemmContext {
   uint32_t acc_, wgt_, g_, cin_;
   bool operator==(FcGemmContext &op) { return acc_ == op.acc_ && wgt_ == op.wgt_ && g_ == op.g_ && cin_ == op.cin_; }
@@ -3296,6 +3297,152 @@ struct FcEvtaBuffers {
   uint32_t nb;  // output blocks
 };
 
+// the EVTA part: b.in (IN bytes), b.wgt, b.bias ready (flushed); b.out is written (not invalidated)
+static void fc_evta_core(const FcEvtaBuffers &b, uint32_t CIN, uint32_t NB, uint32_t gEven, uint32_t nChunks, int shift,
+                         VTACommandHandle cmdh, uint32_t idEVTA) {
+  const uint32_t WGT_HALF = 1024 / 2;
+  VTASetDebugMode(cmdh, 0);
+  VTALoadBuffer2D(cmdh, b.bias, 0, NB, 1, NB, 0, 0, 0, 0, 0, 3);  // compute stage, before the GEMMs
+  VTADepPush(cmdh, 2, 1);
+  VTADepPush(cmdh, 2, 1);
+  for (uint32_t ch = 0; ch < nChunks; ch++) {
+    uint32_t o0 = ch * gEven, gc = std::min(gEven, NB - o0), wb = (ch % 2) * WGT_HALF;
+    VTADepPop(cmdh, 2, 1);
+    if (ch == 0)
+      VTALoadBuffer2D(cmdh, b.in, 0, CIN, 1, CIN, 0, 0, 0, 0, 0, 2);
+    VTALoadBuffer2D(cmdh, b.wgt, o0 * CIN, gc * CIN, 1, gc * CIN, 0, 0, 0, 0, wb, 1);
+    VTADepPush(cmdh, 1, 2);
+    VTADepPop(cmdh, 1, 2);
+    pushFcGemm(cmdh, idEVTA, {o0, wb, gc, CIN});
+    VTADepPush(cmdh, 2, 1);
+  }
+  VTADepPop(cmdh, 2, 1);
+  VTADepPop(cmdh, 2, 1);
+  if (shift > 0) {
+    pushReset(cmdh, idEVTA, NB, NB);
+    pushAlu(cmdh, idEVTA, NB, 0, NB, RES_ALU_ADD, 0, 0);
+    //#### not SHR 31: the ALU shift is a 5-bit signed field (-16..15), 31 is a shift left by 1
+    pushAlu(cmdh, idEVTA, NB, NB, NB, RES_ALU_MIN, 1, 0);
+    pushAlu(cmdh, idEVTA, NB, NB, NB, RES_ALU_MAX, 1, -1);
+    pushAlu(cmdh, idEVTA, 0, NB, NB, RES_ALU_ADD, 0, 0);
+    pushAlu(cmdh, idEVTA, 0, 0, NB, RES_ALU_ADD, 1, 1 << (shift - 1));
+    pushAlu(cmdh, idEVTA, 0, 0, NB, RES_ALU_SHR, 1, shift);
+  }
+  pushAlu(cmdh, idEVTA, 0, 0, NB, RES_ALU_MAX, 1, -128);
+  pushAlu(cmdh, idEVTA, 0, 0, NB, RES_ALU_MIN, 1, 127);
+  VTADepPush(cmdh, 2, 3);
+  VTADepPop(cmdh, 2, 3);
+  VTAStoreBuffer2D(cmdh, 0, 4, b.out, 0, NB, 1, NB);
+  VTADepPush(cmdh, 3, 2);
+  VTADepPop(cmdh, 3, 2);
+  VTASynchronize(cmdh, 1 << 31);
+}
+
+//#### EVTA_FC_PROBE=1 (bring-up): a permutation weight (output j = input j % IN) and distinct inputs, shift 0, no bias:
+//#### the output tells which input the EVTA added for each output
+static void fc_evta_probe(uint32_t IN, uint32_t OUT, VTACommandHandle cmdh, uint32_t idEVTA) {
+  const uint32_t CIN = IN / 16, NB = (OUT + 15) / 16, g = std::min<uint32_t>(NB, 512 / CIN);
+  const uint32_t nChunks = (NB + g - 1) / g, gEven = (NB + nChunks - 1) / nChunks;
+  FcEvtaBuffers b;
+  b.nb = NB;
+  b.wgt = VTABufferAlloc((size_t)NB * CIN * 256);
+  b.bias = VTABufferAlloc((size_t)NB * 64);
+  b.in = VTABufferAlloc(IN);
+  b.out = VTABufferAlloc((size_t)NB * 16);
+  int8_t *w = (int8_t *)VTABufferGetVirtAddr(b.wgt), *x = (int8_t *)VTABufferGetVirtAddr(b.in);
+  memset(w, 0, (size_t)NB * CIN * 256);
+  memset(VTABufferGetVirtAddr(b.bias), 0, (size_t)NB * 64);
+  for (uint32_t k = 0; k < IN; k++)
+    x[k] = (int8_t)((k * 7) % 255 - 127);
+  for (uint32_t j = 0; j < OUT; j++) {
+    uint32_t k = j % IN;
+    w[((size_t)(j / 16) * CIN + k / 16) * 256 + (j % 16) * 16 + k % 16] = 1;
+  }
+  VTABufferFlush(b.wgt, 0, (size_t)NB * CIN * 256);
+  VTABufferFlush(b.bias, 0, (size_t)NB * 64);
+  VTABufferFlush(b.in, 0, IN);
+  memset(VTABufferGetVirtAddr(b.out), 0x5a, (size_t)NB * 16);
+  VTABufferFlush(b.out, 0, (size_t)NB * 16);
+  fc_evta_core(b, CIN, NB, gEven, nChunks, 0, cmdh, idEVTA);
+  VTABufferInvalidate(b.out, 0, (size_t)NB * 16);
+  const int8_t *o = (const int8_t *)VTABufferGetVirtAddr(b.out);
+  uint32_t ok = 0;
+  for (uint32_t j = 0; j < OUT; j++)
+    ok += o[j] == x[j % IN];
+  printf("EVTA_FC_PROBE %u -> %u (%u chunks of %u blocks): %u of %u right\n", IN, OUT, nChunks, gEven, ok, OUT);
+  for (uint32_t j = 0; j < std::min<uint32_t>(OUT, 40); j++) {
+    int found = -1, n = 0;
+    for (uint32_t k = 0; k < IN; k++)
+      if (x[k] == o[j]) { if (found < 0) found = k; n++; }
+    printf("  out %u = %d: input %d%s (want %u)\n", j, o[j], found, n > 1 ? "+" : "", j % IN);
+  }
+  VTABufferFree(b.wgt);
+  VTABufferFree(b.bias);
+  VTABufferFree(b.in);
+  VTABufferFree(b.out);
+}
+
+// random weights (nz nonzeros per output in -4..4, or dense in -128..127 with nz = 0), inputs in -128..127, bias in
+// -bmax..bmax, shift: EVTA vs the exact model (round half away from zero, clip)
+static void fc_evta_probe2(uint32_t IN, uint32_t OUT, int nz, int bmax, int shift, VTACommandHandle cmdh,
+                           uint32_t idEVTA) {
+  const uint32_t CIN = IN / 16, NB = (OUT + 15) / 16, g = std::min<uint32_t>(NB, 512 / CIN);
+  const uint32_t nChunks = (NB + g - 1) / g, gEven = (NB + nChunks - 1) / nChunks;
+  FcEvtaBuffers b;
+  b.wgt = VTABufferAlloc((size_t)NB * CIN * 256);
+  b.bias = VTABufferAlloc((size_t)NB * 64);
+  b.in = VTABufferAlloc(IN);
+  b.out = VTABufferAlloc((size_t)NB * 16);
+  int8_t *w = (int8_t *)VTABufferGetVirtAddr(b.wgt), *x = (int8_t *)VTABufferGetVirtAddr(b.in);
+  int32_t *bb = (int32_t *)VTABufferGetVirtAddr(b.bias);
+  memset(w, 0, (size_t)NB * CIN * 256);
+  memset(bb, 0, (size_t)NB * 64);
+  uint32_t r = 12345;
+  auto rnd = [&]() { r = r * 1103515245u + 12345u; return (r >> 8) & 0xffff; };
+  std::vector<int8_t> W((size_t)IN * OUT, 0);
+  for (uint32_t k = 0; k < IN; k++)
+    x[k] = (int8_t)(rnd() % 256 - 128);
+  for (uint32_t j = 0; j < OUT; j++) {
+    if (nz)
+      for (int t = 0; t < nz; t++)
+        W[(size_t)(rnd() % IN) * OUT + j] = (int8_t)(rnd() % 9 - 4);
+    else
+      for (uint32_t k = 0; k < IN; k++)
+        W[(size_t)k * OUT + j] = (int8_t)(rnd() % 256 - 128);
+    if (bmax)
+      bb[j] = (int32_t)(rnd() % (2 * bmax + 1)) - bmax;
+  }
+  for (uint32_t k = 0; k < IN; k++)
+    for (uint32_t j = 0; j < OUT; j++)
+      w[((size_t)(j / 16) * CIN + k / 16) * 256 + (j % 16) * 16 + k % 16] = W[(size_t)k * OUT + j];
+  VTABufferFlush(b.wgt, 0, (size_t)NB * CIN * 256);
+  VTABufferFlush(b.bias, 0, (size_t)NB * 64);
+  VTABufferFlush(b.in, 0, IN);
+  fc_evta_core(b, CIN, NB, gEven, nChunks, shift, cmdh, idEVTA);
+  VTABufferInvalidate(b.out, 0, (size_t)NB * 16);
+  const int8_t *o = (const int8_t *)VTABufferGetVirtAddr(b.out);
+  uint32_t ok = 0, okFloor = 0, okNoRnd = 0;
+  int shown = 0;
+  for (uint32_t j = 0; j < OUT; j++) {
+    int64_t acc = bb[j];
+    for (uint32_t k = 0; k < IN; k++)
+      acc += (int64_t)x[k] * W[(size_t)k * OUT + j];
+    auto clip = [](int64_t v) { return (int)std::max<int64_t>(-128, std::min<int64_t>(127, v)); };
+    int want = clip((int64_t)std::round(double(acc) / (1 << shift)));
+    ok += o[j] == want;
+    okFloor += o[j] == clip(acc >> shift);
+    okNoRnd += o[j] == clip(acc);
+    if (o[j] != want && shown++ < 6)
+      printf("  out %u: evta %d, want %d (acc %lld)\n", j, o[j], want, (long long)acc);
+  }
+  printf("EVTA_FC_PROBE2 %u -> %u nz %d bias %d shift %d: %u of %u right (floor %u, no shift %u)\n", IN, OUT, nz, bmax,
+         shift, ok, OUT, okFloor, okNoRnd);
+  VTABufferFree(b.wgt);
+  VTABufferFree(b.bias);
+  VTABufferFree(b.in);
+  VTABufferFree(b.out);
+}
+
 int fullyconnected_evta(int8_t *input, float inputScale, int32_t inputOffset, int8_t *kernel, float kernelScale,
                         int32_t kernelOffset, int8_t *bias, float biasScale, int32_t biasOffset, int8_t *output,
                         float outputScale, int32_t outputOffset, dim_t inputDim0, dim_t inputDim1, dim_t kernelDim0,
@@ -3305,7 +3452,7 @@ int fullyconnected_evta(int8_t *input, float inputScale, int32_t inputOffset, in
   const uint32_t IN = inputDim1, OUT = outputDim1, CIN = IN / 16, NB = (OUT + 15) / 16;
   const float matMulScale = inputScale * kernelScale, ratio = matMulScale / outputScale;
   int shift = -1;
-  for (int k = 0; k <= 16; k++)
+  for (int k = 0; k <= 15; k++)  // ALU SHR: -16..15
     if (ratio == std::ldexp(1.0f, -k)) shift = k;
   const uint32_t g = CIN ? std::min<uint32_t>(NB, WGT_HALF / CIN) : 0;
   const uint32_t nChunks = g ? (NB + g - 1) / g : 0, gEven = nChunks ? (NB + nChunks - 1) / nChunks : 0;
@@ -3322,6 +3469,22 @@ int fullyconnected_evta(int8_t *input, float inputScale, int32_t inputOffset, in
                           outputDim0, outputDim1, doBias);
   }
 
+  {
+    static bool probed = false;
+    const char *pe = getenv("EVTA_FC_PROBE");
+    if (pe && atoi(pe) > 0 && !probed) {
+      probed = true;
+      fc_evta_probe(128, 256, (VTACommandHandle)vtaCmdH, idEVTA);
+      fc_evta_probe(IN, OUT, (VTACommandHandle)vtaCmdH, idEVTA);
+      for (int nz : {1, 4})
+        for (int bmax : {0, 50})
+          fc_evta_probe2(IN, OUT, nz, bmax, 0, (VTACommandHandle)vtaCmdH, idEVTA);
+      for (int bmax : {0, 3000})
+        for (int sh : {0, 8})
+          fc_evta_probe2(IN, OUT, 0, bmax, sh, (VTACommandHandle)vtaCmdH, idEVTA);
+      fc_evta_probe2(IN, OUT, 4, 0, 1, (VTACommandHandle)vtaCmdH, idEVTA);
+    }
+  }
   // the buffers of this kernel (one set per call site and EVTA copy), made on the first call
   static std::mutex mtx;
   static std::map<const int8_t *, FcEvtaBuffers> bufs;
@@ -3354,43 +3517,41 @@ int fullyconnected_evta(int8_t *input, float inputScale, int32_t inputOffset, in
   memcpy(VTABufferGetVirtAddr(b.in), input, IN);
   VTABufferFlush(b.in, 0, IN);
 
-  VTACommandHandle cmdh = (VTACommandHandle)vtaCmdH;
-  VTASetDebugMode(cmdh, 0);
-  VTALoadBuffer2D(cmdh, b.bias, 0, NB, 1, NB, 0, 0, 0, 0, 0, 3);  // compute stage, before the GEMMs
-  VTADepPush(cmdh, 2, 1);
-  VTADepPush(cmdh, 2, 1);
-  for (uint32_t ch = 0; ch < nChunks; ch++) {
-    uint32_t o0 = ch * gEven, gc = std::min(gEven, NB - o0), wb = (ch % 2) * WGT_HALF;
-    VTADepPop(cmdh, 2, 1);
-    if (ch == 0)
-      VTALoadBuffer2D(cmdh, b.in, 0, CIN, 1, CIN, 0, 0, 0, 0, 0, 2);
-    VTALoadBuffer2D(cmdh, b.wgt, o0 * CIN, gc * CIN, 1, gc * CIN, 0, 0, 0, 0, wb, 1);
-    VTADepPush(cmdh, 1, 2);
-    VTADepPop(cmdh, 1, 2);
-    pushFcGemm(cmdh, idEVTA, {o0, wb, gc, CIN});
-    VTADepPush(cmdh, 2, 1);
-  }
-  VTADepPop(cmdh, 2, 1);
-  VTADepPop(cmdh, 2, 1);
-  if (shift > 0) {
-    pushReset(cmdh, idEVTA, NB, NB);
-    pushAlu(cmdh, idEVTA, NB, 0, NB, RES_ALU_ADD, 0, 0);
-    pushAlu(cmdh, idEVTA, NB, NB, NB, RES_ALU_SHR, 1, 31);
-    pushAlu(cmdh, idEVTA, 0, NB, NB, RES_ALU_ADD, 0, 0);
-    pushAlu(cmdh, idEVTA, 0, 0, NB, RES_ALU_ADD, 1, 1 << (shift - 1));
-    pushAlu(cmdh, idEVTA, 0, 0, NB, RES_ALU_SHR, 1, shift);
-  }
-  pushAlu(cmdh, idEVTA, 0, 0, NB, RES_ALU_MAX, 1, -128);
-  pushAlu(cmdh, idEVTA, 0, 0, NB, RES_ALU_MIN, 1, 127);
-  VTADepPush(cmdh, 2, 3);
-  VTADepPop(cmdh, 2, 3);
-  VTAStoreBuffer2D(cmdh, 0, 4, b.out, 0, NB, 1, NB);
-  VTADepPush(cmdh, 3, 2);
-  VTADepPop(cmdh, 3, 2);
-  VTASynchronize(cmdh, 1 << 31);
+  fc_evta_core(b, CIN, NB, gEven, nChunks, shift, (VTACommandHandle)vtaCmdH, idEVTA);
   VTABufferInvalidate(b.out, 0, (size_t)NB * 16);
   memcpy(output, VTABufferGetVirtAddr(b.out), OUT);
 
+  //#### EVTA_FC_DEBUG=1: which of a few wrong models the EVTA output matches (bring-up)
+  const char *dbg = getenv("EVTA_FC_DEBUG");
+  if (dbg && atoi(dbg) > 0) {
+    const int32_t *bb = (const int32_t *)VTABufferGetVirtAddr(b.bias);
+    auto rq = [&](int64_t x, bool rnd) {
+      int64_t r = rnd ? (int64_t)std::round(double(x) / (1 << shift)) : (x >> shift);
+      return (int)std::max<int64_t>(-128, std::min<int64_t>(127, r));
+    };
+    const char *names[] = {"right", "wgt block transposed", "no bias", "first input block only",
+                           "floor instead of round", "last input block only", "inputs k%16 only of block 0"};
+    for (int h = 0; h < 7; h++) {
+      uint32_t ok = 0;
+      for (uint32_t j = 0; j < OUT; j++) {
+        int64_t acc = h == 2 ? 0 : bb[j];
+        for (uint32_t k = 0; k < IN; k++) {
+          if (h == 3 && k >= 16) break;
+          if (h == 5 && k < IN - 16) continue;
+          if (h == 6 && k >= 16) break;
+          uint32_t kk = k, jj = j;
+          if (h == 1) { kk = k / 16 * 16 + j % 16; jj = j / 16 * 16 + k % 16; }
+          if (jj >= OUT) continue;
+          acc += (int64_t)input[k] * kernel[(size_t)kk * OUT + jj];
+        }
+        ok += rq(acc, h != 4) == output[j];
+      }
+      printf("EVTA_FC_DEBUG %-28s: %u of %u match\n", names[h], ok, OUT);
+    }
+    printf("EVTA_FC_DEBUG out[0..7]:");
+    for (int j = 0; j < 8; j++) printf(" %d", output[j]);
+    printf("\n");
+  }
   //#### EVTA_RES_CHECK=1: compare with the CPU fullyconnected
   const char *e = getenv("EVTA_RES_CHECK");
   if (e && atoi(e) > 0) {
