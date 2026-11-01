@@ -13,6 +13,7 @@
 
 #include <memory>
 #include <string>
+#include <ctime>
 
 namespace vta {
 
@@ -194,6 +195,7 @@ class CommandQueue {
 
     //#### JO added (2026-11-01): EVTA_STORE_SENTINEL=1 fills the DRAM the STOREs of this run write with 0xA5 first
     StoreSentinelFill();
+    PreRunWait();
     //printf("[Synchronize] device run. device=%p", device_);
     int timeout = VTADeviceRun(
         device_,
@@ -618,7 +620,7 @@ class CommandQueue {
     static int on = -1;
     if (on < 0) {
       const char *e = getenv("EVTA_STORE_SENTINEL");
-      on = e && atoi(e) ? 1 : 0;
+      on = e ? atoi(e) : 0;
     }
     return on;
   }
@@ -655,6 +657,12 @@ class CommandQueue {
     if (m == MAP_FAILED) return;
     sent_map_ = static_cast<volatile uint64_t*>(m);
     sent_base_ = base;
+    //#### EVTA_STORE_SENTINEL=2: map only, no fill (which part of the fill changes the hangs)
+    if (SentinelOn() == 2) {
+      munmap(const_cast<uint64_t*>(sent_map_), sent_len_);
+      sent_map_ = nullptr;
+      return;
+    }
     for (uint32_t i = 0; i < n; i++)
       if (in[i].opcode == VTA_OPCODE_STORE) {
         MemSpan(in[i], &f, &l);
@@ -706,6 +714,19 @@ class CommandQueue {
       }
     fprintf(stderr, "store sentinel (insn 0x%08x): %u STOREs, %u written, %u partly, %u not at all\n%s", q, k, full, part,
             none, det.c_str());
+  }
+  //#### JO added (2026-11-01): EVTA_PRE_RUN_US=<n>: busy wait n us before each run (hang hunt: start timing only)
+  static void PreRunWait() {
+    static long us = -1;
+    if (us < 0) {
+      const char *e = getenv("EVTA_PRE_RUN_US");
+      us = e ? atol(e) : 0;
+    }
+    if (us <= 0) return;
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    do clock_gettime(CLOCK_MONOTONIC, &t1);
+    while ((t1.tv_sec - t0.tv_sec) * 1000000L + (t1.tv_nsec - t0.tv_nsec) / 1000 < us);
   }
   int sent_fd_{-1};
   volatile uint64_t *sent_map_{nullptr};
