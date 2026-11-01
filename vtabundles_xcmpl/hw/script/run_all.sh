@@ -14,10 +14,10 @@ run() {  # dir exe input golden
   [ -n "$ONLY" ] && [[ " $ONLY " != *" $1 "* ]] && return
   echo "================ $1 ($2)"
   echo 0 > /sys/class/fpga_manager/fpga0/flags
-  if for i in 1 2 3 4 5 6 7 8 9 10 11 12; do echo $BIN > /sys/class/fpga_manager/fpga0/firmware 2>/dev/null && break; sleep 5; false; done; then echo $BIN > /tmp/evta_bitstream
+  if for i in $(seq 24); do echo $BIN > /sys/class/fpga_manager/fpga0/firmware 2>/dev/null && break; sleep 5; false; done; then echo $BIN > /tmp/evta_bitstream
   else echo "FAILED $BIN" > /tmp/evta_bitstream; echo "bitstream $BIN: load failed"; fi
   ( cd trace && python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" 2>/dev/null )
-  ( cd $1 && rm -f output.bin && timeout 300 ./$2 $3 > $(LOG $2) 2>&1; echo $? > $(LOG $2).rc )
+  ( cd $1 && rm -f output.bin && timeout -k 10 300 ./$2 $3 > $(LOG $2) 2>&1; echo $? > $(LOG $2).rc )
   rc=$(cat $1/$(LOG $2).rc); chown -R --reference=. $1
   if [ $rc = 124 ]; then res=TIMEOUT
   elif [ $rc != 0 ]; then res="FAIL(rc=$rc)"

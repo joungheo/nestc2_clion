@@ -221,12 +221,12 @@ def main():
                 #### JO changed (2026-11-01): record the loaded bitstream (vtalib pynq_driver.cc checks the EVTA count)
                 # '  echo 0 > /sys/class/fpga_manager/fpga0/flags; echo $BIN > /sys/class/fpga_manager/fpga0/firmware\n'
                 '  echo 0 > /sys/class/fpga_manager/fpga0/flags\n'
-                '  if for i in 1 2 3 4 5 6 7 8 9 10 11 12; do echo $BIN > /sys/class/fpga_manager/fpga0/firmware 2>/dev/null && break; sleep 5; false; done; then echo $BIN > /tmp/evta_bitstream\n'
+                '  if for i in $(seq 24); do echo $BIN > /sys/class/fpga_manager/fpga0/firmware 2>/dev/null && break; sleep 5; false; done; then echo $BIN > /tmp/evta_bitstream\n'
                 '  else echo "FAILED $BIN" > /tmp/evta_bitstream; echo "bitstream $BIN: load failed"; fi\n'
                 #### JO changed (2026-10-27): in trace/ (libcma.so writes sds_trace_data.dat to the working dir)
                 # '  python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" 2>/dev/null\n'
                 '  ( cd trace && python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" 2>/dev/null )\n'
-                '  ( cd $1 && rm -f output.bin && timeout 300 ./$2 $3 > $(LOG $2) 2>&1; echo $? > $(LOG $2).rc )\n'
+                '  ( cd $1 && rm -f output.bin && timeout -k 10 300 ./$2 $3 > $(LOG $2) 2>&1; echo $? > $(LOG $2).rc )\n'
                 '  rc=$(cat $1/$(LOG $2).rc); chown -R --reference=. $1\n'
                 '  if [ $rc = 124 ]; then res=TIMEOUT\n'
                 '  elif [ $rc != 0 ]; then res="FAIL(rc=$rc)"\n'
