@@ -206,8 +206,14 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   single OMP 1 46.9 -> 44.3 ms, multi4 100 inferences 1.29 -> 1.19 s (§7.5). Reused buffers keep their old contents.
 - CPU fc (2026-11-01, vtalib `cpuFullyConnected`): kernel rows read in order, NEON sums per 8 rows x 64 outputs, prefetch, bit-identical:
   Resnet18 dense OMP 1 4.4 -> 0.74 ms, single OMP 1 44.3 -> 40.6 ms, multi4 100 inferences 1.19 -> ~1.1 s (§7.6). multi4 runs still hang
-  now and then (2 of 4 `_sys` runs, also without `-l`, cause unknown); after a timeout the CMA comes back only after ~60 s, the run scripts
-  retry the bitstream load for up to 120 s.
+  now and then (about once per 400 inferences per copy, HLS and systolic, only with 4 EVTAs at once), always in the 3x3 stride-2 conv right
+  after a 1x1 downsample; a busy wait of 5 us before each EVTA run (vtalib `EVTA_PRE_RUN_US`, off by default) made 2000 per copy hang-free
+  (§7.7). A timed-out run (`EVTA_RUN_TIMEOUT_MS`, default 5 s) dumps every EVTA's state and exits 5; the run scripts `xlnk_reset` after a
+  failed bitstream load (the dead run's CMA stays allocated until then).
+- fc on the EVTA (2026-11-02, `VTASave.cpp` `-vta-evta-fc`, default on; vtalib `fullyconnected_evta_packed`): weights and bias written in the
+  EVTA layout at compile time, GEMM over chunks of half the wgt buffer, rounding as `std::round` with ALU MIN/MAX/ADD/SHR (ALU shift is
+  -16..15), bit-exact; batch 1, offsets 0, power-of-two scale ratio, >= 8 output blocks per chunk, else the CPU fc. Resnet18 fc 0.74 -> 0.15 ms,
+  single OMP 1 40.6 -> 39.9 ms, multi4 per copy 41.2 -> 40.6 ms (§7.8).
 - The lab board's PL has a defective configuration row (tile row SLICE Y219, cells stuck at 0; `log/BOARD_TODO.md`
   2026-10-23/24). `vivado.tcl` on zcu102 fences the design below it by default (`VTA_BRAM_FENCE=y219|upper|none`).
   multi2 fits below it and works (2026-10-24); multi4 needs more BRAM than the rows below, so it crosses the row with

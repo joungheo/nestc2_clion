@@ -411,8 +411,57 @@ conv들 뒤 cache에 없는 weight를 1000바이트 간격으로 건너뛰며 DR
 | Resnet18 multi4 비트스트림, single-thread exe 100회 | 4460 ms | **4094 ms** | −8.2 % |
 
 - bench(cache를 밀어낸 상태)에서는 OMP 4가 0.23 ms인데 bundle 안에서는 0.77 ms로 OMP 1과 같다. 이유는 아직 보지 않았다(thread를 깨우는 비용?).
-- multi4 `_sys` 100회가 4번 중 2번 멈췄다(68번째 run 근처, `-l` 없이도; 7.5 전후로 `-l`에서도 1번). 원인은 아직 모른다. timeout으로 죽은 뒤
+- multi4 `_sys` 100회가 4번 중 2번 멈췄다(68번째 run 근처, `-l` 없이도; 7.5 전후로 `-l`에서도 1번). 조사는 §7.7. timeout으로 죽은 뒤
   CMA가 ~60 s 동안 돌아오지 않아 다음 bitstream load가 ENOMEM으로 실패한다: run 스크립트는 load를 5 s 간격으로 120 s까지 다시 시도하고 `timeout -k 10`을 쓴다.
+
+### 7.7 multi4 멈춤: run 시작 직전에 짧게 기다리면 사라진다 (2026-11-01~02, vtalib `cmd_queue.h`)
+
+- 멈추는 곳은 늘 1×1 downsample conv **바로 다음** 3×3 stride-2 conv다(Resnet18 13번째 `stage3_conv0`, 18번째 `stage4_conv0`).
+  HLS 380 MHz, systolic 400 MHz 둘 다 멈추고, 4 EVTA가 같이 돌 때만 멈춘다(single exe는 수천 번 0).
+- 멈춘 순간: fetch는 명령어를 다 내보냈고(`0x06`), load/compute/store는 auto-restart로 대기, compute의 FINISH가 없다.
+  명령어·uop 버퍼는 DRAM과 cache가 같다(멈춘 뒤 5 s에 비교). 의존성 FIFO는 깊이 1024, 명령어 FIFO는 512라 가득 찰 수 없다.
+- systolic multi4 Resnet18, copy당 100회씩 반복:
+
+| run 앞에서 하는 일 | copy당 추론 | 멈춤 |
+|---|---|---|
+| 없음 | 약 400회 | 1번 (EVTA2, 13번째 호출) |
+| STORE 영역을 `/dev/mem`으로 0xA5로 채움 (`EVTA_STORE_SENTINEL=1`) | 2000회 | 0번 |
+| 바쁜 대기 40 / 10 / 5 µs (`EVTA_PRE_RUN_US`) | 각 2000회 | 0번 |
+| EVTA0에만 40 µs (`EVTA_PRE_RUN_MASK=1`) | 약 500회 | 1번 (대기 없는 EVTA1, 18번째 호출) |
+
+- 해석(가설): 같은 EVTA에서 앞 run(짧은 downsample)의 done 직후 다음 run을 바로 시작하는 것이 문제다. 가장 그럴듯한 것은 명령어 버퍼를
+  같은 물리 주소에 다시 쓴 직후 fetch가 DRAM에 아직 반영되지 않은 앞 run의 명령어를 읽는 경우다(4 EVTA의 DRAM 경합으로 늦어진다).
+  아직 확인하지 않았다: 대기를 cache flush 앞에 두는 실험, 명령어 버퍼를 둘로 번갈아 쓰는 실험.
+- 5 µs 대기의 비용은 측정 차이 안이다(single exe 100회 4336 ms 대 4330 ms). 기본으로 켜지는 않았다.
+
+### 7.8 fc를 EVTA로 (2026-11-02, `VTASave.cpp` `-vta-evta-fc`, 기본 켜짐; vtalib `fullyconnected_evta_packed`)
+
+- fc를 1×1 conv 경로로 보내면 최소 tile 7×7 때문에 연산이 49배가 되어, fc 전용 kernel을 따로 썼다(`VTABundle.cpp`).
+  - 출력 블록 o마다 weight 16×16 entry IN/16개가 이어지게 둔다(출력 블록 우선, 출력은 16의 배수로 0 padding).
+  - 이 weight를 wgt 버퍼 반쪽(512 entry)씩 한 번에 LOAD하고, 다른 반쪽을 GEMM하는 동안 읽는다(Resnet18: 4덩어리 × 출력 블록 16개).
+  - GEMM은 c에 대한 loop 하나, o마다 uop 하나다. 같은 acc entry가 g(≥ 8) uop마다 돌아온다.
+  - bias는 acc의 초기값으로 LOAD한다.
+- 반올림은 CPU의 `std::round`(0.5를 0에서 먼 쪽으로)와 같게 ALU만으로 한다:
+  `s = max(min(acc, 0), -1)`, `acc = (acc + s + 2^(shift-1)) >> shift`, clip.
+  처음에 쓴 `SHR 31`은 왼쪽 1 밀기였다. ALU shift 인자는 5비트 부호 있는 수(-16..15)다.
+- weight와 bias는 compile time에 EVTA layout으로 weights 파일에 쓴다(Resnet18: weight 516,096 B, bias 4,032 B). CPU는 입력 512 B와
+  출력 1000 B를 복사하고 명령어를 만들 뿐이다. vtalib `fullyconnected_evta`(CPU layout weight를 첫 호출에 변환)도 남겨 두었다.
+- 조건이 안 맞으면 compile time에 CPU `fullyconnected`로 간다. 조건은 batch 1, offset 0, IN이 16의 배수, scale 비가 2^-shift(0..15),
+  덩어리당 출력 블록 ≥ 8이다. 그래서 Resnet50의 2048→1000(덩어리당 4블록)과 VGG16의 512→10은 CPU에 남는다.
+- 결과: `EVTA_RES_CHECK=1`에서 Resnet18 512→1000, VGG16 512→512 모두 0개 차이다. 보드 bring-up 탐침은 `EVTA_FC_PROBE=1`이다.
+  golden single 30, multi2 3, multi4 3 PASS. Resnet18·Partition·Resnet50은 281, VGG16은 airplane(0)이고, multi2와 multi4의 모든 추론이 281이다.
+
+| 경우 (systolic 400 MHz, `_systimed -r`, run 2~25 median) | 7.6 후 (CPU NEON fc) | EVTA fc |
+|---|---|---|
+| fc 한 번 | 0.74 ms (OMP 1) / 0.77 ms (OMP 4) | **0.152 ms** |
+| Resnet18 single, OMP 1 | 40.56 ms | **39.92 ms** |
+| Resnet18 single, OMP 4 | 38.68 ms | **37.99 ms** |
+| Resnet18 multi4 copy 하나, 4개 동시 | 41.2 ms | **40.56 ms** (4 copy 458.6 GOPS) |
+
+- 남은 CPU 몫(single OMP 4, 37.99 ms 중):
+  - EVTA 호출 22개 안의 CPU 몫(명령어 생성, 시작, 대기) 약 3 ms
+  - 입력 전처리 2.2 ms(elemdiv 0.94, elemsub 0.67, quantize 0.58)
+  - avgpool 0.23 ms 등
 
 ## 8. 하드웨어도 같이 비교해야 하나
 
