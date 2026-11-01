@@ -20,6 +20,12 @@ usage: run_times.py <Dir> <log>
 import csv, os, re, sys
 
 
+#### JO added (2026-11-01): per-run lists of more than 30 runs: the first 10 and the last 5
+def runs_str(v):
+    sh = v if len(v) <= 30 else list(v[:10]) + [None] + list(v[-5:])
+    return ' '.join('...' if x is None else f'{x:.3f}' for x in sh)
+
+
 def median(x):
     s = sorted(x)
     k = len(s) // 2
@@ -110,13 +116,13 @@ def main():
         tag = f'{n}: ' if multi else ''
         whole = [tot[r] for r in rs]
         cv = [sum(m for _, m in conv.get(r, [])) for r in rs]
-        print(f'{tag}whole run ms per run: ' + ' '.join(f'{x:.3f}' for x in whole))
-        print(f'{tag}conv (EVTA calls) ms per run: ' + ' '.join(f'{x:.3f}' for x in cv))
+        print(f'{tag}whole run ms per run: ' + runs_str(whole))
+        print(f'{tag}conv (EVTA calls) ms per run: ' + runs_str(cv))
         _, lw, sw = stat('whole run', whole, ops)
         _, lc, sc = stat('conv', cv, eops)
         cc = [cpu.get(r, 0.0) for r in rs]
         _, lp, sp = stat('cpu conv/fc', cc, cops)
-        print(f'{tag}cpu conv/fc ms per run: ' + ' '.join(f'{x:.3f}' for x in cc))
+        print(f'{tag}cpu conv/fc ms per run: ' + runs_str(cc))
         print(f'{tag}{rng}: {lw}; {lc}; {lp}')
         #### JO changed (2026-10-31): every copy in the summary too (first), the copies at once after them
         # if not multi:
@@ -137,8 +143,8 @@ def main():
         cops = sum(c[6] for c in cps)
         cc = [max(c[5].get(r, 0.0) for c in cps) for r in rs]
         print(f'---- {k} copies at once ----')
-        print(f'whole run (slowest copy) ms per run: ' + ' '.join(f'{x:.3f}' for x in whole))
-        print(f'conv busy union of the {k} EVTAs ms per run: ' + ' '.join(f'{x:.3f}' for x in cu))
+        print(f'whole run (slowest copy) ms per run: ' + runs_str(whole))
+        print(f'conv busy union of the {k} EVTAs ms per run: ' + runs_str(cu))
         _, lw, sw = stat(f'whole run x{k}', whole, ops)
         _, lc, sc = stat(f'conv x{k} (busy union)', cu, eops)
         mu = median(cu[1:] if len(cu) > 1 else cu)

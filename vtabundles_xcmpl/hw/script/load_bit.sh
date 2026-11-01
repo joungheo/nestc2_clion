@@ -13,7 +13,7 @@ exec 9>/tmp/evta_run.lock; flock -n 9 || { echo "another EVTA run is active (/tm
 #### EVTA count of its name before mapping the registers: a missing EVTA is an SError, not a clean error)
 # echo 0 > /sys/class/fpga_manager/fpga0/flags; echo $BIN > /sys/class/fpga_manager/fpga0/firmware
 echo 0 > /sys/class/fpga_manager/fpga0/flags
-if echo $BIN > /sys/class/fpga_manager/fpga0/firmware; then echo $BIN > /tmp/evta_bitstream
+if echo $BIN > /sys/class/fpga_manager/fpga0/firmware || { sleep 5; echo $BIN > /sys/class/fpga_manager/fpga0/firmware; } || { sleep 10; echo $BIN > /sys/class/fpga_manager/fpga0/firmware; }; then echo $BIN > /tmp/evta_bitstream
 else echo "FAILED $BIN" > /tmp/evta_bitstream; echo "bitstream $BIN: load failed"; fi
 mkdir -p trace; chown --reference=. trace
 ( cd trace && python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" )
