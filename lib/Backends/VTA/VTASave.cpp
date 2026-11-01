@@ -24,6 +24,7 @@
 #include "glow/IR/Instrs.h"
 #include "glow/Optimizer/IROptimizer/IROptimizer.h"
 #include "llvm/Support/CommandLine.h"
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -61,11 +62,11 @@ static llvm::cl::opt<bool> vtaEvtaMaxPool(
     //#### default on since the board check (2026-10-31: bit-exact, docs/evta_runtime_compare.md 7.3)
     llvm::cl::init(true));
 
-//#### JO added (2026-11-02): fully connected layer on the EVTA (fullyconnected_evta; falls back to the CPU fullyconnected
-//#### at run time when its quantization does not fit the EVTA)
+//#### JO added (2026-11-02): fully connected layer on the EVTA (fullyconnected_evta_packed, weights and bias written in
+//#### the EVTA layout here; saveEvtaFullyConnectedInst), when its shape and quantization fit, else the CPU fullyconnected
 static llvm::cl::opt<bool> vtaEvtaFc(
     "vta-evta-fc",
-    llvm::cl::desc("Run fully connected layers on the EVTA (fullyconnected_evta)"),
+    llvm::cl::desc("Run fully connected layers on the EVTA (fullyconnected_evta_packed)"),
     llvm::cl::init(true));
 
 namespace vta_save{
@@ -211,6 +212,21 @@ SymbolTableEntry addConstantSymbolEntry(Value* val, VTASaveContext *ctx){
   ste = csyms->back();
 
   return ste;
+}
+
+//#### JO added (2026-11-02): a constant whose bytes in the weights file are not its own size (a layout with padding)
+SymbolTableEntry addConstantSymbolEntrySized(Value *val, uint64_t size, VTASaveContext *ctx) {
+  auto csyms = ctx->getConstantSymbols();
+  csyms->push_back({val->getName().data(), ctx->getCMemSize(), size, '0'});
+  ctx->setCMemSize(ctx->getCMemSize() + size);
+  return csyms->back();
+}
+
+static bool hasConstantSymbol(Value *val, VTASaveContext *ctx) {
+  for (auto s : *ctx->getConstantSymbols())
+    if (strcmp(s.name, val->getName().data()) == 0)
+      return true;
+  return false;
 }
 
 SymbolTableEntry addConstantSymbolEntry_BNN(Value* val, VTASaveContext *ctx, bool first=false){
@@ -3535,8 +3551,103 @@ void saveBNNConvolutionInst(const glow::BNNConvolutionInst *Inst,
   }
 }
 
+//#### JO added (2026-11-02): fully connected layer on the EVTA (-vta-evta-fc). Batch 1, offsets 0, the input size a
+//#### multiple of 16 and in * weight / out scale = 2^-shift (shift 0..15, ALU SHR). The weights go into the weights file in
+//#### the EVTA layout of vtalib fullyconnected_evta_packed: NB = ceil(OUT/16) output blocks x IN/16 input blocks of 16x16
+//#### ([16 out][16 in]), output-block major, zero padded; the bias as NB x 16 int32, rounded to the GEMM scale as the CPU
+//#### fullyconnected does. The plan of the chunks must match vtalib fc_evta_plan (half of the 1024 wgt entries per chunk,
+//#### chunks of >= 8 output blocks, 2 NB acc entries). Returns false (nothing written) when it does not fit.
+static bool saveEvtaFullyConnectedInst(const glow::FullyConnectedInst *Inst, std::string *bundle,
+                                       VTASaveContext *ctx) {
+  auto src = Inst->getSrc();
+  auto dest = Inst->getDest();
+  auto filter = Inst->getWeights();
+  auto bias = Inst->getBias();
+  if (src->dims().size() != 2 || dest->dims().size() != 2 || filter->dims().size() != 2 || src->dims()[0] != 1 ||
+      dest->dims()[0] != 1 || filter->getElementType() != ElemKind::Int8QTy ||
+      bias->getElementType() != ElemKind::Int32QTy)
+    return false;
+  const uint32_t IN = src->dims()[1], OUT = dest->dims()[1];
+  if (filter->dims()[0] != IN || filter->dims()[1] != OUT || IN % 16)
+    return false;
+  if (src->getType()->getOffset() || filter->getType()->getOffset() || dest->getType()->getOffset() ||
+      bias->getType()->getOffset())
+    return false;
+  const float matMulScale = src->getType()->getScale() * filter->getType()->getScale();
+  const float ratio = matMulScale / dest->getType()->getScale();
+  int shift = -1;
+  for (int k = 0; k <= 15; k++)
+    if (ratio == std::ldexp(1.0f, -k))
+      shift = k;
+  const uint32_t CIN = IN / 16, NB = (OUT + 15) / 16, g = std::min<uint32_t>(NB, 512 / CIN);
+  const uint32_t nChunks = g ? (NB + g - 1) / g : 0, gEven = nChunks ? (NB + nChunks - 1) / nChunks : 0;
+  if (shift < 0 || gEven < 8 || 2 * NB > 2048 || hasConstantSymbol(filter, ctx) || hasConstantSymbol(bias, ctx))
+    return false;
+
+  const Tensor *tensor = nullptr, *tensorBias = nullptr;
+  auto vMap = ctx->getVariableMap();
+  for (auto it = vMap->begin(); it != vMap->end(); it++) {
+    if (it->first->getKind() != glow::Kinded::Kind::ConstantKind)
+      continue;
+    if (it->second == filter)
+      tensor = &(llvm::cast<Constant>(it->first)->getPayload());
+    if (it->second == bias)
+      tensorBias = &(llvm::cast<Constant>(it->first)->getPayload());
+  }
+  if (!tensor || !tensorBias)
+    return false;
+  auto handle = tensor->getHandle<int8_t>();
+  auto handleBias = tensorBias->getHandle<int32_t>();
+  const float biasRatio = bias->getType()->getScale() / matMulScale;
+
+  std::vector<int8_t> w((size_t)NB * CIN * 256, 0);
+  for (uint32_t k = 0; k < IN; k++)
+    for (uint32_t j = 0; j < OUT; j++)
+      w[((size_t)(j / 16) * CIN + k / 16) * 256 + (j % 16) * 16 + k % 16] = handle.raw((size_t)k * OUT + j);
+  std::vector<int32_t> b((size_t)NB * 16, 0);
+  for (uint32_t j = 0; j < OUT; j++)
+    b[j] = std::round(float(handleBias.raw(j)) * biasRatio);
+  auto fos = ctx->getWeightFileStream();
+  fos->write((const char *)w.data(), w.size());
+  auto filterSte = addConstantSymbolEntrySized(filter, w.size(), ctx);
+  fos->write((const char *)b.data(), b.size() * 4);
+  auto biasSte = addConstantSymbolEntrySized(bias, b.size() * 4, ctx);
+
+  auto srcWeight = static_cast<WeightVar *>(src);
+  auto destWeight = static_cast<WeightVar *>(dest);
+  bool srcMut = srcWeight->getMutability() == glow::WeightVar::MutabilityKind::Mutable;
+  bool destMut = destWeight->getMutability() == glow::WeightVar::MutabilityKind::Mutable;
+  if (srcMut)
+    addSymbolEntryGenBundle(srcWeight, bundle, ctx);
+  if (destMut)
+    addSymbolEntryGenBundle(destWeight, bundle, ctx);
+
+  uint32_t idx = ctx->getIdxMultiEVTA();
+  bundle->append("  fullyconnected_evta_packed(");
+  bundle->append(srcMut ? addSymbolEntry(srcWeight, ctx).name : src->getName().data());
+  bundle->append(", ");
+  bundle->append(filterSte.name);
+  bundle->append(", ");
+  bundle->append(biasSte.name);
+  bundle->append(", ");
+  bundle->append(destMut ? addSymbolEntry(destWeight, ctx).name : dest->getName().data());
+  for (int v : {(int)IN, (int)OUT, shift}) {
+    bundle->append(", ");
+    bundle->append(std::to_string(v));
+  }
+  bundle->append(", vtaCmdH");
+  if (idx)
+    bundle->append(std::to_string(idx));
+  bundle->append(", ");
+  bundle->append(std::to_string(idx));
+  bundle->append(");\n");
+  return true;
+}
+
 void saveFullyConnectedInst(const glow::FullyConnectedInst *Inst,
                             std::string *bundle, VTASaveContext *ctx) {
+  if (vtaEvtaFc && saveEvtaFullyConnectedInst(Inst, bundle, ctx))
+    return;
   auto src = Inst->getSrc();
   auto srcDims = src->dims();
   auto dest = Inst->getDest();
@@ -3635,9 +3746,7 @@ void saveFullyConnectedInst(const glow::FullyConnectedInst *Inst,
     addSymbolEntryGenBundle(destWeight, bundle, ctx);
   }
 
-  //#### JO changed (2026-11-02): on the EVTA (-vta-evta-fc), the same arguments plus the command handle
-  // bundle->append("  fullyconnected(");
-  bundle->append(vtaEvtaFc ? "  fullyconnected_evta(" : "  fullyconnected(");
+  bundle->append("  fullyconnected(");
 
   if (srcWeight->getMutability() == glow::WeightVar::MutabilityKind::Mutable) {
     auto ste = addSymbolEntry(srcWeight, ctx);
@@ -3702,14 +3811,6 @@ void saveFullyConnectedInst(const glow::FullyConnectedInst *Inst,
   bundle->append(std::to_string(destDims[1]));
   bundle->append(", ");
   bundle->append(std::to_string(1)); // doBias
-  if (vtaEvtaFc) {
-    uint32_t idx = ctx->getIdxMultiEVTA();
-    bundle->append(", vtaCmdH");
-    if (idx)
-      bundle->append(std::to_string(idx));
-    bundle->append(", ");
-    bundle->append(std::to_string(idx));
-  }
   bundle->append(" );\n");
 }
 

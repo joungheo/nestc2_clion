@@ -23,7 +23,9 @@ run() {  # dir exe input golden
   elif [ $rc != 0 ]; then res="FAIL(rc=$rc)"
   elif [ -n "$4" ]; then cmp -s $1/output.bin $1/$4 && res=PASS || res=MISMATCH
   else res="RAN (no golden; see $1/$(LOG $2))"; fi
-  tail -3 $1/$(LOG $2); printf "%-30s %-34s %s\n" $1 $2 "$res" | tee -a result/results.txt
+  r=$(grep -a '^RESULT mask' $1/$(LOG $2) | sed 's/^RESULT mask [^:]*: //; s/, all = golden//')
+  if [ -n "$r" ]; then grep -aE '^(EVTA[0-9]+: |RESULT mask)' $1/$(LOG $2); else tail -3 $1/$(LOG $2); fi
+  printf "%-30s %-34s %s\n" $1 $2 "$res${r:+  $r}" | tee -a result/results.txt
 }
 run AvgPoolTest vtaAvgPoolTestBundle vtaAvgPoolTestInput.bin vtaAvgPoolTestGolden.bin
 run Conv2Test vtaConv2TestBundle vtaConv2TestInput.bin vtaConv2TestGolden.bin
