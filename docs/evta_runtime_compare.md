@@ -393,6 +393,27 @@ ioctl이라 run당 alloc 2.3 ms + free 0.4 ms였다. 이제 `VTABufferFree`는 b
 - OMP 4에서 첫 run의 alloc이 200 ms 걸린다(OMP 1은 1.5 ms). pool이 없으면 run 2에도 생겼다. pool로는 run 1만 남는다.
 - run_all.sh hw 전부 PASS, multi4 전부 PASS. Result 281, Confidence 0.655530 그대로.
 
+### 7.6 CPU fc (2026-11-01, vtalib `CPUBundle_generic.cpp` `cpuFullyConnected`)
+
+Resnet18 dense(512 → 1000, weight int8 512 KB)는 OMP 1에서 4.4 ms였다. 출력 64개씩 나눠 k마다 weight 행의 64바이트를 읽어서,
+conv들 뒤 cache에 없는 weight를 1000바이트 간격으로 건너뛰며 DRAM에서 읽었다(prefetch가 안 된다). 이제 thread마다 출력의 연속 구간을
+맡고, weight 행을 순서대로 8행씩 읽으며 출력 64개의 합을 NEON register 16개에 둔다(int8 × int8 → int16 → int32, offset이 0일 때;
+아니면 scalar). 다음 8행은 prefetch한다. 정수 합이라 결과는 bit 단위로 같다(보드 bench 576가지 크기·offset·thread 수 비교, FCTest PASS).
+
+| 경우 (systolic 400 MHz, `-r`, run 2~25 median) | 7.5 후 | + fc | 변화 |
+|---|---|---|---|
+| fc, OMP 1 | 4.43 ms | **0.74 ms** | −83 % |
+| fc, OMP 4 | 1.20 ms | **0.77 ms** | −36 % |
+| Resnet18 single, OMP 1, 전체 run | 44.27 ms | **40.56 ms** (114.7 GOPS) | −8.4 % |
+| Resnet18 single, OMP 4, 전체 run | 39.07 ms | **38.68 ms** (120.3 GOPS) | −1.0 % |
+| Resnet18 multi4 copy 하나, 4개 동시(`-l` 없이) | – | 41.2 ms (4 copy 451 GOPS) | |
+| Resnet18 multi4 4 copy 100회 wall (`_sys`) | 1189 ms | **1089 / 1131 ms** (~90/s) | −6 ~ −8 % |
+| Resnet18 multi4 비트스트림, single-thread exe 100회 | 4460 ms | **4094 ms** | −8.2 % |
+
+- bench(cache를 밀어낸 상태)에서는 OMP 4가 0.23 ms인데 bundle 안에서는 0.77 ms로 OMP 1과 같다. 이유는 아직 보지 않았다(thread를 깨우는 비용?).
+- multi4 `_sys` 100회가 4번 중 2번 멈췄다(68번째 run 근처, `-l` 없이도; 7.5 전후로 `-l`에서도 1번). 원인은 아직 모른다. timeout으로 죽은 뒤
+  CMA가 ~60 s 동안 돌아오지 않아 다음 bitstream load가 ENOMEM으로 실패한다: run 스크립트는 load를 5 s 간격으로 120 s까지 다시 시도하고 `timeout -k 10`을 쓴다.
+
 ## 8. 하드웨어도 같이 비교해야 하나
 
 해야 한다. 다만 §7의 ①~④를 가르는 것은 어레이가 아니라 다음 네 가지다.
