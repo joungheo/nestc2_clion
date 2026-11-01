@@ -1,6 +1,10 @@
 #ifndef NPULIB_API_DATA_QUEUE_H_
 #define NPULIB_API_DATA_QUEUE_H_
 
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <cstdio>
 #include "uop_kernel.h"
 
 namespace vta {
@@ -27,6 +31,34 @@ class BaseQueue {
   /*! \return Whether there is pending information. */
   bool pending() const {
     return sram_begin_ != sram_end_;
+  }
+  //#### JO added (2026-11-01): after a run timed out, compare the bytes of the last ReadBarrier as the EVTA sees them
+  //#### (DRAM through an uncached /dev/mem mapping) with the CPU's cached view: a difference = a lost cache flush
+  void CompareDram(const char *tag) const {
+    size_t n = last_flush_bytes_;
+    if (!fpga_buff_ || !n) return;
+    size_t pg = getpagesize(), base = fpga_buff_phy_ & ~(pg - 1), off = fpga_buff_phy_ - base;
+    int fd = open("/dev/mem", O_RDONLY | O_SYNC);
+    if (fd < 0) return;
+    void *m = mmap(NULL, off + n, PROT_READ, MAP_SHARED, fd, base);
+    close(fd);
+    if (m == MAP_FAILED) return;
+    const volatile unsigned char *dram = static_cast<const volatile unsigned char *>(m) + off;
+    const unsigned char *cpu = static_cast<const unsigned char *>(fpga_buff_);
+    size_t bad = 0, first = n, last = 0;
+    for (size_t i = 0; i < n; i++)
+      if (dram[i] != cpu[i]) {
+        if (!bad) first = i;
+        last = i;
+        bad++;
+      }
+    fprintf(stderr, "%s buffer at 0x%08x: %zu of %zu bytes differ between DRAM and the CPU cache", tag,
+            (unsigned)fpga_buff_phy_, bad, n);
+    if (bad)
+      fprintf(stderr, " (bytes %zu .. %zu, %s element %zu .. %zu)", first, last, tag, first / elem_bytes_,
+              last / elem_bytes_);
+    fprintf(stderr, "\n");
+    munmap(m, off + n);
   }
   /*! \brief Initialize the space of the buffer. */
   void InitSpace(uint32_t elem_bytes, uint32_t max_bytes, bool coherent, bool always_cache) {
@@ -65,6 +97,8 @@ class BaseQueue {
   void* fpga_buff_{NULL};
   // Physical address of the FPGA buffer
   vta_phy_addr_t fpga_buff_phy_{0};
+  //#### JO added (2026-11-01): bytes copied and flushed by the last ReadBarrier (CompareDram)
+  size_t last_flush_bytes_{0};
 };
 
 /*!
@@ -268,6 +302,7 @@ class UopQueue : public BaseQueue<VTAUop> {
     CHECK(offset <= kMaxBytes);
     // Flush if we're using a shared memory system
     // and if interface is non-coherent
+    last_flush_bytes_ = offset;
     if (!coherent_ && always_cache_) {
       VTAFlushCache(fpga_buff_,
                     fpga_buff_phy_,
@@ -681,6 +716,7 @@ class InsnQueue : public BaseQueue<VTAGenericInsn> {
                        buff_size);
     // Flush if we're using a shared memory system
     // and if interface is non-coherent
+    last_flush_bytes_ = buff_size;
     if (!coherent_ && always_cache_) {
       VTAFlushCache(fpga_buff_,
                     fpga_buff_phy_,

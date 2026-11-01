@@ -207,6 +207,8 @@ class CommandQueue {
         fprintf(stderr, "instructions of the run saved in %s (%u x %zu bytes)\n", name, (unsigned)insn_queue_.count(),
                 sizeof(VTAGenericInsn));
       }
+      insn_queue_.CompareDram("insn");
+      uop_queue_.CompareDram("uop");
       //#### exit at once (not the CHECK's abort: apport takes the core dump of the process for minutes, and the CMA
       //#### stays allocated until it is done, so the next bitstream load fails with ENOMEM)
       fflush(stdout);
