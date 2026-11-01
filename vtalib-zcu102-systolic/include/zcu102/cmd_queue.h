@@ -12,6 +12,7 @@
 #include "uop_kernel.h"
 
 #include <memory>
+#include <string>
 
 namespace vta {
 
@@ -667,13 +668,18 @@ class CommandQueue {
     __sync_synchronize();
   }
   void StoreSentinelReport() {
+    unsigned q = (unsigned)insn_queue_.dram_phy_addr();
     if (!sent_map_) {
-      if (SentinelOn()) fprintf(stderr, "store sentinel: not set for this run\n");
+      if (SentinelOn()) fprintf(stderr, "store sentinel (insn 0x%08x): not set for this run\n", q);
       return;
     }
+    // one block per EVTA (the threads of a multi-EVTA executable print at the same time): the counts, then the STOREs
+    // that are not complete (at most 12)
     const VTAMemInsn *in = reinterpret_cast<const VTAMemInsn*>(insn_queue_.data());
-    uint32_t n = insn_queue_.count(), k = 0;
+    uint32_t n = insn_queue_.count(), k = 0, full = 0, part = 0, none = 0, shown = 0;
     uint64_t f, l;
+    char line[256];
+    std::string det;
     for (uint32_t i = 0; i < n; i++)
       if (in[i].opcode == VTA_OPCODE_STORE) {
         MemSpan(in[i], &f, &l);
@@ -686,11 +692,20 @@ class CommandQueue {
             if (!s) wr++;
             else if (firstun == tot) firstun = y * in[i].x_size + x;
           }
-        fprintf(stderr, "store sentinel: STORE %u (insn %u, dram 0x%08llx, %ux%u): %u of %u vectors written%s", k, i,
-                (unsigned long long)f, in[i].y_size, in[i].x_size, wr, tot, wr == tot ? "\n" : "");
-        if (wr != tot) fprintf(stderr, ", first unwritten %u\n", firstun);
+        if (wr == tot) full++;
+        else {
+          wr ? part++ : none++;
+          if (shown++ < 12) {
+            snprintf(line, sizeof(line), "  STORE %u (insn %u, sram %u, dram 0x%08llx, %ux%u stride %u): %u of %u vectors written,"
+                     " first unwritten %u\n", k, i, (unsigned)in[i].sram_base, (unsigned long long)f, (unsigned)in[i].y_size,
+                     (unsigned)in[i].x_size, (unsigned)in[i].x_stride, wr, tot, firstun);
+            det += line;
+          }
+        }
         k++;
       }
+    fprintf(stderr, "store sentinel (insn 0x%08x): %u STOREs, %u written, %u partly, %u not at all\n%s", q, k, full, part,
+            none, det.c_str());
   }
   int sent_fd_{-1};
   volatile uint64_t *sent_map_{nullptr};
