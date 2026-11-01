@@ -207,6 +207,11 @@ class CommandQueue {
         fprintf(stderr, "instructions of the run saved in %s (%u x %zu bytes)\n", name, (unsigned)insn_queue_.count(),
                 sizeof(VTAGenericInsn));
       }
+      //#### exit at once (not the CHECK's abort: apport takes the core dump of the process for minutes, and the CMA
+      //#### stays allocated until it is done, so the next bitstream load fails with ENOMEM)
+      fflush(stdout);
+      fflush(stderr);
+      _exit(5);
     }
     CHECK_EQ(timeout, 0);
     //printf(" -- DONE\n");
