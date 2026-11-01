@@ -2,6 +2,8 @@
 #define NPULIB_API_COMMAND_QUEUE_H_
 
 
+#include <unistd.h>
+#include <cstdio>
 #include <vta/driver.h>
 #include "uop_kernel.h"
 
@@ -194,6 +196,18 @@ class CommandQueue {
     //printf("[Synchronize] device run. -- DONE\n");
 
     //printf("[Synchronize] check timeout");
+    //#### JO added (2026-11-01): a timed-out run (EVTA_RUN_TIMEOUT_MS, pynq_driver.cc) saves its instructions
+    if (timeout) {
+      char name[128];
+      snprintf(name, sizeof(name), "/tmp/evta_hang_%d_%08x.insn", (int)getpid(), (unsigned)insn_queue_.dram_phy_addr());
+      FILE *fp = fopen(name, "wb");
+      if (fp) {
+        fwrite(insn_queue_.data(), sizeof(VTAGenericInsn), insn_queue_.count(), fp);
+        fclose(fp);
+        fprintf(stderr, "instructions of the run saved in %s (%u x %zu bytes)\n", name, (unsigned)insn_queue_.count(),
+                sizeof(VTAGenericInsn));
+      }
+    }
     CHECK_EQ(timeout, 0);
     //printf(" -- DONE\n");
     

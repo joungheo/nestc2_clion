@@ -400,6 +400,18 @@ class VTADevice {
     //}
     unsigned t, flag = 0;
     bool written = false;
+    //#### JO added (2026-11-01): EVTA_RUN_TIMEOUT_MS (default 5000, 0 = none): a run that does not finish in time prints
+    //#### the state of every EVTA (DumpHang) and returns the timeout (CHECK in Synchronize, the process aborts) instead of
+    //#### polling for hours (wait_cycles 1 << 31 with a yield per poll)
+    static const uint64_t timeout_us = [] {
+      const char *e = getenv("EVTA_RUN_TIMEOUT_MS");
+      return (uint64_t)(e ? atoll(e) : 5000) * 1000;
+    }();
+    run_count_++;
+    in_run_ = true;
+    run_start_ = start_time;
+    insn_count_ = insn_count;
+    insn_phy_ = insn_phy_addr;
     for (t = 0; t < wait_cycles; ++t) {
       if (!written)
         written = VTAReadMappedReg(vta_compute_handle_, VTA_COMPUTE_DONE_RD_OFFSET + 4) & 1;
@@ -407,8 +419,18 @@ class VTADevice {
         flag = VTAReadMappedReg(vta_compute_handle_, VTA_COMPUTE_DONE_RD_OFFSET);
         if (flag == VTA_DONE) break;
       }
+      if (timeout_us && (t & 1023) == 1023) {
+        gettimeofday(&stop_time, nullptr);
+        uint64_t us = (stop_time.tv_sec - start_time.tv_sec) * 1000000ull + stop_time.tv_usec - start_time.tv_usec;
+        if (us >= timeout_us) {
+          DumpHang(us, written, flag);
+          in_run_ = false;
+          return 1;
+        }
+      }
       std::this_thread::yield();
     }
+    in_run_ = false;
     gettimeofday(&stop_time, nullptr);
 
 
@@ -489,6 +511,24 @@ class VTADevice {
     return vta_index_;
   }
 
+  //#### JO added (2026-11-01): one line of this EVTA's state: the HLS control register (offset 0: bit 0 start, 1 done,
+  //#### 2 idle, 3 ready, 7 auto-restart) of fetch / load / compute / store, compute's done_o and done_o_ap_vld (reading
+  //#### 0x1c clears it, so it is only read here when this EVTA is not running), its run count and whether a run is waiting
+  void StateLine(char *buf, size_t n, bool readVld) {
+    struct timeval now;
+    gettimeofday(&now, nullptr);
+    double ms = in_run_ ? ((now.tv_sec - run_start_.tv_sec) * 1e3 + (now.tv_usec - run_start_.tv_usec) / 1e3) : 0;
+    snprintf(buf, n, "EVTA%u: fetch 0x%02x load 0x%02x compute 0x%02x store 0x%02x, done_o %u%s, fetch insn_count %u; "
+             "run %u %s (%.1f ms), insn_count %u at 0x%08x",
+             vta_index_, VTAReadMappedReg(vta_fetch_handle_, 0), VTAReadMappedReg(vta_load_handle_, 0),
+             VTAReadMappedReg(vta_compute_handle_, 0), VTAReadMappedReg(vta_store_handle_, 0),
+             VTAReadMappedReg(vta_compute_handle_, VTA_COMPUTE_DONE_RD_OFFSET),
+             readVld ? (VTAReadMappedReg(vta_compute_handle_, VTA_COMPUTE_DONE_RD_OFFSET + 4) & 1 ? " (vld 1)" : " (vld 0)") : "",
+             VTAReadMappedReg(vta_fetch_handle_, VTA_FETCH_INSN_COUNT_OFFSET), run_count_,
+             in_run_ ? "waiting" : "not in a run", ms, insn_count_, (unsigned)insn_phy_);
+  }
+  void DumpHang(uint64_t us, bool written, unsigned flag);
+
  private:
   // VTA handles (register maps)
   void* vta_fetch_handle_{nullptr};
@@ -504,7 +544,28 @@ class VTADevice {
   //#### JO added
   uint32_t dropped_events_{0};
   uint32_t vta_index_;
+  //#### JO added (2026-11-01): for DumpHang
+  uint32_t run_count_{0};
+  volatile bool in_run_{false};
+  struct timeval run_start_{};
+  uint32_t insn_count_{0};
+  vta_phy_addr_t insn_phy_{0};
 };
+
+void VTADevice::DumpHang(uint64_t us, bool written, unsigned flag) {
+  static std::mutex m;
+  std::lock_guard<std::mutex> lock(m);
+  fprintf(stderr, "EVTA%u: run %u (%u instructions at 0x%08x) not done after %.1f ms (done_o_ap_vld seen %d, done_o %u)\n",
+          vta_index_, run_count_, insn_count_, (unsigned)insn_phy_, us / 1e3, written, flag);
+  char line[512];
+  for (int i = 0; i < VTA_DEVICE_NUM; i++) {
+    VTADevice *d = static_cast<VTADevice *>(createdVTADeviceHandle[i]);
+    if (!d) continue;
+    d->StateLine(line, sizeof(line), false);
+    fprintf(stderr, "  %s\n", line);
+  }
+  fflush(stderr);
+}
 
 VTADeviceHandle VTADeviceAlloc(int index) {
 #ifdef VTA_DEBUG_MODE
