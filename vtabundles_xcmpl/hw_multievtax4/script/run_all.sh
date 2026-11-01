@@ -14,7 +14,7 @@ run() {  # dir exe input golden
   [ -n "$ONLY" ] && [[ " $ONLY " != *" $1 "* ]] && return
   echo "================ $1 ($2)"
   echo 0 > /sys/class/fpga_manager/fpga0/flags
-  if for i in $(seq 24); do echo $BIN > /sys/class/fpga_manager/fpga0/firmware 2>/dev/null && break; sleep 5; false; done; then echo $BIN > /tmp/evta_bitstream
+  if for i in $(seq 24); do echo $BIN > /sys/class/fpga_manager/fpga0/firmware 2>/dev/null && break; [ $i = 1 ] && ( mkdir -p /tmp/xlnk_trace && cd /tmp/xlnk_trace && python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" 2>/dev/null ); sleep 5; false; done; then echo $BIN > /tmp/evta_bitstream
   else echo "FAILED $BIN" > /tmp/evta_bitstream; echo "bitstream $BIN: load failed"; fi
   ( cd trace && python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" 2>/dev/null )
   ( cd $1 && rm -f output.bin && timeout -k 10 300 ./$2 $3 > $(LOG $2) 2>&1; echo $? > $(LOG $2).rc )

@@ -221,7 +221,7 @@ def main():
                 #### JO changed (2026-11-01): record the loaded bitstream (vtalib pynq_driver.cc checks the EVTA count)
                 # '  echo 0 > /sys/class/fpga_manager/fpga0/flags; echo $BIN > /sys/class/fpga_manager/fpga0/firmware\n'
                 '  echo 0 > /sys/class/fpga_manager/fpga0/flags\n'
-                '  if for i in $(seq 24); do echo $BIN > /sys/class/fpga_manager/fpga0/firmware 2>/dev/null && break; sleep 5; false; done; then echo $BIN > /tmp/evta_bitstream\n'
+                '  if for i in $(seq 24); do echo $BIN > /sys/class/fpga_manager/fpga0/firmware 2>/dev/null && break; [ $i = 1 ] && ( mkdir -p /tmp/xlnk_trace && cd /tmp/xlnk_trace && python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" 2>/dev/null ); sleep 5; false; done; then echo $BIN > /tmp/evta_bitstream\n'
                 '  else echo "FAILED $BIN" > /tmp/evta_bitstream; echo "bitstream $BIN: load failed"; fi\n'
                 #### JO changed (2026-10-27): in trace/ (libcma.so writes sds_trace_data.dat to the working dir)
                 # '  python3 -c "from pynq import Xlnk; Xlnk().xlnk_reset()" 2>/dev/null\n'
