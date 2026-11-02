@@ -3609,7 +3609,13 @@ int fullyconnected_evta_packed(int8_t *input, void *wgt, void *bias, int8_t *out
   }
   memcpy(VTABufferGetVirtAddr(b.in), input, IN);
   VTABufferFlush(b.in, 0, IN);
-  fc_evta_core(b, CIN, NB, gEven, nChunks, shift, (VTACommandHandle)vtaCmdH, idEVTA);
+  //#### JO added (2026-11-02): replay (cmd_queue.h ReplayBegin)
+  int32_t replayKey[] = {4, (int32_t)CIN, (int32_t)NB, (int32_t)gEven, (int32_t)nChunks, shift, (int32_t)idEVTA};
+  void *replayBufs[] = {b.wgt, b.bias, b.in, b.out};
+  if (!VTAReplayBegin(vtaCmdH, replayKey, sizeof(replayKey), replayBufs, 4)) {
+    fc_evta_core(b, CIN, NB, gEven, nChunks, shift, (VTACommandHandle)vtaCmdH, idEVTA);
+    VTAReplayEnd(vtaCmdH, 1);
+  }
   VTABufferInvalidate(b.out, 0, (size_t)NB * 16);
   memcpy(output, VTABufferGetVirtAddr(b.out), OUT);
 
