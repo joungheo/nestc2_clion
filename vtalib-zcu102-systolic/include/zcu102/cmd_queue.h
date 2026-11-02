@@ -376,6 +376,8 @@ class CommandQueue {
       return;
     }
     replay_bytes_ += rec_->bytes;
+    rec_->id = (uint32_t)replays_.size();
+    MemExperiment(*rec_);
     if (ReplayLog())
       fprintf(stderr, "EVTA %d replay %zu: %zu runs, %u instructions, %zu relocations, %zu bytes (%zu in all)\n",
               evta_index_, replays_.size(), rec_->segs.size(), rec_->insns, rec_->relocs.size(), rec_->bytes,
@@ -534,6 +536,9 @@ class CommandQueue {
     void *insn{nullptr}, *uop{nullptr};
     vta_phy_addr_t insn_phy{0}, uop_phy{0};
     uint32_t count{0}, uop_bytes{0};
+    // what the run does (EVTA_REPLAY_LOG=2): GEMM / ALU inner iterations, DRAM bytes of the LOADs (uop, wgt, inp, acc)
+    // and of the STOREs (out)
+    uint64_t gemm{0}, alu{0}, bytes[5]{};
   };
   struct ReplayReloc {
     uint32_t seg, idx, buf, elem_bytes, elem_offset;
@@ -543,7 +548,7 @@ class CommandQueue {
     std::vector<ReplayReloc> relocs;
     std::vector<vta_phy_addr_t> bufs;  // the buffers' addresses in the copies
     size_t bytes{0};
-    uint32_t insns{0};
+    uint32_t insns{0}, id{0};
   };
   static int ReplayEnv(const char *name, int def) {
     const char *e = getenv(name);
@@ -556,6 +561,54 @@ class CommandQueue {
   static bool ReplayLog() {
     static const bool on = ReplayEnv("EVTA_REPLAY_LOG", 0) > 0;
     return on;
+  }
+  static int ReplayLogLevel() {
+    static const int level = ReplayEnv("EVTA_REPLAY_LOG", 0);
+    return level;
+  }
+  //#### JO added (2026-11-02): DRAM traffic experiment (docs/evta_runtime_compare.md 7.11), results are garbage:
+  //#### EVTA_MEMEXP bit 0 / 1 / 2 / 3 shrinks the inp / wgt / acc LOADs / the STOREs of the replayed copies to one element
+  //#### (pads kept), so a replay times the run without that traffic
+  static int MemExpMask() {
+    static const int mask = ReplayEnv("EVTA_MEMEXP", 0);
+    return mask;
+  }
+  static void MemExperiment(Replay &r) {
+    const int mask = MemExpMask();
+    if (!mask) return;
+    for (auto &g : r.segs) {
+      for (uint32_t i = 0; i < g.count; i++) {
+        VTAMemInsn *m = InsnAt(g.insn, i);
+        int bit = -1;
+        if (m->opcode == VTA_OPCODE_STORE) bit = 3;
+        else if (m->opcode == VTA_OPCODE_LOAD && m->memory_type == VTA_MEM_ID_INP) bit = 0;
+        else if (m->opcode == VTA_OPCODE_LOAD && m->memory_type == VTA_MEM_ID_WGT) bit = 1;
+        else if (m->opcode == VTA_OPCODE_LOAD && m->memory_type == VTA_MEM_ID_ACC) bit = 2;
+        if (bit >= 0 && (mask >> bit & 1) && m->x_size) {
+          m->x_size = 1;
+          m->y_size = 1;
+        }
+      }
+      VTAFlushCache(g.insn, g.insn_phy, g.count * sizeof(VTAGenericInsn));
+    }
+  }
+  static void CountSegment(ReplaySeg &g) {
+    for (uint32_t i = 0; i < g.count; i++) {
+      VTAGenericInsn *p = static_cast<VTAGenericInsn *>(g.insn) + i;
+      if (p->opcode == VTA_OPCODE_GEMM) {
+        VTAGemInsn *x = reinterpret_cast<VTAGemInsn *>(p);
+        g.gemm += (uint64_t)x->iter_out * x->iter_in * (x->uop_end - x->uop_bgn);
+      } else if (p->opcode == VTA_OPCODE_ALU) {
+        VTAAluInsn *x = reinterpret_cast<VTAAluInsn *>(p);
+        g.alu += (uint64_t)x->iter_out * x->iter_in * (x->uop_end - x->uop_bgn);
+      } else if (p->opcode == VTA_OPCODE_LOAD || p->opcode == VTA_OPCODE_STORE) {
+        VTAMemInsn *m = reinterpret_cast<VTAMemInsn *>(p);
+        static const uint32_t eb[4] = {VTA_UOP_ELEM_BYTES, VTA_WGT_ELEM_BYTES, VTA_INP_ELEM_BYTES, VTA_ACC_ELEM_BYTES};
+        uint64_t n = (uint64_t)m->x_size * m->y_size;
+        if (p->opcode == VTA_OPCODE_STORE) g.bytes[4] += n * VTA_OUT_ELEM_BYTES;
+        else g.bytes[m->memory_type] += n * eb[m->memory_type];
+      }
+    }
   }
   static size_t ReplayLimit() {
     static const size_t mb = ReplayEnv("EVTA_REPLAY_MB", 16);
@@ -617,6 +670,7 @@ class CommandQueue {
       }
     }
     VTAFlushCache(g.insn, g.insn_phy, ib);
+    CountSegment(g);
     rec_->segs.push_back(g);
     rec_->bytes += ib + g.uop_bytes;
     rec_->insns += g.count;
@@ -634,9 +688,19 @@ class CommandQueue {
         InsnAt(r.segs[c.seg].insn, c.idx)->dram_base = (uint32_t)(r.bufs[c.buf] / c.elem_bytes) + c.elem_offset;
       for (auto &g : r.segs) VTAFlushCache(g.insn, g.insn_phy, g.count * sizeof(VTAGenericInsn));
     }
-    for (auto &g : r.segs) {
+    for (size_t s = 0; s < r.segs.size(); s++) {
+      ReplaySeg &g = r.segs[s];
       PreRunWait();
+      struct timespec t0, t1;
+      if (ReplayLogLevel() >= 2) clock_gettime(CLOCK_MONOTONIC, &t0);
       int timeout = VTADeviceRun(device_, g.insn_phy, g.count, 1u << 31);
+      if (ReplayLogLevel() >= 2) {
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        fprintf(stderr, "EVTA_RUN %d %u %zu %u %.1f %llu %llu %llu %llu %llu %llu %llu\n", evta_index_, r.id, s, g.count,
+                (t1.tv_sec - t0.tv_sec) * 1e6 + (t1.tv_nsec - t0.tv_nsec) * 1e-3, (unsigned long long)g.gemm,
+                (unsigned long long)g.alu, (unsigned long long)g.bytes[0], (unsigned long long)g.bytes[1],
+                (unsigned long long)g.bytes[2], (unsigned long long)g.bytes[3], (unsigned long long)g.bytes[4]);
+      }
       if (timeout) {
         char name[128];
         snprintf(name, sizeof(name), "/tmp/evta_hang_%d_%08x.insn", (int)getpid(), (unsigned)g.insn_phy);
