@@ -205,15 +205,20 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   of the same size reuses it (no `cma_alloc` ioctl after the first run; up to `EVTA_BUF_POOL_MB`, default 32, `0` = off): Resnet18
   single OMP 1 46.9 -> 44.3 ms, multi4 100 inferences 1.29 -> 1.19 s (§7.5). Reused buffers keep their old contents.
 - CPU fc (2026-11-01, vtalib `cpuFullyConnected`): kernel rows read in order, NEON sums per 8 rows x 64 outputs, prefetch, bit-identical:
-  Resnet18 dense OMP 1 4.4 -> 0.74 ms, single OMP 1 44.3 -> 40.6 ms, multi4 100 inferences 1.19 -> ~1.1 s (§7.6). multi4 runs still hang
-  now and then (about once per 400 inferences per copy, HLS and systolic, only with 4 EVTAs at once), always in the 3x3 stride-2 conv right
-  after a 1x1 downsample; a busy wait of 5 us before each EVTA run (vtalib `EVTA_PRE_RUN_US`, off by default) made 2000 per copy hang-free
-  (§7.7). A timed-out run (`EVTA_RUN_TIMEOUT_MS`, default 5 s) dumps every EVTA's state and exits 5; the run scripts `xlnk_reset` after a
+  Resnet18 dense OMP 1 4.4 -> 0.74 ms, single OMP 1 44.3 -> 40.6 ms, multi4 100 inferences 1.19 -> ~1.1 s (§7.6). multi4 runs
+  hung now and then (about once per 400 inferences per copy, only with 4 EVTAs at once): libcma's `cma_flush_cache` is a `dc civac`
+  loop with no `dsb`, so the MMIO start could overtake the flush of the instructions; vtalib `VTAFlushCache` / `VTAInvalidateCache` now
+  add `dsb sy` (2026-11-02, `EVTA_NO_DSB=1` leaves it out; 4000 per copy hang-free with no wait). The 5 us busy wait before each run
+  (`EVTA_PRE_RUN_US`, default 5, 0 = off) stays as well (§7.7). A timed-out run (`EVTA_RUN_TIMEOUT_MS`, default 5 s) dumps every EVTA's state and exits 5; the run scripts `xlnk_reset` after a
   failed bitstream load (the dead run's CMA stays allocated until then).
 - fc on the EVTA (2026-11-02, `VTASave.cpp` `-vta-evta-fc`, default on; vtalib `fullyconnected_evta_packed`): weights and bias written in the
   EVTA layout at compile time, GEMM over chunks of half the wgt buffer, rounding as `std::round` with ALU MIN/MAX/ADD/SHR (ALU shift is
   -16..15), bit-exact; batch 1, offsets 0, power-of-two scale ratio, >= 8 output blocks per chunk, else the CPU fc. Resnet18 fc 0.74 -> 0.15 ms,
   single OMP 1 40.6 -> 39.9 ms, multi4 per copy 41.2 -> 40.6 ms (§7.8).
+- Input preprocessing in the conv0 input copy (2026-11-02, `VTASave.cpp` `-vta-fuse-preprocess`, default on, `findInputPreprocess`; vtalib
+  `preprocess_nhwc2vtaio_zerofill`): the float quantize, per-channel constant elemsub / elemdiv (a [C][256] table made at compile time) and
+  an NCHW -> NHWC transpose before the zero-filled first conv, NEON 16 pixels at a time, bit-exact: 2.4 -> 0.37 ms, Resnet18 single OMP 1
+  39.9 -> 37.1 ms, multi4 per copy 40.6 -> 37.6 ms (§7.9).
 - The lab board's PL has a defective configuration row (tile row SLICE Y219, cells stuck at 0; `log/BOARD_TODO.md`
   2026-10-23/24). `vivado.tcl` on zcu102 fences the design below it by default (`VTA_BRAM_FENCE=y219|upper|none`).
   multi2 fits below it and works (2026-10-24); multi4 needs more BRAM than the rows below, so it crosses the row with

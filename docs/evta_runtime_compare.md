@@ -429,10 +429,22 @@ conv들 뒤 cache에 없는 weight를 1000바이트 간격으로 건너뛰며 DR
 | 바쁜 대기 40 / 10 / 5 µs (`EVTA_PRE_RUN_US`) | 각 2000회 | 0번 |
 | EVTA0에만 40 µs (`EVTA_PRE_RUN_MASK=1`) | 약 500회 | 1번 (대기 없는 EVTA1, 18번째 호출) |
 
-- 해석(가설): 같은 EVTA에서 앞 run(짧은 downsample)의 done 직후 다음 run을 바로 시작하는 것이 문제다. 가장 그럴듯한 것은 명령어 버퍼를
-  같은 물리 주소에 다시 쓴 직후 fetch가 DRAM에 아직 반영되지 않은 앞 run의 명령어를 읽는 경우다(4 EVTA의 DRAM 경합으로 늦어진다).
-  아직 확인하지 않았다: 대기를 cache flush 앞에 두는 실험, 명령어 버퍼를 둘로 번갈아 쓰는 실험.
-- 5 µs 대기의 비용은 측정 차이 안이다(single exe 100회 4336 ms 대 4330 ms). 기본으로 켜지는 않았다.
+- 원인을 가르는 실험(2026-11-02, 같은 조건, copy당 100회씩 반복, 멈추면 중단):
+
+| run 앞에서 하는 일 | 멈춤 |
+|---|---|
+| 없음 (대조) | 7번째 100회에서 (EVTA1) |
+| 5 µs 대기를 uop/명령어 복사와 cache flush **앞**에 (`EVTA_PRE_RUN_AT=1`) | 2번째 100회에서 |
+| 대기 없음, uop/명령어 버퍼를 반쪽씩 번갈아 씀 (`EVTA_DOUBLE_QUEUE=1`) | 4번째 100회에서 |
+| 대기 없음, cache flush 뒤 `dsb sy` | **4000회 0번** |
+
+- 원인: PYNQ 2.4 `libcma.so`의 `cma_flush_cache`(와 `cma_invalidate_cache`)는 `dc civac` loop뿐이고 `dsb`가 없다(objdump).
+  Arm에서 cache 정리는 `dsb` 뒤에야 끝났다고 보장되므로, EVTA를 시작하는 MMIO 쓰기가 정리된 명령어/uop가 DRAM에 닿기 전에
+  나갈 수 있다. 4 EVTA가 DRAM을 같이 쓸 때 그 틈이 길어져 fetch가 덜 쓰인 명령어를 읽고 멈춘다(앞 run의 짧은 downsample 뒤에 CPU가
+  다음 run을 빨리 만드는 3×3 stride-2 conv에서 드러났다). flush 뒤의 대기나 sentinel 채우기(`/dev/mem` 쓰기)가 그 틈을 메웠고,
+  flush 앞의 대기나 다른 주소에 쓰기는 소용이 없었다.
+- 고침: vtalib `pynq_driver.cc` `VTAFlushCache` / `VTAInvalidateCache`가 libcma 다음에 `dsb sy`를 한다(`EVTA_NO_DSB=1`이면 뺀다).
+  5 µs 대기(`EVTA_PRE_RUN_US`)는 기본 5로 남겼다(`0`이면 끔). 비용은 측정 차이 안이다(single exe 100회 4336 ms 대 4330 ms).
 
 ### 7.8 fc를 EVTA로 (2026-11-02, `VTASave.cpp` `-vta-evta-fc`, 기본 켜짐; vtalib `fullyconnected_evta_packed`)
 
@@ -462,6 +474,34 @@ conv들 뒤 cache에 없는 weight를 1000바이트 간격으로 건너뛰며 DR
   - EVTA 호출 22개 안의 CPU 몫(명령어 생성, 시작, 대기) 약 3 ms
   - 입력 전처리 2.2 ms(elemdiv 0.94, elemsub 0.67, quantize 0.58)
   - avgpool 0.23 ms 등
+
+### 7.9 입력 전처리를 conv0 입력 복사 하나로 (2026-11-02, `VTASave.cpp` `-vta-fuse-preprocess`, 기본 켜짐; vtalib `preprocess_nhwc2vtaio_zerofill`)
+
+- 0으로 채운 첫 conv(`ConvPath::FirstBNN`) 앞의 float 입력 quantize와 그 뒤의 elemsub / elemdiv(채널마다 같은 int8 상수),
+  NCHW → NHWC transpose(하나까지)를, conv0 입력을 EVTA layout으로 쓰는 복사 한 번에 한다(`findInputPreprocess`).
+  각 값은 다음 명령 하나만 써야 한다.
+  - elemsub / elemdiv 사슬은 quantize한 값(256개)과 채널에만 달렸으므로, compile time에 표 [C][256]로 만들어 weights 파일에 쓴다.
+    표는 CPU elemsub / elemdiv와 같은 float 계산을, bundle이 쓰는 scale(`1.0/<1/scale 소수 6자리>`)로 한다.
+  - Resnet18: quantize → elemsub(mean) → elemdiv(std) → zerofill, 표 있음.
+  - Resnet50, VGG16: quantize → transpose → zerofill, 표 없음.
+  - Resnet18Partition은 conv0이 float이라 해당 없다.
+- vtalib는 16 pixel씩 NEON으로 한다.
+  - quantize는 `vcvtaq`(0.5를 0에서 먼 쪽으로, `std::round`와 같음)와 포화 narrow로 한다. scale이 2의 거듭제곱이면 나누기 대신 곱하기다(결과가 같다).
+  - 표는 `vqtbl4q`/`vqtbx4q` 4번이다.
+  - pixel은 `c0 c1 c2 0` word 하나와 0 12바이트로, `vst4q_u32`로 쓴다.
+- 검사: 보드 단위 시험에서 0개 차이였다. 시험은 vtalib quantize+elemsub+elemdiv+zerofill 대 새 함수이고, 0.5 경계·포화·2의 거듭제곱이 아닌 scale,
+  W 224/37, NHWC/NCHW를 넣었다. golden single 30, multi2 3, multi4 3 PASS, confidence는 그대로다
+  (Resnet18 0.655530, Partition 0.530282, Resnet50 0.581379, VGG16 0.453709).
+- 앞으로 하드웨어 ALU로 옮길 때: quantize(float → int8)는 CPU나 입력 단계에 남는다. 2의 거듭제곱 scale의 elemsub는 ALU ADD/SHR로 된다.
+  채널별 나누기(std)는 MUL이 없어 안 된다. 표를 쓰거나, std를 conv0 weight에 접는 방법이 있다(접으면 경계 padding이 달라져 bit-exact는 아니다).
+
+| 경우 (systolic 400 MHz, `_systimed -r`, run 2~25 median) | 7.8 후 | 전처리 합침 (+ §7.7 dsb) |
+|---|---|---|
+| 입력 전처리 | 2.2 ms + zerofill 0.2 ms | **0.37 ms** |
+| Resnet18 single, OMP 1 | 39.92 ms | **37.08 ms** |
+| Resnet18 single, OMP 4 | 37.99 ms | **36.04 ms** |
+| Resnet18 multi4 copy 하나, 4개 동시 | 40.56 ms | **37.59 ms** (4 copy 494.8 GOPS) |
+| multi4 100회 (`run_all`) | 1115.8 ms | **1060.5 ms** |
 
 ## 8. 하드웨어도 같이 비교해야 하나
 
