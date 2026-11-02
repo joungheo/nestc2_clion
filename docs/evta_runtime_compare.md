@@ -602,6 +602,38 @@ multi4 3), Result / Confidence 그대로.
   6가지 모양(7×7/2, 3×3/1, 5×3/2, 11×11/2(범용 경로), NCHW / NHWC)에서 0 채움 결과와 불일치 0.
 - 출력 tile 16×16은 짝수이고 112를 나눈다: 다음 conv0 + maxpool fusion(pool 3×3/2의 경계)이 tile 경계와 맞는다.
 
+### 7.13 conv0 + maxpool을 EVTA 호출 하나로 (2026-11-02, `VTASave.cpp` `-vta-fuse-pool`, 기본 켜짐; vtalib `convolution_wo_tr_pool`)
+
+**어떻게** (vtalib `ConvPool`, conv_kernel의 store 앞).
+- conv0 출력 tile(16×16)을 pool window의 halo만큼 위로 1행, 왼쪽으로 1열 더 계산한다(17×17; 이미지 경계 쪽 tile은 그 행 / 열이
+  pad라서 더하지 않는다). GEMM이 약 13 % 늘어난다(1.63 → 1.84 ms).
+- requant / relu 뒤 acc 안에서 ALU MAX 두 단계: 행 방향(pool 중심 열 2j + halo가 좌우 열과 max, 제자리, 명령 2개),
+  열 방향(bias 뒤의 8×8×블록 영역을 0으로 reset하고 중심 열의 2i + halo + dy − 1 행 3개와 max, 명령 3개). 명령마다 그 thread의
+  출력 블록 2개를 uop 2개로(연속 uop는 다른 entry에 쓴다). conv 값이 ≥ 0(relu)이라 0에서 시작한 max가 CPU의 경계 안 max와 같다.
+- pooled 영역만 STORE한다. conv0 출력(784 KB)은 DRAM에 쓰지 않고, maxpool 호출(LOAD 784 KB, identity GEMM, ALU)이 없어진다.
+- 컴파일러(`findPoolFusions`): packed conv0(§7.12) + relu 바로 다음이 EVTA maxpool 3×3/2/1이고 conv 출력의 다른 사용자가 없으며
+  schedule tile이 짝수일 때. pool 출력 할당을 conv 앞으로 올린다. vtalib는 모양이 맞지 않으면 conv 후 `maxpool_evta`로 돌린다.
+
+**검증:** `EVTA_DUMP_CONV`(이번에 maxpool 출력도 덤프)로 fusion 전 bundle의 maxpool 출력과 그 뒤 모든 EVTA 출력이 fused bundle의
+출력과 byte 단위로 같다(Resnet18 40개, Resnet50 106개; HLS 빌드와 systolic 빌드 모두). `EVTA_RES_CHECK=1`(fused와 conv + CPU maxpool
+비교) 200,704개 중 0개 불일치. golden PASS(single 30, multi2 3, multi4 3).
+
+**측정** (systolic 400 MHz, `_systimed -r` / `_sysprof`, run 2~25 median)
+
+| 경우 | 7.12 후 (따로) | fusion 1판 (창 위치마다 명령) | fusion (2단계) |
+|---|---|---|---|
+| conv0 + maxpool EVTA | 3.64 + 1.19 = 4.83 ms | 4.80 ms | **4.48 ms** |
+| EVTA 시간 합 | 26.82 ms | 26.78 ms | 26.47 ms |
+| Resnet18 single, OMP 1 | 29.19 ms | 29.25 ms | **28.83 ms** |
+| Resnet18 single, OMP 4 | 28.02 ms | 28.02 ms | **27.71 ms** |
+| Resnet18 multi4 copy 하나 | 29.76 ms | 29.70 ms | **29.37 ms** |
+| multi4 100회 (`run_all`) | 827.3 ms | 823.1 ms | 820.3 ms |
+| single exe 100회 (`run_all`) | 3066.7 ms | 3028.7 ms | 3025.1 ms |
+
+- 1판은 창 위치 9개 × 블록마다 ALU 명령 하나(thread·tile당 19개)였고, 줄어든 DRAM 왕복을 명령 수가 다 잡아먹었다(ALU 명령 하나에
+  약 130 cycle의 고정 비용으로 보인다). 2단계 + 블록당 uop로 thread·tile당 6개(reset 포함).
+- 남은 손해: halo 재계산 GEMM 약 0.2 ms, 늘어난 ALU 명령. §7.11의 예상(0.5~1 ms)보다 작은 0.35 ms다.
+
 ## 8. 하드웨어도 같이 비교해야 하나
 
 해야 한다. 다만 §7의 ①~④를 가르는 것은 어레이가 아니라 다음 네 가지다.
