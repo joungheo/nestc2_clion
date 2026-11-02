@@ -516,6 +516,51 @@ conv들 뒤 cache에 없는 weight를 1000바이트 간격으로 건너뛰며 DR
 | Resnet18 multi4 copy 하나, 4개 동시 | 37.59 ms (494.8 GOPS) | **34.99 ms** (531.6 GOPS) |
 | multi4 100회 (`run_all`) | 1060.5 ms | **977.9 ms** |
 
+### 7.11 층 사이 DRAM 왕복은 얼마나 드나 (측정, 2026-11-02, vtalib `cmd_queue.h` `EVTA_REPLAY_LOG=2`, `EVTA_MEMEXP`)
+
+질문: activation을 DRAM에 쓰고 다음 층이 다시 읽는 일을 없애면(층을 SRAM 안에서 잇기) EVTA 시간이 얼마나 줄어드나.
+systolic bitstream에는 하드웨어 카운터와 AXI 모니터가 없어서(`_sysprof`의 해당 열이 0) replay 사본으로 쟀다.
+
+- `EVTA_REPLAY_LOG=2`: replay된 run마다 명령에서 센 GEMM / ALU 안쪽 반복 수, LOAD(uop, wgt, inp, acc)와 STORE(out)의
+  DRAM 바이트, `VTADeviceRun`의 실측 µs를 찍는다. 400 MHz에서 반복 하나 = 1 cycle로 보면 GEMM + ALU가 연산의 하한이다.
+- `EVTA_MEMEXP=<mask>`: replay 사본의 LOAD / STORE를 원소 하나로 줄인다(bit 0 inp, 1 wgt, 2 acc, 3 STORE; pad는 그대로).
+  결과는 쓰레기지만 명령 수, 의존성, 연산은 그대로라서 **그 전송이 없을 때의 시간**이 나온다. 층을 SRAM 안에서 이었을 때 줄어들 수 있는 시간의 상한이다.
+- 조건: Resnet18 single, `_sysprof -n 25 -r`, OMP 1, replay된 run 2~25의 run별 median. (fc는 이때 replay되지 않아 빠졌다. 고친 것은 아래에 있다.)
+
+| | ms | 기준 대비 |
+|---|---|---|
+| EVTA 시간 (mask 0) | **32.18** | |
+| GEMM 반복 / 400 MHz | 23.60 | conv0 6.27 (0 채움으로 13/16이 버려짐) |
+| ALU 반복 / 400 MHz | 2.32 | |
+| inp LOAD 없음 (1) | 30.80 | −1.38 |
+| STORE 없음 (8) | 31.20 | −0.98 |
+| acc LOAD 없음 (4; bias, residual) | 32.17 | −0.01 |
+| **activation 전부 없음 (13 = inp + acc + STORE)** | **29.82** | **−2.36** |
+| weight LOAD 없음 (2) | 31.39 | −0.79 |
+| DRAM 전송 전부 없음 (15) | 29.13 | −3.05 |
+
+DRAM 바이트(추론 한 번): weight 16.87 MB(conv0가 tile마다 다시 읽어 4.8 MB), inp 5.37 MB(halo를 다시 읽는 몫 포함), out 2.56 MB,
+uop 0.42 MB, acc 0.05 MB.
+
+activation 전부 없음(−2.36 ms)을 어디서 줄었는지로 나누면:
+
+| 구간 | 줄어든 시간 | 무엇 |
+|---|---|---|
+| conv0 | 1.13 ms | 입력 읽기 0.77(네트워크 입력, 층을 이어도 남음), 출력 쓰기 0.36(maxpool 입력) |
+| maxpool | 0.18 ms | |
+| conv 19개 (stage1~4) | 1.05 ms | conv당 0.03~0.11 ms; residual은 0 |
+
+- **conv→conv를 SRAM 안에서 이으면 줄어드는 것은 최대 약 1.05 ms(EVTA 시간의 3 %)다.** 하드웨어 변경(out→inp 경로,
+  store→load 의존성 큐, inp 64 KB에 stage1~2가 안 들어가서 tile 단위 fusion과 halo 재계산)을 들여도 이 이상은 안 된다.
+  DAE가 load와 store를 이미 거의 다 GEMM 뒤에 숨긴다.
+- **conv0 + maxpool fusion**(소프트웨어만, conv0 tile의 acc에서 ALU MAX 후 store)은 conv0 store 0.36 ms와 maxpool run(1.19 ms 중
+  identity GEMM 0.33 + 고정 비용)을 없앤다. ALU MAX는 남는다. pool 경계 행을 다시 계산하는 만큼 빼면 0.5~1 ms로 본다.
+- 전송을 모두 없애도 29.13 ms가 남는다. GEMM + ALU 하한 25.92 ms와의 차이 3.2 ms는 메모리가 아닌 비용이다(run마다 고정 비용,
+  uop LOAD, 의존성 대기 등; 나눠 재지는 않았다). conv0 GEMM 6.27 ms 중 0 채움으로 버리는 몫(약 5 ms)이 가장 큰 덩어리다.
+- 측정 중 발견: bundle이 부르는 `fullyconnected_evta_packed`에는 replay가 없었다(`fullyconnected_evta`에만 있었음). 고친 뒤
+  기록 21개(fc 41개 명령), fc 0.15 → 0.14 ms, golden PASS(single 30, multi2 3, multi4 3), `EVTA_RES_CHECK` fc 불일치 0;
+  single OMP 1 34.48 ms, multi4 copy당 34.99 ms(변화 없음).
+
 ## 8. 하드웨어도 같이 비교해야 하나
 
 해야 한다. 다만 §7의 ①~④를 가르는 것은 어레이가 아니라 다음 네 가지다.
