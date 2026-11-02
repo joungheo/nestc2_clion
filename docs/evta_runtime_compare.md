@@ -504,6 +504,18 @@ conv들 뒤 cache에 없는 weight를 1000바이트 간격으로 건너뛰며 DR
 | Resnet18 multi4 copy 하나, 4개 동시 | 40.56 ms | **37.59 ms** (4 copy 494.8 GOPS) |
 | multi4 100회 (`run_all`) | 1115.8 ms | **1060.5 ms** |
 
+### 7.10 명령 record / replay (AOT 0단계, 2026-11-02, vtalib `cmd_queue.h` `ReplayBegin`)
+
+같은 인자의 EVTA 호출(conv, conv+residual, maxpool, fc)은 첫 호출에 기록한 명령과 uop를 버퍼 주소만 고쳐 다시 실행한다.
+자세한 내용은 `docs/evta_runtime_aot.md` §5.4에 있다. bit-exact이고, golden PASS, multi4 copy당 4000회 동안 멈춤이 0번이었다.
+
+| 경우 (systolic 400 MHz, `_systimed -r`, run 2~25 median) | 7.9 후 | replay |
+|---|---|---|
+| Resnet18 single, OMP 1 | 37.08 ms | **34.50 ms** |
+| Resnet18 single, OMP 4 | 36.04 ms | **33.48 ms** |
+| Resnet18 multi4 copy 하나, 4개 동시 | 37.59 ms (494.8 GOPS) | **34.99 ms** (531.6 GOPS) |
+| multi4 100회 (`run_all`) | 1060.5 ms | **977.9 ms** |
+
 ## 8. 하드웨어도 같이 비교해야 하나
 
 해야 한다. 다만 §7의 ①~④를 가르는 것은 어레이가 아니라 다음 네 가지다.

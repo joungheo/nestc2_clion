@@ -219,6 +219,9 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   `preprocess_nhwc2vtaio_zerofill`): the float quantize, per-channel constant elemsub / elemdiv (a [C][256] table made at compile time) and
   an NCHW -> NHWC transpose before the zero-filled first conv, NEON 16 pixels at a time, bit-exact: 2.4 -> 0.37 ms, Resnet18 single OMP 1
   39.9 -> 37.1 ms, multi4 per copy 40.6 -> 37.6 ms (§7.9).
+- Record / replay of EVTA calls (AOT stage 0, 2026-11-02, vtalib `cmd_queue.h` `ReplayBegin`, `EVTA_REPLAY=0` turns it off): the conv / maxpool / fc
+  entries record their instructions and uops on the first call with the same scalar arguments (with a relocation table for the buffers) and
+  later calls only run the copies; bit-exact, Resnet18 single OMP 1 37.1 -> 34.5 ms, multi4 per copy 37.6 -> 35.0 ms (`docs/evta_runtime_aot.md` §5.4).
 - The lab board's PL has a defective configuration row (tile row SLICE Y219, cells stuck at 0; `log/BOARD_TODO.md`
   2026-10-23/24). `vivado.tcl` on zcu102 fences the design below it by default (`VTA_BRAM_FENCE=y219|upper|none`).
   multi2 fits below it and works (2026-10-24); multi4 needs more BRAM than the rows below, so it crosses the row with

@@ -272,6 +272,52 @@ conv 호출 wall 시간에서 같은 conv의 EVTA 시간을 뺐다(두 번째 ru
   | multi4 multi, copy 평균(`OMP_NUM_THREADS=1`) | 159.2 → 155.0 ms | 156.9 → 154.9 ms |
   | multi4 single, run 100 | 153.33 → 149.87 ms | 153.05 → 149.05 ms |
 
+## 5.4 0단계 구현: record / replay (2026-11-02)
+
+vtalib `include/zcu102/cmd_queue.h` `ReplayBegin` / `ReplayEnd`, API `VTAReplayBegin` / `VTAReplayEnd`(`api.cc`, 시뮬레이터는 빈 함수),
+`lib/Bundle/VTABundle.cpp`의 진입 함수 4개(`convolution_wo_tr_impl`(conv, conv+residual), `maxpool_evta`, `fullyconnected_evta_packed`).
+`vta/vtalib`와 `vtalib-zcu102-systolic` 둘 다. 컴파일러(`VTASave.cpp`)는 바꾸지 않았다.
+
+- **키:** 진입 함수의 스칼라 인자 전부(모양, pad, stride, relu, shift, residual shift, tile, 가상 스레드, EVTA 번호)다. 버퍼는 키에 넣지 않는다.
+  같은 모양의 conv는 하나의 기록을 같이 쓴다(Resnet18: EVTA 호출 22개 → 기록 20개).
+- **기록(키의 첫 호출):**
+  - 시작할 때 uop SRAM을 비었다고 표시한다(`UopReset`). 그래서 그 호출의 uop는 모두 그 호출 안에서 LOAD된다.
+  - run(`Synchronize`)마다 queue를 다 만든 뒤 명령과 uop를 각각 CMA에 복사한다. uop LOAD는 그 복사본을 가리키게 고친다.
+  - 진입 함수가 넘긴 버퍼를 쓰는 LOAD / STORE마다 (run, 명령 번호, 버퍼 번호, 버퍼 안 offset)을 적는다. 이것이 **relocation 표**다.
+    다른 버퍼(identity weight, fc의 입출력 staging)는 프로그램이 끝날 때까지 있는 버퍼라 주소를 그대로 둔다.
+  - 첫 실행은 원래 queue로 그대로 한다.
+- **재생(같은 키):** 명령을 만들지 않는다.
+  - 버퍼 주소가 기록 때와 다르면 relocation 표대로 `dram_base`를 고치고 flush한다.
+  - 복사본마다 `VTADeviceRun`을 하고 끝나면 uop SRAM을 비었다고 표시한다.
+- **환경 변수:** `EVTA_REPLAY=0`이면 끈다. `EVTA_REPLAY_MB`(기본 16)가 EVTA당 복사본 한도다. `EVTA_REPLAY_LOG=1`이면 기록마다 크기를 출력한다.
+- **크기(Resnet18, EVTA 하나):** 기록 20개, run 20개, 명령 8,096개(259 KB), uop 포함 **653 KB**, relocation 2,672개.
+  conv0이 명령 2,369개로 가장 크다. weights(11 MB)에 비하면 작다.
+- **uop cache:** `vta/vtalib`의 `dat_queue.h`를 systolic 사본의 것(10-27 수정: SRAM에 있는 kernel과 이번 batch를 따로 관리)으로 맞췄다.
+  옛 cache는 `Reset`이 kernel을 "SRAM에 있음"으로 둔 채 목록만 비워서, SRAM 상태를 알 수 없었다.
+- **검증:**
+  - golden: single 30, multi2 3, multi4 3 PASS. confidence는 그대로다(Resnet18 0.655530, Partition 0.530282, Resnet50 0.581379, VGG16 0.453709).
+  - Resnet18 `_systimed` replay 켬 / 끔: 같은 class와 confidence.
+  - multi4 systolic, 대기 0: copy당 4000회, 멈춤 0번.
+
+| systolic 400 MHz, `_systimed -r`, run 2~25 median | replay 끔 | replay 켬 |
+|---|---|---|
+| Resnet18 single, OMP 1 | 37.01 ms | **34.50 ms** |
+| Resnet18 single, OMP 4 | 36.04 ms | **33.48 ms** |
+| multi4 copy 하나, 4개 동시 | 37.55 ms (495.4 GOPS) | **34.99 ms (531.6 GOPS)** |
+| multi4 100회 (`run_all`, HLS 380) | 1060.5 ms | **977.9 ms** |
+| single exe 100회 (`run_all`, HLS 380) | 3851 ms | **3620.5 ms** |
+
+**1단계(컴파일 때 생성)로 가는 길:** 기록 하나가 1단계의 blob과 같다. 명령, uop, relocation 표(버퍼 번호와 offset)로 되어 있다.
+1단계에서 할 일은 셋이다.
+- 같은 생성기(`conv_kernel` 등)를 x86에서 가짜 주소의 버퍼로 돌린다.
+- 그 결과를 weights 파일에 넣는다.
+- 보드에서는 `RunReplay`의 relocation 경로로 실행한다.
+
+남는 일도 셋이다.
+- identity weight와 fc staging 같은 "고정 버퍼"도 relocation 대상으로 바꾼다.
+- 키를 호출 위치별 blob으로 바꾼다.
+- 시뮬레이터 경로를 맞춘다.
+
 ## 6. 정할 것
 
 1. AOT 0단계를 시험으로 먼저 할지, 아니면 conv0과 layout 작업을 먼저 할지.
