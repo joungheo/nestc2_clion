@@ -5865,7 +5865,7 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
     }
     //#### JO added (2026-11-02): quantize / elemsub / elemdiv / transpose done by the first conv's input copy
     if (ctx.isPreFused(&I)) {
-      bundle.append("  // done in the input copy of the first conv (preprocess_nhwc2vtaio_zerofill)\n");
+      bundle.append("  // done in the input copy of the first conv (preprocess_nhwc2vtaio_zerofill or preprocess_conv0pack)\n");
       continue;
     }
 
