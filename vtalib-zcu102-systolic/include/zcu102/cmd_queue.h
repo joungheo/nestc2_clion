@@ -377,6 +377,8 @@ class CommandQueue {
     }
     replay_bytes_ += rec_->bytes;
     rec_->id = (uint32_t)replays_.size();
+    if (ReplayDumpDir())
+      for (size_t i = 0; i < rec_->segs.size(); i++) DumpSegment(ReplayDumpDir(), rec_->id, i, rec_->segs[i]);
     MemExperiment(*rec_);
     if (ReplayLog())
       fprintf(stderr, "EVTA %d replay %zu: %zu runs, %u instructions, %zu relocations, %zu bytes (%zu in all)\n",
@@ -712,7 +714,6 @@ class CommandQueue {
     }
     VTAFlushCache(g.insn, g.insn_phy, ib);
     CountSegment(g);
-    if (ReplayDumpDir()) DumpSegment(ReplayDumpDir(), rec_->id, rec_->segs.size(), g);
     rec_->segs.push_back(g);
     rec_->bytes += ib + g.uop_bytes;
     rec_->insns += g.count;
