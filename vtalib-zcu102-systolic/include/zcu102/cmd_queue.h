@@ -566,6 +566,47 @@ class CommandQueue {
     static const int level = ReplayEnv("EVTA_REPLAY_LOG", 0);
     return level;
   }
+  //#### JO added (2026-11-02): EVTA_REPLAY_DUMP=<dir> writes each recorded segment as text, rec_<id>_<seg>.txt: one line per
+  //#### instruction (opcode, dependency flags, the fields) and the uops (dst src wgt)
+  static const char *ReplayDumpDir() {
+    static const char *d = getenv("EVTA_REPLAY_DUMP");
+    return d;
+  }
+  static void DumpSegment(const char *dir, uint32_t id, size_t seg, const ReplaySeg &g) {
+    char name[512];
+    snprintf(name, sizeof(name), "%s/rec_%u_%zu.txt", dir, id, seg);
+    FILE *fp = fopen(name, "w");
+    if (!fp) return;
+    static const char *op[] = {"LOAD", "STORE", "GEMM", "FINISH", "ALU", "XPGEMM", "?6", "?7"};
+    for (uint32_t i = 0; i < g.count; i++) {
+      VTAGenericInsn *p = static_cast<VTAGenericInsn *>(g.insn) + i;
+      fprintf(fp, "%u %s %d%d%d%d", i, op[p->opcode & 7], (int)p->pop_prev_dep, (int)p->pop_next_dep, (int)p->push_prev_dep,
+              (int)p->push_next_dep);
+      if (p->opcode == VTA_OPCODE_LOAD || p->opcode == VTA_OPCODE_STORE) {
+        VTAMemInsn *m = reinterpret_cast<VTAMemInsn *>(p);
+        fprintf(fp, " mem %d sram %u dram %u y %u x %u stride %u pad %u %u %u %u", (int)m->memory_type, (unsigned)m->sram_base,
+                (unsigned)m->dram_base, (unsigned)m->y_size, (unsigned)m->x_size, (unsigned)m->x_stride, (unsigned)m->y_pad_0,
+                (unsigned)m->y_pad_1, (unsigned)m->x_pad_0, (unsigned)m->x_pad_1);
+      } else if (p->opcode == VTA_OPCODE_GEMM) {
+        VTAGemInsn *x = reinterpret_cast<VTAGemInsn *>(p);
+        fprintf(fp, " reset %d uop %u %u iter %u %u dst %u %u src %u %u wgt %u %u", (int)x->reset_reg, (unsigned)x->uop_bgn,
+                (unsigned)x->uop_end, (unsigned)x->iter_out, (unsigned)x->iter_in, (unsigned)x->dst_factor_out,
+                (unsigned)x->dst_factor_in, (unsigned)x->src_factor_out, (unsigned)x->src_factor_in,
+                (unsigned)x->wgt_factor_out, (unsigned)x->wgt_factor_in);
+      } else if (p->opcode == VTA_OPCODE_ALU) {
+        VTAAluInsn *x = reinterpret_cast<VTAAluInsn *>(p);
+        fprintf(fp, " reset %d uop %u %u iter %u %u dst %u %u src %u %u alu %d imm %d %d", (int)x->reset_reg,
+                (unsigned)x->uop_bgn, (unsigned)x->uop_end, (unsigned)x->iter_out, (unsigned)x->iter_in,
+                (unsigned)x->dst_factor_out, (unsigned)x->dst_factor_in, (unsigned)x->src_factor_out,
+                (unsigned)x->src_factor_in, (int)x->alu_opcode, (int)x->use_imm, (int)x->imm);
+      }
+      fputc('\n', fp);
+    }
+    const VTAUop *u = static_cast<const VTAUop *>(g.uop);
+    for (uint32_t i = 0; u && i < g.uop_bytes / sizeof(VTAUop); i++)
+      fprintf(fp, "uop %u %u %u %u\n", i, (unsigned)u[i].dst_idx, (unsigned)u[i].src_idx, (unsigned)u[i].wgt_idx);
+    fclose(fp);
+  }
   //#### JO added (2026-11-02): DRAM traffic experiment (docs/evta_runtime_compare.md 7.11), results are garbage:
   //#### EVTA_MEMEXP bit 0 / 1 / 2 / 3 shrinks the inp / wgt / acc LOADs / the STOREs of the replayed copies to one element
   //#### (pads kept), so a replay times the run without that traffic
@@ -671,6 +712,7 @@ class CommandQueue {
     }
     VTAFlushCache(g.insn, g.insn_phy, ib);
     CountSegment(g);
+    if (ReplayDumpDir()) DumpSegment(ReplayDumpDir(), rec_->id, rec_->segs.size(), g);
     rec_->segs.push_back(g);
     rec_->bytes += ib + g.uop_bytes;
     rec_->insns += g.count;
