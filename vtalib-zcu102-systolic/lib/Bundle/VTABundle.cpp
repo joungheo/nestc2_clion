@@ -417,11 +417,14 @@ struct ConvResidual {
 //#### JO added (2026-11-02): max pool 3x3 / stride 2 / pad 1 fused into a conv with relu (convolution_wo_tr_pool).
 //#### The conv's output tiles (even th x tw, dividing the output) are computed with one more row above and one more column
 //#### to the left (the halo of the pool window, recomputed; not at the image border, where it is the pad): after the
-//#### requantize / relu the tile is in acc as [block][th(+1)][tw(+1)]. An area of th/2 x tw/2 entries per block after the
-//#### bias entries is reset to 0, then for each of the 9 window positions one ALU MAX (a 2-level loop over the pooled
-//#### pixels, as maxpool_evta) takes the conv pixel (2i + haloH + dy - 1, 2j + haloW + dx - 1) into pooled pixel (i, j);
-//#### the positions in the pad (row / column -1 at the image border) are left out. The conv values are >= 0 (relu), so 0
-//#### plus the in-bounds max is the CPU's max. The pooled area is STOREd to the pool output; the conv output is not.
+//#### requantize / relu the tile is in acc as [block][th(+1)][tw(+1)]. The max in two passes of ALU MAX, each a 2-level
+//#### loop with one uop per output block of the thread (consecutive uops write different entries):
+//####   rows: the pool's centre columns 2j + haloW of every tile row take the max with the columns left and right of them
+//####         (2 instructions, in place; the left column of j = 0 is the pad at the image border, left out),
+//####   cols: an area of th/2 x tw/2 entries per block after the bias entries, reset to 0, takes the max of the centre
+//####         columns of rows 2i + haloH + dy - 1, dy = 0..2 (3 instructions; row -1 at the image border is the pad).
+//#### The conv values are >= 0 (relu), so 0 plus the in-bounds max is the CPU's max. The pooled area is STOREd to the
+//#### pool output; the conv output is not. (One instruction per window position and block took 2.7x longer, 2026-11-02.)
 struct ConvPool {
   void *out;            // pool output, EVTA layout, KN x PH x PW
   uint32_t PH, PW;      // pool output size
@@ -429,19 +432,22 @@ struct ConvPool {
   uint32_t pth, ptw;    // this tile's pooled pixels (conv tile / 2)
   bool haloH, haloW;    // the conv tile has the extra row above / column to the left
 };
-// acc[out + i * outRow + j] = max(acc[out + ...], acc[in + i * inRow + j * inCol]), i < oh, j < ow
+// acc[out + i * outRow + j * outCol + f * outF] = max(itself, acc[in + i * inRow + j * inCol + f * inF]),
+// i < oh, j < ow, f < nF (one uop per f)
 struct PoolMax2Context {
-  uint32_t out_, in_, oh_, ow_, outRow_, inRow_, inCol_;
+  uint32_t out_, in_, oh_, ow_, outRow_, outCol_, inRow_, inCol_, nF_, outF_, inF_;
   bool operator==(PoolMax2Context &op) {
     return out_ == op.out_ && in_ == op.in_ && oh_ == op.oh_ && ow_ == op.ow_ && outRow_ == op.outRow_ &&
-           inRow_ == op.inRow_ && inCol_ == op.inCol_;
+           outCol_ == op.outCol_ && inRow_ == op.inRow_ && inCol_ == op.inCol_ && nF_ == op.nF_ &&
+           outF_ == op.outF_ && inF_ == op.inF_;
   }
 };
 int alu_poolmax2(void *param, VTACommandHandle cmdh) {
   PoolMax2Context *p = (PoolMax2Context *)(param);
   VTAUopLoopBegin(cmdh, p->oh_, p->outRow_, p->inRow_, 0);
-  VTAUopLoopBegin(cmdh, p->ow_, 1, p->inCol_, 0);
-  VTAUopPush(cmdh, 1, 0, p->out_, p->in_, 0, RES_ALU_MAX, 0, 0);
+  VTAUopLoopBegin(cmdh, p->ow_, p->outCol_, p->inCol_, 0);
+  for (uint32_t f = 0; f < p->nF_; f++)
+    VTAUopPush(cmdh, 1, 0, p->out_ + f * p->outF_, p->in_ + f * p->inF_, 0, RES_ALU_MAX, 0, 0);
   VTAUopLoopEnd(cmdh);
   VTAUopLoopEnd(cmdh);
   return 0;
@@ -973,17 +979,19 @@ void conv_kernel(uint32_t sizeOutTileH,
       if (pool) {
         const uint32_t T = resizedOutTileH * resizedOutTileW, P = pool->pth * pool->ptw;
         const uint32_t pooled = outputSramBaseAddr + T * nFilterinLoop + nFilterinLoop;
-        pushReset(vtaCmdH, idEVTA, pooled, P * nFilterinLoop);
-        for (uint32_t fIdx = 0; fIdx < nFilterinLoop; fIdx++)
-          for (uint32_t dy = 0; dy < 3; dy++)
-            for (uint32_t dx = 0; dx < 3; dx++) {
-              // pooled (i, j) takes conv (2i + haloH + dy - 1, 2j + haloW + dx - 1); row / column -1 is the pad
-              uint32_t i0 = (!pool->haloH && dy == 0) ? 1 : 0, j0 = (!pool->haloW && dx == 0) ? 1 : 0;
-              uint32_t r = 2 * i0 + pool->haloH + dy - 1, c = 2 * j0 + pool->haloW + dx - 1;
-              pushPoolMax2(vtaCmdH, idEVTA,
-                           {pooled + fIdx * P + i0 * pool->ptw + j0, outputSramBaseAddr + fIdx * T + r * resizedOutTileW + c,
-                            pool->pth - i0, pool->ptw - j0, pool->ptw, 2 * resizedOutTileW, 2});
-            }
+        const uint32_t TW = resizedOutTileW, nF = nFilterinLoop;
+        pushReset(vtaCmdH, idEVTA, pooled, P * nF);
+        // rows: centre column 2j + haloW takes the column left (j >= 1 without the halo) and right of it
+        const uint32_t j0 = pool->haloW ? 0 : 1, centre = outputSramBaseAddr + pool->haloW;
+        pushPoolMax2(vtaCmdH, idEVTA, {centre + 2 * j0, centre + 2 * j0 - 1, resizedOutTileH, pool->ptw - j0, TW, 2, TW,
+                                       2, nF, T, T});
+        pushPoolMax2(vtaCmdH, idEVTA, {centre, centre + 1, resizedOutTileH, pool->ptw, TW, 2, TW, 2, nF, T, T});
+        // cols: pooled (i, j) takes centre column j of rows 2i + haloH + dy - 1 (i >= 1 for dy = 0 without the halo)
+        for (uint32_t dy = 0; dy < 3; dy++) {
+          uint32_t i0 = (!pool->haloH && dy == 0) ? 1 : 0, r = 2 * i0 + pool->haloH + dy - 1;
+          pushPoolMax2(vtaCmdH, idEVTA, {pooled + i0 * pool->ptw, centre + r * TW, pool->pth - i0, pool->ptw,
+                                         pool->ptw, 1, 2 * TW, 2, nF, P, T});
+        }
       }
       VTADepPush(vtaCmdH, 2, 3);
     }
