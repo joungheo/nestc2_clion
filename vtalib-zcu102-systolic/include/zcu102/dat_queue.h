@@ -16,23 +16,23 @@ template <class T>
 class BaseQueue {
  public:
   ~BaseQueue() {
-    if (fpga_buff_ != nullptr) {
-      VTAMemFree(fpga_buff_);
-    }
-    if (alt_buff_ != nullptr) {
-      VTAMemFree(alt_buff_);
+    if (base_buff_ != nullptr) {
+      VTAMemFree(base_buff_);
     }
   }
-  //#### JO added (2026-11-02): EVTA_DOUBLE_QUEUE=1 (hang hunt): the next run uses the other of two FPGA buffers, so the
-  //#### EVTA never reads a buffer the CPU has just rewritten at the same physical address (the second one is allocated here)
+  //#### JO added (2026-11-02): EVTA_DOUBLE_QUEUE=1 (hang hunt): the next run uses the other half of the FPGA buffer, so
+  //#### the EVTA never reads bytes the CPU has just rewritten at the same physical address (a second buffer per queue
+  //#### does not fit in the CMA with 4 EVTAs); each run then has half of the buffer
   void SwapBuffer() {
-    if (alt_buff_ == nullptr) {
-      alt_buff_ = VTAMemAlloc(max_bytes_, coherent_ || always_cache_);
-      CHECK(alt_buff_ != nullptr);
-      alt_buff_phy_ = VTAMemGetPhyAddr(alt_buff_);
+    uint32_t half = (max_bytes_ / 2) & ~4095u;
+    limit_bytes_ = half;
+    if (fpga_buff_ == base_buff_) {
+      fpga_buff_ = static_cast<char *>(base_buff_) + half;
+      fpga_buff_phy_ = base_buff_phy_ + half;
+    } else {
+      fpga_buff_ = base_buff_;
+      fpga_buff_phy_ = base_buff_phy_;
     }
-    std::swap(fpga_buff_, alt_buff_);
-    std::swap(fpga_buff_phy_, alt_buff_phy_);
   }
   /*! \return Content of DRAM buffer. */
   char* dram_buffer() const {
@@ -86,6 +86,9 @@ class BaseQueue {
         max_bytes, coherent_ || always_cache_));
     CHECK(fpga_buff_ != nullptr);
     fpga_buff_phy_ = VTAMemGetPhyAddr(fpga_buff_);
+    base_buff_ = fpga_buff_;
+    base_buff_phy_ = fpga_buff_phy_;
+    limit_bytes_ = max_bytes;
   }
   /*!
    * \brief Reset the pointer of the buffer.
@@ -115,10 +118,11 @@ class BaseQueue {
   vta_phy_addr_t fpga_buff_phy_{0};
   //#### JO added (2026-11-01): bytes copied and flushed by the last ReadBarrier (CompareDram)
   size_t last_flush_bytes_{0};
-  //#### JO added (2026-11-02): the second buffer of SwapBuffer
+  //#### JO added (2026-11-02): the allocation (SwapBuffer runs on its halves) and the bytes a run may use
   uint32_t max_bytes_{0};
-  void* alt_buff_{NULL};
-  vta_phy_addr_t alt_buff_phy_{0};
+  uint32_t limit_bytes_{0};
+  void* base_buff_{NULL};
+  vta_phy_addr_t base_buff_phy_{0};
 };
 
 /*!
@@ -217,7 +221,7 @@ class UopQueue : public BaseQueue<VTAUop> {
 //    for (uint32_t i = 0; i < cache_.size(); ++i) {
 //      buff_size += cache_[i]->size() * kElemBytes;
 //    }
-//    CHECK(buff_size <= kMaxBytes);
+//    CHECK(buff_size <= kMaxBytes && buff_size <= limit_bytes_);
 //    // Move kernel contents to FPGA readable buffer
 //    uint32_t offset = 0;
 //    for (uint32_t i = 0; i < cache_.size(); ++i) {
@@ -728,7 +732,7 @@ class InsnQueue : public BaseQueue<VTAGenericInsn> {
     CHECK(fpga_buff_ != nullptr);
     CHECK(fpga_buff_phy_);
     uint32_t buff_size = dram_buffer_.size() * elem_bytes_;
-    CHECK(buff_size <= kMaxBytes);
+    CHECK(buff_size <= kMaxBytes && buff_size <= limit_bytes_);
     //printf("InstQ ReadBarrier\n");
     // Copy contents of DRAM buffer to FPGA buff
     VTAMemCopyFromHost(fpga_buff_,
@@ -746,7 +750,7 @@ class InsnQueue : public BaseQueue<VTAGenericInsn> {
   void ManualReadBarrier(uint32_t buff_size) {
     CHECK(fpga_buff_ != nullptr);
     CHECK(fpga_buff_phy_);
-    CHECK(buff_size <= kMaxBytes);
+    CHECK(buff_size <= kMaxBytes && buff_size <= limit_bytes_);
     // printf("InstQ ReadBarrier\n");
     // Copy contents of DRAM buffer to FPGA buff
     VTAMemCopyFromHost(fpga_buff_,

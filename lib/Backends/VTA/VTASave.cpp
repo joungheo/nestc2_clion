@@ -28,6 +28,7 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
+#include <list>
 #include <map>
 #include <set>
 #include <vector>
@@ -69,6 +70,15 @@ static llvm::cl::opt<bool> vtaEvtaFc(
     llvm::cl::desc("Run fully connected layers on the EVTA (fullyconnected_evta_packed)"),
     llvm::cl::init(true));
 
+//#### JO added (2026-11-02): the input preprocessing (quantize of the float input, then elemsub / elemdiv by per-channel
+//#### constants and an NCHW -> NHWC transpose) done by the input copy of the zero-filled first conv
+//#### (preprocess_nhwc2vtaio_zerofill; findInputPreprocess)
+static llvm::cl::opt<bool> vtaFusePreprocess(
+    "vta-fuse-preprocess",
+    llvm::cl::desc("Do the quantize / per-channel elemsub, elemdiv / transpose before the "
+                   "zero-filled first EVTA conv in its input copy (preprocess_nhwc2vtaio_zerofill)"),
+    llvm::cl::init(true));
+
 namespace vta_save{
 
 //#### JO added (2026-10-31): an EVTA conv that also does the elementadd and the relu after it
@@ -77,6 +87,13 @@ struct ResidualFusion {
   const Value *out;      // relu dest: written by the fused call
   int convShl, resShl, sumShr;
   bool hoistOut;         // out is allocated after the conv: its allocation is emitted before the conv
+};
+
+//#### JO added (2026-11-02): the preprocessing done in the input copy of a zero-filled first conv (findInputPreprocess)
+struct InputPreprocess {
+  const QuantizeInst *quantize; // its float source is read by the copy
+  bool nchw;                    // the source is NCHW (the transpose to the conv's NHWC is folded in)
+  std::vector<int8_t> lut;      // [C][256] value after the elemsub / elemdiv chain, empty: none
 };
 
 class VTASaveContext {
@@ -112,6 +129,19 @@ public:
   std::set<const Value *> *getHoisted() { return &hoisted; }
   std::set<const Instruction *> *getEvtaMaxPools() { return &evtaMaxPools; }
   bool isEvtaMaxPool(const Instruction *I) const { return evtaMaxPools.count(I) != 0; }
+  //#### JO added (2026-11-02): findInputPreprocess
+  std::map<const Instruction *, InputPreprocess> *getPreprocs() { return &preprocs; }
+  const InputPreprocess *getPreproc(const Instruction *I) const {
+    auto it = preprocs.find(I);
+    return it == preprocs.end() ? nullptr : &it->second;
+  }
+  std::set<const Instruction *> *getPreFused() { return &preFused; }
+  bool isPreFused(const Instruction *I) const { return preFused.count(I) != 0; }
+  // a name that lives as long as the symbol tables (constants that are not IR values)
+  const char *keepName(const std::string &name) {
+    names.push_back(name);
+    return names.back().c_str();
+  }
 
 private:
   IRFunction::VariableMap *variable_map;
@@ -127,6 +157,9 @@ private:
   std::set<const Instruction *> fusedAway;
   std::set<const Value *> hoisted; // allocations already emitted before a fused conv
   std::set<const Instruction *> evtaMaxPools; // max pools run by maxpool_evta
+  std::map<const Instruction *, InputPreprocess> preprocs; // by the first conv
+  std::set<const Instruction *> preFused; // quantize / elemsub / elemdiv / transpose done by a first conv's input copy
+  std::list<std::string> names;
 };
 
 struct SymbolTableEntry {
@@ -218,6 +251,14 @@ SymbolTableEntry addConstantSymbolEntry(Value* val, VTASaveContext *ctx){
 SymbolTableEntry addConstantSymbolEntrySized(Value *val, uint64_t size, VTASaveContext *ctx) {
   auto csyms = ctx->getConstantSymbols();
   csyms->push_back({val->getName().data(), ctx->getCMemSize(), size, '0'});
+  ctx->setCMemSize(ctx->getCMemSize() + size);
+  return csyms->back();
+}
+
+//#### JO added (2026-11-02): a constant made here that is not an IR value (its bytes written by the caller)
+SymbolTableEntry addConstantSymbolEntryNamed(const std::string &name, uint64_t size, VTASaveContext *ctx) {
+  auto csyms = ctx->getConstantSymbols();
+  csyms->push_back({ctx->keepName(name), ctx->getCMemSize(), size, '0'});
   ctx->setCMemSize(ctx->getCMemSize() + size);
   return csyms->back();
 }
@@ -1908,6 +1949,38 @@ void generateFirstBNNInputTranspose(const glow::ConvolutionInst *Inst,
     //bundle->append(std::to_string(N*H*W*C));
     bundle->append(std::to_string(N*H*W*C));
     bundle->append(");\n");
+    //#### JO added (2026-11-02): the quantize (and elemsub / elemdiv / transpose) before it in this copy (findInputPreprocess)
+    if (auto *pre = ctx->getPreproc(Inst)) {
+      auto qsrc = pre->quantize->getSrc();
+      auto qdestTy = pre->quantize->getDest()->getType();
+      auto qsrcWeight = static_cast<WeightVar *>(qsrc);
+      bool qsrcMut = qsrcWeight->getMutability() == glow::WeightVar::MutabilityKind::Mutable;
+      if (qsrcMut)
+        addSymbolEntryGenBundle(qsrcWeight, bundle, ctx);
+      std::string lutName = "nullptr";
+      if (!pre->lut.empty()) {
+        auto ste = addConstantSymbolEntryNamed(std::string(Inst->getName()) + "_preprocess_lut", pre->lut.size(), ctx);
+        ctx->getWeightFileStream()->write((const char *)pre->lut.data(), pre->lut.size());
+        lutName = std::string("(const int8_t *)VTABufferGetVirtAddr(") + ste.name + ")";
+      }
+      bundle->append("  preprocess_nhwc2vtaio_zerofill((const float *)");
+      bundle->append(qsrcMut ? addSymbolEntry(qsrcWeight, ctx).name : qsrc->getName().data());
+      bundle->append(", (int8_t* )VTABufferGetVirtAddr(");
+      bundle->append(Inst->getName());
+      bundle->append("_input_transpose), ");
+      for (int v : {N, H, W, (int)srcDims[3], C, (int)pre->nchw}) {
+        bundle->append(std::to_string(v));
+        bundle->append(", ");
+      }
+      // the scale as saveQuantizeInst writes it
+      bundle->append("1/");
+      bundle->append(std::to_string(1 / qdestTy->getScale()));
+      bundle->append(", ");
+      bundle->append(std::to_string(qdestTy->getOffset()));
+      bundle->append(", ");
+      bundle->append(lutName);
+      bundle->append(");\n");
+    } else {
     bundle->append("  transpose_nhwc2vtaio_zerofill(");
     auto srcWeight = static_cast<WeightVar *>(src);
     if (srcWeight->getMutability() == glow::WeightVar::MutabilityKind::Mutable) {
@@ -1931,6 +2004,7 @@ void generateFirstBNNInputTranspose(const glow::ConvolutionInst *Inst,
     bundle->append(", ");
     bundle->append(std::to_string(C));
     bundle->append(");\n");
+    }
     //#### JO added: flush the CPU-written transposed input before the EVTA reads it
     //#### (non-coherent EVTA, VTA_COHERENT_ACCESSES=false; no-op otherwise)
     bundle->append("  VTABufferFlush(");
@@ -3459,6 +3533,155 @@ void findResidualFusions(const IRFunction *IR, VTASaveContext *ctx) {
     (*ctx->getFusions())[C] = f;
     ctx->getFusedAway()->insert(E);
     ctx->getFusedAway()->insert(Rl);
+  }
+}
+
+//#### JO added (2026-11-02): the input preprocessing before a zero-filled first conv (ConvPath::FirstBNN) done by its input
+//#### copy (preprocess_nhwc2vtaio_zerofill, -vta-fuse-preprocess): a quantize of a float value, then any of elemsub /
+//#### elemdiv by an int8 constant that is the same for every element of a channel and an NCHW -> NHWC transpose (at most
+//#### one), each value used only by the next of them. The elemsub / elemdiv chain depends only on the quantized value and
+//#### the channel, so it becomes a table [C][256], computed as the CPU elemsub / elemdiv compute it with the scales as
+//#### the bundle writes them (1.0/<1/scale with 6 decimals>, offsets 0); bit-exact with the instructions it replaces.
+static float bundleScale(float scale) { return (float)(1.0 / std::stod(std::to_string(1 / scale))); }
+
+static const Tensor *constantPayload(const Value *v, VTASaveContext *ctx) {
+  auto vMap = ctx->getVariableMap();
+  for (auto it = vMap->begin(); it != vMap->end(); it++)
+    if (it->second == v)
+      return it->first->getKind() == glow::Kinded::Kind::ConstantKind ? &llvm::cast<Constant>(it->first)->getPayload()
+                                                                       : nullptr;
+  return nullptr;
+}
+
+void findInputPreprocess(const IRFunction *IR, VTASaveContext *ctx) {
+  ctx->getPreprocs()->clear();
+  ctx->getPreFused()->clear();
+  if (!vtaFusePreprocess)
+    return;
+  std::vector<const Instruction *> ins;
+  std::map<const Value *, int> users; // instructions other than alloc/dealloc that use a value
+  for (const auto &I : IR->getInstrs()) {
+    if (!llvm::isa<AllocActivationInst>(&I) && !llvm::isa<DeallocActivationInst>(&I)) {
+      std::set<const Value *> ops;
+      for (const auto &op : I.getOperands())
+        ops.insert(op.first);
+      for (auto *v : ops)
+        users[v]++;
+    }
+    ins.push_back(&I);
+  }
+  auto next = [&](size_t i) {
+    for (i++; i < ins.size(); i++)
+      if (!llvm::isa<DeallocActivationInst>(ins[i]) && !llvm::isa<AllocActivationInst>(ins[i]))
+        return i;
+    return ins.size();
+  };
+  auto plainInt8 = [](const Value *v) {
+    return v->getElementType() == ElemKind::Int8QTy && v->getType()->getOffset() == 0;
+  };
+  for (size_t i = 0; i < ins.size(); i++) {
+    auto *Q = llvm::dyn_cast<QuantizeInst>(ins[i]);
+    if (!Q || Q->getSrc()->getElementType() != ElemKind::FloatTy || Q->getSrc()->dims().size() != 4 ||
+        Q->getDest()->getElementType() != ElemKind::Int8QTy)
+      continue;
+    std::vector<const Instruction *> chain;
+    const Value *cur = Q->getDest();
+    const ConvolutionInst *C = nullptr;
+    bool transposed = false;
+    for (size_t j = next(i); j < ins.size(); j = next(j)) {
+      if (users[cur] != 2) // the producer and the next instruction
+        break;
+      const Instruction *I = ins[j];
+      if (auto *Cv = llvm::dyn_cast<ConvolutionInst>(I)) {
+        if (Cv->getSrc() == cur && getConvPath(Cv) == ConvPath::FirstBNN && Cv->getSrc()->dims()[0] == 1)
+          C = Cv;
+        break;
+      }
+      const Value *lhs = nullptr, *rhs = nullptr, *dest = nullptr;
+      if (auto *E = llvm::dyn_cast<ElementSubInst>(I))
+        lhs = E->getLHS(), rhs = E->getRHS(), dest = E->getDest();
+      else if (auto *E = llvm::dyn_cast<ElementDivInst>(I))
+        lhs = E->getLHS(), rhs = E->getRHS(), dest = E->getDest();
+      if (lhs) {
+        if (lhs != cur || dest == cur || !plainInt8(rhs) || !plainInt8(dest) || !plainInt8(cur) ||
+            rhs->dims() != cur->dims() || !constantPayload(rhs, ctx))
+          break;
+        chain.push_back(I);
+        cur = dest;
+        continue;
+      }
+      if (auto *T = llvm::dyn_cast<TransposeInst>(I)) {
+        auto sh = T->getShuffle();
+        if (transposed || T->getSrc() != cur || sh.size() != 4 || sh[0] != 0 || sh[1] != 2 || sh[2] != 3 ||
+            sh[3] != 1 || T->getDest()->getType()->getScale() != cur->getType()->getScale() ||
+            T->getDest()->getType()->getOffset() != cur->getType()->getOffset())
+          break;
+        chain.push_back(I);
+        transposed = true;
+        cur = T->getDest();
+        continue;
+      }
+      break;
+    }
+    if (!C || C->getSrc()->dims()[3] > 16)
+      continue;
+    const int CH = C->getSrc()->dims()[3];
+    // channel of element e of a value before (NCHW) or after (NHWC) the transpose
+    auto channel = [&](const Value *v, size_t e, bool nchw) {
+      auto d = v->dims();
+      return nchw ? (int)((e / (d[2] * d[3])) % d[1]) : (int)(e % d[3]);
+    };
+    std::vector<int8_t> lut;
+    bool ok = true, nchwNow = transposed;
+    std::vector<int32_t> val(CH * 256);
+    for (int c = 0; c < CH; c++)
+      for (int q = 0; q < 256; q++)
+        val[c * 256 + q] = q - 128;
+    for (auto *I : chain) {
+      if (llvm::isa<TransposeInst>(I)) {
+        nchwNow = false;
+        continue;
+      }
+      bool sub = llvm::isa<ElementSubInst>(I);
+      const Value *lhs = sub ? llvm::cast<ElementSubInst>(I)->getLHS() : llvm::cast<ElementDivInst>(I)->getLHS();
+      const Value *rhs = sub ? llvm::cast<ElementSubInst>(I)->getRHS() : llvm::cast<ElementDivInst>(I)->getRHS();
+      const Value *dest = sub ? llvm::cast<ElementSubInst>(I)->getDest() : llvm::cast<ElementDivInst>(I)->getDest();
+      auto h = constantPayload(rhs, ctx)->getHandle<int8_t>();
+      std::vector<int> per(CH, 1000);
+      for (size_t e = 0, n = h.size(); e < n && ok; e++) {
+        int c = channel(rhs, e, nchwNow);
+        if (per[c] == 1000)
+          per[c] = h.raw(e);
+        ok = per[c] == h.raw(e);
+      }
+      if (!ok)
+        break;
+      const float s0 = bundleScale(lhs->getType()->getScale()), s1 = bundleScale(rhs->getType()->getScale()),
+                  sd = bundleScale(dest->getType()->getScale());
+      for (int c = 0; c < CH; c++)
+        for (int q = 0; q < 256; q++) {
+          int32_t L = val[c * 256 + q], R = per[c], out32;
+          if (sub) { // CPUBundle_generic.cpp elemsub
+            float l = (s0 / sd) * float(L - 0);
+            float r = (s1 / sd) * float(R - 0);
+            out32 = std::round(l - r + 0);
+          } else { // elemdiv
+            float l = (s0)*float(L - 0);
+            float r = s1 * sd * float(R - 0);
+            out32 = std::round(l / r + 0);
+          }
+          val[c * 256 + q] = out32 > 127 ? 127 : (out32 < -128 ? -128 : out32);
+        }
+      lut.resize(CH * 256);
+    }
+    if (!ok)
+      continue;
+    for (size_t k = 0; k < lut.size(); k++)
+      lut[k] = (int8_t)val[k];
+    (*ctx->getPreprocs())[C] = {Q, transposed, lut};
+    ctx->getPreFused()->insert(Q);
+    for (auto *I : chain)
+      ctx->getPreFused()->insert(I);
   }
 }
 
@@ -5503,6 +5726,7 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
   findPackedActivations(IR.get(), &ctx);
   findResidualFusions(IR.get(), &ctx);
   findEvtaMaxPools(IR.get(), &ctx);
+  findInputPreprocess(IR.get(), &ctx);
 
   for (const auto &I : IR->getInstrs()) {
 
@@ -5523,6 +5747,11 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
     //#### JO added (2026-10-31): elementadd / relu done by the fused conv before them
     if (ctx.isFusedAway(&I)) {
       bundle.append("  // done by the EVTA conv before (convolution_wo_tr_res)\n");
+      continue;
+    }
+    //#### JO added (2026-11-02): quantize / elemsub / elemdiv / transpose done by the first conv's input copy
+    if (ctx.isPreFused(&I)) {
+      bundle.append("  // done in the input copy of the first conv (preprocess_nhwc2vtaio_zerofill)\n");
       continue;
     }
 

@@ -1615,6 +1615,79 @@ void transpose_nhwc2vtaio_zerofill(int8_t* input, int8_t* output, int N, int H, 
   }
 }
 
+//#### JO added (2026-11-02): the input preprocessing in one pass (VTASave.cpp findInputPreprocess): quantize the float
+//#### input as quantize() does (std::round(x / scale + offset), clipped to int8), map each channel's value through its
+//#### 256-entry table (elemsub / elemdiv by per-channel constants, folded at compile time; nullptr = none) and write the
+//#### EVTA layout N{CO/16}HW16 of the zero-filled first conv (channels C..CO-1 are 0, C <= 16). nchw: the input is
+//#### NCHW (an NCHW -> NHWC transpose folded in), else NHWC.
+static inline int8_t preprocessQuant1(float x, float scale, int32_t offset) {
+  int32_t q = std::round(x / scale + offset);
+  return (int8_t)(q > 127 ? 127 : (q < -128 ? -128 : q));
+}
+#if defined(__aarch64__)
+// 4 values as preprocessQuant1: vcvtaq rounds half away from zero like std::round
+static inline int32x4_t preprocessQuant4(float32x4_t x, float32x4_t vs, float32x4_t vo) {
+  int32x4_t q = vcvtaq_s32_f32(vaddq_f32(vdivq_f32(x, vs), vo));
+  return vminq_s32(vmaxq_s32(q, vdupq_n_s32(-128)), vdupq_n_s32(127));
+}
+#endif
+void preprocess_nhwc2vtaio_zerofill(const float *input, int8_t *output, int N, int H, int W, int C, int CO, int nchw,
+                                    float scale, int32_t offset, const int8_t *lut) {
+  const int CB = CO / 16, rows = N * H, WC = 64;
+#pragma omp parallel for schedule(static)
+  for (int r = 0; r < rows; r++) {
+    const int n = r / H, h = r % H;
+    int8_t *out = output + ((size_t)n * CB * H + h) * W * 16;
+    for (int w0 = 0; w0 < W; w0 += WC) {
+      const int nw = std::min(WC, W - w0);
+      int8_t q[16][WC];
+      int k0 = 0;
+#if defined(__aarch64__)
+      const float32x4_t vs = vdupq_n_f32(scale), vo = vdupq_n_f32((float)offset);
+      if (!nchw && C == 3) {
+        const float *src = input + (((size_t)n * H + h) * W + w0) * 3;
+        for (; k0 + 4 <= nw; k0 += 4) {
+          float32x4x3_t x = vld3q_f32(src + k0 * 3);
+          for (int c = 0; c < 3; c++) {
+            int32x4_t v = preprocessQuant4(x.val[c], vs, vo);
+            for (int i = 0; i < 4; i++)
+              q[c][k0 + i] = (int8_t)vgetq_lane_s32(v, 0), v = vextq_s32(v, v, 1);
+          }
+        }
+      } else if (nchw) {
+        int k = 0;
+        for (int c = 0; c < C; c++) {
+          const float *src = input + (((size_t)n * C + c) * H + h) * W + w0;
+          for (k = 0; k + 4 <= nw; k += 4) {
+            int32x4_t v = preprocessQuant4(vld1q_f32(src + k), vs, vo);
+            for (int i = 0; i < 4; i++)
+              q[c][k + i] = (int8_t)vgetq_lane_s32(v, 0), v = vextq_s32(v, v, 1);
+          }
+        }
+        k0 = k;
+      }
+#endif
+      for (int c = 0; c < C; c++)
+        for (int k = k0; k < nw; k++)
+          q[c][k] = preprocessQuant1(nchw ? input[(((size_t)n * C + c) * H + h) * W + w0 + k]
+                                          : input[(((size_t)n * H + h) * W + w0 + k) * C + c],
+                                     scale, offset);
+      if (lut)
+        for (int c = 0; c < C; c++)
+          for (int k = 0; k < nw; k++)
+            q[c][k] = lut[c * 256 + q[c][k] + 128];
+      for (int k = 0; k < nw; k++) {
+        int8_t px[16] = {0};
+        for (int c = 0; c < C; c++)
+          px[c] = q[c][k];
+        memcpy(out + (size_t)(w0 + k) * 16, px, 16);
+      }
+    }
+    for (int c_ = 1; c_ < CB; c_++)
+      memset(out + (size_t)c_ * H * W * 16, 0, (size_t)W * 16);
+  }
+}
+
 void transpose_nhwc2vtaio_zerofill_old(int8_t* input, int8_t* output, int N, int H, int W, int C){
   int8_t *IN_NHWC = input;
 

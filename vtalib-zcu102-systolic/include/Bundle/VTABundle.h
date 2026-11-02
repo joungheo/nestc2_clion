@@ -141,4 +141,7 @@ void transpose_nhwc2vtaio_pack(int8_t* input, int8_t* output, int N, int H, int 
 void transpose_nhwc2vtaio_pack_zerofill(int8_t* input, int8_t* output, int N, int H, int W, int C);
 
 void transpose_nhwc2vtaio_zerofill(int8_t* input, int8_t* output, int N, int H, int W, int C);
+//#### JO added (2026-11-02): quantize + per-channel table + NHWC/NCHW -> zero-filled EVTA layout (CPUBundle_generic.cpp)
+void preprocess_nhwc2vtaio_zerofill(const float *input, int8_t *output, int N, int H, int W, int C, int CO, int nchw,
+                                    float scale, int32_t offset, const int8_t *lut);
 #endif //VTALIB_EXAMPLE_VTABUNDLE_H
