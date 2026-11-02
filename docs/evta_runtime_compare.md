@@ -668,8 +668,28 @@ ALU 4.63 ms의 내역(반복 × 2 cycle):
   - fc: 133 µs 중 GEMM 5 µs(weight 504 KB LOAD).
 - 회귀(실측 = GEMM + 2·ALU + a·명령 수 + b): run당 상수 약 100 µs, run 21개에 rms 20 µs. 명령 수 계수는 서로 얽혀 따로 믿기 어렵다.
 
+**run 하나와 명령 하나의 비용** (`vtabundles_xcmpl/hwtest/runbench.cpp`, systolic 400 MHz, `VTASynchronize` 시간 200회 median;
+case를 한 프로세스에서 모두 돈다: runtime의 CMA는 `xlnk_reset`으로만 돌아온다)
+
+| 측정 | 값 |
+|---|---|
+| 가장 작은 run (reset, STORE 1) | **4.7 µs** (CPU flush, MMIO 시작, done poll 포함) |
+| GEMM 반복 | 1.0 cycle (1 uop × 4096: 2.33 ns, 16 × 1024: 2.55 ns) |
+| GEMM 명령 하나 (1 uop, 1 반복) | 약 25 cycle |
+| ALU 반복 (imm도 reg도) | **2.0 cycle** (16 × 2048) |
+| ALU 명령 하나 (1 반복) | 약 35 cycle |
+| inp LOAD / STORE 큰 것 | 5.0 / 5.2 GB/s |
+| inp LOAD / STORE 명령 하나 (1 block) | 0.29 / 0.21 µs |
+| 서로 다른 uop kernel 256개 (`gemmu 256 1`) | EVTA 멈춤(조사하지 않음; bundle에는 이런 run이 없다) |
+
+- **run 고정 비용은 4.7 µs뿐이다.** run 21개 × 4.7 µs = 0.1 ms라 run을 합쳐도 줄 것이 거의 없다. 3×3 conv의 run당 60~70 µs는
+  run 시작·끝이 아니라 conv 안의 몫(첫 tile LOAD가 숨지 못하는 시간, 마지막 ALU와 STORE 등)이다.
+- ALU는 imm도 2 cycle이다. HLS 보고서(`vta-hw-zcu102-systolic/build/.../compute_csynth.rpt`): `EXE_OUT_LOOP_EXE_IN_LOOP_READ_ALU_UOP`
+  flatten, II 2, depth 11. acc를 두 번 읽고(src, dst) 한 번 쓰는데 acc_mem(T2P BRAM) 포트가 둘이라서다.
+- Resnet18의 imm ALU 명령은 같은 run 안에서 acc 주소를 16 반복 안에 다시 쓰지 않는다(덤프로 확인). II = 1로 바꿔도 겹침이 생기지 않는다.
+
 **정리:** GEMM 밖의 7.6 ms 중 **ALU가 4.6 ms로 가장 크고 하드웨어 II 때문이다.** 소프트웨어만으로 줄일 수 있는 것은 conv0 tile
-고정 비용(약 1 ms 중 일부), run 수(run당 약 60 µs), downsample conv의 LOAD(약 0.3 ms) 정도다.
+고정 비용(약 1 ms 중 일부), downsample conv의 LOAD(약 0.3 ms) 정도다(run 합치기는 run당 4.7 µs라 이득이 없다).
 
 ## 8. 하드웨어도 같이 비교해야 하나
 
