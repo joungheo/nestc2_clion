@@ -2,6 +2,7 @@
 #include <ctime>
 #include <cstring>
 #include <cstdint>
+#include <cmath>
 #include <fstream>
 #include <vector>
 #ifdef _OPENMP
@@ -1625,63 +1626,94 @@ static inline int8_t preprocessQuant1(float x, float scale, int32_t offset) {
   return (int8_t)(q > 127 ? 127 : (q < -128 ? -128 : q));
 }
 #if defined(__aarch64__)
-// 4 values as preprocessQuant1: vcvtaq rounds half away from zero like std::round
-static inline int32x4_t preprocessQuant4(float32x4_t x, float32x4_t vs, float32x4_t vo) {
-  int32x4_t q = vcvtaq_s32_f32(vaddq_f32(vdivq_f32(x, vs), vo));
-  return vminq_s32(vmaxq_s32(q, vdupq_n_s32(-128)), vdupq_n_s32(127));
+// 16 values as preprocessQuant1 (x / scale, or x * (1 / scale) when that is exact: scale a power of two). vcvtaq rounds
+// half away from zero like std::round, the saturating narrows clip to int8.
+static inline int8x16_t preprocessQuant16(const float32x4_t x[4], float32x4_t vs, float32x4_t vo, bool mul) {
+  int16x8_t h[2];
+  for (int i = 0; i < 2; i++) {
+    int32x4_t a = vcvtaq_s32_f32(vaddq_f32(mul ? vmulq_f32(x[2 * i], vs) : vdivq_f32(x[2 * i], vs), vo));
+    int32x4_t b = vcvtaq_s32_f32(vaddq_f32(mul ? vmulq_f32(x[2 * i + 1], vs) : vdivq_f32(x[2 * i + 1], vs), vo));
+    h[i] = vcombine_s16(vqmovn_s32(a), vqmovn_s32(b));
+  }
+  return vcombine_s8(vqmovn_s16(h[0]), vqmovn_s16(h[1]));
+}
+// lut[q + 128] for 16 values: 4 table lookups of 64 bytes (vqtbx keeps the lanes whose index is out of its table)
+static inline int8x16_t preprocessLut16(int8x16_t q, const uint8x16x4_t t[4]) {
+  uint8x16_t i = veorq_u8(vreinterpretq_u8_s8(q), vdupq_n_u8(0x80)), d = vdupq_n_u8(64);
+  uint8x16_t r = vqtbl4q_u8(t[0], i);
+  r = vqtbx4q_u8(r, t[1], i = vsubq_u8(i, d));
+  r = vqtbx4q_u8(r, t[2], i = vsubq_u8(i, d));
+  r = vqtbx4q_u8(r, t[3], vsubq_u8(i, d));
+  return vreinterpretq_s8_u8(r);
 }
 #endif
 void preprocess_nhwc2vtaio_zerofill(const float *input, int8_t *output, int N, int H, int W, int C, int CO, int nchw,
                                     float scale, int32_t offset, const int8_t *lut) {
-  const int CB = CO / 16, rows = N * H, WC = 64;
+  const int CB = CO / 16, rows = N * H;
+#if defined(__aarch64__)
+  int fe;
+  const bool mul = std::frexp(scale, &fe) == 0.5f && std::isnormal(1 / scale);
+  const float32x4_t vs = vdupq_n_f32(mul ? 1 / scale : scale), vo = vdupq_n_f32((float)offset);
+  uint8x16x4_t tab[3][4];
+  if (C == 3 && lut)
+    for (int c = 0; c < 3; c++)
+      for (int k = 0; k < 4; k++)
+        for (int j = 0; j < 4; j++)
+          tab[c][k].val[j] = vld1q_u8((const uint8_t *)lut + c * 256 + k * 64 + j * 16);
+#endif
 #pragma omp parallel for schedule(static)
   for (int r = 0; r < rows; r++) {
     const int n = r / H, h = r % H;
     int8_t *out = output + ((size_t)n * CB * H + h) * W * 16;
-    for (int w0 = 0; w0 < W; w0 += WC) {
-      const int nw = std::min(WC, W - w0);
-      int8_t q[16][WC];
-      int k0 = 0;
+    int w0 = 0;
 #if defined(__aarch64__)
-      const float32x4_t vs = vdupq_n_f32(scale), vo = vdupq_n_f32((float)offset);
-      if (!nchw && C == 3) {
-        const float *src = input + (((size_t)n * H + h) * W + w0) * 3;
-        for (; k0 + 4 <= nw; k0 += 4) {
-          float32x4x3_t x = vld3q_f32(src + k0 * 3);
+    // 3 channels, 16 pixels at a time: quantize, table, then each pixel as one 32-bit word c0 c1 c2 0 followed by 12 zero
+    // bytes (vst4q_u32 with three zero vectors)
+    if (C == 3) {
+      const uint32x4_t z = vdupq_n_u32(0);
+      for (; w0 + 16 <= W; w0 += 16) {
+        int8x16_t q[3];
+        float32x4_t x[3][4];
+        if (nchw) {
           for (int c = 0; c < 3; c++) {
-            int32x4_t v = preprocessQuant4(x.val[c], vs, vo);
-            for (int i = 0; i < 4; i++)
-              q[c][k0 + i] = (int8_t)vgetq_lane_s32(v, 0), v = vextq_s32(v, v, 1);
+            const float *src = input + (((size_t)n * 3 + c) * H + h) * W + w0;
+            for (int k = 0; k < 4; k++)
+              x[c][k] = vld1q_f32(src + 4 * k);
+          }
+        } else {
+          const float *src = input + (((size_t)n * H + h) * W + w0) * 3;
+          for (int k = 0; k < 4; k++) {
+            float32x4x3_t v = vld3q_f32(src + 12 * k);
+            x[0][k] = v.val[0], x[1][k] = v.val[1], x[2][k] = v.val[2];
           }
         }
-      } else if (nchw) {
-        int k = 0;
-        for (int c = 0; c < C; c++) {
-          const float *src = input + (((size_t)n * C + c) * H + h) * W + w0;
-          for (k = 0; k + 4 <= nw; k += 4) {
-            int32x4_t v = preprocessQuant4(vld1q_f32(src + k), vs, vo);
-            for (int i = 0; i < 4; i++)
-              q[c][k + i] = (int8_t)vgetq_lane_s32(v, 0), v = vextq_s32(v, v, 1);
-          }
+        for (int c = 0; c < 3; c++) {
+          q[c] = preprocessQuant16(x[c], vs, vo, mul);
+          if (lut)
+            q[c] = preprocessLut16(q[c], tab[c]);
         }
-        k0 = k;
+        uint8x16_t c0 = vreinterpretq_u8_s8(q[0]), c1 = vreinterpretq_u8_s8(q[1]), c2 = vreinterpretq_u8_s8(q[2]),
+                   zb = vdupq_n_u8(0);
+        uint16x8_t p01[2] = {vreinterpretq_u16_u8(vzip1q_u8(c0, c1)), vreinterpretq_u16_u8(vzip2q_u8(c0, c1))};
+        uint16x8_t p2[2] = {vreinterpretq_u16_u8(vzip1q_u8(c2, zb)), vreinterpretq_u16_u8(vzip2q_u8(c2, zb))};
+        for (int i = 0; i < 2; i++) {
+          uint32x4x4_t a = {{vreinterpretq_u32_u16(vzip1q_u16(p01[i], p2[i])), z, z, z}};
+          vst4q_u32((uint32_t *)(out + (size_t)(w0 + 8 * i) * 16), a);
+          a.val[0] = vreinterpretq_u32_u16(vzip2q_u16(p01[i], p2[i]));
+          vst4q_u32((uint32_t *)(out + (size_t)(w0 + 8 * i + 4) * 16), a);
+        }
       }
+    }
 #endif
-      for (int c = 0; c < C; c++)
-        for (int k = k0; k < nw; k++)
-          q[c][k] = preprocessQuant1(nchw ? input[(((size_t)n * C + c) * H + h) * W + w0 + k]
-                                          : input[(((size_t)n * H + h) * W + w0 + k) * C + c],
-                                     scale, offset);
-      if (lut)
-        for (int c = 0; c < C; c++)
-          for (int k = 0; k < nw; k++)
-            q[c][k] = lut[c * 256 + q[c][k] + 128];
-      for (int k = 0; k < nw; k++) {
-        int8_t px[16] = {0};
-        for (int c = 0; c < C; c++)
-          px[c] = q[c][k];
-        memcpy(out + (size_t)(w0 + k) * 16, px, 16);
+    for (int w = w0; w < W; w++) {
+      int8_t px[16] = {0};
+      for (int c = 0; c < C; c++) {
+        int8_t v = preprocessQuant1(nchw ? input[(((size_t)n * C + c) * H + h) * W + w]
+                                         : input[(((size_t)n * H + h) * W + w) * C + c],
+                                    scale, offset);
+        px[c] = lut ? lut[c * 256 + v + 128] : v;
       }
+      memcpy(out + (size_t)w * 16, px, 16);
     }
     for (int c_ = 1; c_ < CB; c_++)
       memset(out + (size_t)c_ * H * W * 16, 0, (size_t)W * 16);
