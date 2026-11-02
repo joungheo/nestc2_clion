@@ -444,7 +444,8 @@ conv들 뒤 cache에 없는 weight를 1000바이트 간격으로 건너뛰며 DR
   다음 run을 빨리 만드는 3×3 stride-2 conv에서 드러났다). flush 뒤의 대기나 sentinel 채우기(`/dev/mem` 쓰기)가 그 틈을 메웠고,
   flush 앞의 대기나 다른 주소에 쓰기는 소용이 없었다.
 - 고침: vtalib `pynq_driver.cc` `VTAFlushCache` / `VTAInvalidateCache`가 libcma 다음에 `dsb sy`를 한다(`EVTA_NO_DSB=1`이면 뺀다).
-  5 µs 대기(`EVTA_PRE_RUN_US`)는 기본 5로 남겼다(`0`이면 끔). 비용은 측정 차이 안이다(single exe 100회 4336 ms 대 4330 ms).
+  5 µs 대기(`EVTA_PRE_RUN_US`)는 원인을 찾는 동안 기본 5였고, dsb로 고친 뒤 기본 0으로 되돌렸다(`EVTA_PRE_RUN_US=5`로 다시 켬).
+  비용은 측정 차이 안이었다(single exe 100회 4336 ms 대 4330 ms).
 
 ### 7.8 fc를 EVTA로 (2026-11-02, `VTASave.cpp` `-vta-evta-fc`, 기본 켜짐; vtalib `fullyconnected_evta_packed`)
 

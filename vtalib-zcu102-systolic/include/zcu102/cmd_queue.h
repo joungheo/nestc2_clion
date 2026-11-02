@@ -729,6 +729,7 @@ class CommandQueue {
   //#### EVTA_PRE_RUN_MASK=<bits> (default all): only on the EVTAs whose bit is set (2026-11-02)
   //#### JO changed (2026-11-02): default 5 us (multi4 runs hung about once per 400 inferences without it,
   //#### docs/evta_runtime_compare.md 7.7); EVTA_PRE_RUN_US=0 turns it off
+  //#### JO changed (2026-11-02): default 0 again (the hang was the missing dsb after the cache flush, pynq_driver.cc)
   static int PreRunAt() {
     static int at = -1;
     if (at < 0) {
@@ -749,7 +750,7 @@ class CommandQueue {
     static long us = -1, mask = -1;
     if (us < 0) {
       const char *e = getenv("EVTA_PRE_RUN_US");
-      us = e ? atol(e) : 5;
+      us = e ? atol(e) : 0;
       e = getenv("EVTA_PRE_RUN_MASK");
       mask = e ? strtol(e, nullptr, 0) : -1;
       if (mask < 0) mask = 0x7fffffff;

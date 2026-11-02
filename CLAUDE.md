@@ -208,8 +208,8 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   Resnet18 dense OMP 1 4.4 -> 0.74 ms, single OMP 1 44.3 -> 40.6 ms, multi4 100 inferences 1.19 -> ~1.1 s (§7.6). multi4 runs
   hung now and then (about once per 400 inferences per copy, only with 4 EVTAs at once): libcma's `cma_flush_cache` is a `dc civac`
   loop with no `dsb`, so the MMIO start could overtake the flush of the instructions; vtalib `VTAFlushCache` / `VTAInvalidateCache` now
-  add `dsb sy` (2026-11-02, `EVTA_NO_DSB=1` leaves it out; 4000 per copy hang-free with no wait). The 5 us busy wait before each run
-  (`EVTA_PRE_RUN_US`, default 5, 0 = off) stays as well (§7.7). A timed-out run (`EVTA_RUN_TIMEOUT_MS`, default 5 s) dumps every EVTA's state and exits 5; the run scripts `xlnk_reset` after a
+  add `dsb sy` (2026-11-02, `EVTA_NO_DSB=1` leaves it out; 4000 per copy hang-free with no wait). The 5 us busy wait before each run used
+  during the hunt (`EVTA_PRE_RUN_US`) is off by default again (§7.7). A timed-out run (`EVTA_RUN_TIMEOUT_MS`, default 5 s) dumps every EVTA's state and exits 5; the run scripts `xlnk_reset` after a
   failed bitstream load (the dead run's CMA stays allocated until then).
 - fc on the EVTA (2026-11-02, `VTASave.cpp` `-vta-evta-fc`, default on; vtalib `fullyconnected_evta_packed`): weights and bias written in the
   EVTA layout at compile time, GEMM over chunks of half the wgt buffer, rounding as `std::round` with ALU MIN/MAX/ADD/SHR (ALU shift is
