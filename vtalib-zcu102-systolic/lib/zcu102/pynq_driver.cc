@@ -55,16 +55,33 @@ void VTAMemCopyToHost(void* dst, const void* src, size_t size) {
   memcpy(dst, src, size);
 }
 
+//#### JO added (2026-11-02): libcma's cma_flush_cache / cma_invalidate_cache are a loop of dc civac without a dsb
+//#### (objdump of PYNQ 2.4 /usr/lib/libcma.so): the cache maintenance is complete only after a dsb, so the MMIO writes
+//#### that start the EVTA could go out before the cleaned instructions / uops reached DRAM. The multi4 hangs (about once per
+//#### 400 inferences per copy, gone with a 5 us wait after the flush, not before it) came from that. EVTA_NO_DSB=1 leaves it out.
+static inline void CacheMaintenanceBarrier() {
+#if defined(__aarch64__)
+  static const bool off = [] {
+    const char *e = getenv("EVTA_NO_DSB");
+    return e && atoi(e);
+  }();
+  if (!off)
+    __asm__ __volatile__("dsb sy" ::: "memory");
+#endif
+}
+
 void VTAFlushCache(void* vir_addr, vta_phy_addr_t phy_addr, int size) {
   // Call the cma_flush_cache on the CMA buffer
   // so that the FPGA can read the buffer data.
   cma_flush_cache(vir_addr, phy_addr, size);
+  CacheMaintenanceBarrier();
 }
 
 void VTAInvalidateCache(void* vir_addr, vta_phy_addr_t phy_addr, int size) {
   // Call the cma_invalidate_cache on the CMA buffer
   // so that the host needs to read the buffer data.
   cma_invalidate_cache(vir_addr, phy_addr, size);
+  CacheMaintenanceBarrier();
 }
 
 void *VTAMapRegister(uint32_t addr) {
