@@ -222,6 +222,9 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
 - Record / replay of EVTA calls (AOT stage 0, 2026-11-02, vtalib `cmd_queue.h` `ReplayBegin`, `EVTA_REPLAY=0` turns it off): the conv / maxpool / fc
   entries record their instructions and uops on the first call with the same scalar arguments (with a relocation table for the buffers) and
   later calls only run the copies; bit-exact, Resnet18 single OMP 1 37.1 -> 34.5 ms, multi4 per copy 37.6 -> 35.0 ms (`docs/evta_runtime_aot.md` §5.4).
+- DRAM traffic between layers is cheap (2026-11-02, `docs/evta_runtime_compare.md` §7.11): `EVTA_REPLAY_LOG=2` prints per replayed run the
+  GEMM / ALU iterations, DRAM bytes and time; `EVTA_MEMEXP=<mask>` shrinks the replayed inp / wgt / acc LOADs / STOREs (bits 0-3, results
+  garbage). Resnet18 EVTA 32.18 ms, GEMM + ALU floor 25.9 ms, all activation traffic gone 29.82 ms (conv -> conv at most 1.05 ms of it).
 - The lab board's PL has a defective configuration row (tile row SLICE Y219, cells stuck at 0; `log/BOARD_TODO.md`
   2026-10-23/24). `vivado.tcl` on zcu102 fences the design below it by default (`VTA_BRAM_FENCE=y219|upper|none`).
   multi2 fits below it and works (2026-10-24); multi4 needs more BRAM than the rows below, so it crosses the row with
