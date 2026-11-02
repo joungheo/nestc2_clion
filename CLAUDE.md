@@ -225,6 +225,11 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
 - DRAM traffic between layers is cheap (2026-11-02, `docs/evta_runtime_compare.md` §7.11): `EVTA_REPLAY_LOG=2` prints per replayed run the
   GEMM / ALU iterations, DRAM bytes and time; `EVTA_MEMEXP=<mask>` shrinks the replayed inp / wgt / acc LOADs / STOREs (bits 0-3, results
   garbage). Resnet18 EVTA 32.18 ms, GEMM + ALU floor 25.9 ms, all activation traffic gone 29.82 ms (conv -> conv at most 1.05 ms of it).
+- conv0 over a packed input (2026-11-02, `VTASave.cpp` `-vta-conv0-pack`, default on, `getConv0Pack`; vtalib `preprocess_conv0pack` /
+  `conv0pack_nhwc2vtaio`): KH x KW / stride s over 3 channels as ceil(KH/s) x 1 / stride 1 over s * KW * 3 channels (s rows and the KW taps
+  in the channels; Resnet18 conv0 4x1 over 115x112x48, schedule 2 / 16x16) instead of 7x7 over 16 zero-filled channels; the zero-filled
+  path stays for shapes that do not fit. Every EVTA conv output byte-identical (`EVTA_DUMP_CONV=<dir>` dumps them); conv0 9.13 -> 3.64 ms,
+  Resnet18 single OMP 1 34.5 -> 29.8 ms, multi4 per copy 35.0 -> 30.5 ms (`docs/evta_runtime_compare.md` §7.12).
 - The lab board's PL has a defective configuration row (tile row SLICE Y219, cells stuck at 0; `log/BOARD_TODO.md`
   2026-10-23/24). `vivado.tcl` on zcu102 fences the design below it by default (`VTA_BRAM_FENCE=y219|upper|none`).
   multi2 fits below it and works (2026-10-24); multi4 needs more BRAM than the rows below, so it crosses the row with
