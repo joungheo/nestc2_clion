@@ -9,7 +9,8 @@
 //   alureg N K         N ALU ADD instructions acc[dst] += acc[src], K iterations each
 //   load   N K         N inp LOADs of K blocks before the compute
 //   store  N K         N STOREs of K blocks after the compute
-// usage: sudo ./runbench <case> [N] [K] [reps, default 200]
+// usage: sudo ./runbench <case> <N> <K> [<case> <N> <K> ...]   (REPS=<n>, default 200; all cases in one process: the
+//        runtime's CMA is only given back by an xlnk_reset)
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
@@ -57,14 +58,15 @@ static double now_us() {
 }
 
 int main(int argc, char **argv) {
-  std::string c = argc > 1 ? argv[1] : "base";
-  uint32_t N = argc > 2 ? atoi(argv[2]) : 0, K = argc > 3 ? atoi(argv[3]) : 1;
-  int reps = argc > 4 ? atoi(argv[4]) : 200;
+  int reps = getenv("REPS") ? atoi(getenv("REPS")) : 200;
   DataBuffer *inp = (DataBuffer *)VTABufferAlloc(4096 * 16);
   DataBuffer *out = (DataBuffer *)VTABufferAlloc(4096 * 16);
   std::vector<int8_t> z(4096 * 16, 1);
   VTABufferCopy(z.data(), 0, inp, 0, z.size(), 1);
   VTACommandHandle h = VTATLSCommandHandle(EVTA_ID);
+  for (int ai = 1; ai < argc; ai += 3) {
+  std::string c = argv[ai];
+  uint32_t N = ai + 1 < argc ? atoi(argv[ai + 1]) : 0, K = ai + 2 < argc ? atoi(argv[ai + 2]) : 1;
   std::vector<void *> uh(2 * (N + 2), nullptr);
   std::vector<Arg> args(N + 1);
   std::vector<double> t;
@@ -95,6 +97,8 @@ int main(int argc, char **argv) {
   std::sort(t.begin() + 1, t.end());
   printf("RUNBENCH %s N %u K %u median %.2f us min %.2f us (first %.1f)\n", c.c_str(), N, K, t[1 + (t.size() - 1) / 2],
          t[1], t[0]);
+  fflush(stdout);
+  }
   VTARuntimeShutdown(EVTA_ID);
   VTABufferFree(inp);
   VTABufferFree(out);
