@@ -1,3 +1,4 @@
+#include <atomic>
 #include <cstdint>
 #include <cmath>
 #include <cstdlib>
@@ -2762,6 +2763,23 @@ int convolution_wo_tr_wo_ch(int8_t* input, int8_t *kernel, int32_t *bias, int8_t
 }
 
 //#### JO changed (2026-10-31): body of convolution_wo_tr and convolution_wo_tr_res (res = nullptr: plain conv)
+//#### JO added (2026-11-02): EVTA_DUMP_CONV=<dir> writes the output of every EVTA conv call (the EVTA layout as the
+//#### buffer holds it) to <dir>/conv_<n>.bin, n counting the calls of the process from 0: compares two bundles' layers
+static void dumpConvOutput(void *output, size_t bytes) {
+  static const char *dir = getenv("EVTA_DUMP_CONV");
+  static std::atomic<int> n{0};
+  if (!dir)
+    return;
+  VTABufferInvalidate(output, 0, bytes);
+  char name[512];
+  snprintf(name, sizeof(name), "%s/conv_%d.bin", dir, n++);
+  FILE *fp = fopen(name, "wb");
+  if (fp) {
+    fwrite(VTABufferGetVirtAddr(output), 1, bytes, fp);
+    fclose(fp);
+  }
+}
+
 static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *output, int N, int H, int W, int C, int KN, int KH, int KW, int pad_size,
                       int stride_size, bool doRelu, bool doBias, uint8_t shift, int out_h, int out_w, void* vtaCmdH, int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA,
                       const ConvResidual *res) {
@@ -2784,8 +2802,10 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
                          res ? (int32_t)res->resShl : 0, res ? (int32_t)res->convShl : 0,
                          res ? (int32_t)res->sumShr : 0, res ? res->relu : 0, res ? res->buf == output : 0};
   void *replayBufs[] = {input, kernel, doBias ? bias : nullptr, output, res ? res->buf : nullptr};
-  if (VTAReplayBegin(vtaCmdH, replayKey, sizeof(replayKey), replayBufs, 5))
+  if (VTAReplayBegin(vtaCmdH, replayKey, sizeof(replayKey), replayBufs, 5)) {
+    dumpConvOutput(output, (size_t)N * KN * out_h * out_w);
     return 0;
+  }
 
 #ifdef VTA_DEBUG_MODE
   int8_t *dbg_input = (int8_t *)VTABufferGetVirtAddr(vta_input_buf);
@@ -3020,6 +3040,7 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
 #ifdef NESTC_EVTA_PROFILE_AUTOTUNE
     std::cout<<f0<<","<<f1<<","<<f2<<","<<f3<<","<<f4<<","<<f5<<","<<f6<<","<<f7<<","<<f8<<","<<f9<<","<<f10<<","<<f11<<","<<f12<<","<<f13<<","<<f14<<","<<f15<<","<<f16<<","<<f17<<endl;
 #endif
+  dumpConvOutput(output, (size_t)N * KN * out_h * out_w);
   return 0;
 }
 
