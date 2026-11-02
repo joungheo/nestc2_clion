@@ -174,6 +174,9 @@ class CommandQueue {
     CHECK(!insn_queue_.PendingPop());
     // Check if there are no instruction to execute at all
     if (insn_queue_.count() == 0) return;
+    //#### JO added (2026-11-02): EVTA_PRE_RUN_AT=1: the pre-run wait before the copy and cache flush of the queues
+    //#### instead of after them (hang hunt: time since the last run vs time since the flush)
+    if (PreRunAt() == 1) PreRunWait();
     // Synchronization for the queues
     uop_queue_.AutoReadBarrier();
     insn_queue_.AutoReadBarrier();
@@ -196,7 +199,7 @@ class CommandQueue {
 
     //#### JO added (2026-11-01): EVTA_STORE_SENTINEL=1 fills the DRAM the STOREs of this run write with 0xA5 first
     StoreSentinelFill();
-    PreRunWait();
+    if (PreRunAt() == 0) PreRunWait();
     //printf("[Synchronize] device run. device=%p", device_);
     int timeout = VTADeviceRun(
         device_,
@@ -237,6 +240,12 @@ class CommandQueue {
     //printf("[Synchronize] reset uop queue");
     insn_queue_.Reset();
     //printf(" -- DONE\n");    
+    //#### JO added (2026-11-02): EVTA_DOUBLE_QUEUE=1: the next run's uops and instructions in the other buffers
+    //#### (the uop LOADs take the buffer's address when they are made, so swap before the next run is built)
+    if (DoubleQueue()) {
+      uop_queue_.SwapBuffer();
+      insn_queue_.SwapBuffer();
+    }
   }
 
   int Synchronize_CNU(uint32_t wait_cycles, char* rec_cache = NULL, int buf_size = 0, int num_cache = 0, int record = -1) {
@@ -718,11 +727,29 @@ class CommandQueue {
   }
   //#### JO added (2026-11-01): EVTA_PRE_RUN_US=<n>: busy wait n us before each run (hang hunt: start timing only);
   //#### EVTA_PRE_RUN_MASK=<bits> (default all): only on the EVTAs whose bit is set (2026-11-02)
+  //#### JO changed (2026-11-02): default 5 us (multi4 runs hung about once per 400 inferences without it,
+  //#### docs/evta_runtime_compare.md 7.7); EVTA_PRE_RUN_US=0 turns it off
+  static int PreRunAt() {
+    static int at = -1;
+    if (at < 0) {
+      const char *e = getenv("EVTA_PRE_RUN_AT");
+      at = e ? atoi(e) : 0;
+    }
+    return at;
+  }
+  static bool DoubleQueue() {
+    static int on = -1;
+    if (on < 0) {
+      const char *e = getenv("EVTA_DOUBLE_QUEUE");
+      on = e ? atoi(e) : 0;
+    }
+    return on;
+  }
   void PreRunWait() {
     static long us = -1, mask = -1;
     if (us < 0) {
       const char *e = getenv("EVTA_PRE_RUN_US");
-      us = e ? atol(e) : 0;
+      us = e ? atol(e) : 5;
       e = getenv("EVTA_PRE_RUN_MASK");
       mask = e ? strtol(e, nullptr, 0) : -1;
       if (mask < 0) mask = 0x7fffffff;

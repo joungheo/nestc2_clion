@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <cstdio>
+#include <utility>
 #include "uop_kernel.h"
 
 namespace vta {
@@ -18,6 +19,20 @@ class BaseQueue {
     if (fpga_buff_ != nullptr) {
       VTAMemFree(fpga_buff_);
     }
+    if (alt_buff_ != nullptr) {
+      VTAMemFree(alt_buff_);
+    }
+  }
+  //#### JO added (2026-11-02): EVTA_DOUBLE_QUEUE=1 (hang hunt): the next run uses the other of two FPGA buffers, so the
+  //#### EVTA never reads a buffer the CPU has just rewritten at the same physical address (the second one is allocated here)
+  void SwapBuffer() {
+    if (alt_buff_ == nullptr) {
+      alt_buff_ = VTAMemAlloc(max_bytes_, coherent_ || always_cache_);
+      CHECK(alt_buff_ != nullptr);
+      alt_buff_phy_ = VTAMemGetPhyAddr(alt_buff_);
+    }
+    std::swap(fpga_buff_, alt_buff_);
+    std::swap(fpga_buff_phy_, alt_buff_phy_);
   }
   /*! \return Content of DRAM buffer. */
   char* dram_buffer() const {
@@ -65,6 +80,7 @@ class BaseQueue {
     coherent_ = coherent;
     always_cache_ = always_cache;
     elem_bytes_ = elem_bytes;
+    max_bytes_ = max_bytes;
     // Allocate buffer ahead of time
     fpga_buff_ = static_cast<char*>(VTAMemAlloc(
         max_bytes, coherent_ || always_cache_));
@@ -99,6 +115,10 @@ class BaseQueue {
   vta_phy_addr_t fpga_buff_phy_{0};
   //#### JO added (2026-11-01): bytes copied and flushed by the last ReadBarrier (CompareDram)
   size_t last_flush_bytes_{0};
+  //#### JO added (2026-11-02): the second buffer of SwapBuffer
+  uint32_t max_bytes_{0};
+  void* alt_buff_{NULL};
+  vta_phy_addr_t alt_buff_phy_{0};
 };
 
 /*!
