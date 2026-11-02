@@ -82,9 +82,9 @@ int main(int argc, char **argv) {
       Arg &a = args[c == "gemmu" ? i : 0];
       a = {K, c[0] == 'a' ? 1u : 0u, c == "aluimm" ? 3u : 2u, c == "aluimm" ? 1u : 0u, c == "gemmu" ? i % 64 : 0u};
       if (a.mode == 0)
-        VTAPushGEMMOp(h, &uh[2 + (c == "gemmu" ? i : 0)], &uop_body, &a, sizeof(a));
+        VTAPushGEMMOp(h, &uh[2 + (c == "gemmu" ? i : 0)], &uop_body, &a, 0);
       else
-        VTAPushALUOp(h, &uh[2 + 0], &uop_body, &a, sizeof(a));
+        VTAPushALUOp(h, &uh[2 + 0], &uop_body, &a, 0);
     }
     VTADepPush(h, 2, 3);
     VTADepPop(h, 2, 3);
