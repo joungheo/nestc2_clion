@@ -233,6 +233,9 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
 - conv0 + maxpool in one EVTA call (2026-11-02, `VTASave.cpp` `-vta-fuse-pool`, default on, `findPoolFusions`; vtalib `convolution_wo_tr_pool`,
   `ConvPool`): conv tiles with the pool halo row / column recomputed, ALU MAX in acc in two passes, only the pooled area stored; byte-identical
   (`EVTA_DUMP_CONV` also dumps maxpool outputs; `EVTA_RES_CHECK=1`). conv0 + pool 4.83 -> 4.48 ms, single OMP 1 29.2 -> 28.8 ms (§7.13).
+- Where the EVTA time goes (2026-11-02, §7.14; `EVTA_REPLAY_DUMP=<dir>` writes every recorded run's instructions and uops as text):
+  Resnet18 26.47 ms = GEMM 18.85 + ALU 4.63 (the HLS `alu` loop is `II = 2`; bias ADD, SHR, clip MIN/MAX, relu, pool) + 2.99
+  (conv0 tiles 1.08, about 60 us per run, load-bound 1x1 downsample convs).
 - The lab board's PL has a defective configuration row (tile row SLICE Y219, cells stuck at 0; `log/BOARD_TODO.md`
   2026-10-23/24). `vivado.tcl` on zcu102 fences the design below it by default (`VTA_BRAM_FENCE=y219|upper|none`).
   multi2 fits below it and works (2026-10-24); multi4 needs more BRAM than the rows below, so it crosses the row with

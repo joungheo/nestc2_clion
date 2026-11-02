@@ -634,6 +634,43 @@ multi4 3), Result / Confidence 그대로.
   약 130 cycle의 고정 비용으로 보인다). 2단계 + 블록당 uop로 thread·tile당 6개(reset 포함).
 - 남은 손해: halo 재계산 GEMM 약 0.2 ms, 늘어난 ALU 명령. §7.11의 예상(0.5~1 ms)보다 작은 0.35 ms다.
 
+### 7.14 EVTA 시간 26.47 ms는 어디에 쓰이나 (측정, 2026-11-02, vtalib `cmd_queue.h` `EVTA_REPLAY_DUMP=<dir>`)
+
+**방법:** `EVTA_REPLAY_DUMP=<dir>`가 기록된 run마다 명령(필드, 의존성 비트)과 uop을 `rec_<id>_<seg>.txt`로 쓴다.
+`EVTA_REPLAY_LOG=2`의 run별 실측(24 inference median)과 맞춰 본다. Resnet18 `_sysprof`, systolic 400 MHz, inference당 run 21개.
+
+| 덩어리 | ms | 몫 | 근거 |
+|---|---|---|---|
+| GEMM 반복 / 400 MHz | 18.85 | 71 % | systolic, 1 cycle / 반복 |
+| ALU 반복 × **2** / 400 MHz | 4.63 | 17.5 % | HLS `alu` 루프가 `PIPELINE II = 2`(`vta-hw-zcu102-systolic/.../vta.cc`); 회귀 계수도 1.9 |
+| 나머지 | 2.99 | 11 % | conv0 1.08, 그 밖의 run 20개가 run당 60~130 µs |
+
+ALU 4.63 ms의 내역(반복 × 2 cycle):
+
+| ALU 연산 | ms | 무엇 |
+|---|---|---|
+| ADD (acc의 bias, 블록마다 broadcast) | 0.91 | conv마다 (conv0 0.28) |
+| SHR imm | 0.90 | requantize shift (conv0 0.28) |
+| MIN 127 | 0.98 | 위쪽 clip (conv0 0.28) |
+| MAX 0 / MAX −128 | 0.69 / 0.29 | relu / 아래쪽 clip |
+| MAX (pool, conv0) | 0.45 | §7.13 |
+| ADD imm (반올림 상수) | 0.16 | shift가 작은 층 |
+| residual ADD | (bias ADD에 포함) | §7.2 |
+
+- imm 연산(SHR, MIN, MAX imm, ADD imm)이 ALU 반복의 69 %다. acc를 하나만 읽는 연산이라 하드웨어에서 II = 1로 돌릴 여지가 있다
+  (그것만 해도 약 −1.5 ms, 전부 II = 1이면 −2.3 ms).
+- 나머지 2.99 ms:
+  - conv0 1.08 ms: tile 98개(2 thread × 49)마다 약 11 µs. tile마다 halo 모양이 달라 GEMM uop(약 1100개)을 다시 LOAD하고
+    (648 KB/inference, compute 모듈에서 순차), ALU 명령 9개, GEMM 명령 5개.
+  - stage 2~4의 3×3 conv: run당 60~70 µs로 거의 일정하다(run 시작·끝의 고정 비용으로 보인다: 첫 tile LOAD, 마지막 STORE,
+    명령 fetch 등; 따로 재지 않았다). stage 1은 105~117 µs.
+  - 1×1 downsample conv 3개: 333 / 263 / 303 µs 중 GEMM 78 / 71 / 67 µs. GEMM이 작아 LOAD가 숨지 못한다(나머지 129~205 µs).
+  - fc: 133 µs 중 GEMM 5 µs(weight 504 KB LOAD).
+- 회귀(실측 = GEMM + 2·ALU + a·명령 수 + b): run당 상수 약 100 µs, run 21개에 rms 20 µs. 명령 수 계수는 서로 얽혀 따로 믿기 어렵다.
+
+**정리:** GEMM 밖의 7.6 ms 중 **ALU가 4.6 ms로 가장 크고 하드웨어 II 때문이다.** 소프트웨어만으로 줄일 수 있는 것은 conv0 tile
+고정 비용(약 1 ms 중 일부), run 수(run당 약 60 µs), downsample conv의 LOAD(약 0.3 ms) 정도다.
+
 ## 8. 하드웨어도 같이 비교해야 하나
 
 해야 한다. 다만 §7의 ①~④를 가르는 것은 어레이가 아니라 다음 네 가지다.
