@@ -88,6 +88,13 @@ static llvm::cl::opt<bool> vtaConv0Pack(
                    "filter columns in the channels) instead of the channels zero-filled to 16"),
     llvm::cl::init(true));
 
+//#### JO added (2026-11-02): the EVTA max pool 3x3 / stride 2 / pad 1 right after the packed first conv (-vta-conv0-pack)
+//#### with relu done by that conv's call (convolution_wo_tr_pool, findPoolFusions): no conv output in DRAM, no pool call
+static llvm::cl::opt<bool> vtaFusePool(
+    "vta-fuse-pool",
+    llvm::cl::desc("Do the EVTA max pool after the packed first conv in that conv's call (convolution_wo_tr_pool)"),
+    llvm::cl::init(true));
+
 namespace vta_save{
 
 //#### JO added (2026-10-31): an EVTA conv that also does the elementadd and the relu after it
@@ -96,6 +103,13 @@ struct ResidualFusion {
   const Value *out;      // relu dest: written by the fused call
   int convShl, resShl, sumShr;
   bool hoistOut;         // out is allocated after the conv: its allocation is emitted before the conv
+};
+
+//#### JO added (2026-11-02): a max pool done by the first conv's call (findPoolFusions)
+struct PoolFusion {
+  const Instruction *pool;
+  const Value *out; // pool dest: written by the fused call
+  bool hoistOut;    // out is allocated after the conv: its allocation is emitted before the conv
 };
 
 //#### JO added (2026-11-02): the preprocessing done in the input copy of a zero-filled first conv (findInputPreprocess)
@@ -145,6 +159,12 @@ public:
     return it == preprocs.end() ? nullptr : &it->second;
   }
   std::set<const Instruction *> *getPreFused() { return &preFused; }
+  //#### JO added (2026-11-02): findPoolFusions
+  std::map<const Instruction *, PoolFusion> *getPoolFusions() { return &poolFusions; }
+  const PoolFusion *getPoolFusion(const Instruction *I) const {
+    auto it = poolFusions.find(I);
+    return it == poolFusions.end() ? nullptr : &it->second;
+  }
   bool isPreFused(const Instruction *I) const { return preFused.count(I) != 0; }
   // a name that lives as long as the symbol tables (constants that are not IR values)
   const char *keepName(const std::string &name) {
@@ -168,6 +188,7 @@ private:
   std::set<const Instruction *> evtaMaxPools; // max pools run by maxpool_evta
   std::map<const Instruction *, InputPreprocess> preprocs; // by the first conv
   std::set<const Instruction *> preFused; // quantize / elemsub / elemdiv / transpose done by a first conv's input copy
+  std::map<const Instruction *, PoolFusion> poolFusions; // by the first conv
   std::list<std::string> names;
 };
 
@@ -2717,7 +2738,9 @@ void generateFirstBNNVTAConvolutionCall(const glow::ConvolutionInst *Inst,
   int shift = getExpofPowerofTwo(scale);
 
   auto filterSte = addConstantSymbolEntry(filter, ctx);
-  bundle->append("  convolution_wo_tr(");
+  //#### JO added (2026-11-02): with the max pool after it (findPoolFusions)
+  const PoolFusion *pf = ctx->getPoolFusion(Inst);
+  bundle->append(pf ? "  convolution_wo_tr_pool(" : "  convolution_wo_tr(");
   bundle->append(Inst->getName());
   bundle->append("_input_transpose, ");
   bundle->append(filterSte.name);
@@ -2792,7 +2815,24 @@ void generateFirstBNNVTAConvolutionCall(const glow::ConvolutionInst *Inst,
     bundle->append(std::to_string(ctx->getIdxMultiEVTA()));
   }
 #endif
+  if (pf) {
+    auto *P = llvm::cast<MaxPoolInst>(pf->pool);
+    bundle->append(", ");
+    bundle->append(pf->out->getName());
+    bundle->append("_vbuf");
+    for (int v : {(int)P->getKernels()[0], (int)P->getStrides()[0], (int)P->getPads()[0]}) {
+      bundle->append(", ");
+      bundle->append(std::to_string(v));
+    }
+  }
   bundle->append(");\n");
+  if (pf) {
+    bundle->append("  VTABufferInvalidate(");
+    bundle->append(pf->out->getName());
+    bundle->append("_vbuf, 0, ");
+    bundle->append(std::to_string(pf->out->getSizeInBytes()));
+    bundle->append(");\n");
+  }
 }
 
 void generateBNNVTAConvolutionCall(const glow::BNNConvolutionInst *Inst,
@@ -3647,6 +3687,59 @@ void findResidualFusions(const IRFunction *IR, VTASaveContext *ctx) {
     (*ctx->getFusions())[C] = f;
     ctx->getFusedAway()->insert(E);
     ctx->getFusedAway()->insert(Rl);
+  }
+}
+
+//#### JO added (2026-11-02): the EVTA max pool (findEvtaMaxPools) 3x3 / stride 2 / pad 1 that is the next instruction after a
+//#### packed first conv (getConv0Pack) with relu and the only other user of its output, when the conv's schedule tiles are
+//#### even: done by the conv's call (convolution_wo_tr_pool); the pool's dest is allocated before the conv if needed.
+void findPoolFusions(const IRFunction *IR, VTASaveContext *ctx) {
+  ctx->getPoolFusions()->clear();
+  if (!vtaFusePool)
+    return;
+  std::vector<const Instruction *> ins;
+  std::map<const Value *, size_t> allocAt;
+  std::map<const Value *, int> users; // instructions other than alloc/dealloc that use a value
+  for (const auto &I : IR->getInstrs()) {
+    if (auto *A = llvm::dyn_cast<AllocActivationInst>(&I))
+      allocAt[A] = ins.size();
+    if (!llvm::isa<AllocActivationInst>(&I) && !llvm::isa<DeallocActivationInst>(&I)) {
+      std::set<const Value *> ops;
+      for (const auto &op : I.getOperands())
+        ops.insert(op.first);
+      for (auto *v : ops)
+        users[v]++;
+    }
+    ins.push_back(&I);
+  }
+  for (size_t i = 0; i < ins.size(); i++) {
+    auto *C = llvm::dyn_cast<ConvolutionInst>(ins[i]);
+    Conv0Pack pk;
+    if (!C || getConvPath(C) != ConvPath::FirstBNN || C->getFusedActivation() != RELU || !getConv0Pack(C, &pk))
+      continue;
+    size_t j = i + 1;
+    while (j < ins.size() && (llvm::isa<AllocActivationInst>(ins[j]) || llvm::isa<DeallocActivationInst>(ins[j])))
+      j++;
+    if (j >= ins.size())
+      continue;
+    auto *P = llvm::dyn_cast<MaxPoolInst>(ins[j]);
+    const Value *D = C->getDest();
+    if (!P || P->getSrc() != D || !ctx->isEvtaMaxPool(P) || users[D] != 2)
+      continue;
+    auto k = P->getKernels(), st = P->getStrides(), pads = P->getPads();
+    if (k[0] != 3 || k[1] != 3 || st[0] != 2 || st[1] != 2)
+      continue;
+    bool pad1 = true;
+    for (auto p : pads)
+      pad1 = pad1 && p == 1;
+    int vt, th, tw;
+    getConvSchedule(C->getSrc()->dims()[0], pk.H2, pk.W2, pk.CO, C->getFilter()->dims()[0], pk.KH2, 1, 1, 0, &vt, &th,
+                    &tw);
+    const Value *O = P->getDest();
+    if (!pad1 || th % 2 || tw % 2 || !allocAt.count(O))
+      continue;
+    (*ctx->getPoolFusions())[C] = {P, O, allocAt[O] > i};
+    ctx->getFusedAway()->insert(P);
   }
 }
 
@@ -5841,6 +5934,7 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
   findResidualFusions(IR.get(), &ctx);
   findEvtaMaxPools(IR.get(), &ctx);
   findInputPreprocess(IR.get(), &ctx);
+  findPoolFusions(IR.get(), &ctx);
 
   for (const auto &I : IR->getInstrs()) {
 
@@ -5860,7 +5954,7 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
 
     //#### JO added (2026-10-31): elementadd / relu done by the fused conv before them
     if (ctx.isFusedAway(&I)) {
-      bundle.append("  // done by the EVTA conv before (convolution_wo_tr_res)\n");
+      bundle.append("  // done by the EVTA conv before (convolution_wo_tr_res / convolution_wo_tr_pool)\n");
       continue;
     }
     //#### JO added (2026-11-02): quantize / elemsub / elemdiv / transpose done by the first conv's input copy
@@ -5876,6 +5970,10 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
       if (auto *fu = ctx.getFusion(I2))
         if (fu->hoistOut && ctx.getHoisted()->insert(fu->out).second)
           emitPackedAlloc(fu->out, &bundle);
+      //#### JO added (2026-11-02): the dest of the max pool done by the first conv (findPoolFusions)
+      if (auto *pf = ctx.getPoolFusion(I2))
+        if (pf->hoistOut && ctx.getHoisted()->insert(pf->out).second)
+          emitPackedAlloc(pf->out, &bundle);
       saveConvolutionInst(I2, &bundle, &initConst, &ctx);
       break;
     }

@@ -14,6 +14,11 @@ int convolution(int8_t* input, int8_t *kernel, int8_t *output, int N, int H, int
 
 int convolution_wo_tr(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *output, int N, int H, int W, int C, int KN, int KH, int KW, int pad_size,
                        int stride_size, bool doRelu, bool doBias, uint8_t shift, int out_h, int out_w, void* vtaCmdH, int nVirtualThread = 1, int tileHSize = 14, int tileWSize = 14, uint32_t idEVTA = 0);
+//#### JO added (2026-11-02): conv (with relu) + max pool 3x3 / stride 2 / pad 1 in one EVTA call (see VTABundle.cpp ConvPool)
+int convolution_wo_tr_pool(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *output, int N, int H, int W, int C, int KN, int KH, int KW, int pad_size,
+                           int stride_size, bool doRelu, bool doBias, uint8_t shift, int out_h, int out_w, void* vtaCmdH,
+                           int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA,
+                           int8_t *pool_out, int poolK, int poolStride, int poolPad);
 //#### JO added (2026-10-31): max pool on the EVTA, input >= 0, EVTA layout (see VTABundle.cpp)
 int maxpool_evta(int8_t *input, int8_t *output, int N, int H, int W, int C, int KH, int KW, int pad_size,
                  int stride_size, void *vtaCmdH, uint32_t idEVTA = 0);

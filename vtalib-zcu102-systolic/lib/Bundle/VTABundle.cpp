@@ -414,6 +414,59 @@ struct ConvResidual {
 #define RES_ALU_ADD 2
 #define RES_ALU_SHR 3
 
+//#### JO added (2026-11-02): max pool 3x3 / stride 2 / pad 1 fused into a conv with relu (convolution_wo_tr_pool).
+//#### The conv's output tiles (even th x tw, dividing the output) are computed with one more row above and one more column
+//#### to the left (the halo of the pool window, recomputed; not at the image border, where it is the pad): after the
+//#### requantize / relu the tile is in acc as [block][th(+1)][tw(+1)]. An area of th/2 x tw/2 entries per block after the
+//#### bias entries is reset to 0, then for each of the 9 window positions one ALU MAX (a 2-level loop over the pooled
+//#### pixels, as maxpool_evta) takes the conv pixel (2i + haloH + dy - 1, 2j + haloW + dx - 1) into pooled pixel (i, j);
+//#### the positions in the pad (row / column -1 at the image border) are left out. The conv values are >= 0 (relu), so 0
+//#### plus the in-bounds max is the CPU's max. The pooled area is STOREd to the pool output; the conv output is not.
+struct ConvPool {
+  void *out;            // pool output, EVTA layout, KN x PH x PW
+  uint32_t PH, PW;      // pool output size
+  uint32_t py0, px0;    // this tile's first pooled pixel
+  uint32_t pth, ptw;    // this tile's pooled pixels (conv tile / 2)
+  bool haloH, haloW;    // the conv tile has the extra row above / column to the left
+};
+// acc[out + i * outRow + j] = max(acc[out + ...], acc[in + i * inRow + j * inCol]), i < oh, j < ow
+struct PoolMax2Context {
+  uint32_t out_, in_, oh_, ow_, outRow_, inRow_, inCol_;
+  bool operator==(PoolMax2Context &op) {
+    return out_ == op.out_ && in_ == op.in_ && oh_ == op.oh_ && ow_ == op.ow_ && outRow_ == op.outRow_ &&
+           inRow_ == op.inRow_ && inCol_ == op.inCol_;
+  }
+};
+int alu_poolmax2(void *param, VTACommandHandle cmdh) {
+  PoolMax2Context *p = (PoolMax2Context *)(param);
+  VTAUopLoopBegin(cmdh, p->oh_, p->outRow_, p->inRow_, 0);
+  VTAUopLoopBegin(cmdh, p->ow_, 1, p->inCol_, 0);
+  VTAUopPush(cmdh, 1, 0, p->out_, p->in_, 0, RES_ALU_MAX, 0, 0);
+  VTAUopLoopEnd(cmdh);
+  VTAUopLoopEnd(cmdh);
+  return 0;
+}
+struct PoolMax2UopHandle {
+  PoolMax2Context ctx;
+  void *uopHandle[2];
+  PoolMax2UopHandle() { uopHandle[0] = nullptr; }
+};
+std::vector<PoolMax2UopHandle *> vPoolMax2UopHandle[4];
+static void pushPoolMax2(VTACommandHandle &cmdh, uint32_t idEVTA, const PoolMax2Context &c) {
+  PoolMax2Context ctx = c;
+  void **h = nullptr;
+  for (auto u : vPoolMax2UopHandle[idEVTA])
+    if (u->ctx == ctx) { h = u->uopHandle; break; }
+  if (!h) {
+    auto u = new PoolMax2UopHandle();
+    u->ctx = ctx;
+    h = u->uopHandle;
+    vPoolMax2UopHandle[idEVTA].push_back(u);
+  }
+  VTAPushALUOp(cmdh, h, &alu_poolmax2, &ctx, 0);
+}
+static void pushReset(VTACommandHandle &cmdh, uint32_t idEVTA, uint32_t base, uint32_t size);
+
 static void *getIdentityWeights(uint32_t idEVTA) {
   static void *idWgt[4] = {nullptr, nullptr, nullptr, nullptr};
   if (!idWgt[idEVTA]) {
@@ -540,7 +593,8 @@ void conv_kernel(uint32_t sizeOutTileH,
                  VTACommandHandle& vtaCmdH,
                  uint32_t idEVTA = 0,
                  uint32_t nVirtualThread = 1,
-                 const ConvResidual *res = nullptr) {  //#### JO added (2026-10-31): res
+                 const ConvResidual *res = nullptr,  //#### JO added (2026-10-31): res
+                 const ConvPool *pool = nullptr) {   //#### JO added (2026-11-02): pool
 
   uint32_t resizedOutTileH = (sizeInTileH-KH) / stride_size + 1;
   uint32_t resizedOutTileW = (sizeInTileW-KW) / stride_size + 1;
@@ -915,6 +969,22 @@ void conv_kernel(uint32_t sizeOutTileH,
                 res->relu ? 0 : -128);
         pushAlu(vtaCmdH, idEVTA, outputSramBaseAddr, outputSramBaseAddr, size, RES_ALU_MIN, 1, 127);
       }
+      //#### JO added (2026-11-02): fused max pool (ConvPool): pooled area after the bias entries
+      if (pool) {
+        const uint32_t T = resizedOutTileH * resizedOutTileW, P = pool->pth * pool->ptw;
+        const uint32_t pooled = outputSramBaseAddr + T * nFilterinLoop + nFilterinLoop;
+        pushReset(vtaCmdH, idEVTA, pooled, P * nFilterinLoop);
+        for (uint32_t fIdx = 0; fIdx < nFilterinLoop; fIdx++)
+          for (uint32_t dy = 0; dy < 3; dy++)
+            for (uint32_t dx = 0; dx < 3; dx++) {
+              // pooled (i, j) takes conv (2i + haloH + dy - 1, 2j + haloW + dx - 1); row / column -1 is the pad
+              uint32_t i0 = (!pool->haloH && dy == 0) ? 1 : 0, j0 = (!pool->haloW && dx == 0) ? 1 : 0;
+              uint32_t r = 2 * i0 + pool->haloH + dy - 1, c = 2 * j0 + pool->haloW + dx - 1;
+              pushPoolMax2(vtaCmdH, idEVTA,
+                           {pooled + fIdx * P + i0 * pool->ptw + j0, outputSramBaseAddr + fIdx * T + r * resizedOutTileW + c,
+                            pool->pth - i0, pool->ptw - j0, pool->ptw, 2 * resizedOutTileW, 2});
+            }
+      }
       VTADepPush(vtaCmdH, 2, 3);
     }
 
@@ -924,7 +994,16 @@ void conv_kernel(uint32_t sizeOutTileH,
       uint32_t outputSramBaseAddr = threadIdx * ACC_MEM_ENTRY / nVirtualThread;
       VTADepPop(vtaCmdH, 2, 3);
 
-      if (outDummyW == 0) {
+      //#### JO added (2026-11-02): fused max pool: the pooled area, not the conv tile
+      if (pool) {
+        const uint32_t T = resizedOutTileH * resizedOutTileW, P = pool->pth * pool->ptw;
+        const uint32_t pooled = outputSramBaseAddr + T * nFilterinLoop + nFilterinLoop;
+        for (uint32_t fIdx = 0; fIdx < nFilterinLoop; fIdx++)
+          VTAStoreBuffer2D(vtaCmdH, pooled + fIdx * P, 4, pool->out,
+                           ((filterIdx * nVirtualThread + threadIdx) * nFilterinLoop + fIdx) * pool->PH * pool->PW +
+                               pool->py0 * pool->PW + pool->px0,
+                           pool->ptw, pool->pth, pool->PW);
+      } else if (outDummyW == 0) {
         for (uint32_t fIdx = 0; fIdx < nFilterinLoop; fIdx++) {
 #ifdef NESTC_EVTA_PROFILE_AUTOTUNE
           f17 ++;
@@ -2782,7 +2861,7 @@ static void dumpConvOutput(void *output, size_t bytes) {
 
 static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *output, int N, int H, int W, int C, int KN, int KH, int KW, int pad_size,
                       int stride_size, bool doRelu, bool doBias, uint8_t shift, int out_h, int out_w, void* vtaCmdH, int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA,
-                      const ConvResidual *res) {
+                      const ConvResidual *res, const ConvPool *pool = nullptr) {
 
   int8_t *in_NC_HW16 = input;
   int8_t *filter_N_C_HW1616 = kernel;
@@ -2800,10 +2879,14 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
   int32_t replayKey[] = {1, N, H, W, C, KN, KH, KW, pad_size, stride_size, doRelu, doBias, shift, out_h, out_w,
                          nVirtualThread, tileHSize, tileWSize, (int32_t)idEVTA, res != nullptr,
                          res ? (int32_t)res->resShl : 0, res ? (int32_t)res->convShl : 0,
-                         res ? (int32_t)res->sumShr : 0, res ? res->relu : 0, res ? res->buf == output : 0};
-  void *replayBufs[] = {input, kernel, doBias ? bias : nullptr, output, res ? res->buf : nullptr};
+                         res ? (int32_t)res->sumShr : 0, res ? res->relu : 0, res ? res->buf == output : 0,
+                         pool != nullptr};
+  //#### JO changed (2026-11-02): a fused max pool writes its output, not the conv's
+  void *replayBufs[] = {input, kernel, doBias ? bias : nullptr, pool ? pool->out : (void *)output, res ? res->buf : nullptr};
+  void *dumpBuf = pool ? pool->out : (void *)output;
+  const size_t dumpBytes = pool ? (size_t)KN * pool->PH * pool->PW : (size_t)N * KN * out_h * out_w;
   if (VTAReplayBegin(vtaCmdH, replayKey, sizeof(replayKey), replayBufs, 5)) {
-    dumpConvOutput(output, (size_t)N * KN * out_h * out_w);
+    dumpConvOutput(dumpBuf, dumpBytes);
     return 0;
   }
 
@@ -2902,7 +2985,28 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
 #ifdef VTA_DEBUG_MODE
   clock_t conv_stage1_end = clock();
 #endif
-  for (int tileHIdx = 0; tileHIdx < nTileH; tileHIdx++) {
+  //#### JO added (2026-11-02): fused max pool (ConvPool): tiles with the extra row / column of the pool window
+  //#### (convolution_wo_tr_pool checked the shapes: tiles even, dividing the output, no remainder tiles)
+  for (uint32_t tileHIdx = 0; pool && tileHIdx < nTileH; tileHIdx++) {
+    for (uint32_t tileWIdx = 0; tileWIdx < nTileW; tileWIdx++) {
+      ConvPool tp = *pool;
+      tp.haloH = tileHIdx > 0;
+      tp.haloW = tileWIdx > 0;
+      tp.pth = sizeOutTileH / 2;
+      tp.ptw = sizeOutTileW / 2;
+      tp.py0 = tileHIdx * tp.pth;
+      tp.px0 = tileWIdx * tp.ptw;
+      uint32_t outH0 = tileHIdx * sizeOutTileH - tp.haloH, outW0 = tileWIdx * sizeOutTileW - tp.haloW;
+      uint32_t tileH = sizeOutTileH + tp.haloH, tileW = sizeOutTileW + tp.haloW;
+      conv_kernel(tileH, tileW, pad_size, stride_size,
+                  tileWIdx == 0 ? pad_size : 0, tileWIdx == nTileW - 1 ? pad_size : 0,
+                  tileHIdx == 0 ? pad_size : 0, tileHIdx == nTileH - 1 ? pad_size : 0,
+                  outW0, outH0, (tileH - 1) * stride_size + KH, (tileW - 1) * stride_size + KW,
+                  C, H, W, vta_input_buf, KN, KH, KW, vta_filter_buf, out_h, out_w, vta_output_buf, doRelu, shift,
+                  doBias, vta_bias_buf, vtaCmdH, idEVTA, nVirtualThread, nullptr, &tp);
+    }
+  }
+  for (int tileHIdx = 0; !pool && tileHIdx < nTileH; tileHIdx++) {
     for (int tileWIdx = 0; tileWIdx < nTileW; tileWIdx++) {
       uint32_t x_pad_before = tileWIdx == 0 ? pad_size : 0;
       uint32_t x_pad_after = tileWIdx == (nTileW - 1) ? pad_size : 0;
@@ -3040,7 +3144,7 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
 #ifdef NESTC_EVTA_PROFILE_AUTOTUNE
     std::cout<<f0<<","<<f1<<","<<f2<<","<<f3<<","<<f4<<","<<f5<<","<<f6<<","<<f7<<","<<f8<<","<<f9<<","<<f10<<","<<f11<<","<<f12<<","<<f13<<","<<f14<<","<<f15<<","<<f16<<","<<f17<<endl;
 #endif
-  dumpConvOutput(output, (size_t)N * KN * out_h * out_w);
+  dumpConvOutput(dumpBuf, dumpBytes);
   return 0;
 }
 
@@ -3055,6 +3159,66 @@ int convolution_wo_tr(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *outp
 
 //#### JO added (2026-10-31): conv + elementadd (+ relu) in one EVTA call, see ConvResidual. output may be residual
 //#### (in place: each tile reads its residual before it stores), not input.
+//#### JO added (2026-11-02): conv (with relu) + max pool 3x3 / stride 2 / pad 1 in one EVTA call (ConvPool). output: the
+//#### conv's output buffer, written only when the shapes do not fit the fusion (then the conv, then maxpool_evta on it).
+//#### EVTA_RES_CHECK=1: also runs the conv into output and the CPU maxpool on it, and compares with the fused output.
+int convolution_wo_tr_pool(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *output, int N, int H, int W, int C, int KN, int KH, int KW, int pad_size,
+                           int stride_size, bool doRelu, bool doBias, uint8_t shift, int out_h, int out_w, void* vtaCmdH,
+                           int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA,
+                           int8_t *pool_out, int poolK, int poolStride, int poolPad) {
+  const int PH = (out_h + 2 * poolPad - poolK) / poolStride + 1, PW = (out_w + 2 * poolPad - poolK) / poolStride + 1;
+  // acc per thread: the tile with its halo, the bias entries and the pooled area, nFilterinLoop blocks as conv_kernel
+  uint32_t nF = 0;
+  if (nVirtualThread > 0 && tileHSize > 0 && tileWSize > 0) {
+    nF = std::min<uint32_t>(KN / nVirtualThread / 16, 2048 / nVirtualThread / (tileHSize + 1) / (tileWSize + 1));
+    for (; nF > 0; nF--)
+      if ((KN / 16) % (nF * nVirtualThread) == 0)
+        break;
+  }
+  const bool fits = N == 1 && doRelu && poolK == 3 && poolStride == 2 && poolPad == 1 && KN % 16 == 0 && nF > 0 &&
+                    tileHSize % 2 == 0 && tileWSize % 2 == 0 && out_h % tileHSize == 0 && out_w % tileWSize == 0 &&
+                    tileHSize + 1 >= MIN_H_SIZE && tileWSize + 1 >= MIN_W_SIZE &&
+                    (tileHSize + 1) * (tileWSize + 1) * nF + nF + tileHSize * tileWSize / 4 * nF <= 2048 / (uint32_t)nVirtualThread;
+  static int check = -1;
+  if (check < 0) {
+    const char *e = getenv("EVTA_RES_CHECK");
+    check = e && atoi(e) > 0;
+  }
+  int rc = 0;
+  if (fits) {
+    ConvPool pool = {pool_out, (uint32_t)PH, (uint32_t)PW, 0, 0, 0, 0, false, false};
+    rc = convolution_wo_tr_impl(input, kernel, bias, output, N, H, W, C, KN, KH, KW, pad_size, stride_size, doRelu,
+                                doBias, shift, out_h, out_w, vtaCmdH, nVirtualThread, tileHSize, tileWSize, idEVTA,
+                                nullptr, &pool);
+  }
+  if (!fits || check) {
+    rc |= convolution_wo_tr(input, kernel, bias, output, N, H, W, C, KN, KH, KW, pad_size, stride_size, doRelu, doBias,
+                            shift, out_h, out_w, vtaCmdH, nVirtualThread, tileHSize, tileWSize, idEVTA);
+    if (!fits)
+      return rc | maxpool_evta(output, pool_out, N, out_h, out_w, KN, poolK, poolK, poolPad, poolStride, vtaCmdH, idEVTA);
+    size_t no = (size_t)KN * PH * PW, ni = (size_t)KN * out_h * out_w;
+    VTABufferInvalidate(output, 0, ni);
+    VTABufferInvalidate(pool_out, 0, no);
+    std::vector<int8_t> ref(no);
+    maxpool((int8_t *)VTABufferGetVirtAddr(output), ref.data(), KN / 16, out_h, out_w, 16, poolK, poolK, poolPad,
+            poolStride);
+    const int8_t *o = (const int8_t *)VTABufferGetVirtAddr(pool_out);
+    size_t bad = 0, first = no;
+    for (size_t i = 0; i < no; i++)
+      if (o[i] != ref[i]) {
+        if (!bad)
+          first = i;
+        bad++;
+      }
+    printf("EVTA_RES_CHECK conv %dx%dx%d -> %d + maxpool k%d s%d p%d: %zu of %zu differ", out_h, out_w, C, KN, poolK,
+           poolStride, poolPad, bad, no);
+    if (bad)
+      printf(" (first at %zu: fused %d, conv + cpu maxpool %d)", first, o[first], ref[first]);
+    printf("\n");
+  }
+  return rc;
+}
+
 int convolution_wo_tr_res(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *output, int N, int H, int W, int C, int KN, int KH, int KW, int pad_size,
                           int stride_size, bool doRelu, bool doBias, uint8_t shift, int out_h, int out_w,
                           int8_t *residual, int convShl, int resShl, int sumShr, bool sumRelu,
@@ -3256,6 +3420,8 @@ int maxpool_evta(int8_t *input, int8_t *output, int N, int H, int W, int C, int 
     rc = maxpool_evta_run(input, output, H, W, C, KH, pad_size, stride_size, (VTACommandHandle)vtaCmdH, idEVTA);
     VTAReplayEnd(vtaCmdH, rc == 0);
   }
+  //#### JO added (2026-11-02): EVTA_DUMP_CONV also writes the max pool outputs (compare with a fused conv + pool)
+  dumpConvOutput(output, (size_t)C * ((H + 2 * pad_size - KH) / stride_size + 1) * ((W + 2 * pad_size - KW) / stride_size + 1));
   if (rc)
     printf("maxpool_evta: window does not fit the buffers (%dx%d, kernel %d, stride %d)\n", H, W, KH, stride_size);
   //#### EVTA_RES_CHECK=1: compare with the CPU maxpool (16-channel blocks as the batch)
