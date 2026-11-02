@@ -1779,3 +1779,10 @@ void VTAPrintEnv() {
 void VTAUopBufferReset(VTACommandHandle cmdH) {
   static_cast<vta::CommandQueue*>(cmdH)->ResetUopQueue();
 }
+
+//#### JO added (2026-11-02): record / replay is in the zcu102 runtime only; the simulator always generates
+int VTAReplayBegin(VTACommandHandle cmdH, const void* key, int key_bytes, void* const* bufs, int nbufs) {
+  return 0;
+}
+
+void VTAReplayEnd(VTACommandHandle cmdH, int ok) {}

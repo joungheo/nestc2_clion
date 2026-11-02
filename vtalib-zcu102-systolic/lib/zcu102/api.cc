@@ -280,3 +280,12 @@ int VTASynchronize_CNU(VTACommandHandle cmd, uint32_t wait_cycles,
 void VTAUopBufferReset(VTACommandHandle cmdH) {
   static_cast<vta::CommandQueue*>(cmdH)->ResetUopQueue();
 }
+
+//#### JO added (2026-11-02): record / replay of an EVTA call (cmd_queue.h ReplayBegin)
+int VTAReplayBegin(VTACommandHandle cmdH, const void* key, int key_bytes, void* const* bufs, int nbufs) {
+  return static_cast<vta::CommandQueue*>(cmdH)->ReplayBegin(key, key_bytes, bufs, nbufs);
+}
+
+void VTAReplayEnd(VTACommandHandle cmdH, int ok) {
+  static_cast<vta::CommandQueue*>(cmdH)->ReplayEnd(ok != 0);
+}

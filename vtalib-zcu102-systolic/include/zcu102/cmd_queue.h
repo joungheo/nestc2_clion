@@ -14,6 +14,8 @@
 #include <memory>
 #include <string>
 #include <ctime>
+#include <unordered_map>
+#include <vector>
 
 namespace vta {
 
@@ -87,6 +89,7 @@ class CommandQueue {
     DataBuffer* src = DataBuffer::FromHandle(src_dram_addr);
     if(dst_memory_type!=VTA_MEM_ID_MOVE) {
       insn->dram_base = src->phy_addr() / GetElemBytes(dst_memory_type) + src_elem_offset;
+      if (rec_) RecordReloc(src, insn->dram_base, GetElemBytes(dst_memory_type));
     }
     else {
       insn->dram_base = *(uint32_t *) src_dram_addr;
@@ -114,6 +117,7 @@ class CommandQueue {
     insn->sram_base = src_sram_index;
     DataBuffer* dst = DataBuffer::FromHandle(dst_dram_addr);
     insn->dram_base = dst->phy_addr() / GetElemBytes(src_memory_type) + dst_elem_offset;
+    if (rec_) RecordReloc(dst, insn->dram_base, GetElemBytes(src_memory_type));
     insn->y_size = y_size;
     insn->x_size = x_size;
     insn->x_stride = x_stride;
@@ -196,6 +200,7 @@ class CommandQueue {
     // Make sure that we don't exceed contiguous physical memory limits
     CHECK(insn_queue_.count() * sizeof(VTAGenericInsn) < VTA_MAX_XFER);
     //printf(" -- DONE\n");
+    if (rec_) RecordSegment();
 
     //#### JO added (2026-11-01): EVTA_STORE_SENTINEL=1 fills the DRAM the STOREs of this run write with 0xA5 first
     StoreSentinelFill();
@@ -334,6 +339,50 @@ class CommandQueue {
     insn_queue_.Reset();
     //printf(" -- DONE\n");    
     return counter;                           
+  }
+
+  //#### JO added (2026-11-02): record / replay of an EVTA call (AOT stage 0, docs/evta_runtime_aot.md 5.2).
+  //#### The bundle entry (conv, maxpool, fc) calls ReplayBegin with a key (its scalar arguments) and its VTA buffers.
+  //#### The first call with a key records: the uop SRAM is marked empty (every uop of the call is LOADed inside it),
+  //#### each run (Synchronize) of the call is copied after its queues are built (instructions, uops; the uop LOADs
+  //#### point at the copy) and each LOAD / STORE of one of the buffers notes its offset from that buffer; ReplayEnd
+  //#### keeps it. A later call with the key runs the copies (the buffers' addresses patched in if they moved) and
+  //#### generates nothing. The relocation table is what a compile-time instruction blob needs as well (stage 1).
+  //#### EVTA_REPLAY=0 turns it off; EVTA_REPLAY_MB (default 16) limits the copies per EVTA; EVTA_REPLAY_LOG=1 prints them.
+  int ReplayBegin(const void *key, int key_bytes, void *const *bufs, int nbufs) {
+    if (!ReplayOn()) return 0;
+    if (rec_) DropRecording();
+    if (insn_queue_.count() != 0) return 0;
+    std::string k(static_cast<const char *>(key), key_bytes);
+    auto it = replays_.find(k);
+    if (it != replays_.end()) {
+      RunReplay(*it->second, bufs, nbufs);
+      return 1;
+    }
+    if (replay_bytes_ >= ReplayLimit()) return 0;
+    rec_ = new Replay;
+    rec_key_ = k;
+    for (int i = 0; i < nbufs; i++) {
+      rec_->bufs.push_back(bufs[i] ? DataBuffer::FromHandle(bufs[i])->phy_addr() : 0);
+      rec_bufs_.push_back(bufs[i] ? DataBuffer::FromHandle(bufs[i]) : nullptr);
+    }
+    uop_queue_.UopReset();
+    return 0;
+  }
+  void ReplayEnd(bool ok) {
+    if (!rec_) return;
+    if (!ok || !rec_ok_ || rec_->segs.empty() || insn_queue_.count() != 0) {
+      DropRecording();
+      return;
+    }
+    replay_bytes_ += rec_->bytes;
+    if (ReplayLog())
+      fprintf(stderr, "EVTA %d replay %zu: %zu runs, %u instructions, %zu relocations, %zu bytes (%zu in all)\n",
+              evta_index_, replays_.size(), rec_->segs.size(), rec_->insns, rec_->relocs.size(), rec_->bytes,
+              replay_bytes_);
+    replays_[rec_key_] = rec_;
+    rec_ = nullptr;
+    rec_bufs_.clear();
   }
 
   // Get record kernel
@@ -480,6 +529,139 @@ class CommandQueue {
   }
 
  private:
+  //#### JO added (2026-11-02): record / replay, see ReplayBegin
+  struct ReplaySeg {
+    void *insn{nullptr}, *uop{nullptr};
+    vta_phy_addr_t insn_phy{0}, uop_phy{0};
+    uint32_t count{0}, uop_bytes{0};
+  };
+  struct ReplayReloc {
+    uint32_t seg, idx, buf, elem_bytes, elem_offset;
+  };
+  struct Replay {
+    std::vector<ReplaySeg> segs;
+    std::vector<ReplayReloc> relocs;
+    std::vector<vta_phy_addr_t> bufs;  // the buffers' addresses in the copies
+    size_t bytes{0};
+    uint32_t insns{0};
+  };
+  static int ReplayEnv(const char *name, int def) {
+    const char *e = getenv(name);
+    return e ? atoi(e) : def;
+  }
+  static bool ReplayOn() {
+    static const bool on = ReplayEnv("EVTA_REPLAY", 1) > 0;
+    return on;
+  }
+  static bool ReplayLog() {
+    static const bool on = ReplayEnv("EVTA_REPLAY_LOG", 0) > 0;
+    return on;
+  }
+  static size_t ReplayLimit() {
+    static const size_t mb = ReplayEnv("EVTA_REPLAY_MB", 16);
+    return mb << 20;
+  }
+  static void FreeReplay(Replay *r) {
+    for (auto &g : r->segs) {
+      if (g.insn) VTAMemFree(g.insn);
+      if (g.uop) VTAMemFree(g.uop);
+    }
+    delete r;
+  }
+  static VTAMemInsn *InsnAt(void *insns, uint32_t i) {
+    return reinterpret_cast<VTAMemInsn *>(static_cast<VTAGenericInsn *>(insns) + i);
+  }
+  void DropRecording() {
+    FreeReplay(rec_);
+    rec_ = nullptr;
+    rec_bufs_.clear();
+    rec_ok_ = true;
+  }
+  // LOAD / STORE just made (the last instruction) addresses buffer b: note which argument and the offset
+  void RecordReloc(DataBuffer *b, uint32_t dram_base, uint32_t elem_bytes) {
+    for (size_t i = 0; i < rec_bufs_.size(); i++)
+      if (rec_bufs_[i] == b) {
+        rec_->relocs.push_back({(uint32_t)rec_->segs.size(), insn_queue_.count() - 1, (uint32_t)i, elem_bytes,
+                                dram_base - (uint32_t)(b->phy_addr() / elem_bytes)});
+        return;
+      }
+    // another buffer (identity weights, fc staging): kept for the program's life, its address stays
+  }
+  // a run of the recorded call, its queues built and flushed: copy them
+  void RecordSegment() {
+    ReplaySeg g;
+    g.count = insn_queue_.count();
+    size_t ib = g.count * sizeof(VTAGenericInsn);
+    g.insn = VTAMemAlloc(ib, 1);
+    g.uop_bytes = uop_queue_.flushed_bytes();
+    if (g.uop_bytes) g.uop = VTAMemAlloc(g.uop_bytes, 1);
+    if (!g.insn || (g.uop_bytes && !g.uop)) {
+      if (g.insn) VTAMemFree(g.insn);
+      rec_ok_ = false;
+      return;
+    }
+    g.insn_phy = VTAMemGetPhyAddr(g.insn);
+    memcpy(g.insn, insn_queue_.data(), ib);
+    if (g.uop_bytes) {
+      g.uop_phy = VTAMemGetPhyAddr(g.uop);
+      memcpy(g.uop, uop_queue_.fpga_data(), g.uop_bytes);
+      VTAFlushCache(g.uop, g.uop_phy, g.uop_bytes);
+    }
+    // the uop LOADs read the uop queue's buffer: point them at the copy
+    const uint32_t eb = VTA_UOP_ELEM_BYTES, q = uop_queue_.dram_phy_addr() / eb;
+    for (uint32_t i = 0; i < g.count; i++) {
+      VTAMemInsn *m = InsnAt(g.insn, i);
+      if (m->opcode == VTA_OPCODE_LOAD && m->memory_type == VTA_MEM_ID_UOP && m->x_size) {
+        if (!g.uop || m->dram_base < q || (m->dram_base - q) * eb >= g.uop_bytes) rec_ok_ = false;
+        m->dram_base = m->dram_base - q + g.uop_phy / eb;
+      }
+    }
+    VTAFlushCache(g.insn, g.insn_phy, ib);
+    rec_->segs.push_back(g);
+    rec_->bytes += ib + g.uop_bytes;
+    rec_->insns += g.count;
+  }
+  void RunReplay(Replay &r, void *const *bufs, int nbufs) {
+    CHECK_EQ((size_t)nbufs, r.bufs.size());
+    bool moved = false;
+    for (int i = 0; i < nbufs; i++) {
+      vta_phy_addr_t a = bufs[i] ? DataBuffer::FromHandle(bufs[i])->phy_addr() : 0;
+      if (a != r.bufs[i]) moved = true;
+      r.bufs[i] = a;
+    }
+    if (moved) {
+      for (auto &c : r.relocs)
+        InsnAt(r.segs[c.seg].insn, c.idx)->dram_base = (uint32_t)(r.bufs[c.buf] / c.elem_bytes) + c.elem_offset;
+      for (auto &g : r.segs) VTAFlushCache(g.insn, g.insn_phy, g.count * sizeof(VTAGenericInsn));
+    }
+    for (auto &g : r.segs) {
+      PreRunWait();
+      int timeout = VTADeviceRun(device_, g.insn_phy, g.count, 1u << 31);
+      if (timeout) {
+        char name[128];
+        snprintf(name, sizeof(name), "/tmp/evta_hang_%d_%08x.insn", (int)getpid(), (unsigned)g.insn_phy);
+        FILE *fp = fopen(name, "wb");
+        if (fp) {
+          fwrite(g.insn, sizeof(VTAGenericInsn), g.count, fp);
+          fclose(fp);
+          fprintf(stderr, "instructions of the replayed run saved in %s (%u x %zu bytes)\n", name, g.count,
+                  sizeof(VTAGenericInsn));
+        }
+        fflush(stdout);
+        fflush(stderr);
+        _exit(5);
+      }
+    }
+    // the uop SRAM now holds the copies' uops
+    uop_queue_.UopReset();
+  }
+  std::unordered_map<std::string, Replay *> replays_;
+  Replay *rec_{nullptr};
+  bool rec_ok_{true};
+  std::string rec_key_;
+  std::vector<DataBuffer *> rec_bufs_;
+  size_t replay_bytes_{0};
+
   // Push GEMM uop to the command buffer
   void PushGEMMOp(UopKernel* kernel, bool from_outmem=false) {
     uop_queue_.Push(kernel,

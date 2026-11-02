@@ -336,6 +336,10 @@ TVM_DLL int VTASynchronize_CNU(VTACommandHandle cmd, uint32_t wait_cycles,
                             char* rec_cache=NULL, int buf_size=0, int num_cache=0, int record=-1);
 
 void VTAUopBufferReset(VTACommandHandle cmdH);
+//#### JO added (2026-11-02): record / replay of an EVTA call (cmd_queue.h ReplayBegin): 1 = replayed (nothing to
+//#### generate), 0 = generate it (and VTASynchronize) as usual, then VTAReplayEnd(ok)
+int VTAReplayBegin(VTACommandHandle cmdH, const void* key, int key_bytes, void* const* bufs, int nbufs);
+void VTAReplayEnd(VTACommandHandle cmdH, int ok);
 
 #ifdef __cplusplus
 }

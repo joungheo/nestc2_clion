@@ -101,3 +101,7 @@ void VTASynchronize(VTACommandHandle cmd, uint32_t wait_cycles);
 int VTASynchronize_CNU(VTACommandHandle cmd, uint32_t wait_cycles, 
                  char* rec_cache, int buf_size, int num_cache, int record);
 void VTAUopBufferReset(VTACommandHandle cmdH);
+//#### JO added (2026-11-02): record / replay of an EVTA call (cmd_queue.h ReplayBegin): 1 = replayed (nothing to
+//#### generate), 0 = generate it (and VTASynchronize) as usual, then VTAReplayEnd(ok)
+int VTAReplayBegin(VTACommandHandle cmdH, const void* key, int key_bytes, void* const* bufs, int nbufs);
+void VTAReplayEnd(VTACommandHandle cmdH, int ok);

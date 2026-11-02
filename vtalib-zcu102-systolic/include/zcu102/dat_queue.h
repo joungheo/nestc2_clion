@@ -43,6 +43,13 @@ class BaseQueue {
     CHECK(fpga_buff_phy_);
     return fpga_buff_phy_;
   }
+  //#### JO added (2026-11-02): the FPGA buffer and the bytes of its last ReadBarrier (replay copies, cmd_queue.h)
+  const void* fpga_data() const {
+    return fpga_buff_;
+  }
+  size_t flushed_bytes() const {
+    return last_flush_bytes_;
+  }
   /*! \return Whether there is pending information. */
   bool pending() const {
     return sram_begin_ != sram_end_;

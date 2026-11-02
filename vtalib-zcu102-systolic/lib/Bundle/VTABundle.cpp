@@ -2777,6 +2777,16 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
   void *vta_output_buf = output;
   void *vta_bias_buf = bias;
 
+  //#### JO added (2026-11-02): a call with the same arguments as an earlier one runs that one's recorded instructions
+  //#### (cmd_queue.h ReplayBegin); the buffers are relocated
+  int32_t replayKey[] = {1, N, H, W, C, KN, KH, KW, pad_size, stride_size, doRelu, doBias, shift, out_h, out_w,
+                         nVirtualThread, tileHSize, tileWSize, (int32_t)idEVTA, res != nullptr,
+                         res ? (int32_t)res->resShl : 0, res ? (int32_t)res->convShl : 0,
+                         res ? (int32_t)res->sumShr : 0, res ? res->relu : 0, res ? res->buf == output : 0};
+  void *replayBufs[] = {input, kernel, doBias ? bias : nullptr, output, res ? res->buf : nullptr};
+  if (VTAReplayBegin(vtaCmdH, replayKey, sizeof(replayKey), replayBufs, 5))
+    return 0;
+
 #ifdef VTA_DEBUG_MODE
   int8_t *dbg_input = (int8_t *)VTABufferGetVirtAddr(vta_input_buf);
   int8_t *dbg_kernel = (int8_t *)VTABufferGetVirtAddr(vta_filter_buf);
@@ -2920,6 +2930,7 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
   clock_t conv_stage2_end = clock();
 #endif
   VTASynchronize(vtaCmdH, 1 << 31);
+  VTAReplayEnd(vtaCmdH, 1);
 
 
 
@@ -3216,7 +3227,14 @@ int maxpool_evta(int8_t *input, int8_t *output, int N, int H, int W, int C, int 
     printf("maxpool_evta: unsupported N %d C %d kernel %dx%d\n", N, C, KH, KW);
     return -1;
   }
-  int rc = maxpool_evta_run(input, output, H, W, C, KH, pad_size, stride_size, (VTACommandHandle)vtaCmdH, idEVTA);
+  //#### JO added (2026-11-02): replay (cmd_queue.h ReplayBegin)
+  int32_t replayKey[] = {2, H, W, C, KH, pad_size, stride_size, (int32_t)idEVTA};
+  void *replayBufs[] = {input, output};
+  int rc = 0;
+  if (!VTAReplayBegin(vtaCmdH, replayKey, sizeof(replayKey), replayBufs, 2)) {
+    rc = maxpool_evta_run(input, output, H, W, C, KH, pad_size, stride_size, (VTACommandHandle)vtaCmdH, idEVTA);
+    VTAReplayEnd(vtaCmdH, rc == 0);
+  }
   if (rc)
     printf("maxpool_evta: window does not fit the buffers (%dx%d, kernel %d, stride %d)\n", H, W, KH, stride_size);
   //#### EVTA_RES_CHECK=1: compare with the CPU maxpool (16-channel blocks as the batch)
@@ -3527,7 +3545,13 @@ int fullyconnected_evta(int8_t *input, float inputScale, int32_t inputOffset, in
   memcpy(VTABufferGetVirtAddr(b.in), input, IN);
   VTABufferFlush(b.in, 0, IN);
 
-  fc_evta_core(b, CIN, NB, gEven, nChunks, shift, (VTACommandHandle)vtaCmdH, idEVTA);
+  //#### JO added (2026-11-02): replay (cmd_queue.h ReplayBegin)
+  int32_t replayKey[] = {3, (int32_t)CIN, (int32_t)NB, (int32_t)gEven, (int32_t)nChunks, shift, (int32_t)idEVTA};
+  void *replayBufs[] = {b.wgt, b.bias, b.in, b.out};
+  if (!VTAReplayBegin(vtaCmdH, replayKey, sizeof(replayKey), replayBufs, 4)) {
+    fc_evta_core(b, CIN, NB, gEven, nChunks, shift, (VTACommandHandle)vtaCmdH, idEVTA);
+    VTAReplayEnd(vtaCmdH, 1);
+  }
   VTABufferInvalidate(b.out, 0, (size_t)NB * 16);
   memcpy(output, VTABufferGetVirtAddr(b.out), OUT);
 
