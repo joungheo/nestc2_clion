@@ -574,8 +574,9 @@ activation 전부 없음(−2.36 ms)을 어디서 줄었는지로 나누면:
   나누고 입력 tile이 1024 entry에 들어갈 때만 쓰고, 아니면 이전의 0 채움 경로다(`prepareFirstBNNVTAConvolutionInst`,
   `preprocess_nhwc2vtaio_zerofill` / `transpose_nhwc2vtaio_zerofill`은 그대로 남겼다; `-vta-conv0-pack=false`로도 그 경로).
   Resnet18, Resnet50(같은 conv0), VGG16 cifar(3×3/1 → 3×1 over 16)에 적용된다.
-- 입력 복사(`preprocess_conv0pack`, 전처리 §7.9 포함): quantize + table을 pad된 3채널 이미지(스레드별로 남겨 둠)에 쓰고,
-  픽셀마다 두 행의 32바이트를 64바이트 표로 `vqtbl4q_u8` 한 번에 16채널 블록 하나씩 만든다.
+- 입력 복사(`preprocess_conv0pack`, 전처리 §7.9 포함): packed 행 q는 pad된 입력 행 2q, 2q+1만 읽고 그 두 행은 다른 q가 읽지 않는다.
+  스레드마다 그 두 행만 작은 버퍼(약 1.4 KB)에 quantize + table로 쓰고 곧바로 pack한다(pad된 이미지를 메모리에 두지 않는다).
+  pack은 픽셀마다 두 행의 32바이트를 64바이트 표로 `vqtbl4q_u8` 한 번에 16채널 블록 하나씩 만든다.
 
 **검증:** `EVTA_DUMP_CONV=<dir>`(vtalib, EVTA conv 호출마다 출력 버퍼를 파일로)로 0 채움 bundle과 새 bundle의 **모든 EVTA conv 출력이
 byte 단위로 같다**(Resnet18 40개, Resnet50 106개, VGG16 26개, Partition 36개, Resnetv10S1C0 2개). golden PASS(single 30, multi2 3,
@@ -587,16 +588,18 @@ multi4 3), Result / Confidence 그대로.
 |---|---|---|
 | conv0 EVTA 시간 (`EVTA_REPLAY_LOG=2`) | 9.13 ms (GEMM 하한 6.27) | **3.64 ms** (GEMM 하한 1.63) |
 | EVTA 시간 합 (`_sysprof`) | 32.18 ms | 26.82 ms |
-| 입력 복사 (`preprocess`, OMP 4) | 0.36 ms | 0.58 ms |
-| Resnet18 single, OMP 1 | 34.48 ms | **29.81 ms** |
-| Resnet18 single, OMP 4 | 33.48 ms | **28.16 ms** |
-| Resnet18 multi4 copy 하나, 4개 동시 | 34.99 ms | **30.49 ms** |
-| multi4 100회 (`run_all`) | 977.9 ms | **910.9 ms** (한 번은 895.4 ms) |
-| single exe 100회 (`run_all`) | 3620.5 ms | **3119.7 ms** |
+| 입력 복사 (`preprocess`, OMP 4) | 0.36 ms | 0.58 ms → 행 단위 **0.44 ms** |
+| Resnet18 single, OMP 1 | 34.48 ms | 29.81 ms → 행 단위 **29.19 ms** |
+| Resnet18 single, OMP 4 | 33.48 ms | 28.16 ms → 행 단위 **28.02 ms** |
+| Resnet18 multi4 copy 하나, 4개 동시 | 34.99 ms | 30.49 ms → 행 단위 **29.76 ms** |
+| multi4 100회 (`run_all`) | 977.9 ms | 910.9 ms (한 번은 895.4) → 행 단위 **827.3 ms** |
+| single exe 100회 (`run_all`) | 3620.5 ms | 3119.7 ms → 행 단위 **3066.7 ms** |
 
 - GOPS 열은 bundle의 conv 모양으로 연산 수를 세므로 packed conv0(4×1×48)는 원래(7×7×3)와 연산 수가 달라 이전 값과 비교할 수 없다.
-- 입력 복사는 0 채움(802 KB 쓰기)보다 느리다(OMP 4 +0.2 ms, OMP 1 약 +0.9 ms; 보드 단독 측정 OMP 1: 0 채움 1.55, pack 2.18 ms).
-  pad된 이미지(160 KB)를 한 번 쓰고 다시 읽기 때문이다. 행 단위로 quantize와 pack을 붙이면 줄일 수 있다(아직 안 함).
+- 입력 복사, 보드 단독 측정(OMP 1, Resnet18 conv0 입력): 0 채움 1.55 ms, pad 이미지 + pack 2.18 ms, 행 단위 1.69 ms.
+  pad 이미지를 없앤 것보다 컸던 것은 pack 루프의 aliasing이다: byte store가 어떤 메모리든 가리킬 수 있어 `d`의 필드와 표 index를
+  픽셀마다 다시 읽었다. 지역 변수로 옮기자 pack이 0.88 → 0.35 ms. 남은 대부분(약 1.35 ms)은 quantize 계산이고 0 채움 경로도 같다.
+  6가지 모양(7×7/2, 3×3/1, 5×3/2, 11×11/2(범용 경로), NCHW / NHWC)에서 0 채움 결과와 불일치 0.
 - 출력 tile 16×16은 짝수이고 112를 나눈다: 다음 conv0 + maxpool fusion(pool 3×3/2의 경계)이 tile 경계와 맞는다.
 
 ## 8. 하드웨어도 같이 비교해야 하나
