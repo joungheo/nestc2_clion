@@ -79,6 +79,15 @@ static llvm::cl::opt<bool> vtaFusePreprocess(
                    "zero-filled first EVTA conv in its input copy (preprocess_nhwc2vtaio_zerofill)"),
     llvm::cl::init(true));
 
+//#### JO added (2026-11-02): a first conv with few channels (the image conv0) as a ceil(KH/s) x 1 / stride 1 conv over its
+//#### packed input (s input rows and the KW taps in the channels; vtalib conv0pack_nhwc2vtaio / preprocess_conv0pack)
+//#### instead of KH x KW / stride s over the channels zero-filled to 16 (getConv0Pack); off: the zero-filled conv
+static llvm::cl::opt<bool> vtaConv0Pack(
+    "vta-conv0-pack",
+    llvm::cl::desc("Run the first conv with few channels over a packed input (stride rows and the "
+                   "filter columns in the channels) instead of the channels zero-filled to 16"),
+    llvm::cl::init(true));
+
 namespace vta_save{
 
 //#### JO added (2026-10-31): an EVTA conv that also does the elementadd and the relu after it
@@ -1175,6 +1184,75 @@ void prepareEVTAConvolutionInst(const glow::VTAConvolutionInst *Inst,
   }
 }
 
+//#### JO added (2026-11-02): the schedule of a conv (VTASchedules.h), else the default 1 thread, 8 x 8
+static void getConvSchedule(int N, int H, int W, int C, int KN, int KH, int KW, int stride, int pad, int *vt,
+                            int *th, int *tw) {
+#include "VTASchedules.h"
+  for (auto elem : convTune.ConvolutionTune_)
+    if (elem.isMatch(N, H, W, C, KN, KH, KW, C, stride, pad)) {
+      *vt = elem.nVirtualThread_, *th = elem.tileHSize_, *tw = elem.tileWSize_;
+      return;
+    }
+  *vt = 1, *th = 8, *tw = 8;
+}
+
+//#### JO added (2026-11-02): -vta-conv0-pack. The KH x KW / stride s conv over C channels (pad p) as a KH2 = ceil(KH/s)
+//#### x 1 / stride 1 conv without pad over CO = s * KW * C (rounded up to 16) channels: packed pixel (q, x), channel
+//#### (dh * KW + j) * C + c = padded input (s * q + dh, s * x + j, c) (vtalib conv0pack_nhwc2vtaio), filter tap (k, 0,
+//#### (dh * KW + j) * C + c) = (s * k + dh, j, c), 0 where s * k + dh >= KH. Same sums, so the same output. Used when the
+//#### schedule of the packed conv divides the output and its input tile fits half of the inp SRAM of the multi-EVTA
+//#### buffers (1024 entries), else the zero-filled conv.
+struct Conv0Pack {
+  int H2, W2, CO, KH2;
+};
+static bool getConv0Pack(const glow::ConvolutionInst *Inst, Conv0Pack *p) {
+  if (!vtaConv0Pack)
+    return false;
+  auto srcDims = Inst->getSrc()->dims();
+  auto filterDims = Inst->getFilter()->dims();
+  auto destDims = Inst->getDest()->dims();
+  auto pads = Inst->getPads();
+  auto strides = Inst->getStrides();
+  int N = srcDims[0], H = srcDims[1], W = srcDims[2], C = srcDims[3];
+  int KN = filterDims[0], KH = filterDims[1], KW = filterDims[2];
+  int s = strides[0], pad = pads[0];
+  if (strides[1] != s || pads[1] != pad || pads[2] != pad || pads[3] != pad || s < 1 || KN % 16)
+    return false;
+  int outH = destDims[1], outW = destDims[2];
+  if ((H + 2 * pad - KH) / s + 1 != outH || (W + 2 * pad - KW) / s + 1 != outW)
+    return false;
+  p->KH2 = (KH + s - 1) / s;
+  p->CO = (s * KW * C + 15) / 16 * 16;
+  p->H2 = outH + p->KH2 - 1;
+  p->W2 = outW;
+  if (p->CO > 256)
+    return false;
+  int vt, th, tw;
+  getConvSchedule(N, p->H2, p->W2, p->CO, KN, p->KH2, 1, 1, 0, &vt, &th, &tw);
+  return outH % th == 0 && outW % tw == 0 && (th + p->KH2 - 1) * tw * (p->CO / 16) <= 1024;
+}
+
+// the packed conv's filter in the EVTA layout [KN/16][CO/16][KH2][1][16][16] into the weights file
+static void writeConv0PackFilter(const glow::ConvolutionInst *Inst, const Tensor *tensor, const Conv0Pack &p,
+                                 VTASaveContext *ctx) {
+  auto filterDims = Inst->getFilter()->dims();
+  int KN = filterDims[0], KH = filterDims[1], KW = filterDims[2], C = filterDims[3];
+  int s = Inst->getStrides()[0], CB = p.CO / 16;
+  auto handle = tensor->getHandle<int8_t>();
+  std::vector<int8_t> out((size_t)KN * p.KH2 * p.CO, 0);
+  for (int o = 0; o < KN; o++)
+    for (int k = 0; k < p.KH2; k++)
+      for (int dh = 0; dh < s && s * k + dh < KH; dh++)
+        for (int j = 0; j < KW; j++)
+          for (int c = 0; c < C; c++) {
+            int ch = (dh * KW + j) * C + c;
+            size_t idx = ((((size_t)(o / 16) * CB + ch / 16) * p.KH2 + k) * 16 + o % 16) * 16 + ch % 16;
+            out[idx] = handle.at({(dim_t)o, (dim_t)(s * k + dh), (dim_t)j, (dim_t)c});
+          }
+  ctx->getWeightFileStream()->write((const char *)out.data(), out.size());
+  addConstantSymbolEntrySized(Inst->getFilter(), out.size(), ctx);
+}
+
 void prepareFirstBNNVTAConvolutionInst(const glow::ConvolutionInst *Inst,
                                       std::string *bundle,
                                       std::string *initConst,
@@ -1212,6 +1290,11 @@ void prepareFirstBNNVTAConvolutionInst(const glow::ConvolutionInst *Inst,
   }
   assert(tensor);
 
+  //#### JO added (2026-11-02): -vta-conv0-pack: the packed conv's filter; the zero-filled one below otherwise
+  Conv0Pack pack;
+  if (getConv0Pack(Inst, &pack)) {
+    writeConv0PackFilter(Inst, tensor, pack, ctx);
+  } else {
   auto TempfilterType = Type(tensor->getType());
 	std::array<dim_t, 4> TempFilterS{{(dim_t)filterDims[0], (dim_t)filterDims[1], (dim_t)filterDims[2], (dim_t)16}};
 	llvm::ArrayRef<dim_t> TempFilterShape(TempFilterS);
@@ -1283,6 +1366,7 @@ void prepareFirstBNNVTAConvolutionInst(const glow::ConvolutionInst *Inst,
     }
   }
   addConstantSymbolEntry_BNN(filter, ctx, true);
+  }
 
 
   //save Bias file
@@ -1936,6 +2020,17 @@ void generateFirstBNNInputTranspose(const glow::ConvolutionInst *Inst,
     int C = srcDims[3];
 
     if(C == 3) C = 16;
+    //#### JO added (2026-11-02): -vta-conv0-pack: the packed input (conv0pack_nhwc2vtaio / preprocess_conv0pack)
+    Conv0Pack pack;
+    const bool packed = getConv0Pack(Inst, &pack);
+    const std::string inBytes = std::to_string(packed ? (size_t)N * pack.CO * pack.H2 * pack.W2 : (size_t)N * H * W * C);
+    auto packArgs = [&]() {
+      for (int v : {(int)filter->dims()[1], (int)filter->dims()[2], (int)Inst->getStrides()[0], (int)Inst->getPads()[0],
+                    pack.CO}) {
+        bundle->append(", ");
+        bundle->append(std::to_string(v));
+      }
+    };
 
   #ifdef VTA_PROFILE
     bundle->append("  clock_t ");
@@ -1947,7 +2042,7 @@ void generateFirstBNNInputTranspose(const glow::ConvolutionInst *Inst,
     bundle->append(Inst->getName());
     bundle->append("_input_transpose = (int8_t *)VTABufferAlloc(");
     //bundle->append(std::to_string(N*H*W*C));
-    bundle->append(std::to_string(N*H*W*C));
+    bundle->append(inBytes);
     bundle->append(");\n");
     //#### JO added (2026-11-02): the quantize (and elemsub / elemdiv / transpose) before it in this copy (findInputPreprocess)
     if (auto *pre = ctx->getPreproc(Inst)) {
@@ -1963,14 +2058,21 @@ void generateFirstBNNInputTranspose(const glow::ConvolutionInst *Inst,
         ctx->getWeightFileStream()->write((const char *)pre->lut.data(), pre->lut.size());
         lutName = std::string("(const int8_t *)VTABufferGetVirtAddr(") + ste.name + ")";
       }
-      bundle->append("  preprocess_nhwc2vtaio_zerofill((const float *)");
+      bundle->append(packed ? "  preprocess_conv0pack((const float *)" : "  preprocess_nhwc2vtaio_zerofill((const float *)");
       bundle->append(qsrcMut ? addSymbolEntry(qsrcWeight, ctx).name : qsrc->getName().data());
       bundle->append(", (int8_t* )VTABufferGetVirtAddr(");
       bundle->append(Inst->getName());
       bundle->append("_input_transpose), ");
+      if (packed) {
+        for (int v : {N, H, W, (int)srcDims[3], (int)pre->nchw}) {
+          bundle->append(std::to_string(v));
+          bundle->append(", ");
+        }
+      } else {
       for (int v : {N, H, W, (int)srcDims[3], C, (int)pre->nchw}) {
         bundle->append(std::to_string(v));
         bundle->append(", ");
+      }
       }
       // the scale as saveQuantizeInst writes it
       bundle->append("1/");
@@ -1979,9 +2081,11 @@ void generateFirstBNNInputTranspose(const glow::ConvolutionInst *Inst,
       bundle->append(std::to_string(qdestTy->getOffset()));
       bundle->append(", ");
       bundle->append(lutName);
+      if (packed)
+        packArgs();
       bundle->append(");\n");
     } else {
-    bundle->append("  transpose_nhwc2vtaio_zerofill(");
+    bundle->append(packed ? "  conv0pack_nhwc2vtaio(" : "  transpose_nhwc2vtaio_zerofill(");
     auto srcWeight = static_cast<WeightVar *>(src);
     if (srcWeight->getMutability() == glow::WeightVar::MutabilityKind::Mutable) {
       auto ste = addSymbolEntry(srcWeight, ctx);
@@ -2002,7 +2106,12 @@ void generateFirstBNNInputTranspose(const glow::ConvolutionInst *Inst,
     bundle->append(", ");
     bundle->append(std::to_string(W));
     bundle->append(", ");
+    if (packed) {
+      bundle->append(std::to_string(srcDims[3]));
+      packArgs();
+    } else {
     bundle->append(std::to_string(C));
+    }
     bundle->append(");\n");
     }
     //#### JO added: flush the CPU-written transposed input before the EVTA reads it
@@ -2010,7 +2119,7 @@ void generateFirstBNNInputTranspose(const glow::ConvolutionInst *Inst,
     bundle->append("  VTABufferFlush(");
     bundle->append(Inst->getName());
     bundle->append("_input_transpose, 0, ");
-    bundle->append(std::to_string(N * H * W * C));
+    bundle->append(inBytes);
     bundle->append(");\n");
 
   #ifdef VTA_PROFILE
@@ -2564,6 +2673,11 @@ void generateFirstBNNVTAConvolutionCall(const glow::ConvolutionInst *Inst,
   int KW = filterDims[2];
   int pad_size = pad[0];
   int stride_size = strides[0];
+  //#### JO added (2026-11-02): -vta-conv0-pack: the KH2 x 1 / stride 1 conv without pad over the packed input
+  Conv0Pack pack;
+  if (getConv0Pack(Inst, &pack)) {
+    H = pack.H2, W = pack.W2, C = pack.CO, KH = pack.KH2, KW = 1, pad_size = 0, stride_size = 1;
+  }
   bool doRelu = Inst->getFusedActivation()==RELU;
   bool doBias = false;
 

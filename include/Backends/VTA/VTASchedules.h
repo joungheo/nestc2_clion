@@ -58,6 +58,10 @@ convTune.ConvolutionTune_.clear();
 //#### 14 x 14 (9.30 ms) needs 33 x 33 = 1089, and tiles that do not divide 112 changed the result (16 x 11).
 convTune.ConvolutionTune_.push_back({1, 224, 224, 16, 64, 7, 7, 16, 2, 3, 2, 8,
                                      16});
+//#### JO added (2026-11-02): the same conv0 over its packed input (VTASave.cpp -vta-conv0-pack: 4 x 1 / stride 1 over
+//#### 115 x 112 x 48): input tile 19 x 16 x 3 blocks = 912 entries (half of the multi-EVTA inp SRAM is 1024)
+convTune.ConvolutionTune_.push_back({1, 115, 112, 48, 64, 4, 1, 48, 1, 0, 2, 16,
+                                     16});
 convTune.ConvolutionTune_.push_back({1, 56, 56, 64, 64, 3, 3, 64, 1, 1, 2, 8,
                                      56});
 convTune.ConvolutionTune_.push_back({1, 56, 56, 64, 128, 1, 1, 64, 2, 0, 2, 7,

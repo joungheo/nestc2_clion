@@ -1720,6 +1720,117 @@ void preprocess_nhwc2vtaio_zerofill(const float *input, int8_t *output, int N, i
   }
 }
 
+//#### JO added (2026-11-02): packed input of a first conv with few channels (VTASave.cpp -vta-conv0-pack): the
+//#### KH x KW / stride s conv over C channels (pad p) becomes a ceil(KH/s) x 1 / stride 1 conv without pad over CO channels,
+//#### CO = s * KW * C rounded up to 16 (Resnet18 conv0 7x7/2 over 3 channels: 4x1 over 48 instead of 7x7 over 16 zero
+//#### filled). Packed pixel (q, x), channel (dh * KW + j) * C + c = padded input (s * q + dh, s * x + j, c); the rest 0.
+//#### Its size: H2 = out_h + ceil(KH/s) - 1 rows, W2 = out_w columns, EVTA layout N{CO/16}H2W2 16.
+struct Conv0PackDims {
+  int s, KH2, H2, W2, PH, PW, CB;
+  Conv0PackDims(int H, int W, int KH, int KW, int stride, int pad, int CO) {
+    s = stride;
+    KH2 = (KH + s - 1) / s;
+    H2 = (H + 2 * pad - KH) / s + 1 + KH2 - 1;
+    W2 = (W + 2 * pad - KW) / s + 1;
+    PH = s * H2;              // rows of the padded input that the packed rows read
+    PW = s * (W2 - 1) + KW;   // its columns
+    CB = CO / 16;
+  }
+};
+// the padded input (PH x PW x C, the image at (pad, pad), the rest 0) -> the packed EVTA layout
+static void conv0packFromPadded(const int8_t *img, int8_t *output, int n, const Conv0PackDims &d, int KW, int C, int CO) {
+  const size_t run = (size_t)KW * C;
+#pragma omp parallel for schedule(static)
+  for (int q = 0; q < d.H2; q++) {
+    int8_t v[256];
+    memset(v, 0, CO);
+    for (int x = 0; x < d.W2; x++) {
+      for (int dh = 0; dh < d.s; dh++)
+        memcpy(v + dh * run, img + ((size_t)(d.s * q + dh) * d.PW + (size_t)d.s * x) * C, run);
+      for (int b = 0; b < d.CB; b++)
+        memcpy(output + ((((size_t)n * d.CB + b) * d.H2 + q) * d.W2 + x) * 16, v + 16 * b, 16);
+    }
+  }
+}
+void conv0pack_nhwc2vtaio(const int8_t *input, int8_t *output, int N, int H, int W, int C, int KH, int KW, int stride,
+                          int pad, int CO) {
+  const Conv0PackDims d(H, W, KH, KW, stride, pad, CO);
+  assert(CO <= 256 && CO % 16 == 0 && stride * KW * C <= CO);
+  std::vector<int8_t> img((size_t)d.PH * d.PW * C);
+  for (int n = 0; n < N; n++) {
+    std::fill(img.begin(), img.end(), 0);
+    for (int h = 0; h < H && h + pad < d.PH; h++) {
+      const int w1 = std::min(W, d.PW - pad);
+      memcpy(img.data() + ((size_t)(h + pad) * d.PW + pad) * C, input + ((size_t)n * H + h) * W * C, (size_t)w1 * C);
+    }
+    conv0packFromPadded(img.data(), output, n, d, KW, C, CO);
+  }
+}
+// with the quantize / table of preprocess_nhwc2vtaio_zerofill (findInputPreprocess) written into the padded input
+void preprocess_conv0pack(const float *input, int8_t *output, int N, int H, int W, int C, int nchw, float scale,
+                          int32_t offset, const int8_t *lut, int KH, int KW, int stride, int pad, int CO) {
+  const Conv0PackDims d(H, W, KH, KW, stride, pad, CO);
+  assert(CO <= 256 && CO % 16 == 0 && stride * KW * C <= CO);
+  std::vector<int8_t> img((size_t)d.PH * d.PW * C);
+#if defined(__aarch64__)
+  int fe;
+  const bool mul = std::frexp(scale, &fe) == 0.5f && std::isnormal(1 / scale);
+  const float32x4_t vs = vdupq_n_f32(mul ? 1 / scale : scale), vo = vdupq_n_f32((float)offset);
+  uint8x16x4_t tab[3][4];
+  if (C == 3 && lut)
+    for (int c = 0; c < 3; c++)
+      for (int k = 0; k < 4; k++)
+        for (int j = 0; j < 4; j++)
+          tab[c][k].val[j] = vld1q_u8((const uint8_t *)lut + c * 256 + k * 64 + j * 16);
+#endif
+  const int w1 = std::min(W, d.PW - pad);  // image columns the packed input reads
+  for (int n = 0; n < N; n++) {
+    std::fill(img.begin(), img.end(), 0);
+#pragma omp parallel for schedule(static)
+    for (int h = 0; h < H; h++) {
+      if (h + pad >= d.PH)
+        continue;
+      int8_t *row = img.data() + ((size_t)(h + pad) * d.PW + pad) * C;
+      int w0 = 0;
+#if defined(__aarch64__)
+      if (C == 3) {
+        for (; w0 + 16 <= w1; w0 += 16) {
+          float32x4_t x[3][4];
+          if (nchw) {
+            for (int c = 0; c < 3; c++) {
+              const float *src = input + (((size_t)n * 3 + c) * H + h) * W + w0;
+              for (int k = 0; k < 4; k++)
+                x[c][k] = vld1q_f32(src + 4 * k);
+            }
+          } else {
+            const float *src = input + (((size_t)n * H + h) * W + w0) * 3;
+            for (int k = 0; k < 4; k++) {
+              float32x4x3_t v = vld3q_f32(src + 12 * k);
+              x[0][k] = v.val[0], x[1][k] = v.val[1], x[2][k] = v.val[2];
+            }
+          }
+          int8x16x3_t q;
+          for (int c = 0; c < 3; c++) {
+            q.val[c] = preprocessQuant16(x[c], vs, vo, mul);
+            if (lut)
+              q.val[c] = preprocessLut16(q.val[c], tab[c]);
+          }
+          vst3q_s8(row + (size_t)w0 * 3, q);
+        }
+      }
+#endif
+      for (int w = w0; w < w1; w++)
+        for (int c = 0; c < C; c++) {
+          int8_t v = preprocessQuant1(nchw ? input[(((size_t)n * C + c) * H + h) * W + w]
+                                           : input[(((size_t)n * H + h) * W + w) * C + c],
+                                      scale, offset);
+          row[(size_t)w * C + c] = lut ? lut[c * 256 + v + 128] : v;
+        }
+    }
+    conv0packFromPadded(img.data(), output, n, d, KW, C, CO);
+  }
+}
+
 void transpose_nhwc2vtaio_zerofill_old(int8_t* input, int8_t* output, int N, int H, int W, int C){
   int8_t *IN_NHWC = input;
 
