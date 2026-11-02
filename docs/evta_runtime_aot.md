@@ -290,7 +290,7 @@ vtalib `include/zcu102/cmd_queue.h` `ReplayBegin` / `ReplayEnd`, API `VTAReplayB
   - 버퍼 주소가 기록 때와 다르면 relocation 표대로 `dram_base`를 고치고 flush한다.
   - 복사본마다 `VTADeviceRun`을 하고 끝나면 uop SRAM을 비었다고 표시한다.
 - **환경 변수:** `EVTA_REPLAY=0`이면 끈다. `EVTA_REPLAY_MB`(기본 16)가 EVTA당 복사본 한도다. `EVTA_REPLAY_LOG=1`이면 기록마다 크기를 출력한다.
-- **크기(Resnet18, EVTA 하나):** 기록 20개, run 20개, 명령 8,096개(259 KB), uop 포함 **653 KB**, relocation 2,672개.
+- **크기(Resnet18, EVTA 하나):** 기록 20개, run 20개, 명령 8,096개(259 KB), uop 포함 **653 KB**, relocation 3,186개.
   conv0이 명령 2,369개로 가장 크다. weights(11 MB)에 비하면 작다.
 - **uop cache:** `vta/vtalib`의 `dat_queue.h`를 systolic 사본의 것(10-27 수정: SRAM에 있는 kernel과 이번 batch를 따로 관리)으로 맞췄다.
   옛 cache는 `Reset`이 kernel을 "SRAM에 있음"으로 둔 채 목록만 비워서, SRAM 상태를 알 수 없었다.
