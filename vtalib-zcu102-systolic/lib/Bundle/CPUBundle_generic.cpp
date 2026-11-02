@@ -1726,115 +1726,119 @@ void preprocess_nhwc2vtaio_zerofill(const float *input, int8_t *output, int N, i
 //#### filled). Packed pixel (q, x), channel (dh * KW + j) * C + c = padded input (s * q + dh, s * x + j, c); the rest 0.
 //#### Its size: H2 = out_h + ceil(KH/s) - 1 rows, W2 = out_w columns, EVTA layout N{CO/16}H2W2 16.
 struct Conv0PackDims {
-  int s, KH2, H2, W2, PH, PW, CB;
+  int s, KH2, H2, W2, PW, CB;
   Conv0PackDims(int H, int W, int KH, int KW, int stride, int pad, int CO) {
     s = stride;
     KH2 = (KH + s - 1) / s;
     H2 = (H + 2 * pad - KH) / s + 1 + KH2 - 1;
     W2 = (W + 2 * pad - KW) / s + 1;
-    PH = s * H2;              // rows of the padded input that the packed rows read
-    PW = s * (W2 - 1) + KW;   // its columns
+    PW = s * (W2 - 1) + KW;   // columns of the padded input that the packed pixels read
     CB = CO / 16;
   }
 };
-// the padded input (PH x PW x C, the image at (pad, pad), the rest 0; 32 bytes to spare at its end) -> the packed EVTA
-// layout. The runs of KW * C bytes are copied 16 bytes at a time (fixed-size copies, no memcpy calls); the bytes a run
-// copies past its end are overwritten by the next run or cleared after the last one.
-static void conv0packFromPadded(const int8_t *img, int8_t *output, int n, const Conv0PackDims &d, int KW, int C, int CO) {
+//#### Packed row q reads only the padded rows s * q .. s * q + s - 1, which no other packed row reads: each thread
+//#### writes those s rows (fill(h, dst): input row h, its first w1 = min(W, PW - pad) pixels, at dst) into its own
+//#### buffer of s padded rows (the pad columns stay 0) and packs them at once (no padded image in memory). Board, Resnet18
+//#### conv0 input, OMP 1: 2.18 -> 1.69 ms (zero-filled copy 1.56 ms; most of it is the quantize, docs/evta_runtime_compare.md 7.12).
+template <class Fill>
+static void conv0packRows(int8_t *output, int n, int H, int pad, const Conv0PackDims &d, int KW, int C, int CO,
+                          Fill fill) {
   const int run = KW * C, used = d.s * run;
+  const size_t rowBytes = (size_t)d.PW * C, plane = (size_t)d.H2 * d.W2 * 16;
 #if defined(__aarch64__)
   // s <= 2, KW * C <= 32, CO <= 64 (Resnet conv0 7x7/2: 21 bytes per row, 48 channels): the 32 bytes at the pixel in
   // each of the s rows are one 64-byte table, each 16-channel block one vqtbl4q_u8 (index 255 = 0)
-  if (d.s <= 2 && run <= 32 && CO <= 64) {
-    uint8_t idx[64];
-    for (int ch = 0; ch < 64; ch++)
-      idx[ch] = ch < used ? (uint8_t)(ch / run * 32 + ch % run) : 255;
-    uint8x16_t vi[4];
-    for (int b = 0; b < 4; b++)
-      vi[b] = vld1q_u8(idx + 16 * b);
-    const size_t plane = (size_t)d.H2 * d.W2 * 16;
-#pragma omp parallel for schedule(static)
-    for (int q = 0; q < d.H2; q++) {
-      const uint8_t *r0 = (const uint8_t *)img + (size_t)(d.s * q) * d.PW * C;
-      const uint8_t *r1 = d.s == 2 ? r0 + (size_t)d.PW * C : r0;
-      int8_t *out = output + (((size_t)n * d.CB * d.H2 + q) * d.W2) * 16;
-      for (int x = 0; x < d.W2; x++) {
-        const size_t o = (size_t)d.s * x * C;
-        uint8x16x4_t t = {{vld1q_u8(r0 + o), vld1q_u8(r0 + o + 16), vld1q_u8(r1 + o), vld1q_u8(r1 + o + 16)}};
-        for (int b = 0; b < d.CB; b++)
-          vst1q_u8((uint8_t *)out + b * plane + (size_t)x * 16, vqtbl4q_u8(t, vi[b]));
-      }
-    }
-    return;
-  }
+  const bool tbl = d.s <= 2 && run <= 32 && CO <= 64;
+  uint8_t idx[64];
+  for (int ch = 0; ch < 64; ch++)
+    idx[ch] = ch < used ? (uint8_t)(ch / run * 32 + ch % run) : 255;
+  uint8x16_t vi[4];
+  for (int b = 0; b < 4; b++)
+    vi[b] = vld1q_u8(idx + 16 * b);
 #endif
-#pragma omp parallel for schedule(static)
-  for (int q = 0; q < d.H2; q++) {
-    int8_t v[256 + 16];
-    memset(v, 0, sizeof(v));
-    int8_t *out = output + (((size_t)n * d.CB * d.H2 + q) * d.W2) * 16;
-    const size_t plane = (size_t)d.H2 * d.W2 * 16;
-    for (int x = 0; x < d.W2; x++) {
+#pragma omp parallel
+  {
+    // s padded rows, 32 bytes to spare for the 16- / 32-byte reads at the last pixel
+    std::vector<int8_t> rows(d.s * rowBytes + 32, 0);
+#pragma omp for schedule(static)
+    for (int q = 0; q < d.H2; q++) {
       for (int dh = 0; dh < d.s; dh++) {
-        const int8_t *src = img + ((size_t)(d.s * q + dh) * d.PW + (size_t)d.s * x) * C;
-        for (int o = 0; o < run; o += 16)
-          memcpy(v + dh * run + o, src + o, 16);
+        int8_t *dst = rows.data() + dh * rowBytes;
+        const int h = d.s * q + dh - pad;
+        if (h < 0 || h >= H)
+          memset(dst, 0, rowBytes);
+        else
+          fill(h, dst + (size_t)pad * C);
       }
-      memset(v + used, 0, 16);  // the tail CO - used < 16 bytes (a run copies at most 15 past its end)
-      for (int b = 0; b < d.CB; b++)
-        memcpy(out + b * plane + (size_t)x * 16, v + 16 * b, 16);
+      int8_t *out = output + (((size_t)n * d.CB * d.H2 + q) * d.W2) * 16;
+#if defined(__aarch64__)
+      if (tbl) {
+        // everything the loop reads in locals: its byte stores may alias any memory, so d, vi[] would be reloaded
+        const uint8_t *r0 = (const uint8_t *)rows.data(), *r1 = d.s == 2 ? r0 + rowBytes : r0;
+        const int W2 = d.W2, CB = d.CB, step = d.s * C;
+        const uint8x16_t i0 = vi[0], i1 = vi[1], i2 = vi[2], i3 = vi[3];
+        uint8_t *o0 = (uint8_t *)out, *o1 = o0 + plane, *o2 = o1 + plane, *o3 = o2 + plane;
+        for (int x = 0; x < W2; x++, r0 += step, r1 += step) {
+          uint8x16x4_t t = {{vld1q_u8(r0), vld1q_u8(r0 + 16), vld1q_u8(r1), vld1q_u8(r1 + 16)}};
+          vst1q_u8(o0 + 16 * x, vqtbl4q_u8(t, i0));
+          if (CB > 1)
+            vst1q_u8(o1 + 16 * x, vqtbl4q_u8(t, i1));
+          if (CB > 2)
+            vst1q_u8(o2 + 16 * x, vqtbl4q_u8(t, i2));
+          if (CB > 3)
+            vst1q_u8(o3 + 16 * x, vqtbl4q_u8(t, i3));
+        }
+        continue;
+      }
+#endif
+      int8_t v[256];
+      memset(v, 0, sizeof(v));
+      for (int x = 0; x < d.W2; x++) {
+        for (int dh = 0; dh < d.s; dh++)
+          memcpy(v + dh * run, rows.data() + dh * rowBytes + (size_t)d.s * x * C, run);
+        for (int b = 0; b < d.CB; b++)
+          memcpy(out + b * plane + (size_t)x * 16, v + 16 * b, 16);
+      }
     }
   }
-}
-// the padded input of a shape, kept per thread: its border stays 0 (each call writes the same interior); 32 bytes to spare
-// at its end for the 16- / 32-byte reads at the last pixel
-static int8_t *conv0packImage(const Conv0PackDims &d, int C) {
-  static thread_local std::vector<int8_t> img;
-  const size_t bytes = (size_t)d.PH * d.PW * C + 32;
-  if (img.size() != bytes)
-    img.assign(bytes, 0);
-  return img.data();
 }
 void conv0pack_nhwc2vtaio(const int8_t *input, int8_t *output, int N, int H, int W, int C, int KH, int KW, int stride,
                           int pad, int CO) {
   const Conv0PackDims d(H, W, KH, KW, stride, pad, CO);
   assert(CO <= 256 && CO % 16 == 0 && stride * KW * C <= CO);
-  int8_t *img = conv0packImage(d, C);
-  for (int n = 0; n < N; n++) {
-    for (int h = 0; h < H && h + pad < d.PH; h++) {
-      const int w1 = std::min(W, d.PW - pad);
-      memcpy(img + ((size_t)(h + pad) * d.PW + pad) * C, input + ((size_t)n * H + h) * W * C, (size_t)w1 * C);
-    }
-    conv0packFromPadded(img, output, n, d, KW, C, CO);
-  }
+  const int w1 = std::min(W, d.PW - pad);
+  for (int n = 0; n < N; n++)
+    conv0packRows(output, n, H, pad, d, KW, C, CO, [&](int h, int8_t *dst) {
+      memcpy(dst, input + ((size_t)n * H + h) * W * C, (size_t)w1 * C);
+    });
 }
-// with the quantize / table of preprocess_nhwc2vtaio_zerofill (findInputPreprocess) written into the padded input
+// with the quantize / table of preprocess_nhwc2vtaio_zerofill (findInputPreprocess) written into the padded rows
 void preprocess_conv0pack(const float *input, int8_t *output, int N, int H, int W, int C, int nchw, float scale,
                           int32_t offset, const int8_t *lut, int KH, int KW, int stride, int pad, int CO) {
   const Conv0PackDims d(H, W, KH, KW, stride, pad, CO);
   assert(CO <= 256 && CO % 16 == 0 && stride * KW * C <= CO);
-  int8_t *img = conv0packImage(d, C);
 #if defined(__aarch64__)
   int fe;
   const bool mul = std::frexp(scale, &fe) == 0.5f && std::isnormal(1 / scale);
-  const float32x4_t vs = vdupq_n_f32(mul ? 1 / scale : scale), vo = vdupq_n_f32((float)offset);
-  uint8x16x4_t tab[3][4];
+  const float32x4_t vs_ = vdupq_n_f32(mul ? 1 / scale : scale), vo_ = vdupq_n_f32((float)offset);
+  uint8x16x4_t tab_[3][4];
   if (C == 3 && lut)
     for (int c = 0; c < 3; c++)
       for (int k = 0; k < 4; k++)
         for (int j = 0; j < 4; j++)
-          tab[c][k].val[j] = vld1q_u8((const uint8_t *)lut + c * 256 + k * 64 + j * 16);
+          tab_[c][k].val[j] = vld1q_u8((const uint8_t *)lut + c * 256 + k * 64 + j * 16);
 #endif
   const int w1 = std::min(W, d.PW - pad);  // image columns the packed input reads
-  for (int n = 0; n < N; n++) {
-#pragma omp parallel for schedule(static)
-    for (int h = 0; h < H; h++) {
-      if (h + pad >= d.PH)
-        continue;
-      int8_t *row = img + ((size_t)(h + pad) * d.PW + pad) * C;
+  for (int n = 0; n < N; n++)
+    conv0packRows(output, n, H, pad, d, KW, C, CO, [&](int h, int8_t *row) {
       int w0 = 0;
 #if defined(__aarch64__)
       if (C == 3) {
+        // the constants in locals: the byte stores below may alias the captured ones (reloaded at every pixel block)
+        const float32x4_t vs = vs_, vo = vo_;
+        uint8x16x4_t tab[3][4];
+        if (lut)
+          memcpy(tab, tab_, sizeof(tab));
         for (; w0 + 16 <= w1; w0 += 16) {
           float32x4_t x[3][4];
           if (nchw) {
@@ -1867,9 +1871,7 @@ void preprocess_conv0pack(const float *input, int8_t *output, int N, int H, int 
                                       scale, offset);
           row[(size_t)w * C + c] = lut ? lut[c * 256 + v + 128] : v;
         }
-    }
-    conv0packFromPadded(img, output, n, d, KW, C, CO);
-  }
+    });
 }
 
 void transpose_nhwc2vtaio_zerofill_old(int8_t* input, int8_t* output, int N, int H, int W, int C){
