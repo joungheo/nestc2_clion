@@ -423,6 +423,36 @@ void gemm_sa_csim(
 #endif
 #endif
 
+//#### JO added (2026-11-03): a register on a value (the pattern of hls::reg in utils/x_hls_utils.h, there in an internal
+//#### namespace): a function that is not inlined and registers its return
+template <class T>
+T alu_reg(T in) {
+#pragma HLS INLINE off
+#pragma HLS INTERFACE ap_none port=return register
+  return in;
+}
+
+//#### JO added (2026-11-02): one ALU lane, the arithmetic of the loop in alu() below
+inline void alu_lane(uint32_t opcode, acc_T src_0, acc_T src_1, acc_T &d, out_T &o) {
+#pragma HLS INLINE
+  aluop_shr_arg_T shft_by = src_1.range(VTA_SHR_ARG_BIT_WIDTH - 1, 0);
+  if (opcode == VTA_ALU_OPCODE_MIN || opcode == VTA_ALU_OPCODE_MAX) {
+    acc_T mix_val = src_0 < src_1 ?
+        (opcode == VTA_ALU_OPCODE_MIN ? src_0 : src_1) :
+        (opcode == VTA_ALU_OPCODE_MIN ? src_1 : src_0);
+    d = mix_val;
+    o = (out_T) mix_val.range(VTA_OUT_WIDTH - 1, 0);
+  } else if (opcode == VTA_ALU_OPCODE_ADD) {
+    acc_T add_val = src_0.range(VTA_ACC_WIDTH - 1, 0) + src_1.range(VTA_ACC_WIDTH - 1, 0);
+    d = add_val;
+    o = (out_T) add_val.range(VTA_OUT_WIDTH - 1, 0);
+  } else if (opcode == VTA_ALU_OPCODE_SHR) {
+    acc_T shr_val = src_0 >> shft_by;
+    d = shr_val;
+    o = (out_T) shr_val.range(VTA_OUT_WIDTH - 1, 0);
+  }
+}
+
 void alu(
   insn_T insn_raw,
   uop_T uop_mem[VTA_UOP_BUFF_DEPTH],
@@ -433,6 +463,41 @@ void alu(
 #pragma HLS INLINE
 
   VTAAluInsn insn = *((VTAAluInsn *) &insn_raw);
+
+#ifdef VTA_SYSTOLIC
+  //#### JO added (2026-11-02, docs/evta_runtime_compare.md 7.14): an op with an immediate reads only dst. One acc read and
+  //#### one acc write per step fit the two ports of acc_mem, so this loop runs at II = 1; the loop below reads src and dst
+  //#### and needs II = 2. Like that loop (DEPENDENCE inter false on acc_mem), it assumes that no step reads a dst written
+  //#### by a step still in the pipeline (the bundles' imm ops write each dst once per instruction).
+  if (insn.use_imm) {
+    acc_idx_T imm_dst_offset_out = 0;
+    ALU_IMM_OUT_LOOP: for (int it_out = 0; it_out < insn.iter_out; it_out++) {
+      acc_idx_T dst_offset_in = imm_dst_offset_out;
+      ALU_IMM_IN_LOOP: for (int it_in = 0; it_in < insn.iter_in; it_in++) {
+        ALU_IMM_UOP: for (int upc = insn.uop_bgn; upc < insn.uop_end; upc++) {
+#pragma HLS PIPELINE II = 1
+          //#### JO (2026-11-03): registers (alu_reg) after the uop read and after the add: at II = 1 HLS put uop_mem -> add -> acc_mem
+          //#### address in one cycle, and the acc_mem address fans out to its 58 BRAMs (400 MHz WNS -0.819 ns)
+          uop_T uop = alu_reg(uop_mem[upc]);
+          acc_idx_T dst_idx = alu_reg((acc_idx_T) (uop.range(VTA_UOP_ALU_0_1, VTA_UOP_ALU_0_0) + dst_offset_in));
+          acc_T dst_tensor[VTA_BATCH][VTA_BLOCK_OUT];
+          read_tensor<bus_T, acc_T, acc_idx_T, VTA_BUS_WIDTH, VTA_ACC_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, acc_mem, dst_tensor);
+          out_T o_tensor[VTA_BATCH][VTA_BLOCK_OUT];
+          for (int i = 0; i < VTA_BATCH; i++) {
+            for (int b = 0; b < VTA_BLOCK_OUT; b++) {
+              alu_lane(insn.alu_opcode, dst_tensor[i][b], (acc_T) insn.imm, dst_tensor[i][b], o_tensor[i][b]);
+            }
+          }
+          write_tensor<bus_T, acc_T, acc_idx_T, VTA_BUS_WIDTH, VTA_ACC_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, dst_tensor, acc_mem);
+          write_tensor<bus_T, out_T, acc_idx_T, VTA_BUS_WIDTH, VTA_OUT_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, o_tensor, out_mem);
+        }
+        dst_offset_in += insn.dst_factor_in;
+      }
+      imm_dst_offset_out += insn.dst_factor_out;
+    }
+    return;
+  }
+#endif
 
   // Loop offset
   acc_idx_T dst_offset_out = 0;
