@@ -449,8 +449,8 @@ def fig14():
              ("11-02", "명령 record / replay", 37.1, 34.5, "§7.10"),
              ("11-02", "conv0 packed 입력 4×1", 34.5, 29.19, "§7.12"),
              ("11-02", "conv0 + maxpool 한 호출", 29.19, 28.83, "§7.13"),
-             ("예상", "ALU imm 연산 II = 1 (bitstream)", 28.83, 27.3, "§7.14"),
-             ("예상", "RMW reset에 bias (bitstream)", 27.3, 26.4, "")]
+             ("11-03", "ALU imm 연산 II = 1 (bitstream, 같은 날 28.98 기준)", 28.98, 27.32, "§7.15"),
+             ("예상", "RMW reset에 bias (bitstream)", 27.32, 26.4, "")]
     rh = 46
     H = 150 + len(steps) * rh + 150
     s = Svg(W, H, "그림 14. Resnet18 추론 한 장의 시간: 단계별로 줄어든 폭",
@@ -482,9 +482,9 @@ def fig14():
             s.text(x0 + now * scale + 8, yy + 27, f"{now} ms", 12.5, weight="bold")
     yb = y + len(steps) * rh + 30
     s.lines(30, yb, [("합", "bold"),
-                     "• 148.9 → 28.83 ms (5.2배). 가장 큰 것은 transpose 제거(−57.8 ms)와 CPU elementwise를 EVTA로 옮긴 것(−38.6 ms).",
+                     "• 148.9 → 27.32 ms (5.4배). 가장 큰 것은 transpose 제거(−57.8 ms)와 CPU elementwise를 EVTA로 옮긴 것(−38.6 ms).",
                      "• OMP 4로는 73.6 → 27.71 ms. multi4 (4 copy 동시) 100회는 약 3.9 s → 0.820 s.",
-                     "• 점선은 예상치(ALU II = 1: −1.5 ms, bias reset: −0.9 ms)이고 아직 보드에서 재지 않았다."], 13)
+                     "• ALU II = 1은 11-03 보드 측정(EVTA −1.53 ms). 점선(bias reset −0.9 ms)은 예상치다."], 13)
     s.legend(30, H - 18, [("evta", "그 단계 뒤의 시간"), ("new", "그 단계로 줄어든 몫")])
     return s
 

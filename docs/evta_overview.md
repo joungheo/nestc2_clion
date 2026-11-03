@@ -18,7 +18,8 @@ NEST-C의 EVTA(VTA 계열 NPU)를 ZCU102 보드에서 돌리고 빠르게 만든
 | 10-31 | 91.1 → 52.5 ms (OMP 1) | 3.9 → 1.47 s | layout 유지, residual fusion, maxpool EVTA |
 | 11-01 | 52.5 → 40.6 ms | 1.47 → 약 1.1 s | transpose 16 B 복사, buffer pool, NEON fc |
 | 11-02 | 40.6 → **28.83 ms** (OMP 4 27.71) | **0.820 s** | fc EVTA, 전처리 합치기, replay, conv0 pack, conv0+pool |
-| 진행 중 | 약 27.3 ms (예상) | | ALU II = 1 bitstream, 다음은 bias reset |
+| 11-03 | **27.32 ms** (같은 날 이전 bitstream 28.98) | | ALU imm II = 1 bitstream |
+| 다음 | 약 26.4 ms (예상) | | RMW reset에 bias |
 
 현재 Resnet18 single OMP 1 28.83 ms의 구성(11-02, `evta_runtime_compare.md` §7.14): EVTA 26.47 ms
 (GEMM 18.85 + ALU 4.63 + 그 밖 2.99), CPU와 호출 약 2.4 ms.
@@ -86,10 +87,11 @@ NEST-C의 EVTA(VTA 계열 NPU)를 ZCU102 보드에서 돌리고 빠르게 만든
 - **11-02** EVTA 시간 26.47 ms를 나눴다: GEMM 18.85 ms(71 %), ALU 4.63 ms(17.5 %, HLS ALU 루프가 II = 2), 그 밖 2.99 ms
   (conv0 tile 고정 비용, 1×1 downsample conv의 LOAD 등). run 하나의 고정 비용은 4.7 µs뿐이라 run 합치기는 하지 않는다.
   → [evta_runtime_compare.md](evta_runtime_compare.md) §7.14, 측정 도구 `vtabundles_xcmpl/hwtest/runbench.cpp`, `EVTA_REPLAY_DUMP`
-- **11-02 ~ 11-03 ALU II = 1 (진행 중):** imm ALU 연산(SHR, clip, relu)은 acc를 한 번만 읽으므로 따로 II = 1 루프로 돌린다
-  (`vta-hw-zcu102-systolic/hardware/xilinx/src/vta.cc` `alu()`, systolic 빌드만). ISA·vtalib·컴파일러는 바뀌지 않는다. HLS csim 통과,
-  첫 400 MHz 빌드는 WNS −0.819 ns(uop 읽기 → 주소 덧셈 → acc 주소가 한 cycle)로 실패해 register를 넣고 다시 빌드 중이다.
-  예상 EVTA −1.5 ms.
+- **11-02 ~ 11-03 ALU II = 1:** imm ALU 연산(SHR, clip, relu)은 acc를 한 번만 읽으므로 따로 II = 1 루프로 돌린다
+  (`vta-hw-zcu102-systolic/hardware/xilinx/src/vta.cc` `alu()`, systolic 빌드만). ISA·vtalib·컴파일러는 바뀌지 않는다.
+  400 MHz timing은 register 2개와 `Performance_ExplorePostRoutePhysOpt` 전략으로 WNS +0.001 ns에 맞췄다.
+  golden 30 PASS, 층 출력 byte 동일, Resnet18 EVTA 26.42 → 24.89 ms, 추론 28.98 → 27.32 ms (11-03).
+  → [evta_runtime_compare.md](evta_runtime_compare.md) §7.15
 - **다음: bias reset.** GEMM reset 단계에서 acc에 0 대신 bias를 쓴다(RTL `sa_rmw.v`, HLS uop 비트, ISA 비트 하나, vtalib).
   bias ALU ADD 0.91 ms가 없어진다. ALU II = 1이 보드에서 확인된 뒤 한다.
 - 그 뒤 후보: conv0 tile 키우기(single EVTA는 inp buffer 전체), 1×1 downsample conv를 같은 입력의 conv와 합치기, 한 장을

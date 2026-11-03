@@ -239,6 +239,10 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
 - Where the EVTA time goes (2026-11-02, §7.14; `EVTA_REPLAY_DUMP=<dir>` writes every recorded run's instructions and uops as text):
   Resnet18 26.47 ms = GEMM 18.85 + ALU 4.63 (the HLS `alu` loop is `II = 2`; bias ADD, SHR, clip MIN/MAX, relu, pool) + 2.99
   (conv0 tiles 1.08, about 60 us per run, load-bound 1x1 downsample convs).
+- ALU ops with an immediate at II = 1 (2026-11-03, §7.15; `vta-hw-zcu102-systolic` `vta.cc` `alu()`, systolic builds only): one acc read
+  and one write per step; bitstream `vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_400mhz_alu1_epr.bin` (`Performance_ExplorePostRoutePhysOpt`,
+  WNS +0.001 ns; ExtraTimingOpt missed by 0.126 ns), same executables and vtalib. Golden 30 PASS, layer dumps byte-identical;
+  Resnet18 EVTA 26.42 -> 24.89 ms, single OMP 1 28.98 -> 27.32 ms. Use it with `BIN=<that file>` on `run_prof.sh -s _sys*`.
 - The lab board's PL has a defective configuration row (tile row SLICE Y219, cells stuck at 0; `log/BOARD_TODO.md`
   2026-10-23/24). `vivado.tcl` on zcu102 fences the design below it by default (`VTA_BRAM_FENCE=y219|upper|none`).
   multi2 fits below it and works (2026-10-24); multi4 needs more BRAM than the rows below, so it crosses the row with

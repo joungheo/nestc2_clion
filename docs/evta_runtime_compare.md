@@ -30,12 +30,13 @@ OMP 1로는 91.1 ms에서 28.83 ms가 됐다.** multi4 100회(4 copy 동시)는 
 | 명령 record / replay | §7.10 | 37.1 → 34.5 ms | `EVTA_REPLAY=0` |
 | conv0 packed 입력 | §7.12 | 34.5 → 29.2 ms | `-vta-conv0-pack=false` |
 | conv0 + maxpool 합치기 | §7.13 | 29.2 → **28.83 ms** (OMP 4 27.71) | `-vta-fuse-pool=false` |
+| ALU imm 연산 II = 1 (bitstream) | §7.15 | 28.98 → **27.32 ms** (같은 날 측정) | 이전 bitstream `..._sa_400mhz` |
 
 - **남은 시간(§7.14):** EVTA 26.47 ms = GEMM 18.85(71 %) + ALU 4.63(17.5 %) + 그 밖 2.99. CPU와 호출은 약 2.4 ms다.
   - ALU가 큰 것은 HLS ALU 루프가 반복마다 acc를 두 번 읽어 II = 2이기 때문이다.
   - run 하나의 고정 비용은 4.7 µs뿐이다. 층 사이 DRAM 왕복을 모두 없애도 −2.36 ms(§7.11)라 하드웨어 경로는 만들지 않는다.
-- **진행 중:** imm ALU 연산(SHR, clip, relu)을 II = 1 루프로 돌리는 systolic bitstream(예상 EVTA −1.5 ms). 첫 빌드가 400 MHz timing에
-  실패해(WNS −0.819 ns) register를 넣고 다시 빌드하고 있다.
+- **ALU imm 연산 II = 1 (§7.15, 11-03):** 새 systolic bitstream `..._sa_400mhz_alu1_epr`로 EVTA 26.42 → 24.89 ms, Resnet18 single OMP 1
+  28.98 → 27.32 ms(같은 날 측정). bundle과 vtalib은 그대로다.
 - **다음:** RMW에서 reset할 때 0 대신 bias를 쓴다(bias ALU ADD 0.91 ms 제거, RTL + HLS + ISA 비트 + vtalib).
   그 뒤 후보: conv0 tile 키우기, 1×1 downsample conv 합치기, 한 장을 EVTA 4개로, 다른 모델.
 
@@ -722,6 +723,34 @@ case를 한 프로세스에서 모두 돈다: runtime의 CMA는 `xlnk_reset`으�
 
 **정리:** GEMM 밖의 7.6 ms 중 **ALU가 4.6 ms로 가장 크고 하드웨어 II 때문이다.** 소프트웨어만으로 줄일 수 있는 것은 conv0 tile
 고정 비용(약 1 ms 중 일부), downsample conv의 LOAD(약 0.3 ms) 정도다(run 합치기는 run당 4.7 µs라 이득이 없다).
+
+### 7.15 ALU imm 연산을 II = 1로 (2026-11-03, bitstream `..._sa_400mhz_alu1_epr`, `vta-hw-zcu102-systolic` `vta.cc` `alu()`)
+
+**어떻게:** systolic 빌드(`VTA_SYSTOLIC`)의 `alu()`에 `use_imm`인 명령만 도는 루프를 따로 둔다. 반복마다 acc를 dst 한 번만 읽고(포트 A)
+한 번 쓰므로(포트 B) II = 1이다. reg 연산(bias ADD, pool MAX)은 그대로 II = 2 루프다. ISA, vtalib, 컴파일러, bundle은 바뀌지 않는다.
+- 같은 반복 안에서 읽은 dst를 몇 clk 뒤 쓰므로, 그 사이 같은 dst를 다시 읽으면 안 된다(acc는 `DEPENDENCE inter false`).
+  Resnet18의 ALU 명령 1,566개를 `EVTA_REPLAY_DUMP`로 보면 imm 명령은 16 반복 안에 같은 주소를 다시 쓰지 않는다.
+- timing(400 MHz):
+  - 첫 빌드: uop 읽기 → 주소 덧셈 → acc_mem 주소(BRAM 58개)가 한 clk이라 WNS −0.819 ns(실패 9,031).
+  - uop 읽기 뒤와 주소 계산 뒤에 register(`alu_reg`, `INLINE off` + 반환 register; `hls::reg`는 2020.1에서 내부 namespace)를 넣어
+    WNS −0.126 ns(`Performance_ExtraTimingOpt`). 남은 실패는 acc LOAD padding(`load_pad_2d` / `reset_mem`)의 acc 쓰기 enable 등으로
+    퍼져 있었고, 배선 후 `phys_opt_design -directive AggressiveExplore`로는 −0.124 ns였다.
+  - `IMPL_STRATEGY=Performance_ExplorePostRoutePhysOpt`로 **WNS +0.001 ns**, WHS +0.010 ns, WPWS +0.001 ns. LUT 28.3K → 34.1K.
+    여유가 1 ps라, 다음 빌드에서 모자라면 acc LOAD padding 쓰기와 imm 루프의 acc 쓰기 데이터 앞에 register를 더 넣는다(HLS가 주소·데이터·enable을 같이 민다).
+- 보드 bit dir: `/home/xilinx/JO/npuprg/bit/evta_sys_alu1_400MHz_pass_261103/` (README 있음).
+
+**검증:** golden 30 PASS(`run_prof.sh -s _systimed -n 2 all`, `BIN=<새 bitstream>`). Resnet18 281 / 0.655530, Resnet50 281 / 0.581379,
+Partition 281 / 0.530282, VGG16 0 / 0.453709로 전과 같다. `EVTA_DUMP_CONV`로 Resnet18 40개, Resnet50 106개 파일이 기존 systolic
+bitstream과 byte 단위로 같다.
+
+| 측정 (systolic 400 MHz, 같은 실행 파일) | `..._sa_400mhz` | `..._sa_400mhz_alu1_epr` |
+|---|---|---|
+| runbench `aluimm 16 2048` (ALU imm 반복) | 169.74 µs (2.0 clk) | **87.37 µs (1.0 clk)** |
+| runbench `alureg 16 2048`, `gemm 16 1024` | 169.74 / 46.12 µs | 169.54 / 46.42 µs (그대로) |
+| Resnet18 EVTA 시간 (`_sysprof`, 25회 평균) | 26.42 ms | **24.89 ms** (−1.53 ms) |
+| Resnet18 single OMP 1 (`_systimed -r`, run 2·3·25 중앙값) | 28.98 ms | **27.32 ms** |
+
+예상(§7.14의 −1.5 ms)과 같다. 다음은 RMW reset에 bias를 쓰는 것(bias ALU ADD 0.91 ms)이다.
 
 ## 8. 하드웨어도 같이 비교해야 하나
 
