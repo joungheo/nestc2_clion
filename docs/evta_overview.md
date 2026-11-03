@@ -103,6 +103,89 @@ NEST-C의 EVTA(VTA 계열 NPU)를 ZCU102 보드에서 돌리고 빠르게 만든
   `xlnk_reset`한다.
 - **보드는 여러 사용자가 같이 쓴다:** 실행 전에 다른 사람의 EVTA 실행을 확인한다(`/tmp/evta_run.lock`, `ps`).
 
+
+## 그림: 이전 구조와 지금 구조
+
+이전과 지금을 위아래로 놓고 무엇이 바뀌었는지 그렸다. 먼저 볼 것은 그림 1 → 12 → 4 → 5 → 14다. 그림은 `docs/figs/src/make_evta_figs.py`가 만든다(`python3 docs/figs/src/make_evta_figs.py [번호 ...]`).
+
+| 그림 | 내용 |
+|---|---|
+| [1](figs/evta_fig01_inference_flow.svg) | Resnet18 추론 한 번: CPU와 EVTA가 하는 일 (10-29 → 11-02) |
+| [2](figs/evta_fig02_change_map.svg) | 무엇을 어디서 바꿨나 (컴파일러, runtime, 하드웨어) |
+| [3](figs/evta_fig03_activation_layout.svg) | 층 사이 activation layout: NHWC ↔ EVTA layout → EVTA layout 그대로 |
+| [4](figs/evta_fig04_residual_block.svg) | residual block: conv → CPU elemadd → CPU relu ⇒ EVTA 호출 하나 |
+| [5](figs/evta_fig05_conv0_pack.svg) | conv0: 16채널 0 채움 7×7 → packed 입력의 4×1 conv |
+| [6](figs/evta_fig06_conv0_maxpool.svg) | conv0 + maxpool: EVTA 호출 두 번 → 한 번 |
+| [7](figs/evta_fig07_input_preprocess.svg) | 입력 전처리: CPU 단계 네 번 → NEON 복사 한 번 |
+| [8](figs/evta_fig08_fc.svg) | fc: CPU → NEON → EVTA GEMM |
+| [9](figs/evta_fig09_evta_call_runtime.svg) | EVTA 호출 하나의 CPU 쪽 일: buffer pool, record / replay |
+| [10](figs/evta_fig10_multi4_hang_dsb.svg) | multi4 멈춤의 원인과 dsb sy |
+| [11](figs/evta_fig11_evta_block.svg) | EVTA 블록도: HLS GEMM → systolic gemm_sa, 클럭 분리 |
+| [12](figs/evta_fig12_gemm_hls_vs_systolic.svg) | GEMM 한 단계: HLS broadcast → systolic 어레이 |
+| [13](figs/evta_fig13_alu_ii.svg) | ALU: II = 2 → imm II = 1, 다음은 RMW reset에 bias |
+| [14](figs/evta_fig14_time_waterfall.svg) | Resnet18 추론 시간: 단계별로 줄어든 폭 |
+| [15](figs/evta_fig15_evta_time_now.svg) | 지금 EVTA 시간 26.47 ms의 구성과 줄어들 몫 |
+
+### 그림 1. Resnet18 추론 한 번: CPU와 EVTA가 하는 일 (10-29 → 11-02)
+
+![그림 1](figs/evta_fig01_inference_flow.svg)
+
+### 그림 2. 무엇을 어디서 바꿨나 (컴파일러, runtime, 하드웨어)
+
+![그림 2](figs/evta_fig02_change_map.svg)
+
+### 그림 3. 층 사이 activation layout: NHWC ↔ EVTA layout → EVTA layout 그대로
+
+![그림 3](figs/evta_fig03_activation_layout.svg)
+
+### 그림 4. residual block: conv → CPU elemadd → CPU relu ⇒ EVTA 호출 하나
+
+![그림 4](figs/evta_fig04_residual_block.svg)
+
+### 그림 5. conv0: 16채널 0 채움 7×7 → packed 입력의 4×1 conv
+
+![그림 5](figs/evta_fig05_conv0_pack.svg)
+
+### 그림 6. conv0 + maxpool: EVTA 호출 두 번 → 한 번
+
+![그림 6](figs/evta_fig06_conv0_maxpool.svg)
+
+### 그림 7. 입력 전처리: CPU 단계 네 번 → NEON 복사 한 번
+
+![그림 7](figs/evta_fig07_input_preprocess.svg)
+
+### 그림 8. fc: CPU → NEON → EVTA GEMM
+
+![그림 8](figs/evta_fig08_fc.svg)
+
+### 그림 9. EVTA 호출 하나의 CPU 쪽 일: buffer pool, record / replay
+
+![그림 9](figs/evta_fig09_evta_call_runtime.svg)
+
+### 그림 10. multi4 멈춤의 원인과 dsb sy
+
+![그림 10](figs/evta_fig10_multi4_hang_dsb.svg)
+
+### 그림 11. EVTA 블록도: HLS GEMM → systolic gemm_sa, 클럭 분리
+
+![그림 11](figs/evta_fig11_evta_block.svg)
+
+### 그림 12. GEMM 한 단계: HLS broadcast → systolic 어레이
+
+![그림 12](figs/evta_fig12_gemm_hls_vs_systolic.svg)
+
+### 그림 13. ALU: II = 2 → imm II = 1, 다음은 RMW reset에 bias
+
+![그림 13](figs/evta_fig13_alu_ii.svg)
+
+### 그림 14. Resnet18 추론 시간: 단계별로 줄어든 폭
+
+![그림 14](figs/evta_fig14_time_waterfall.svg)
+
+### 그림 15. 지금 EVTA 시간 26.47 ms의 구성과 줄어들 몫
+
+![그림 15](figs/evta_fig15_evta_time_now.svg)
+
 ## 문서 지도
 
 | 문서 | 내용 |

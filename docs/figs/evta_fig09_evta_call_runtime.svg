@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1460" height="770" viewBox="0 0 1460 770" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif">
+<title>그림 9. EVTA 호출 하나의 CPU 쪽 일: 매번 할당·생성 → pool에서 재사용, 기록한 명령을 replay</title>
+<defs>
+<marker id="ara" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#333333"/></marker>
+<marker id="arb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f5f98"/></marker>
+<marker id="aro" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c06a10"/></marker>
+<marker id="arg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3c8a35"/></marker>
+<marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker>
+<marker id="arp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6d4596"/></marker>
+<marker id="ary" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9a7b00"/></marker>
+<marker id="ark" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#888888"/></marker>
+</defs>
+<rect x="0.0" y="0.0" width="1460.0" height="770.0" rx="0" fill="#ffffff" stroke="none" stroke-width="1.2"/>
+<text x="24.0" y="38.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="22" text-anchor="start" font-weight="bold" fill="#222222" xml:space="preserve">그림 9. EVTA 호출 하나의 CPU 쪽 일: 매번 할당·생성 → pool에서 재사용, 기록한 명령을 replay</text>
+<text x="24.0" y="64.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13.5" text-anchor="start" font-weight="normal" fill="#444444" xml:space="preserve">conv 하나를 부를 때 CPU가 하는 일. 자세히: evta_runtime_compare.md §2.2, §7.5, §7.10, evta_runtime_aot.md §5.4, vtalib api.cc, cmd_queue.h ReplayBegin / RunReplay.</text>
+<rect x="24.0" y="92.0" width="1412.0" height="30.0" rx="4" fill="#f3f6fa" stroke="#c8d3e0" stroke-width="1"/>
+<text x="36.0" y="113.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="15.5" text-anchor="start" font-weight="bold" fill="#2f5f98" xml:space="preserve">A. 이전 (10-29): 호출마다 buffer를 새로 잡고, tile마다 명령과 uop을 CPU가 만든다 (JIT)</text>
+<rect x="40.0" y="142.0" width="140.0" height="80.0" rx="6" fill="#fde5cc" stroke="#c06a10" stroke-width="1.4"/>
+<text x="110.0" y="170.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">VTABufferAlloc</text>
+<text x="110.0" y="186.2" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">입력, 출력</text>
+<text x="110.0" y="202.4" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">(cma_alloc ioctl)</text>
+<line x1="182.0" y1="182.0" x2="198.0" y2="182.0" stroke="#333333" stroke-width="1.4" marker-end="url(#ara)"/>
+<rect x="200.0" y="142.0" width="100.0" height="80.0" rx="6" fill="#fde5cc" stroke="#c06a10" stroke-width="1.4"/>
+<text x="250.0" y="178.1" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">transpose</text>
+<text x="250.0" y="194.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">+ flush</text>
+<line x1="302.0" y1="182.0" x2="318.0" y2="182.0" stroke="#333333" stroke-width="1.4" marker-end="url(#ara)"/>
+<rect x="320.0" y="142.0" width="170.0" height="80.0" rx="6" fill="#fde5cc" stroke="#c06a10" stroke-width="1.4"/>
+<text x="405.0" y="170.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">conv_kernel × tile</text>
+<text x="405.0" y="186.2" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">LOAD/GEMM/ALU/STORE</text>
+<text x="405.0" y="202.4" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">명령과 uop 생성</text>
+<line x1="492.0" y1="182.0" x2="508.0" y2="182.0" stroke="#333333" stroke-width="1.4" marker-end="url(#ara)"/>
+<rect x="510.0" y="142.0" width="130.0" height="80.0" rx="6" fill="#fde5cc" stroke="#c06a10" stroke-width="1.4"/>
+<text x="575.0" y="170.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">명령·uop을</text>
+<text x="575.0" y="186.2" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">queue buffer에</text>
+<text x="575.0" y="202.4" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">복사 + flush</text>
+<line x1="642.0" y1="182.0" x2="658.0" y2="182.0" stroke="#333333" stroke-width="1.4" marker-end="url(#ara)"/>
+<rect x="660.0" y="142.0" width="110.0" height="80.0" rx="6" fill="#dce8f5" stroke="#2f5f98" stroke-width="1.4"/>
+<text x="715.0" y="178.1" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">MMIO 시작</text>
+<text x="715.0" y="194.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">EVTA 실행</text>
+<line x1="772.0" y1="182.0" x2="788.0" y2="182.0" stroke="#333333" stroke-width="1.4" marker-end="url(#ara)"/>
+<rect x="790.0" y="142.0" width="120.0" height="80.0" rx="6" fill="#fde5cc" stroke="#c06a10" stroke-width="1.4"/>
+<text x="850.0" y="178.1" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">완료 폴링</text>
+<text x="850.0" y="194.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">(done 레지스터)</text>
+<line x1="912.0" y1="182.0" x2="928.0" y2="182.0" stroke="#333333" stroke-width="1.4" marker-end="url(#ara)"/>
+<rect x="930.0" y="142.0" width="110.0" height="80.0" rx="6" fill="#fde5cc" stroke="#c06a10" stroke-width="1.4"/>
+<text x="985.0" y="178.1" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">invalidate</text>
+<text x="985.0" y="194.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">+ transpose</text>
+<line x1="1042.0" y1="182.0" x2="1058.0" y2="182.0" stroke="#333333" stroke-width="1.4" marker-end="url(#ara)"/>
+<rect x="1060.0" y="142.0" width="130.0" height="80.0" rx="6" fill="#fde5cc" stroke="#c06a10" stroke-width="1.4"/>
+<text x="1125.0" y="178.1" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">VTABufferFree</text>
+<text x="1125.0" y="194.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">(cma_free ioctl)</text>
+<text x="40.0" y="262.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" text-anchor="start" font-weight="normal" fill="#222222" xml:space="preserve">• Resnet18 한 번(OMP 1): buffer 할당·해제·flush 4.5 ms, 명령 생성 2.5 ms (그 동안 EVTA는 쉰다).</text>
+<text x="40.0" y="279.6" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" text-anchor="start" font-weight="normal" fill="#222222" xml:space="preserve">• 입력이 같은 모양이면 매번 같은 명령이 나온다: 바뀌는 것은 buffer 주소뿐이다.</text>
+<rect x="24.0" y="342.0" width="1412.0" height="30.0" rx="4" fill="#f3f6fa" stroke="#c8d3e0" stroke-width="1"/>
+<text x="36.0" y="363.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="15.5" text-anchor="start" font-weight="bold" fill="#2f7a2a" xml:space="preserve">B. 지금: buffer pool (§7.5) + record / replay (§7.10)</text>
+<rect x="40.0" y="392.0" width="200.0" height="90.0" rx="6" fill="#dcefd6" stroke="#3c8a35" stroke-width="1.4"/>
+<text x="140.0" y="425.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">VTABufferAlloc</text>
+<text x="140.0" y="441.2" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">크기별 free list에서 꺼냄</text>
+<text x="140.0" y="457.4" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">(첫 run만 ioctl)</text>
+<rect x="280.0" y="392.0" width="230.0" height="90.0" rx="6" fill="#dcefd6" stroke="#3c8a35" stroke-width="1.4"/>
+<text x="395.0" y="425.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">ReplayBegin(key)</text>
+<text x="395.0" y="441.2" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">key = 호출 종류와 스칼라 인자</text>
+<text x="395.0" y="457.4" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">(모양, shift, EVTA 번호 등)</text>
+<line x1="242.0" y1="437.0" x2="278.0" y2="437.0" stroke="#333333" stroke-width="1.6" marker-end="url(#ara)"/>
+<rect x="560.0" y="372.0" width="860.0" height="120.0" rx="8" fill="#fff8ec" stroke="#c06a10" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="572.0" y="392.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="start" font-weight="bold" fill="#a0601a" xml:space="preserve">처음 본 key: 기록 (첫 추론에서, 호출 종류마다 한 번)</text>
+<rect x="572.0" y="406.0" width="140.0" height="70.0" rx="6" fill="#fde5cc" stroke="#c06a10" stroke-width="1.4"/>
+<text x="642.0" y="437.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">명령·uop 생성</text>
+<text x="642.0" y="452.8" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">(A와 같음)</text>
+<line x1="714.0" y1="441.0" x2="728.0" y2="441.0" stroke="#333333" stroke-width="1.4" marker-end="url(#ara)"/>
+<rect x="730.0" y="406.0" width="160.0" height="70.0" rx="6" fill="#fde5cc" stroke="#c06a10" stroke-width="1.4"/>
+<text x="810.0" y="437.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">segment별로</text>
+<text x="810.0" y="452.8" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">전용 buffer에 복사</text>
+<line x1="892.0" y1="441.0" x2="906.0" y2="441.0" stroke="#333333" stroke-width="1.4" marker-end="url(#ara)"/>
+<rect x="908.0" y="406.0" width="200.0" height="70.0" rx="6" fill="#fde5cc" stroke="#c06a10" stroke-width="1.4"/>
+<text x="1008.0" y="429.5" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">relocation 표</text>
+<text x="1008.0" y="445.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">LOAD/STORE마다</text>
+<text x="1008.0" y="460.6" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">어느 인자 buffer + offset</text>
+<line x1="1110.0" y1="441.0" x2="1124.0" y2="441.0" stroke="#333333" stroke-width="1.4" marker-end="url(#ara)"/>
+<rect x="1126.0" y="406.0" width="80.0" height="70.0" rx="6" fill="#dce8f5" stroke="#2f5f98" stroke-width="1.4"/>
+<text x="1166.0" y="445.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">실행</text>
+<line x1="512.0" y1="422.0" x2="570.0" y2="422.0" stroke="#c06a10" stroke-width="1.6" marker-end="url(#aro)"/>
+<rect x="560.0" y="512.0" width="860.0" height="120.0" rx="8" fill="#eef7ea" stroke="#3c8a35" stroke-width="1.2" stroke-dasharray="6 4"/>
+<text x="572.0" y="532.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="start" font-weight="bold" fill="#2a6a24" xml:space="preserve">기록이 있는 key: replay (그 뒤 모든 호출)</text>
+<rect x="572.0" y="546.0" width="190.0" height="70.0" rx="6" fill="#dcefd6" stroke="#3c8a35" stroke-width="1.4"/>
+<text x="667.0" y="569.5" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">buffer 주소가</text>
+<text x="667.0" y="585.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">바뀌었으면만</text>
+<text x="667.0" y="600.5" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">dram_base 고침 + flush</text>
+<line x1="764.0" y1="581.0" x2="778.0" y2="581.0" stroke="#333333" stroke-width="1.4" marker-end="url(#ara)"/>
+<rect x="780.0" y="546.0" width="130.0" height="70.0" rx="6" fill="#dce8f5" stroke="#2f5f98" stroke-width="1.4"/>
+<text x="845.0" y="577.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">segment마다</text>
+<text x="845.0" y="592.8" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">MMIO 시작</text>
+<line x1="912.0" y1="581.0" x2="926.0" y2="581.0" stroke="#333333" stroke-width="1.4" marker-end="url(#ara)"/>
+<rect x="928.0" y="546.0" width="110.0" height="70.0" rx="6" fill="#fde5cc" stroke="#c06a10" stroke-width="1.4"/>
+<text x="983.0" y="585.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">완료 폴링</text>
+<line x1="512.0" y1="452.0" x2="570.0" y2="572.0" stroke="#3c8a35" stroke-width="1.6" marker-end="url(#arg)"/>
+<rect x="280.0" y="542.0" width="230.0" height="60.0" rx="6" fill="#dcefd6" stroke="#3c8a35" stroke-width="1.4"/>
+<text x="395.0" y="568.1" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">VTABufferFree</text>
+<text x="395.0" y="584.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">free list에 남김 (최대 32 MB)</text>
+<text x="40.0" y="672.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" text-anchor="start" font-weight="bold" fill="#222222" xml:space="preserve">결과</text>
+<text x="40.0" y="689.5" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" text-anchor="start" font-weight="normal" fill="#222222" xml:space="preserve">• buffer pool: run당 Alloc 23번 + Free 23번 2.7 → 0.05 ms. Resnet18 single OMP 1 46.9 → 44.3 ms.</text>
+<text x="40.0" y="707.1" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" text-anchor="start" font-weight="normal" fill="#222222" xml:space="preserve">• replay: Resnet18 single OMP 1 37.1 → 34.5 ms, multi4 copy당 37.6 → 35.0 ms. bit 단위로 같다. EVTA_REPLAY=0으로 끈다.</text>
+<text x="40.0" y="724.6" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" text-anchor="start" font-weight="normal" fill="#222222" xml:space="preserve">• 재사용 buffer에는 이전 내용이 남아 있다(결과에는 영향 없음을 golden으로 확인).</text>
+</svg>

@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1460" height="920" viewBox="0 0 1460 920" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif">
+<title>그림 10. multi4 멈춤의 원인: cache flush가 끝나기 전에 EVTA 시작 MMIO가 나간다 → dsb sy로 막는다</title>
+<defs>
+<marker id="ara" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#333333"/></marker>
+<marker id="arb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f5f98"/></marker>
+<marker id="aro" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c06a10"/></marker>
+<marker id="arg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3c8a35"/></marker>
+<marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker>
+<marker id="arp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6d4596"/></marker>
+<marker id="ary" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9a7b00"/></marker>
+<marker id="ark" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#888888"/></marker>
+</defs>
+<rect x="0.0" y="0.0" width="1460.0" height="920.0" rx="0" fill="#ffffff" stroke="none" stroke-width="1.2"/>
+<text x="24.0" y="38.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="22" text-anchor="start" font-weight="bold" fill="#222222" xml:space="preserve">그림 10. multi4 멈춤의 원인: cache flush가 끝나기 전에 EVTA 시작 MMIO가 나간다 → dsb sy로 막는다</text>
+<text x="24.0" y="64.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13.5" text-anchor="start" font-weight="normal" fill="#444444" xml:space="preserve">EVTA 4개를 동시에 돌릴 때 copy당 약 400회 추론에 한 번 멈췄다(1×1 downsample 바로 다음 3×3 stride-2 conv). 자세히: evta_runtime_compare.md §7.7, vtalib pynq_driver.cc VTAFlushCache.</text>
+<rect x="24.0" y="92.0" width="1412.0" height="30.0" rx="4" fill="#f3f6fa" stroke="#c8d3e0" stroke-width="1"/>
+<text x="36.0" y="113.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="15.5" text-anchor="start" font-weight="bold" fill="#2f5f98" xml:space="preserve">A. 이전: libcma의 cma_flush_cache는 dc civac loop뿐, dsb가 없다</text>
+<text x="150.0" y="176.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" text-anchor="end" font-weight="bold" fill="#222222" xml:space="preserve">CPU</text>
+<line x1="165.0" y1="172.0" x2="1400.0" y2="172.0" stroke="#dddddd" stroke-width="1"/>
+<text x="150.0" y="246.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" text-anchor="end" font-weight="bold" fill="#222222" xml:space="preserve">cache → DRAM</text>
+<line x1="165.0" y1="242.0" x2="1400.0" y2="242.0" stroke="#dddddd" stroke-width="1"/>
+<text x="150.0" y="316.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" text-anchor="end" font-weight="bold" fill="#222222" xml:space="preserve">EVTA fetch</text>
+<line x1="165.0" y1="312.0" x2="1400.0" y2="312.0" stroke="#dddddd" stroke-width="1"/>
+<rect x="180.0" y="152.0" width="220.0" height="40.0" rx="6" fill="#fde5cc" stroke="#c06a10" stroke-width="1.4"/>
+<text x="290.0" y="176.2" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">명령·uop을 queue buffer에 씀</text>
+<rect x="410.0" y="152.0" width="260.0" height="40.0" rx="6" fill="#fde5cc" stroke="#c06a10" stroke-width="1.4"/>
+<text x="540.0" y="176.2" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">cma_flush_cache: dc civac × N</text>
+<rect x="680.0" y="152.0" width="180.0" height="40.0" rx="6" fill="#fde5cc" stroke="#c06a10" stroke-width="1.4"/>
+<text x="770.0" y="176.2" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">MMIO: EVTA 시작</text>
+<rect x="420.0" y="222.0" width="560.0" height="40.0" rx="6" fill="#eeeeee" stroke="#777777" stroke-width="1.4"/>
+<text x="700.0" y="246.2" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">정리된 line이 DRAM에 닿는 중</text>
+<text x="990.0" y="247.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="start" font-weight="normal" fill="#555555" xml:space="preserve">DRAM이 4 EVTA로 바쁘면 길어진다</text>
+<rect x="880.0" y="292.0" width="330.0" height="40.0" rx="6" fill="#fbdcdc" stroke="#c0392b" stroke-width="1.4"/>
+<text x="1045.0" y="316.2" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">fetch가 덜 쓰인 명령(앞 run 것)을 읽음 → token 어긋남 → 멈춤</text>
+<line x1="845.0" y1="194.0" x2="930.0" y2="292.0" stroke="#c0392b" stroke-width="1.6" marker-end="url(#arr)"/>
+<text x="600.0" y="357.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" text-anchor="start" font-weight="normal" fill="#c0392b" xml:space="preserve">Arm에서 dc civac는 dsb 뒤에야 끝났다고 보장된다. 그 전에 Device 쓰기(MMIO)가 먼저 나갈 수 있다.</text>
+<rect x="24.0" y="392.0" width="1412.0" height="30.0" rx="4" fill="#f3f6fa" stroke="#c8d3e0" stroke-width="1"/>
+<text x="36.0" y="413.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="15.5" text-anchor="start" font-weight="bold" fill="#2f7a2a" xml:space="preserve">B. 지금: VTAFlushCache / VTAInvalidateCache가 libcma 다음에 dsb sy (EVTA_NO_DSB=1이면 뺀다)</text>
+<text x="150.0" y="476.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" text-anchor="end" font-weight="bold" fill="#222222" xml:space="preserve">CPU</text>
+<line x1="165.0" y1="472.0" x2="1400.0" y2="472.0" stroke="#dddddd" stroke-width="1"/>
+<text x="150.0" y="546.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" text-anchor="end" font-weight="bold" fill="#222222" xml:space="preserve">cache → DRAM</text>
+<line x1="165.0" y1="542.0" x2="1400.0" y2="542.0" stroke="#dddddd" stroke-width="1"/>
+<text x="150.0" y="616.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" text-anchor="end" font-weight="bold" fill="#222222" xml:space="preserve">EVTA fetch</text>
+<line x1="165.0" y1="612.0" x2="1400.0" y2="612.0" stroke="#dddddd" stroke-width="1"/>
+<rect x="180.0" y="452.0" width="220.0" height="40.0" rx="6" fill="#fde5cc" stroke="#c06a10" stroke-width="1.4"/>
+<text x="290.0" y="476.2" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">명령·uop을 queue buffer에 씀</text>
+<rect x="410.0" y="452.0" width="260.0" height="40.0" rx="6" fill="#fde5cc" stroke="#c06a10" stroke-width="1.4"/>
+<text x="540.0" y="476.2" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">cma_flush_cache: dc civac × N</text>
+<rect x="680.0" y="452.0" width="200.0" height="40.0" rx="6" fill="#dcefd6" stroke="#3c8a35" stroke-width="1.4"/>
+<text x="780.0" y="476.2" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">dsb sy: 정리 끝까지 대기</text>
+<rect x="890.0" y="452.0" width="180.0" height="40.0" rx="6" fill="#fde5cc" stroke="#c06a10" stroke-width="1.4"/>
+<text x="980.0" y="476.2" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">MMIO: EVTA 시작</text>
+<rect x="420.0" y="522.0" width="450.0" height="40.0" rx="6" fill="#eeeeee" stroke="#777777" stroke-width="1.4"/>
+<text x="645.0" y="546.2" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">모든 line이 DRAM에 닿음</text>
+<rect x="1080.0" y="592.0" width="300.0" height="40.0" rx="6" fill="#dcefd6" stroke="#3c8a35" stroke-width="1.4"/>
+<text x="1230.0" y="616.2" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">fetch가 새 명령을 읽음</text>
+<line x1="980.0" y1="494.0" x2="1100.0" y2="592.0" stroke="#3c8a35" stroke-width="1.6" marker-end="url(#arg)"/>
+<text x="40.0" y="682.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13.5" text-anchor="start" font-weight="bold" fill="#222222" xml:space="preserve">원인을 가른 실험 (systolic multi4 Resnet18, copy당 100회씩 반복)</text>
+<rect x="36.0" y="693.0" width="1000.0" height="24.0" rx="0" fill="#f3f6fa" stroke="none" stroke-width="0"/>
+<text x="40.0" y="710.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="start" font-weight="bold" fill="#222222" xml:space="preserve">run 앞에서 하는 일</text>
+<text x="420.0" y="710.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="start" font-weight="bold" fill="#222222" xml:space="preserve">결과</text>
+<text x="640.0" y="710.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="start" font-weight="bold" fill="#222222" xml:space="preserve">뜻</text>
+<text x="40.0" y="734.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="start" font-weight="normal" fill="#222222" xml:space="preserve">없음</text>
+<text x="420.0" y="734.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="start" font-weight="normal" fill="#222222" xml:space="preserve">약 400회 안에 멈춤</text>
+<text x="640.0" y="734.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="start" font-weight="normal" fill="#222222" xml:space="preserve">대조</text>
+<text x="40.0" y="758.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="start" font-weight="normal" fill="#222222" xml:space="preserve">flush 뒤 5~40 µs 바쁜 대기</text>
+<text x="420.0" y="758.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="start" font-weight="normal" fill="#222222" xml:space="preserve">2000회 0번</text>
+<text x="640.0" y="758.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="start" font-weight="normal" fill="#222222" xml:space="preserve">flush 뒤의 틈이 문제</text>
+<text x="40.0" y="782.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="start" font-weight="normal" fill="#222222" xml:space="preserve">5 µs 대기를 flush 앞에</text>
+<text x="420.0" y="782.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="start" font-weight="normal" fill="#222222" xml:space="preserve">멈춤</text>
+<text x="640.0" y="782.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="start" font-weight="normal" fill="#222222" xml:space="preserve">EVTA 쪽 settle 문제가 아님</text>
+<text x="40.0" y="806.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="start" font-weight="normal" fill="#222222" xml:space="preserve">명령 buffer를 반쪽씩 번갈아 (대기 없음)</text>
+<text x="420.0" y="806.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="start" font-weight="normal" fill="#222222" xml:space="preserve">멈춤</text>
+<text x="640.0" y="806.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="start" font-weight="normal" fill="#222222" xml:space="preserve">같은 주소 재사용 문제가 아님</text>
+<text x="40.0" y="830.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="start" font-weight="normal" fill="#2a6a24" xml:space="preserve">flush 뒤 dsb sy (대기 없음)</text>
+<text x="420.0" y="830.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="start" font-weight="normal" fill="#2a6a24" xml:space="preserve">4000회 0번</text>
+<text x="640.0" y="830.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="start" font-weight="normal" fill="#2a6a24" xml:space="preserve">고침 (비용은 측정 차이 안)</text>
+</svg>
