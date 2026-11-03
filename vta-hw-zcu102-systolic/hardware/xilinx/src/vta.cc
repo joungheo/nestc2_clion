@@ -423,6 +423,15 @@ void gemm_sa_csim(
 #endif
 #endif
 
+//#### JO added (2026-11-03): a register on a value (the pattern of hls::reg in utils/x_hls_utils.h, there in an internal
+//#### namespace): a function that is not inlined and registers its return
+template <class T>
+T alu_reg(T in) {
+#pragma HLS INLINE off
+#pragma HLS INTERFACE ap_none port=return register
+  return in;
+}
+
 //#### JO added (2026-11-02): one ALU lane, the arithmetic of the loop in alu() below
 inline void alu_lane(uint32_t opcode, acc_T src_0, acc_T src_1, acc_T &d, out_T &o) {
 #pragma HLS INLINE
@@ -467,8 +476,10 @@ void alu(
       ALU_IMM_IN_LOOP: for (int it_in = 0; it_in < insn.iter_in; it_in++) {
         ALU_IMM_UOP: for (int upc = insn.uop_bgn; upc < insn.uop_end; upc++) {
 #pragma HLS PIPELINE II = 1
-          uop_T uop = uop_mem[upc];
-          acc_idx_T dst_idx = uop.range(VTA_UOP_ALU_0_1, VTA_UOP_ALU_0_0) + dst_offset_in;
+          //#### JO (2026-11-03): registers (alu_reg) after the uop read and after the add: at II = 1 HLS put uop_mem -> add -> acc_mem
+          //#### address in one cycle, and the acc_mem address fans out to its 58 BRAMs (400 MHz WNS -0.819 ns)
+          uop_T uop = alu_reg(uop_mem[upc]);
+          acc_idx_T dst_idx = alu_reg((acc_idx_T) (uop.range(VTA_UOP_ALU_0_1, VTA_UOP_ALU_0_0) + dst_offset_in));
           acc_T dst_tensor[VTA_BATCH][VTA_BLOCK_OUT];
           read_tensor<bus_T, acc_T, acc_idx_T, VTA_BUS_WIDTH, VTA_ACC_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, acc_mem, dst_tensor);
           out_T o_tensor[VTA_BATCH][VTA_BLOCK_OUT];
