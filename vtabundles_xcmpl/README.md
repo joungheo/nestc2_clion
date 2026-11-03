@@ -18,7 +18,7 @@ Bundle sources are generated in the simulator build, then compiled for the board
 |---|---|---|
 | 1. Generate bundle sources (simulator, `NESTC_USE_VTASIM=ON`) | `nest-compiler/Debug2_remote/` | `./build_sim_bundles.sh [target ...]` |
 | 2. Copy them into `hw/<Dir>/` (no compile) | `vtabundles_xcmpl/` | `./collect_hw_bundles.py [Dir ...]` |
-| 3a. Compile for the board | `vtabundles_xcmpl/build/` | `make -j2 hw_bundles` or `make -j2 <target>` |
+| 3a. Compile for the board | `vtabundles_xcmpl/build/` | `make -j2` (= `make -j2 hw_bundles`, every bundle; since 2026-11-04) or `make -j2 <target>` |
 | 3b. Compile with HW profiling | `vtabundles_xcmpl/build_prof/` | `make -j2 <target>` → `hw/<Dir>/<target>_prof` |
 | 4a. Run all + compare with golden | `vtabundles_xcmpl/` | `sudo hw/script/run_all.sh [Dir ...]` → `hw/result/results.txt` |
 | 4b. Run profiling bundles | `vtabundles_xcmpl/` | `sudo hw/script/run_prof.sh [-s <suffix>] [-n <runs>] [-l] [-r] [Dir ...]` (no Dir, `all` or `hw_bundles` = every bundle) → `hw/<Dir>/prof.log` (`timed.log`, `timing.csv`; `prof_<exe>.log` when a Dir has several executables; multi-EVTA `_prof` logs are split per EVTA by the `[profile] VTA<i> events` line); `_prof` logs also get `prof_summary.py`: runs, per-conv ms and GOPS of runs 1, 2, 3 and the last side by side (`<log>.sum`). `-n <runs>` (default 25, hw/ only) = inferences per executable: the `_prof` and `_timed` builds wrap each inference function (`timed_bundle.py`, `BUNDLE_RUNS`), the multi-EVTA mains keep their own loop, one line per Dir in `hw/result/prof_summary.txt` (`timed_summary.txt`). 예) `sudo hw/script/run_prof.sh -s _sysprof -n 10 -r Resnet18Test Resnet50Test` (systolic bitstream, 10 inferences each, chrt) |

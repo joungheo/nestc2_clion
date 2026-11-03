@@ -8,7 +8,7 @@
 # usage:
 #   mkdir -p build && cd build
 #   cmake ..                          # clang-8 by default
-#   make -j2 vtaConv3TestBundle        # binary lands in ../hw/Conv3Test/ (or: make hw_bundles)
+#   make -j2 vtaConv3TestBundle        # binary lands in ../hw/Conv3Test/ (or: make -j2 = make hw_bundles, all of them)
 #   sudo ../hw/script/run_all.sh Conv3Test
 cmake_minimum_required(VERSION 3.10)
 # default to clang-8 (this board's c++ is g++ 7.3; the flags below are clang-specific); -D overrides
@@ -96,7 +96,10 @@ set(BUNDLE_EXE_SUFFIX "" CACHE STRING "suffix appended to every bundle executabl
 # use with its own build dir and -DBUNDLE_EXE_SUFFIX=_timed. Mains are compiled unchanged.
 option(BUNDLE_TIMED "time every statement of the generated bundle functions" OFF)
 find_package(PythonInterp 3 REQUIRED)
-add_custom_target(hw_bundles)
+#### JO changed (2026-11-04): hw_bundles in ALL, so a plain `make` builds every bundle of the set (the executables stay
+#### EXCLUDE_FROM_ALL themselves; `make <target>` still builds one); before, `make` built nothing
+#add_custom_target(hw_bundles)
+add_custom_target(hw_bundles ALL)
 function(add_bundle dir target)
   set(srcs)
   #### JO added (2026-10-26): several timed .cpp in one executable (multi-EVTA copies, VTA partitions) write
