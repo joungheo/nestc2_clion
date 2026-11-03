@@ -34,7 +34,9 @@ static int LOOKAHEAD = 32;               // uop FIFO between HLS and the array
 static int HANDSHAKE = 4;                // done -> next GEMM instruction (HLS)
 static bool DRAIN = true;                // wait for done after each GEMM instruction
 
-struct Item { int dst, src, wgt; bool reset; int insn; };
+//### JO changed (2026-11-04, bias reset): bias = a reset uop of a bias_reset GEMM: acc[dst] = acc[src] (sa_rmw.v)
+//struct Item { int dst, src, wgt; bool reset; int insn; };
+struct Item { int dst, src, wgt; bool reset; int insn; bool bias = false; };
 struct Insn { std::vector<Item> items; };
 
 struct Mem {
@@ -51,8 +53,10 @@ static void reference(const std::vector<Insn> &insns, Mem &m, std::vector<int> &
       for (int oc = 0; oc < N; oc++) {
         int32_t tmp = 0;
         for (int ic = 0; ic < N; ic++) tmp += int32_t(m.inp[it.src * N + ic]) * int32_t(m.wgt[(it.wgt * N + oc) * N + ic]);
-        int32_t accum = m.acc[it.dst * N + oc] + tmp;
-        m.acc[it.dst * N + oc] = it.reset ? 0 : accum;
+        //### JO changed (2026-11-04): bias reset row: acc[src], nothing added
+        //int32_t accum = m.acc[it.dst * N + oc] + tmp;
+        int32_t accum = it.bias ? m.acc[it.src * N + oc] : m.acc[it.dst * N + oc] + tmp;
+        m.acc[it.dst * N + oc] = it.reset && !it.bias ? 0 : accum;
         m.out[it.dst * N + oc] = int8_t(accum & 0xff);
       }
       last_writer_reset[it.dst] = it.reset;
@@ -61,7 +65,7 @@ static void reference(const std::vector<Insn> &insns, Mem &m, std::vector<int> &
 
 struct Stats { long cycles = 0, items = 0, wstall = 0, fills = 0, forwards = 0, drain = 0; };
 
-struct Tag { bool valid = false; int dst = 0; bool reset = false; };
+struct Tag { bool valid = false; int dst = 0; bool reset = false; bool bias = false; int src = 0; };   //### JO: + bias, src
 
 static Stats simulate(const std::vector<Insn> &insns, Mem &m) {
   Stats st;
@@ -195,7 +199,7 @@ static Stats simulate(const std::vector<Insn> &insns, Mem &m) {
     }
     // tag pipe
     Tag tg = tagq.front(); tagq.pop_front();
-    Tag ti; if (issue >= 0) { ti.valid = true; ti.dst = s[issue].dst; ti.reset = s[issue].reset; }
+    Tag ti; if (issue >= 0) { ti.valid = true; ti.dst = s[issue].dst; ti.reset = s[issue].reset; ti.bias = s[issue].bias; ti.src = s[issue].src; }
     tagq.push_back(ti);
     // RMW: commit due writes, then read (forwarding) for this row
     while (!wq.empty() && wq.front().at <= c) {
@@ -204,13 +208,15 @@ static Stats simulate(const std::vector<Insn> &insns, Mem &m) {
       wq.pop_front(); insn_left_writes--; last_done = c;
     }
     if (tg.valid) {
-      Wr w; w.at = c + RMW_LAT; w.dst = tg.dst; w.reset = tg.reset;
+      //### JO changed (2026-11-04, bias reset): a bias row reads acc[src] (forwarded by the address read) and adds nothing
+      Wr w; w.at = c + RMW_LAT; w.dst = tg.dst; w.reset = tg.reset && !tg.bias;
+      const int ra = tg.bias ? tg.src : tg.dst;
       const Wr *fw = nullptr;
-      for (auto it = wq.rbegin(); it != wq.rend(); ++it) if (it->dst == tg.dst) { fw = &*it; break; }
+      for (auto it = wq.rbegin(); it != wq.rend(); ++it) if (it->dst == ra) { fw = &*it; break; }
       if (fw) st.forwards++;
       for (int j = 0; j < N; j++) {
-        int32_t old = fw ? (fw->reset ? 0 : fw->v[j]) : m.acc[tg.dst * N + j];
-        w.v[j] = old + row[j];
+        int32_t old = fw ? (fw->reset ? 0 : fw->v[j]) : m.acc[ra * N + j];
+        w.v[j] = old + (tg.bias ? 0 : row[j]);
       }
       wq.push_back(w);
     }
@@ -227,10 +233,10 @@ static Stats simulate(const std::vector<Insn> &insns, Mem &m) {
 // ---------------- instruction generators ----------------
 struct Gen {   // VTAUopLoopBegin x2 + uops, as vtalib builds a GEMM instruction
   int eo, do_, so, wo, ei, di, si, wi; std::vector<Item> uops;
-  Insn expand(int insn, bool reset) const {
+  Insn expand(int insn, bool reset, bool bias = false) const {   //### JO: + bias (2026-11-04)
     Insn in;
     for (int a = 0; a < eo; a++) for (int b = 0; b < ei; b++) for (auto u : uops)
-      in.items.push_back({u.dst + a * do_ + b * di, u.src + a * so + b * si, u.wgt + a * wo + b * wi, reset, insn});
+      in.items.push_back({u.dst + a * do_ + b * di, u.src + a * so + b * si, u.wgt + a * wo + b * wi, reset, insn, reset && bias});
     return in;
   }
 };
@@ -260,7 +266,7 @@ static int check(const Mem &a, const Mem &b, const std::vector<int> &lastreset) 
 //### JO added (2026-10-27, Phase D1): test vectors for the RTL testbench (rtl/tb/tb_gemm_sa.v).
 // ./systolic_model dump <dir> <seed> [hazard]   writes, in $readmemh format (one word per line, hex, lane 0 in the low bits):
 //   meta.txt   n_uops n_inp n_wgt n_acc n_last
-//   uops.hex   {g2s, g2l, first, last, reset, wgt[11], src[12], dst[12]} = 40 bits, issue order
+//   uops.hex   {bias, g2s, g2l, first, last, reset, wgt[11], src[12], dst[12]} = 41 bits, issue order
 //   inp.hex    n_inp x 128 bits (x[ic] in bits 8ic+7:8ic)
 //   wgt.hex    n_wgt*16 x 128 bits, line blk*16+j = bank j of block blk = w[j][0..15] (w[j][ic] in bits 8ic+7:8ic)
 //   acc0.hex   n_acc x 512 bits (lane oc in bits 32oc+31:32oc), initial accumulator
@@ -271,7 +277,9 @@ static void hexline(FILE *f, const uint8_t *bytes, int n) {   // little endian b
   for (int k = n - 1; k >= 0; k--) fprintf(f, "%02x", bytes[k]);
   fprintf(f, "\n");
 }
-static int dump_vectors(const char *dir, unsigned seed, bool hazard, bool same, bool conv, bool reload) {
+//### JO changed (2026-11-04): bias: random instructions, a reset instruction is a bias reset half of the time; with
+//### hazard the bias src is often a dst written just before (forwarding by the address read). uops.hex bit 40 = bias.
+static int dump_vectors(const char *dir, unsigned seed, bool hazard, bool same, bool conv, bool reload, bool bias = false) {
   std::mt19937 rng(seed);
   auto rnd = [&](int lo, int hi) { return std::uniform_int_distribution<int>(lo, hi)(rng); };
   DRAIN = false; LOOKAHEAD = 32;   // the RTL does not drain between GEMM instructions
@@ -294,8 +302,11 @@ static int dump_vectors(const char *dir, unsigned seed, bool hazard, bool same, 
     if (hazard || same) { g.do_ = rnd(0, 2); g.di = 0; g.wi = 0; g.wo = rnd(0, 1); }   // same dst back to back with one weight
     int nu = rnd(1, 40);
     for (int u = 0; u < nu; u++) g.uops.push_back({rnd(0, dmax), rnd(0, 150), rnd(0, 40), false, 0});
-    Insn in = g.expand(q, rnd(0, 7) == 0);
+    //Insn in = g.expand(q, rnd(0, 7) == 0);
+    bool rs = bias ? rnd(0, hazard ? 1 : 2) == 0 : rnd(0, 7) == 0;   // biashazard: more reset instructions, most of them bias
+    Insn in = g.expand(q, rs, bias && (hazard ? rnd(0, 3) != 0 : rnd(0, 1)));
     for (auto &it : in.items) { it.dst %= NA; it.src %= NI; it.wgt %= NW; }
+    if (hazard) for (auto &it : in.items) if (it.bias) it.src = rnd(0, dmax);   //### JO: bias src among the dsts in flight
     insns.push_back(in);
   }
   Mem r = m; std::vector<int> lr(r.nacc, 0);
@@ -321,7 +332,8 @@ static int dump_vectors(const char *dir, unsigned seed, bool hazard, bool same, 
       uint64_t w = uint64_t(it.dst) | uint64_t(it.src) << 12 | uint64_t(it.wgt) << 24 | uint64_t(it.reset) << 35 | uint64_t(last) << 36 |
                    uint64_t(k == 0) << 37 |   // first step of the instruction (gemm_sa refills the weight)
                    uint64_t(last && (it.insn % 3 != 1)) << 38 | uint64_t(last && (it.insn % 2 == 0)) << 39;   // g2l, g2s tokens
-      fprintf(f, "%010llx\n", (unsigned long long)w); nu++; nl += last;
+      w |= uint64_t(it.bias) << 40;   //### JO added (2026-11-04)
+      fprintf(f, "%011llx\n", (unsigned long long)w); nu++; nl += last;
     }
   fclose(f);
   f = open("inp.hex"); for (int i = 0; i < NI; i++) hexline(f, (const uint8_t *)&m.inp[i * N], N); fclose(f);
@@ -342,7 +354,12 @@ static int dump_vectors(const char *dir, unsigned seed, bool hazard, bool same, 
 }
 
 int main(int argc, char **argv) {
-  if (argc > 1 && !strcmp(argv[1], "dump")) return dump_vectors(argv[2], argc > 3 ? atoi(argv[3]) : 1, argc > 4 && !strcmp(argv[4], "hazard"), argc > 4 && !strcmp(argv[4], "same"), argc > 4 && !strcmp(argv[4], "conv"), argc > 4 && !strcmp(argv[4], "reload"));
+  //### JO changed (2026-11-04): modes bias, biashazard
+  if (argc > 1 && !strcmp(argv[1], "dump")) {
+    const char *md = argc > 4 ? argv[4] : "";
+    return dump_vectors(argv[2], argc > 3 ? atoi(argv[3]) : 1, !strcmp(md, "hazard") || !strcmp(md, "biashazard"), !strcmp(md, "same"),
+                        !strcmp(md, "conv"), !strcmp(md, "reload"), !strcmp(md, "bias") || !strcmp(md, "biashazard"));
+  }
   int ntests = argc > 1 ? atoi(argv[1]) : 300;
   unsigned seed = argc > 2 ? atoi(argv[2]) : 1;
   std::mt19937 rng(seed);
@@ -361,7 +378,9 @@ int main(int argc, char **argv) {
       Gen g{rnd(1, 3), rnd(0, 9), rnd(0, 9), rnd(0, 3), rnd(1, 3), rnd(0, 9), rnd(0, 9), rnd(0, 3), {}};
       int nu = rnd(1, 20);
       for (int u = 0; u < nu; u++) g.uops.push_back({rnd(0, 150), rnd(0, 150), rnd(0, 40), false, 0});
-      insns.push_back(g.expand(q, rnd(0, 7) == 0));
+      //### JO changed (2026-11-04): bias resets too
+      //insns.push_back(g.expand(q, rnd(0, 7) == 0));
+      insns.push_back(g.expand(q, rnd(0, 7) == 0, rnd(0, 1)));
     }
     Mem r = m; std::vector<int> lr(r.nacc, 0);
     reference(insns, r, lr);

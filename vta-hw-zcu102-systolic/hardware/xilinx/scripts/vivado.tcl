@@ -248,8 +248,11 @@ if {$systolic} {
   set sa_sw [expr {int(round(log($inp_mem_depth) / log(2)))}]
   set sa_ww [expr {int(round(log($wgt_mem_depth) / log(2)))}]
   set gemm_sa_0 [ create_bd_cell -type module -reference gemm_sa_bd gemm_sa_0 ]
+  #### JO changed (2026-11-04, bias reset): uop + 1 bit (bias), was
+  #set_property -dict [ list CONFIG.DW $sa_dw CONFIG.SW $sa_sw CONFIG.WW $sa_ww \
+  #  CONFIG.UB [expr {(($sa_dw + $sa_sw + $sa_ww + 5 + 7) / 8) * 8}] ] $gemm_sa_0
   set_property -dict [ list CONFIG.DW $sa_dw CONFIG.SW $sa_sw CONFIG.WW $sa_ww \
-    CONFIG.UB [expr {(($sa_dw + $sa_sw + $sa_ww + 5 + 7) / 8) * 8}] ] $gemm_sa_0
+    CONFIG.UB [expr {(($sa_dw + $sa_sw + $sa_ww + 6 + 7) / 8) * 8}] ] $gemm_sa_0
   set acc_mem [ create_bd_cell -type ip -vlnv xilinx.com:ip:blk_mem_gen:8.4 acc_mem ]
   [ init_bram_property $acc_mem 512 $out_mem_depth true ]
   set_property CONFIG.Register_PortA_Output_of_Memory_Primitives {true} $acc_mem

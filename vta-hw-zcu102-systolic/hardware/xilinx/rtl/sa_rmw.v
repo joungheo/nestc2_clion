@@ -4,6 +4,10 @@
 // S3: acc[dst] <= reset ? 0 : sum, out[dst] <= low 8 bits of each lane of sum (as vta.cc gemm(), also on reset).
 // The acc BRAM must read the old value when a read and a write hit the same address in one cycle (READ_FIRST); a write
 // is visible to reads presented two cycles later, which is why three in-flight writes are compared.
+// #### JO changed (2026-11-04, bias reset): a row with tag_bias (a reset uop of a GEMM instruction with bias_reset) reads
+// acc[tag_src] instead of acc[dst] and writes that value to acc[dst] (the row from the array is not added): the conv bias,
+// LOADed into acc before the reset GEMM, becomes the start of the accumulation and the ALU ADD of the bias goes away.
+// The forwarding compares are against the address read (src for a bias row), so a bias entry still in flight is forwarded.
 `timescale 1ns / 1ps
 module sa_rmw #(
   parameter N = 16,
@@ -16,6 +20,8 @@ module sa_rmw #(
   input  wire              tag_valid,
   input  wire [DW-1:0]     tag_dst,
   input  wire              tag_reset,
+  input  wire              tag_bias,     // #### JO added (2026-11-04): reset row that takes acc[tag_src] (with tag_reset)
+  input  wire [DW-1:0]     tag_src,
   input  wire              tag_last,
   input  wire [1:0]        tag_tok,
   // acc_mem: read port (address cycle -> data two cycles later) and write port
@@ -34,7 +40,10 @@ module sa_rmw #(
   output wire              busy
 );
   assign acc_rd_en   = tag_valid;
-  assign acc_rd_addr = tag_dst;
+  //#### JO changed (2026-11-04, bias reset): read address = src for a bias row
+  //assign acc_rd_addr = tag_dst;
+  wire [DW-1:0] ra = tag_bias ? tag_src : tag_dst;
+  assign acc_rd_addr = ra;
 
   reg [PW*N-1:0] r1, r2;
   reg            v1, v2, v3, vw1, vw2;
@@ -42,6 +51,7 @@ module sa_rmw #(
   reg            z1, z2, z3, zw1, zw2;       // reset
   reg            l1, l2, l3;
   reg [1:0]      k1, k2, k3;               // tokens
+  reg [DW-1:0]   a1;                       // #### JO added (2026-11-04): address read (dst, or src for a bias row)
   reg [32*N-1:0] s3, sw1, sw2;               // sums
 
   //#### JO changed (2026-10-27, Phase D4): the dst compares are done one stage early (S1, against the rows that will be in
@@ -67,10 +77,17 @@ module sa_rmw #(
   always @(posedge clk) begin
     // compare in S1: when this row (d1) is in S2, S3 holds the row now in S2 (d2), written-1 the row now in S3 (d3),
     // written-2 the row written last cycle (dw1)
-    f3 <= v2 && d2 == d1;   f3z <= z2;
-    f4 <= v3 && d3 == d1;   f4z <= z3;
-    f5 <= vw1 && dw1 == d1; f5z <= zw1;
-    r1 <= row; d1 <= tag_dst; z1 <= tag_reset; l1 <= tag_last; k1 <= tag_tok;
+    //#### JO changed (2026-11-04, bias reset): compared with the address read (a1), a bias row adds nothing (r2 = 0) and
+    //#### is not a zero write (z = reset && !bias)
+    //f3 <= v2 && d2 == d1;   f3z <= z2;
+    //f4 <= v3 && d3 == d1;   f4z <= z3;
+    //f5 <= vw1 && dw1 == d1; f5z <= zw1;
+    //r1 <= row; d1 <= tag_dst; z1 <= tag_reset; l1 <= tag_last; k1 <= tag_tok;
+    //r2 <= r1;  d2 <= d1;      z2 <= z1;        l2 <= l1;       k2 <= k1;
+    f3 <= v2 && d2 == a1;   f3z <= z2;
+    f4 <= v3 && d3 == a1;   f4z <= z3;
+    f5 <= vw1 && dw1 == a1; f5z <= zw1;
+    r1 <= tag_bias ? {PW*N{1'b0}} : row; d1 <= tag_dst; a1 <= ra; z1 <= tag_reset && !tag_bias; l1 <= tag_last; k1 <= tag_tok;
     r2 <= r1;  d2 <= d1;      z2 <= z1;        l2 <= l1;       k2 <= k1;
     s3 <= sum; d3 <= d2;      z3 <= z2;        l3 <= l2;       k3 <= k2;
     sw1 <= s3; dw1 <= d3;     zw1 <= z3;

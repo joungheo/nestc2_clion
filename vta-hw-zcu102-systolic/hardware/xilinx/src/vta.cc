@@ -398,6 +398,7 @@ bool gemm_sa_issue(
         u[VTA_SA_UOP_B + 2] = first;
         u[VTA_SA_UOP_B + 3] = last && ginsn.push_prev_dep;   // g2l token, pushed by gemm_sa
         u[VTA_SA_UOP_B + 4] = last && ginsn.push_next_dep;   // g2s token
+        u[VTA_SA_UOP_B + 5] = insn.reset_reg && insn.bias_reset;   //#### JO added (2026-11-04): bias reset step
         gemm_uop.write(u);
       }
       dst_offset_in += insn.dst_factor_in;
@@ -428,12 +429,15 @@ void gemm_sa_csim(
     inp_idx_T src_idx = u.range(VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH - 1, VTA_LOG_ACC_BUFF_DEPTH);
     wgt_idx_T wgt_idx = u.range(VTA_SA_UOP_B - 1, VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH);
     bool reset = u[VTA_SA_UOP_B];
+    bool bias = u[VTA_SA_UOP_B + 5];   //#### JO added (2026-11-04): acc[dst] = acc[src], as sa_rmw.v
     wgt_T w_tensor[VTA_BLOCK_OUT][VTA_BLOCK_IN];
     read_tensor<bus_T, wgt_T, wgt_idx_T, VTA_BUS_WIDTH, VTA_WGT_WIDTH, VTA_BLOCK_OUT, VTA_BLOCK_IN>(wgt_idx, wgt_mem, w_tensor);
     inp_T i_tensor[VTA_BATCH][VTA_BLOCK_IN];
     read_tensor<bus_T, inp_T, inp_idx_T, VTA_BUS_WIDTH, VTA_INP_WIDTH, VTA_BATCH, VTA_BLOCK_IN>(src_idx, inp_mem, i_tensor);
     acc_T a_tensor[VTA_BATCH][VTA_BLOCK_OUT];
-    read_tensor<bus_T, acc_T, acc_idx_T, VTA_BUS_WIDTH, VTA_ACC_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, acc_mem, a_tensor);
+    //read_tensor<bus_T, acc_T, acc_idx_T, VTA_BUS_WIDTH, VTA_ACC_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, acc_mem, a_tensor);
+    read_tensor<bus_T, acc_T, acc_idx_T, VTA_BUS_WIDTH, VTA_ACC_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(bias ? (acc_idx_T) src_idx : dst_idx,
+                                                                                                acc_mem, a_tensor);
     out_T o_tensor[VTA_BATCH][VTA_BLOCK_OUT];
     for (int b = 0; b < VTA_BATCH; b++) {
       for (int oc = 0; oc < VTA_BLOCK_OUT; oc++) {
@@ -443,8 +447,10 @@ void gemm_sa_csim(
           mul_T prod_dsp = i_tensor[b][ic] * w_tensor[oc][ic];
           tmp += (sum_T) prod_dsp;
         }
-        accum += (acc_T) tmp;
-        a_tensor[b][oc] = reset ? (acc_T) 0 : accum;
+        //accum += (acc_T) tmp;
+        //a_tensor[b][oc] = reset ? (acc_T) 0 : accum;
+        if (!bias) accum += (acc_T) tmp;
+        a_tensor[b][oc] = reset && !bias ? (acc_T) 0 : accum;
         o_tensor[b][oc] = (out_T) accum.range(VTA_OUT_WIDTH - 1, 0);
       }
     }

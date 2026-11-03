@@ -9,7 +9,7 @@ module tb_gemm_sa;
   reg clk = 0, rstn = 0;
   always #1.25 clk = ~clk;
 
-  reg  [DW+SW+WW+4:0] uop_d;
+  reg  [DW+SW+WW+5:0] uop_d;   // #### JO changed (2026-11-04): + bias
   wire                g2l_v, g2s_v;
   integer             ng2l, ng2s, eg2l, eg2s;
   reg                 uop_v;
@@ -34,7 +34,7 @@ module tb_gemm_sa;
   reg [127:0] out_mem [0:NA-1];
   reg [511:0] acc_exp [0:NA-1];
   reg [127:0] out_exp [0:NA-1];
-  reg [39:0]  uops [0:65535];
+  reg [40:0]  uops [0:65535];   // #### JO changed (2026-11-04): bit 40 = bias
 
   reg [127:0]  inp_p [0:L_RD-1];
   reg [127:0]  wgt_p [0:N-1][0:L_RD-1];

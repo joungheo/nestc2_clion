@@ -591,7 +591,8 @@ class CommandQueue {
                 (unsigned)m->y_pad_1, (unsigned)m->x_pad_0, (unsigned)m->x_pad_1);
       } else if (p->opcode == VTA_OPCODE_GEMM) {
         VTAGemInsn *x = reinterpret_cast<VTAGemInsn *>(p);
-        fprintf(fp, " reset %d uop %u %u iter %u %u dst %u %u src %u %u wgt %u %u", (int)x->reset_reg, (unsigned)x->uop_bgn,
+        //#### JO changed (2026-11-04): reset 2 = bias reset
+        fprintf(fp, " reset %d uop %u %u iter %u %u dst %u %u src %u %u wgt %u %u", (int)x->reset_reg + (int)x->bias_reset, (unsigned)x->uop_bgn,
                 (unsigned)x->uop_end, (unsigned)x->iter_out, (unsigned)x->iter_in, (unsigned)x->dst_factor_out,
                 (unsigned)x->dst_factor_in, (unsigned)x->src_factor_out, (unsigned)x->src_factor_in,
                 (unsigned)x->wgt_factor_out, (unsigned)x->wgt_factor_in);
@@ -780,7 +781,11 @@ class CommandQueue {
     }
     VTAGemInsn* insn = insn_queue_.CreateGemInsn();
     insn->opcode = VTA_OPCODE_GEMM;
-    insn->reset_reg = kernel->reset_out_;
+    //#### JO changed (2026-11-04, bias reset): VTAUopPush reset_out 2 = reset to acc[src] (bias_reset, bitstreams with
+    //#### "bias" in the name; VTABiasReset() in pynq_driver.cc)
+    //insn->reset_reg = kernel->reset_out_;
+    insn->reset_reg = kernel->reset_out_ == 2 ? 1 : kernel->reset_out_;
+    insn->bias_reset = kernel->reset_out_ == 2;
     insn->uop_bgn = kernel->sram_begin_;
     insn->uop_end = kernel->sram_end_;
     insn->gemm_from_output = from_outmem;

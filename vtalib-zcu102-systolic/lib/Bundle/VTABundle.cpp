@@ -569,6 +569,58 @@ static void pushResGemm(VTACommandHandle &cmdh, uint32_t idEVTA, uint32_t acc, u
   VTAPushGEMMOp(cmdh, h, &gemm_res, &ctx, 0);
 }
 
+//#### JO added (2026-11-04, bias reset): the conv bias as the start of the accumulation. The bias entries are LOADed into
+//#### acc (bias + f, f < nF) before the reset GEMM, and the reset writes acc[base + f * T + p] = acc[bias + f] (GEMM
+//#### bias_reset, VTAUopPush reset_out 2) instead of 0, so the ALU ADD of the bias after the GEMMs goes away (same sums,
+//#### integer). Only on a bitstream that has it (gemm_sa sa_rmw.v, 2026-11-04): "bias" in the name of the bitstream the
+//#### run scripts loaded (/tmp/evta_bitstream); EVTA_BIAS_RESET=0|1 overrides.
+static bool evtaBiasReset() {
+  static int on = -1;
+  if (on < 0) {
+    const char *e = getenv("EVTA_BIAS_RESET");
+    if (e && *e) on = atoi(e) > 0;
+    else {
+      char name[256] = {0};
+      FILE *f = fopen("/tmp/evta_bitstream", "r");
+      on = f && fgets(name, sizeof(name), f) && strstr(name, "bias") && strncmp(name, "FAILED", 6);
+      if (f) fclose(f);
+    }
+  }
+  return on;
+}
+struct BiasResetContext {
+  uint32_t base_, bias_, T_, nF_;
+  bool operator==(BiasResetContext &op) { return base_ == op.base_ && bias_ == op.bias_ && T_ == op.T_ && nF_ == op.nF_; }
+};
+int bias_reset_acc(void *param, VTACommandHandle cmdh) {
+  BiasResetContext *p = (BiasResetContext *)(param);
+  VTAUopLoopBegin(cmdh, p->nF_, p->T_, 1, 0);
+  VTAUopLoopBegin(cmdh, p->T_, 1, 0, 0);
+  VTAUopPush(cmdh, 0, 2, p->base_, p->bias_, 0, 0, 0, 0);
+  VTAUopLoopEnd(cmdh);
+  VTAUopLoopEnd(cmdh);
+  return 0;
+}
+struct BiasResetUopHandle {
+  BiasResetContext ctx;
+  void *uopHandle[2];
+  BiasResetUopHandle() { uopHandle[0] = nullptr; }
+};
+std::vector<BiasResetUopHandle *> vBiasResetUopHandle[4];
+static void pushBiasReset(VTACommandHandle &cmdh, uint32_t idEVTA, uint32_t base, uint32_t bias, uint32_t T, uint32_t nF) {
+  BiasResetContext ctx = {base, bias, T, nF};
+  void **h = nullptr;
+  for (auto u : vBiasResetUopHandle[idEVTA])
+    if (u->ctx == ctx) { h = u->uopHandle; break; }
+  if (!h) {
+    auto u = new BiasResetUopHandle();
+    u->ctx = ctx;
+    h = u->uopHandle;
+    vBiasResetUopHandle[idEVTA].push_back(u);
+  }
+  VTAPushGEMMOp(cmdh, h, &bias_reset_acc, &ctx, 0);
+}
+
 void conv_kernel(uint32_t sizeOutTileH,
                  uint32_t sizeOutTileW,
                  uint32_t pad_size,
@@ -654,10 +706,22 @@ void conv_kernel(uint32_t sizeOutTileH,
       f14 = resizedInTileH;
     }
 #endif
+    //#### JO added (2026-11-04): bias reset (evtaBiasReset): the bias LOAD of the bias / shift / relu part below comes here
+    const bool biasReset = bias && evtaBiasReset();
     // Push operations for resetting Acc memory
     for (uint32_t threadIdx = 0; threadIdx < nVirtualThread; threadIdx++) {
       // acc buffer reset
       uint32_t outputSramBaseAddr = threadIdx * ACC_MEM_ENTRY / nVirtualThread;
+      if (biasReset) {
+        uint32_t T = resizedOutTileH * resizedOutTileW;
+        uint32_t sram_offset = outputSramBaseAddr + T * nFilterinLoop;
+        VTALoadBuffer2D(vtaCmdH, (int32_t *)vta_bias_buf,
+                        filterIdx * nVirtualThread * nFilterinLoop + threadIdx * nFilterinLoop,
+                        nFilterinLoop, 1, 16 * nFilterinLoop, 0, 0, 0, 0, sram_offset, 3);
+        pushBiasReset(vtaCmdH, idEVTA, outputSramBaseAddr, sram_offset, T, nFilterinLoop);
+        VTADepPush(vtaCmdH, 2, 1);
+        continue;
+      }
       ResetAcc reset;
       reset.base_ = outputSramBaseAddr;
       reset.size_ = resizedOutTileH * resizedOutTileW * nFilterinLoop;
@@ -828,7 +892,9 @@ void conv_kernel(uint32_t sizeOutTileH,
       uint32_t inputSramBaseAddr = threadIdx * (INP_MEM_ENTRY / nVirtualThread);
       uint32_t weightSramBaseAddr =
           threadIdx * (WGT_MEM_ENTRY / nVirtualThread);
-      if(bias) {
+      //#### JO changed (2026-11-04): not with the bias reset (the bias is already in acc)
+      //if(bias) {
+      if(bias && !biasReset) {
         uint32_t sram_offset = outputSramBaseAddr + resizedOutTileH *
                                                     resizedOutTileW *
                                                     nFilterinLoop;
@@ -2617,6 +2683,7 @@ int convolution(int8_t* input, int8_t *kernel, int8_t *output, int N, int H, int
   vMaxUopHandle[idEVTA].clear();
   vMinUopHandle[idEVTA].clear();
   vShiftUopHandle[idEVTA].clear();
+  vBiasResetUopHandle[idEVTA].clear();   //#### JO added (2026-11-04)
   return 0;
 }
 

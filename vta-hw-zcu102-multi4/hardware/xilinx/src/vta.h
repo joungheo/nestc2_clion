@@ -49,9 +49,11 @@ typedef ap_uint<VTA_BUS_WIDTH> bus_T;
 //#### g2l, g2s (Phase D, speed): the GEMM instruction's dependence pushes, on its last step; gemm_sa pushes the tokens itself
 //#### when that step is written, so a load waiting for its buffer does not wait for compute to see the done.
 //#### Layout: {g2s, g2l, first, last, reset, wgt, src, dst}, bit VTA_SA_UOP_B = reset.
+//#### bias (2026-11-04, bias reset): bit VTA_SA_UOP_B + 5, a reset step that writes acc[src] to acc[dst] (insn.bias_reset).
 //#define VTA_SA_UOP_WIDTH (VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH + VTA_LOG_WGT_BUFF_DEPTH + 2)
 #define VTA_SA_UOP_B (VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH + VTA_LOG_WGT_BUFF_DEPTH)
-#define VTA_SA_UOP_WIDTH (VTA_SA_UOP_B + 5)
+//#define VTA_SA_UOP_WIDTH (VTA_SA_UOP_B + 5)
+#define VTA_SA_UOP_WIDTH (VTA_SA_UOP_B + 6)
 typedef ap_uint<VTA_SA_UOP_WIDTH> sa_uop_T;
 #endif
 

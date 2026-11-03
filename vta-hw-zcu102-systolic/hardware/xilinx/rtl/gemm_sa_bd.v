@@ -242,7 +242,7 @@ module gemm_sa_bd #(
 
   gemm_sa #(.N(N), .DW(DW), .SW(SW), .WW(WW), .L_RD(L_RD)) sa (
     .clk(clk), .rstn(rstn),
-    .s_uop_tdata(s_uop_tdata[DW+SW+WW+4:0]), .s_uop_tvalid(s_uop_tvalid), .s_uop_tready(s_uop_tready),
+    .s_uop_tdata(s_uop_tdata[DW+SW+WW+5:0]), .s_uop_tvalid(s_uop_tvalid), .s_uop_tready(s_uop_tready),
     .m_done_tdata(m_done_tdata), .m_done_tvalid(m_done_tvalid), .m_done_tready(m_done_tready),
     .m_g2l_tvalid(sa_g2l_v), .m_g2l_tready(sa_g2l_r), .m_g2s_tvalid(sa_g2s_v), .m_g2s_tready(sa_g2s_r),
     .inp_en(inp_en), .inp_addr(inp_addr), .inp_data(mem_inp_dout),

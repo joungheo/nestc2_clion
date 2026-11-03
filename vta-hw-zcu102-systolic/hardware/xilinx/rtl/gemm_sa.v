@@ -12,7 +12,7 @@ module gemm_sa #(
 ) (
   input  wire                 clk,
   input  wire                 rstn,
-  input  wire [DW+SW+WW+4:0]  s_uop_tdata,   // {g2s, g2l, first, last, reset, wgt, src, dst}
+  input  wire [DW+SW+WW+5:0]  s_uop_tdata,   // {bias, g2s, g2l, first, last, reset, wgt, src, dst} (#### JO 2026-11-04: + bias)
   input  wire                 s_uop_tvalid,
   output wire                 s_uop_tready,
   output wire [7:0]           m_done_tdata,
@@ -44,6 +44,8 @@ module gemm_sa #(
   always @(posedge clk) rst <= !rstn;
 
   wire flag, go, tv, tz, tl, idle, done, rbusy;
+  wire tb;              // #### JO added (2026-11-04): bias reset row, with its src
+  wire [SW-1:0] ts;
   wire [1:0] tk, dtok;
   wire [DW-1:0] td;
   wire [PW*N-1:0] row;
@@ -53,13 +55,13 @@ module gemm_sa #(
     .s_uop_tdata(s_uop_tdata), .s_uop_tvalid(s_uop_tvalid), .s_uop_tready(s_uop_tready),
     .inp_en(inp_en), .inp_addr(inp_addr), .wgt_en(wgt_en), .wgt_addr(wgt_addr),
     .arr_flag(flag), .arr_go(go),
-    .tag_valid(tv), .tag_dst(td), .tag_reset(tz), .tag_last(tl), .tag_tok(tk), .idle(idle));
+    .tag_valid(tv), .tag_dst(td), .tag_reset(tz), .tag_bias(tb), .tag_src(ts), .tag_last(tl), .tag_tok(tk), .idle(idle));
 
   sa_array #(.N(N), .PW(PW)) array (
     .clk(clk), .rst(rst), .x_in(inp_data), .f_in(flag), .go(go), .wd(wgt_data), .row_out(row));
 
   sa_rmw #(.N(N), .PW(PW), .DW(DW)) rmw (
-    .clk(clk), .rst(rst), .row(row), .tag_valid(tv), .tag_dst(td), .tag_reset(tz), .tag_last(tl), .tag_tok(tk),
+    .clk(clk), .rst(rst), .row(row), .tag_valid(tv), .tag_dst(td), .tag_reset(tz), .tag_bias(tb), .tag_src(ts[DW-1:0]), .tag_last(tl), .tag_tok(tk),
     .acc_rd_en(acc_rd_en), .acc_rd_addr(acc_rd_addr), .acc_rd_data(acc_rd_data),
     .acc_wr_en(acc_wr_en), .acc_wr_addr(acc_wr_addr), .acc_wr_data(acc_wr_data),
     .out_wr_en(out_wr_en), .out_wr_addr(out_wr_addr), .out_wr_data(out_wr_data),

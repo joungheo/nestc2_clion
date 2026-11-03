@@ -344,7 +344,11 @@ typedef struct {
   /*! \brief Inner loop weight memory index factor */
   uint64_t wgt_factor_in  : VTA_LOG_WGT_BUFF_DEPTH;
   uint64_t gemm_from_output : 1;
-  uint64_t pad_0          : 32;
+  //#### JO changed (2026-11-04, bias reset): with reset_reg, acc[dst] = acc[src] instead of 0 (the src operand addresses
+  //#### acc, where the bias was LOADed); systolic bitstreams with "bias" in the name (gemm_sa sa_rmw.v)
+  //uint64_t pad_0          : 32;
+  uint64_t bias_reset     : 1;
+  uint64_t pad_0          : 31;
   uint64_t pad_1          : 64;
 } VTAGemInsn;
 
