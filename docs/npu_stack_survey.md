@@ -22,7 +22,7 @@
 | 컴파일러 | Glow 위 NEST-C VTA backend. 합치기와 layout은 bundle 생성 단계(`VTASave.cpp`)에서 IR 패턴으로 정한다 | 가속기마다 다른 부분은 backend와 **opaque executable**(명령 blob)에 가두고, 앞 단계는 공통으로 | 비교만 함 (§2) |
 | runtime | vtalib. conv마다 CPU가 명령을 만들고(JIT) 폴링으로 기다린다. record/replay로 두 번째부터 복사만 한다 | AOT executable, 여러 연산을 한 번에 제출, interrupt와 fence | 0단계(record/replay) 구현 (§3) |
 | driver | 사용자 공간 `/dev/mem` + libcma, sudo 필요 | 커널 driver(UIO 또는 XRT zocl → Linux DRM accel). 장치를 열거하고 장치마다 queue를 둔다 | 미착수 (§3) |
-| 공통 API | 없음 (Glow Backend/DeviceManager만) | IREE HAL이나 PJRT 모양의 C API: buffer, executable, dispatch, fence, reset, perf | 미착수 (§3.3) |
+| 공통 API | 없음 (Glow Backend/DeviceManager만) | IREE HAL이나 PJRT 모양의 C API: buffer, executable, dispatch, fence, reset, perf. AMD/Intel NPU는 MLIR 컴파일러 → UMD → DRM accel 구성 | 원문 개요 확인, 초안 미착수 (§2.3, §3.3) |
 | 하드웨어 | VTA DAE 4모듈, systolic 16×16, 400 MHz, ALU MIN/MAX/ADD/SHR | 후처리 경로, 하드웨어 루프, 2배 클럭 어레이, 공통 제어 규약(링 버퍼 + doorbell + IRQ) | ALU II=1 완료, 나머지 후보 (§5) |
 | 싼 FPGA | ZCU102 (ZU9EG) | Kria K24(ZU3급)가 가장 가깝다. Spartan US+는 CPU가 없어 runtime이 새로 필요 | 문서 조사만 (§4) |
 
@@ -48,7 +48,7 @@ Hardware 공통 제어 규약: AXI-Lite start/done/irq, DRAM 명령 링 버퍼 +
 
 - **공통 API의 핵심:** 가속기마다 다른 것을 opaque executable과 그것을 만드는 backend에 몰아넣는다.
   - 그러면 다음은 하드웨어와 무관해진다: buffer 할당·import·sync, executable 적재, dispatch(executable, bindings), 제출, fence 대기, reset, perf counter 읽기.
-  - IREE HAL과 PJRT가 이 방식이라, 새로 만들기보다 둘 중 하나의 모양을 따르는 것이 좋다. `[일반 지식]`
+  - IREE HAL과 PJRT가 이 방식이라, 새로 만들기보다 둘 중 하나의 모양을 따르는 것이 좋다. `[원문]` 개요 수준 (§3.3)
 - **하드웨어 규약:** 가속기들이 같은 제어 규약을 따르면 driver는 하나로 된다.
   - VTA의 fetch 모듈은 이미 DRAM의 명령 스트림을 읽는다. 그래서 EVTA는 interrupt와 링 버퍼만 더하면 이 규약에 가깝다.
 - **단계 (제안 당시 순서):**
@@ -83,9 +83,60 @@ Hardware 공통 제어 규약: AXI-Lite start/done/irq, DRAM 명령 링 버퍼 +
 - **블록 16이 backend 코드에 고정돼 있다**(`VTA.cpp:509`, `VTASave.cpp:805` 등). 작은 FPGA용으로 블록을 줄이거나 32×32로 키우려면 backend를 고쳐야 한다.
 - **명령은 아직 실행 중에 만든다.** record/replay로 두 번째 실행부터는 복사만 하지만, 진짜 AOT(컴파일러가 명령 blob을 내는 것)는 아니다.
 
-### 2.3 아직 조사하지 않은 것
+### 2.3 MLIR 계열: 컴파일러 아래에 runtime과 driver가 어떻게 붙는가 (2026-11-03)
 
-- MLIR 기반 흐름: IREE의 컴파일러 쪽, torch-mlir, MLIR로 만든 가속기 컴파일러(예: Allo, Buddy-MLIR).
+**MLIR과 LLVM은 컴파일러를 만드는 틀이다. runtime과 driver는 정해 주지 않는다.** MLIR로 만든 프로젝트마다 runtime과 driver를 따로 둔다.
+
+```
+PyTorch / ONNX / TF
+   │  front end (torch-mlir, StableHLO, TOSA)
+MLIR 상위 dialect → linalg / tensor / memref (장치 무관 최적화: fusion, tiling, layout)
+   │  장치별 dialect로 (IREE HAL dialect, AIE dialect, Intel VPU dialect)
+   ├─(a) 프로그래머블 코어 코드 → LLVM IR → ELF        (CPU, GPU, NPU 안 VLIW/RISC-V 코어)
+   └─(b) 고정 기능 명령, 제어 코드 → 전용 serializer → 명령 binary
+   │
+module 하나 (IREE .vmfb, AMD xclbin + 명령 스트림, Intel blob)
+   │
+runtime (user space): module 적재, buffer, command buffer, 제출, fence
+UMD: Vulkan ICD, CUDA driver, XRT, Level Zero
+KMD: DRM accel (/dev/accel), GEM buffer, 제출 ioctl, 완료 IRQ, firmware
+HW : 명령 FIFO / 링 버퍼 + doorbell + IRQ
+```
+
+- **LLVM은 (a)에만 쓰인다.** EVTA처럼 명령 형식이 고정된 NPU의 명령은 LLVM을 거치지 않는다. MLIR dialect에서 바로 serializer로 간다.
+  EVTA에서 LLVM 몫은 CPU host 코드, 그리고 나중에 제어용 RISC-V 코어를 넣으면 그 펌웨어뿐이다.
+
+| 프로젝트 | 컴파일러 | 출력 | runtime | driver | 확인 |
+|---|---|---|---|---|---|
+| **IREE** | 입력 dialect → Flow(스케줄·실행 영역 분할, dispatch) → Stream → **HAL dialect**("거의 1:1로 compute 전용 Vulkan API") → target backend | VM bytecode(스케줄) + 장치별 executable. 정적 링크용으로 VM을 LLVM IR로 내릴 수도 있다 | IREE VM + HAL C API | HAL driver(local-task, vulkan, cuda, hip, metal). 외부 HAL driver를 plugin으로 붙인다 | `[원문]` iree.dev design roadmap, HAL dialect 문서. vmfb 형식은 `[일반 지식]` |
+| **iree-amd-aie** | IREE 컴파일러 plugin(`compiler/plugins`). AIE 코어 코드는 Peano(LLVM-AIE) | — | IREE runtime + 외부 HAL driver `amdxdna`(`runtime/src`) | `xdna-driver` 커널 모듈, XRT submodule | `[원문]` README. HAL driver가 XRT를 거치는지는 미확인 |
+| **MLIR-AIE / IRON** (AMD Ryzen AI) | MLIR 기반 AIE toolchain, Python IRON. 코어 코드는 Peano(LLVM에 AIE target 추가) | **xclbin + 명령 스트림**(배열 설정 overlay와 제어 코드) | XRT | **amdxdna** (DRM accel) | `[원문]` mlir-aie README, kernel amdxdna 문서 |
+| **Intel NPU** | OpenVINO IR → MLIR 기반 NPU 컴파일러(compiler-in-driver, `libnpu_driver_compiler.so`) → blob | blob | OpenVINO NPU plugin → **Level Zero** UMD(`libze_intel_npu.so`, Graph extension) | **ivpu** (`drivers/accel/ivpu`) + firmware | 구조는 `[원문]`(linux-npu-driver 저장소), 라이브러리 이름은 패키징 페이지(제3자) |
+| **OpenXLA** | StableHLO → 장치별 컴파일러 | 장치별 | **PJRT C API**: 장치 vendor가 plugin으로 구현, framework에는 opaque | 장치별 | `[원문]` openxla.org/xla/pjrt. plugin이 구현하는 함수 목록은 `pjrt_c_api.h`(아직 안 읽음) |
+| Triton | Triton → TritonGPU dialect → LLVM → PTX/AMDGCN | cubin/hsaco | 얇은 launcher | CUDA/ROCm driver | `[일반 지식]` |
+| torch-mlir | front end만 | MLIR | 없음 (IREE 등에 넘김) | — | `[일반 지식]` |
+
+**정리**
+- 새 장치를 IREE에 붙이는 단위는 **컴파일러 target plugin + 외부 HAL driver 한 쌍**이다(iree-amd-aie가 실례).
+- AMD와 Intel NPU는 둘 다 "MLIR 컴파일러 → 전용 UMD(XRT / Level Zero) → DRM accel KMD + firmware" 구성이다. 우리 목표 구조(§1)와 가장 가깝다.
+- AMD는 계산 코어 코드(LLVM)와 **제어 코드(명령 스트림)**를 따로 낸다. 제어 코드는 NPU 안의 microcontroller firmware가 실행한다(§3.3). EVTA로 치면 GEMM/ALU 명령 스트림을 fetch 모듈이 읽는 것과 같은 자리다.
+
+**EVTA에 대응시키면**
+
+| 층 | 지금 | MLIR식으로 바꾸면 |
+|---|---|---|
+| front end | Glow importer, NEST-C 그래프 최적화 | torch-mlir / ONNX → linalg (공통) |
+| backend | `VTASave.cpp`가 vtalib 호출 C++를 생성 | **EVTA dialect**에서 tiling, fusion. serializer가 256-bit 명령과 uop를 컴파일 때 생성 |
+| 출력 | bundle 실행 파일 (명령은 실행 중에 생성) | 명령과 uop가 들어 있는 module. 지금 record/replay가 실행 중에 하는 일을 컴파일 때로 옮긴 것 |
+| runtime | vtalib (`cmd_queue`, replay) | HAL 구현 하나 (IREE 외부 HAL driver "evta" 또는 같은 모양의 자체 API) |
+| UMD / KMD | `pynq_driver.cc` + `/dev/mem` + polling | UIO → DRM accel. CMA buffer는 GEM, 완료는 IRQ + fence |
+
+- 판단: 여러 하드웨어를 잇는 데는 MLIR로 갈아타는 것보다 **runtime/HAL 경계를 먼저 정하는 것**이 중요하다. 컴파일러는 Glow든 MLIR이든 그 경계에 맞는 executable만 내면 된다.
+  순서 제안: (1) HAL 초안(IREE HAL 모양) 뒤로 vtalib 옮기기, (2) UIO + IRQ, (3) EVTA dialect 시제품(MLIR-AIE 구조 참고).
+
+### 2.4 아직 조사하지 않은 것
+
+- MLIR로 만든 가속기 컴파일러(예: Allo, Buddy-MLIR), IREE 컴파일러 plugin API의 실제 모양.
 - FPGA용 데이터플로 컴파일러: FINN(Xilinx, 양자화 데이터플로), hls4ml.
 - TVM의 최신 경로(Relax, UMA)로 VTA 계열을 붙인 사례.
 - ExecuTorch, TFLite delegate, ONNX Runtime EP의 실제 장치 연결 API.
@@ -131,16 +182,19 @@ Hardware 공통 제어 규약: AXI-Lite start/done/irq, DRAM 명령 링 버퍼 +
 - 손해는 "conv 하나 = 함수 하나 = 동기화 한 번 = layout 왕복 한 번"이라는 runtime·backend의 단위에서 났다.
 - 실제로 그 단위를 고쳐 Resnet18 single이 73.6 ms(10-29, OMP 4)에서 27.3 ms(11-03, OMP 1)가 됐다 `[측정]`.
 
-### 3.3 공통 API 후보 (`[일반 지식]`, 원문으로 아직 확인 안 함)
+### 3.3 공통 API 후보 (2026-11-03 원문 일부 확인)
 
-| 후보 | 모양 | 우리에게 |
-|---|---|---|
-| IREE HAL | Vulkan을 본뜸: allocator, buffer, command buffer, executable, queue, semaphore | 1순위 참고. executable이 opaque라 EVTA 명령 blob을 그대로 담을 수 있다 |
-| OpenXLA PJRT | plugin마다 compile과 execute | 컴파일러까지 묶인 단위라 무겁다 |
-| TVM UMA | TVM에 가속기를 붙이는 공식 경로 | 컴파일러 쪽 연결 |
-| Linux DRM accel | `/dev/accel/*`, 2023년 커널. Intel VPU, AMD XDNA, Qualcomm AI100이 씀 | driver 최종 목표 |
-| Xilinx XRT / zocl | buffer object, run start/wait, interrupt | 지금 보드(ZynqMP)에 바로 맞는 중간 단계 |
-| Glow Backend / DeviceManager | 이미 사용 중 | 컴파일러와 runtime이 한 몸이라 다른 컴파일러와 나누기 어렵다 |
+| 후보 | 모양 | 우리에게 | 확인 |
+|---|---|---|---|
+| IREE HAL | "Vulkan 같은 현대 compute API 위의 저수준 추상화(CPU 포함)". 할 일: 장치 열거와 능력 조회, 장치에서 돌 executable 정의, 메모리 할당과 cache 제어, 지연 제출용 작업 묶음(command buffer), 제출 순서를 위한 명시적 동기화. HAL dialect의 객체: allocator, buffer, buffer_view, command_buffer, device(`queue.execute`), executable, fence, event, channel. 구현 검증용 conformance test(`cts/`)가 있다 | 1순위 참고. executable이 opaque라 EVTA 명령 blob을 그대로 담을 수 있다. CTS로 우리 구현을 검증할 수 있다 | `[원문]` HAL README, HAL dialect 문서. semaphore 모델 세부는 미확인 |
+| OpenXLA PJRT | 장치 vendor가 PJRT C API를 plugin으로 구현하고 framework(TF, JAX)는 그 뒤를 모른다. IREE에도 PJRT plugin이 있다 | 컴파일까지 묶인 단위라 무겁다. IREE를 쓰면 PJRT는 따라온다 | `[원문]` openxla.org. 함수 목록은 미확인 |
+| TVM UMA | TVM에 가속기를 붙이는 공식 경로 | 컴파일러 쪽 연결 | `[일반 지식]` |
+| Linux DRM accel | 장치 `/dev/accel/accel*`(major 261). DRM의 새 장치 종류로 DRM 코드를 재사용하지만, GPU 스택이 가속기를 GPU로 오인하지 않게 노드를 따로 둔다. driver는 `drivers/accel/`에 두고 `DRIVER_COMPUTE_ACCEL` 플래그를 쓴다. 문서는 대상으로 embedded FPGA/ASIC의 edge AI도 든다 | driver 최종 목표 | `[원문]` kernel accel 문서 |
+| ↳ amdxdna (AMD NPU) | microcontroller firmware가 명령 처리. 작업 context마다 mailbox 채널과 64 MB 명령 buffer(사용자 공간에도 매핑). 흐름: context 생성 → 사용자가 제어 코드를 명령 buffer에 복사 → command buffer 제출 → driver가 mailbox로 전달 → firmware가 제어 코드 실행(DMA 구동) → 완료 MSI-X | 우리가 할 "명령 링 + doorbell + IRQ"의 실제 예. firmware 대신 EVTA fetch 모듈이 명령을 읽는다 | `[원문]` kernel amdxdna 문서 |
+| ↳ qaic (Qualcomm AI100) | 작업마다 DBC 채널: host 메모리의 request/response FIFO, tail pointer를 올려 제출, 완료는 response FIFO + MSI. uAPI: `CREATE_BO`(GEM handle), `ATTACH_SLICE_BO`(BO의 어느 부분을 어디로), `EXECUTE_BO`(큐에 넣기만, 비동기), `WAIT_BO`(완료 또는 timeout) | 우리 KMD uAPI 모양의 참고: 할당, 제출, 대기 세 가지면 된다 | `[원문]` kernel qaic 문서 |
+| Xilinx XRT / zocl | buffer object, run start/wait, interrupt. AMD NPU도 XRT를 UMD로 쓴다(xdna-driver의 XRT shim) | 지금 보드(ZynqMP)에 바로 맞는 중간 단계 | zocl은 `[일반 지식]`, NPU shim은 `[원문]` |
+| Intel Level Zero | NPU UMD가 Level Zero API를 구현, ioctl로 ivpu에 제출. 컴파일러는 UMD가 불러 쓴다(compiler-in-driver) | 컴파일러를 UMD에 넣는 방식의 예 | `[원문]` 일부, §2.3 |
+| Glow Backend / DeviceManager | 이미 사용 중 | 컴파일러와 runtime이 한 몸이라 다른 컴파일러와 나누기 어렵다 | `[원문]` 코드 |
 
 ### 3.4 아직 하지 않은 것
 
@@ -221,8 +275,8 @@ EVTA 쪽 수치는 저장소 utilization report에서, 보드 쪽은 공식 페�
 
 ## 6. 다음에 할 조사 (우선순위 순)
 
-1. **공통 API 원문 확인:** IREE HAL, PJRT, Linux DRM accel, XRT의 API를 원문으로 읽고 HAL 초안을 쓴다. (§3.3)
-2. **컴파일러 비교 채우기:** MLIR 계열(IREE 컴파일러, torch-mlir), FINN, hls4ml, TVM UMA/Relax를 §2.1과 같은 기준으로. (§2.3)
+1. **HAL 초안:** 개요 수준 원문 확인은 했다(11-03, §3.3). 남은 것: IREE HAL 헤더(`iree/hal/*.h`)의 semaphore·queue 함수, `pjrt_c_api.h`, amdxdna·qaic uAPI 헤더를 읽고 EVTA용 HAL 초안을 쓴다.
+2. **컴파일러 비교 채우기:** MLIR 계열은 구조만 봤다(§2.3). FINN, hls4ml, TVM UMA/Relax, IREE 컴파일러 plugin API를 §2.1과 같은 기준으로. (§2.4)
 3. **다른 오픈 소스 NPU:** Coral NPU(Google, RISC-V 기반, 2025), OpenTPU, PULP 계열 가속기의 제어 방식과 SW 스택. `[일반 지식]`으로만 알고 있다.
 4. **싼 FPGA 합성:** XCZU3EG part로 EVTA 합성. K24 LPDDR4 용량, speed grade, PYNQ 지원.
 5. **확인 못 한 수치들:** DPU 의존성 처리, Gemmini FPGA 클럭, Tensil·AutoSA 클럭, ZU9EG -2 DSP Fmax(DS925).
@@ -244,7 +298,16 @@ EVTA 쪽 수치는 저장소 utilization report에서, 보드 쪽은 공식 페�
 - `evta_runtime_compare.md` §10: VTA, Gemmini, NVDLA, DPU(PG338, UG1414, UG1354), TVM `graphpack.py`.
 - `evta_systolic.md` §9: Gemmini, UG579, arXiv 2409.03508, 2309.16158, 2510.08137, DPU, WP486, Tensil, AutoSA, gemm_hls.
 - `evta_board_compare.md` §6: AMD SCU35, SCU200, Kria K24, DS891, DS985.
+- §2.3, §3.3 (2026-11-03에 읽음):
+  - IREE: https://iree.dev/ , https://iree.dev/developers/design-docs/design-roadmap/ , https://iree.dev/reference/mlir-dialects/HAL/ ,
+    https://github.com/iree-org/iree/blob/main/runtime/src/iree/hal/README.md
+  - iree-amd-aie: https://github.com/nod-ai/iree-amd-aie ; MLIR-AIE: https://github.com/Xilinx/mlir-aie
+  - PJRT: https://openxla.org/xla/pjrt
+  - Linux accel: https://docs.kernel.org/accel/introduction.html , https://docs.kernel.org/accel/amdxdna/amdnpu.html ,
+    https://docs.kernel.org/accel/qaic/aic100.html , https://docs.kernel.org/accel/qaic/qaic.html
+  - Intel NPU: https://github.com/intel/linux-npu-driver (구성 요소 이름 일부는 Fedora COPR, snapcraft 등 패키징 페이지)
 
 ## 9. 변경 이력
 
 - 2026-11-03: 처음 씀. 10-26 ~ 11-03의 조사(런타임 비교 10-28/29, 다른 NPU 10-28/31, 싼 보드 10-29/30, 하드웨어 조사 10-27)와 11-03까지의 측정을 모았다.
+- 2026-11-03: §2.3 MLIR 계열(IREE, iree-amd-aie, MLIR-AIE, Intel NPU, PJRT)의 컴파일러 → runtime → driver 구성과 EVTA 대응을 추가. §3.3을 원문(IREE HAL, DRM accel, amdxdna, qaic) 확인으로 고침. 옛 §2.3은 §2.4.
