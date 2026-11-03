@@ -146,14 +146,52 @@ def call_args(stmt, name):
     return args
 
 
+#### JO added (2026-11-03): the model's first conv is called on a prepared input: zero-filled to 16 channels or packed
+#### (KH x KW / stride s as ceil(KH/s) x 1 over s*KW*C channels). The call that writes that input names the real shape;
+#### FIRST_CONV maps its output buffer to (C, KH, KW) (KH, KW None: the conv's own), so the conv counts the model's MACs.
+#### Filled by note_first_conv_input (call it on every statement before the conv; call_ops does it for its statement).
+FIRST_CONV = {}
+FIRST_INPUT_CALLS = {  # name: (index of C, of KH, of KW), None = the conv's own kernel
+    'preprocess_conv0pack': (5, 10, 11),
+    'conv0pack_nhwc2vtaio': (5, 6, 7),
+    'preprocess_nhwc2vtaio_zerofill': (5, None, None),
+    'transpose_nhwc2vtaio_zerofill': (5, None, None),
+    'transpose_nhwc2vtaio_pack_zerofill': (5, None, None),
+}
+
+
+def buffer_name(arg):
+    """the buffer of an argument such as (int8_t* )VTABufferGetVirtAddr(x) or x: its last identifier"""
+    ids = re.findall(r'[A-Za-z_]\w*', arg)
+    return ids[-1] if ids else arg
+
+
+def note_first_conv_input(stmt):
+    for name, (ic, ikh, ikw) in FIRST_INPUT_CALLS.items():
+        if re.search(r'\b' + name + r'\(', stmt):
+            try:
+                a = call_args(stmt, name)
+                FIRST_CONV[buffer_name(a[1])] = (int(a[ic]), int(a[ikh]) if ikh is not None else None,
+                                                 int(a[ikw]) if ikw is not None else None)
+            except (ValueError, IndexError):
+                pass
+
+
 def call_ops(stmt, name):
     """Multiply-add ops (2 per MAC) of a conv / fc call, from its literal shape arguments; 0 if unknown."""
+    note_first_conv_input(stmt)
     try:
         a = call_args(stmt, name)
         n = lambda k: int(a[k])
         #### JO changed (2026-10-31): + convolution_wo_tr_res (conv + elementadd + relu; the add is not counted)
-        if name in ('convolution_wo_tr', 'convolution_wo_tr_scale', 'convolution_wo_tr_res'):
+        #### JO changed (2026-11-03): + convolution_wo_tr_pool (conv0 + max pool; the pool is not counted); the first conv
+        #### counts the model's shape (FIRST_CONV), not the zero-filled or packed one it runs
+        if name in ('convolution_wo_tr', 'convolution_wo_tr_scale', 'convolution_wo_tr_res', 'convolution_wo_tr_pool'):
             # (in, ker, bias, out, N, H, W, C, KN, KH, KW, pad, stride, relu, bias, shift, out_h, out_w, ...)
+            first = FIRST_CONV.get(buffer_name(a[0]))
+            if first:
+                c, kh, kw = first
+                return 2 * n(4) * n(16) * n(17) * n(8) * (kh or n(9)) * (kw or n(10)) * c
             return 2 * n(4) * n(16) * n(17) * n(8) * n(9) * n(10) * n(7)
         if name == 'convolutionFloat':
             # (in, ker, bias, out, N, H, W, C, KN, KH, KW, pad, stride, group, dilation, relu, bias, out_h, out_w)
@@ -166,6 +204,9 @@ def call_ops(stmt, name):
         if name in ('fullyconnected', 'fullyconnected_evta'):
             # (in,s,o, ker,s,o, bias,s,o, out,s,o, inDim0, inDim1, kerDim0, kerDim1, ...)
             return 2 * n(12) * n(13) * n(15)
+        #### JO added (2026-11-03): fc on the EVTA with weights packed at compile time (input, wgt, bias, output, IN, OUT, ...)
+        if name == 'fullyconnected_evta_packed':
+            return 2 * n(4) * n(5)
     except (ValueError, IndexError):
         pass
     return 0

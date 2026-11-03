@@ -4,7 +4,7 @@
 The log has one VTA_SYNC line per EVTA run (exe_time in ms; its GOPS column is 0 without a PROFILE=1
 bitstream). Each EVTA call of the bundle .cpp (a statement with vtaCmdH, i.e. convolution_wo_tr) is one
 VTA_SYNC, in order, so events / calls = inference runs; the ops of each call come from its shape
-arguments (timed_bundle.call_ops, 2 per MAC; a zero-filled conv such as conv0 counts the filled channels).
+arguments (timed_bundle.call_ops, 2 per MAC; the first conv counts the model's shape, not its zero-filled or packed input).
 Prints a per-call table (runs 1, 2, 3 and the last side by side) and, last, one summary line (run_prof.sh puts it in the summary).
 
 usage: prof_summary.py <Dir> <log>
@@ -14,7 +14,7 @@ e.g.:  cd hw_multievtax4 && python3 ../prof_summary.py MultiEVTAResnet18Test Mul
 import glob, os, re, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from timed_bundle import RUN, call_args, call_name, call_ops
+from timed_bundle import RUN, call_args, call_name, call_ops, note_first_conv_input
 
 
 def evta_calls(cpp):
@@ -32,11 +32,15 @@ def evta_calls(cpp):
         if m:
             node = m.group(2)
         s = l.strip()
+        if not s.startswith('//'):
+            note_first_conv_input(s)
         if 'vtaCmdH' in s and s.endswith(';') and not s.startswith('//'):
             c = call_name(s)
             #### JO added (2026-10-29): the last argument of convolution_wo_tr is the EVTA index
+            #### JO changed (2026-11-03): convolution_wo_tr_pool has (pool_out, poolK, poolStride, poolPad) after the index
             try:
-                dev = int(call_args(s, c)[-1])
+                a = call_args(s, c)
+                dev = int(a[-5] if c == 'convolution_wo_tr_pool' else a[-1])
             except (ValueError, IndexError):
                 dev = 0
             calls.append((node, c, call_ops(s, c), dev))
