@@ -183,7 +183,7 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
 - Default bitstreams of `vtabundles_xcmpl/hw*/script/run_all.sh` (2026-10-28, `docs/evta_systolic.md` §8 8)): 380 MHz HLS GEMM with the
   HP ports on a separate 333 MHz clock (single `..._16_16_19_18_380mhz`, multi2 `..._2evta_380mhz_hp333`, multi4 `..._4evta_380mhz`);
   `SYS_BIN` = systolic 400 MHz (single, multi4), used by `run_prof.sh -s _sys*` (executables built with `-DVTALIB=<vtalib-zcu102-systolic>`);
-  single `SYS_BIN` is the ALU imm II = 1 build `..._sa_400mhz_alu1_epr.bin` since 2026-11-03 (§7.15).
+  single `SYS_BIN` is the ALU imm II = 1 build `..._sa_400mhz_alu1_epr.bin` since 2026-11-03, multi4 `..._4evta_sa_400mhz_alu1.bin` since 2026-11-04 (§7.15).
   The 333 MHz `vtahw_*_y219.bin` stay usable with `BIN=<file>`.
 - Measuring (2026-10-29, `vtabundles_xcmpl/README.md`): `hw*/script/run_prof.sh -s _prof|_timed|_sysprof|_systimed` (build dirs
   `build[_<set>]<suffix>`), `-n <runs>` (default 25), `-l` lockstep of the multi-EVTA copies, `-r` `chrt -f 10`, `-t <threads>`

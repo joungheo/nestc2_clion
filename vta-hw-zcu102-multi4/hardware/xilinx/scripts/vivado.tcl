@@ -530,8 +530,24 @@ if {[info exists ::env(VTA_IMPL_STRATEGY)] && $::env(VTA_IMPL_STRATEGY) ne ""} {
   set_property strategy $::env(VTA_IMPL_STRATEGY) [get_runs impl_1]
   puts "impl strategy $::env(VTA_IMPL_STRATEGY)"
 }
-launch_runs impl_1 -to_step write_bitstream -jobs $num_threads
+#### JO changed (2026-11-04): Makefile IMPL_TO_STEP (e.g. opt_design for the multi4 Y219 flow, which only reads
+#### vta_wrapper_opt.dcp) stops impl_1 there instead of placing and routing a run that cannot make a bitstream
+#launch_runs impl_1 -to_step write_bitstream -jobs $num_threads
+set impl_to_step write_bitstream
+if {[info exists ::env(VTA_IMPL_TO_STEP)] && $::env(VTA_IMPL_TO_STEP) ne ""} {
+  set impl_to_step $::env(VTA_IMPL_TO_STEP)
+}
+launch_runs impl_1 -to_step $impl_to_step -jobs $num_threads
 wait_on_run impl_1
+if {$impl_to_step ne "write_bitstream"} {
+  set opt_dcp $proj_path/$proj_name.runs/impl_1/${proj_name}_wrapper_opt.dcp
+  if {$impl_to_step eq "opt_design" && ![file exist $opt_dcp]} {
+    puts "ERROR: no $opt_dcp (see $proj_name.runs/impl_1/runme.log)"
+    exit 1
+  }
+  puts "impl_1 stopped after $impl_to_step: [file normalize $proj_path/$proj_name.runs/impl_1]"
+  exit
+}
 
 # Export export/<export name>.bit plus .hwh, .xsa and utilization / timing reports
 # (check WNS >= 0 in <export name>.timing.rpt before using the bitstream)

@@ -752,6 +752,18 @@ bitstream과 byte 단위로 같다.
 
 예상(§7.14의 −1.5 ms)과 같다. 다음은 RMW reset에 bias를 쓰는 것(bias ALU ADD 0.91 ms)이다.
 
+**multi4 (2026-11-04, `..._4evta_sa_400mhz_alu1.bin`, 보드 `bit/evta_multi4_alu1_400MHz_pass_261104/`):**
+- 같은 vta.cc로 첫 빌드는 WNS −0.343 ns였다. 경로는 RESET_MEM 루프 제어 → acc 쓰기 enable(BRAM 58개)과 ALU 결과 → acc 쓰기 데이터.
+  - `reset_mem`을 `alu_reg`로 주소를 레지스터에 담아 II = 1로 파이프라인했다(systolic 사본만, 바깥 `load_pad_2d` y 루프의 PIPELINE은 뺐다).
+  - imm 루프와 II = 2 루프에서 acc / out에 쓰기 전에 `alu_reg`를 하나씩 넣었다. imm 루프 깊이 10, II = 2 루프 11.
+  - single 사본에도 같은 vta.cc가 들어갔다. single bitstream `alu1_epr`은 이 변경 전 것이다.
+- Y219 flow 뒤 WNS +0.001, WHS −0.032(smc_3 FIFO 한 net). `holdnets.tcl`(그 net만 다시 배선)로는 그대로였다.
+  `flow/holdpin.tcl`(그 끝점에 최소 배선 지연 310 ps)로 WHS +0.007, Y219 PIP 0, stuckchk 0 extra.
+- 보드: probes 40/40, golden 3 PASS, Resnet18 4 copy / single 정상, `EVTA_DUMP_CONV` 80개가 이전 multi4 bitstream과 같다.
+- Resnet18 EVTA 시간(`_sysprof -n 25 -l -r`): 4 copy 동시 EVTA마다 26.73~26.85 → **25.24~25.37 ms**, single copy 26.49 → **24.97 ms**.
+  `hw_multievtax4/script/run_all.sh`의 `SYS_BIN`을 이것으로 바꿨다.
+- multi4 `_sysprof` 실행 파일이 11-01 것이라 지금 bundle과 맞지 않아 죽었다(두 bitstream 모두 exit 139). `build_multievtax4_sysprof`에서 `make -j2 hw_bundles`로 다시 빌드했다.
+
 ## 8. 하드웨어도 같이 비교해야 하나
 
 해야 한다. 다만 §7의 ①~④를 가르는 것은 어레이가 아니라 다음 네 가지다.

@@ -28,6 +28,36 @@
 
 #include "vta.h"
 
+//#### JO added (2026-11-03): a register on a value (the pattern of hls::reg in utils/x_hls_utils.h, there in an internal
+//#### namespace): a function that is not inlined and registers its return
+template <class T>
+T alu_reg(T in) {
+#pragma HLS INLINE off
+#pragma HLS INTERFACE ap_none port=return register
+  return in;
+}
+
+#ifdef VTA_SYSTOLIC
+//#### JO (2026-11-03): pipelined with the address in a register: the loop of the original (sram_idx ++ in the body, not
+//#### pipelined) drove the write enables of the 58 acc_mem BRAMs from its exit compare (multi4 400 MHz WNS -0.181 ns)
+template <typename DATA_T, int MAT_AXI_RATIO>
+void reset_mem(
+  memop_sram_T &sram_idx,
+  memop_sram_T range,
+  DATA_T mem[][MAT_AXI_RATIO]) {
+
+  memop_sram_T base = sram_idx;
+  RESET_MEM: for (int i = 0; i < range; i ++) {
+#pragma HLS PIPELINE II = 1
+    memop_sram_T a = alu_reg((memop_sram_T) (base + i));
+    for (int j = 0; j < MAT_AXI_RATIO; j ++) {
+#pragma HLS UNROLL
+      mem[a][j] = 0;
+    }
+  }
+  sram_idx = base + range;
+}
+#else
 template <typename DATA_T, int MAT_AXI_RATIO>
 void reset_mem(
   memop_sram_T &sram_idx,
@@ -42,6 +72,7 @@ void reset_mem(
     sram_idx ++;
   }
 }
+#endif
 
 template <typename DATA_T, int MAT_AXI_RATIO, int ELEM_BYTES>
 void load_pad_2d(
@@ -60,7 +91,11 @@ void load_pad_2d(
 
   reset_mem<DATA_T, MAT_AXI_RATIO>(sram_idx, y_offset_0, dst);
   for (int y = 0; y < y_size; y++) {
+#ifndef VTA_SYSTOLIC
 #pragma HLS PIPELINE
+#endif
+    //#### JO (2026-11-03): no PIPELINE on y in the systolic copy: HLS could not apply it (subloops with variable bounds) and it
+    //#### kept the RESET_MEM loop of reset_mem from being pipelined
     reset_mem<DATA_T, MAT_AXI_RATIO>(sram_idx, x_pad_0, dst);
     memcpy(&dst[sram_idx][0],
            (const DATA_T*) &src[dram_idx * MAT_AXI_RATIO],
@@ -423,15 +458,6 @@ void gemm_sa_csim(
 #endif
 #endif
 
-//#### JO added (2026-11-03): a register on a value (the pattern of hls::reg in utils/x_hls_utils.h, there in an internal
-//#### namespace): a function that is not inlined and registers its return
-template <class T>
-T alu_reg(T in) {
-#pragma HLS INLINE off
-#pragma HLS INTERFACE ap_none port=return register
-  return in;
-}
-
 //#### JO added (2026-11-02): one ALU lane, the arithmetic of the loop in alu() below
 inline void alu_lane(uint32_t opcode, acc_T src_0, acc_T src_1, acc_T &d, out_T &o) {
 #pragma HLS INLINE
@@ -486,6 +512,9 @@ void alu(
           for (int i = 0; i < VTA_BATCH; i++) {
             for (int b = 0; b < VTA_BLOCK_OUT; b++) {
               alu_lane(insn.alu_opcode, dst_tensor[i][b], (acc_T) insn.imm, dst_tensor[i][b], o_tensor[i][b]);
+              //#### JO (2026-11-03): registers before the acc / out writes (multi4 400 MHz: acc read -> op -> acc_mem data)
+              dst_tensor[i][b] = alu_reg(dst_tensor[i][b]);
+              o_tensor[i][b] = alu_reg(o_tensor[i][b]);
             }
           }
           write_tensor<bus_T, acc_T, acc_idx_T, VTA_BUS_WIDTH, VTA_ACC_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, dst_tensor, acc_mem);
@@ -558,6 +587,11 @@ void alu(
               dst_tensor[i][b] = shr_val;
               o_tensor[i][b] = (out_T) shr_val.range(VTA_OUT_WIDTH - 1, 0);
             }
+#ifdef VTA_SYSTOLIC
+            //#### JO (2026-11-03): registers before the writes as in the imm loop above (both loops drive acc_mem's data)
+            dst_tensor[i][b] = alu_reg(dst_tensor[i][b]);
+            o_tensor[i][b] = alu_reg(o_tensor[i][b]);
+#endif
           }
         }
 

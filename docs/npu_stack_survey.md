@@ -262,7 +262,7 @@ EVTA 쪽 수치는 저장소 utilization report에서, 보드 쪽은 공식 페�
 
 | 후보 | 내용 | 예상 효과 | 비용 | 상태 |
 |---|---|---|---|---|
-| ALU imm II=1 | imm 연산은 acc 읽기·쓰기 한 번씩 | ALU 4.63 → 약 3.1 ms | 작음 | **완료** (single 보드 통과, multi4 timing 재빌드 중) |
+| ALU imm II=1 | imm 연산은 acc 읽기·쓰기 한 번씩 | ALU 4.63 → 약 3.1 ms | 작음 | **완료** (single 11-03, multi4 11-04 보드 통과) |
 | RMW reset에 bias | GEMM 첫 누산을 0 대신 bias로 | bias ADD 0.91 ms 제거 | 약 2일 (RTL tag, ISA pad bit, vtalib) | 다음 |
 | 후처리를 출력 경로로 | Gemmini/NVDLA처럼 SHR, clip, relu를 STORE 경로에 | ALU 시간 대부분 | 중간~큼, ISA | 검토 |
 | ALU opcode 폭 | 지금 2비트라 MUL(4), MOVE(5)를 못 씀 | avgpool, 곱 scale, BNN | ISA, 컴파일러 | 검토 |
@@ -311,3 +311,4 @@ EVTA 쪽 수치는 저장소 utilization report에서, 보드 쪽은 공식 페�
 
 - 2026-11-03: 처음 씀. 10-26 ~ 11-03의 조사(런타임 비교 10-28/29, 다른 NPU 10-28/31, 싼 보드 10-29/30, 하드웨어 조사 10-27)와 11-03까지의 측정을 모았다.
 - 2026-11-03: §2.3 MLIR 계열(IREE, iree-amd-aie, MLIR-AIE, Intel NPU, PJRT)의 컴파일러 → runtime → driver 구성과 EVTA 대응을 추가. §3.3을 원문(IREE HAL, DRM accel, amdxdna, qaic) 확인으로 고침. 옛 §2.3은 §2.4.
+- 2026-11-04: §5.3 ALU imm II=1이 multi4에서도 보드 통과(Resnet18 copy당 EVTA 26.8 → 25.3 ms).

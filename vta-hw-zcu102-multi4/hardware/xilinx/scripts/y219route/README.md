@@ -29,6 +29,14 @@ With one `proc_sys_reset_<i>` per EVTA inside its pblock (2026-10-26), `run_flow
 MMCM change: rs_rst, WNS +0.008, WHS +0.010, stuckchk 0 extra, all board tests pass
 (`bit/evta_multi4_y219_333MHz_pass_261026/vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta.bin` = `/lib/firmware/vtahw_multi4_y219.bin`).
 
+Since 2026-11-04 `flow/m4_build.sh <tag> [make vars]` (on the host) does the whole thing: `make bin IMPL_TO_STEP=opt_design`
+(run_flow.sh only reads `impl_1/vta_wrapper_opt.dcp`; impl_1 also stopped if it reaches place_design), then `run_flow.sh m<tag>`
+in `build/y219`. Logs `build/m4_<tag>.log`, `build/m4_<tag>_flow.log`; ALL_DONE at the end. The full impl_1 place and route
+cost hours for nothing (alu1r 2026-11-03: route still not done after 4 h).
+If hold still fails after `route_s.tcl` and `holdnets.tcl` does not move it (the reroute takes the same wires), `flow/holdpin.tcl
+-tclargs <in.dcp> <out> <min delay ps> ...` reroutes each failing endpoint with a minimum route delay, the first delay that meets hold
+with no PIP in row Y219 wins (alu1r 2026-11-04: WHS -0.032 -> +0.007 at 310 ps; 400 ps took a detour through the row).
+
 ## Tools
 - `Y219RWRoute.java` reroute the nets with a PIP in the row (`-Dpips=stuck_int_pips.txt`: only stuck-cell PIPs,
   not enough on this board); `stuckpips.py` makes that list from Project U-Ray `segbits_int.db`.
