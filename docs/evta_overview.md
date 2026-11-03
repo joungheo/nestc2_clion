@@ -201,5 +201,6 @@ NEST-C의 EVTA(VTA 계열 NPU)를 ZCU102 보드에서 돌리고 빠르게 만든
 | [vta_synth_notes.md](vta_synth_notes.md) | 합성 환경, 보드 결함(Y219), 버그와 함정, ISA·버퍼 지도 |
 | [evta_multi4_609gops_report.md](evta_multi4_609gops_report.md) | multi4 609.7 GOPS 보고서 |
 | [evta_board_compare.md](evta_board_compare.md) | 다른 보드(Kria, Spartan)에 들어가는지 |
+| [npu_stack_survey.md](npu_stack_survey.md) | 다른 컴파일러·runtime·NPU·싼 FPGA 조사와 방향 (계속 고쳐 씀) |
 | [../vtabundles_xcmpl/README.md](../vtabundles_xcmpl/README.md) | 보드 bundle 빌드·실행 흐름의 상세 |
 | [dailyreport/](dailyreport/) | 날짜별 일지 (결정의 이유, 중간에 틀렸던 것) |

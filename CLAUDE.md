@@ -124,6 +124,8 @@ from CLion over remote.
 
 Overview of all EVTA work in date order with pointers to the detailed docs: [docs/evta_overview.md](docs/evta_overview.md);
 commands, options and where to run them: [docs/evta_user_manual.md](docs/evta_user_manual.md).
+Survey of other compilers, runtimes / drivers, NPUs and cheaper FPGAs, and the direction (a stack for several accelerators; kept up to date):
+[docs/npu_stack_survey.md](docs/npu_stack_survey.md).
 
 - **ISA of the bitstream:** 256-bit instructions, but `memory_type` and `alu_opcode` are **2 bits**. Both
   `vta/vtalib/include/zcu102/vta/hw_spec.h` and `.../simulator/hw_spec.h` are set to that (`//#### JO`
