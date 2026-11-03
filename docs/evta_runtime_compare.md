@@ -9,6 +9,38 @@
 
 ## 1. 요약
 
+### 1.1 지금 상태 (2026-11-03)
+
+10-29의 분석(§1.2)과 계획(§7)대로 CPU 일을 거의 다 없앴다. **Resnet18 single 추론이 73.6 ms(OMP 4)에서 27.71 ms(OMP 4),
+OMP 1로는 91.1 ms에서 28.83 ms가 됐다.** multi4 100회(4 copy 동시)는 3.9 s에서 0.820 s다. 모든 단계는 EVTA 출력이 이전과 byte 단위로 같거나 CPU
+경로와 실행 중 비교해 같고, golden(single 30, multi2 3, multi4 3)을 통과했다. 전체 경과는 [evta_overview.md](evta_overview.md),
+명령과 옵션은 [evta_user_manual.md](evta_user_manual.md)에 있다.
+
+| 단계 | 절 | Resnet18 single, OMP 1 (systolic 400 MHz) | 끄는 방법 |
+|---|---|---|---|
+| 시작 (10-31 아침, keep-layout 직후) | §7.1 | 91.1 ms (OMP 4: 73.6 → 56.4) | `-vta-keep-layout=false` |
+| conv + elemadd + relu 합치기 | §7.2 | 90.9 → 67.1 ms | `-vta-fuse-residual=false` |
+| maxpool EVTA | §7.3 | 67.1 → 52.5 ms | `-vta-evta-maxpool=false` |
+| transpose 16바이트 복사 | §7.4 | 52.5 → 46.9 ms | — |
+| buffer pool | §7.5 | 46.9 → 44.3 ms | `EVTA_BUF_POOL_MB=0` |
+| CPU fc NEON | §7.6 | 44.3 → 40.6 ms | — |
+| multi4 멈춤 수정 (`dsb sy`) | §7.7 | (multi4 copy당 4000회 무멈춤) | `EVTA_NO_DSB=1` |
+| fc EVTA | §7.8 | 40.6 → 39.9 ms | `-vta-evta-fc=false` |
+| 입력 전처리 합치기 | §7.9 | 39.9 → 37.1 ms | `-vta-fuse-preprocess=false` |
+| 명령 record / replay | §7.10 | 37.1 → 34.5 ms | `EVTA_REPLAY=0` |
+| conv0 packed 입력 | §7.12 | 34.5 → 29.2 ms | `-vta-conv0-pack=false` |
+| conv0 + maxpool 합치기 | §7.13 | 29.2 → **28.83 ms** (OMP 4 27.71) | `-vta-fuse-pool=false` |
+
+- **남은 시간(§7.14):** EVTA 26.47 ms = GEMM 18.85(71 %) + ALU 4.63(17.5 %) + 그 밖 2.99. CPU와 호출은 약 2.4 ms다.
+  - ALU가 큰 것은 HLS ALU 루프가 반복마다 acc를 두 번 읽어 II = 2이기 때문이다.
+  - run 하나의 고정 비용은 4.7 µs뿐이다. 층 사이 DRAM 왕복을 모두 없애도 −2.36 ms(§7.11)라 하드웨어 경로는 만들지 않는다.
+- **진행 중:** imm ALU 연산(SHR, clip, relu)을 II = 1 루프로 돌리는 systolic bitstream(예상 EVTA −1.5 ms). 첫 빌드가 400 MHz timing에
+  실패해(WNS −0.819 ns) register를 넣고 다시 빌드하고 있다.
+- **다음:** RMW에서 reset할 때 0 대신 bias를 쓴다(bias ALU ADD 0.91 ms 제거, RTL + HLS + ISA 비트 + vtalib).
+  그 뒤 후보: conv0 tile 키우기, 1×1 downsample conv 합치기, 한 장을 EVTA 4개로, 다른 모델.
+
+### 1.2 10-29 분석 당시의 요약
+
 - **DAE(decoupled access-execute) 구조 자체는 좋은 편이다.** 큰 3×3 conv에서 이론 최대의 93 %(systolic 400, 190 GOPS / 204.8)가 나온다.
   load·store가 GEMM 뒤에 숨는다는 뜻이고, 이 부분은 Gemmini(ROB로 controller 사이 의존 추적)나 TPU v1과 같은 수준이다.
 - **성능을 깎는 것은 DAE가 아니라 그 위의 runtime 사용법이다.** Resnet18 한 번(single, OpenMP 4스레드) 73.6 ms 중

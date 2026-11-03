@@ -122,6 +122,9 @@ from CLion over remote.
 
 ### EVTA on this board (verified 2026-09-29/30)
 
+Overview of all EVTA work in date order with pointers to the detailed docs: [docs/evta_overview.md](docs/evta_overview.md);
+commands, options and where to run them: [docs/evta_user_manual.md](docs/evta_user_manual.md).
+
 - **ISA of the bitstream:** 256-bit instructions, but `memory_type` and `alu_opcode` are **2 bits**. Both
   `vta/vtalib/include/zcu102/vta/hw_spec.h` and `.../simulator/hw_spec.h` are set to that (`//#### JO`
   markers); with 3 bits every LOAD/STORE address is off by one bit (results 0, deadlocks). ALU `MUL` (4) and
