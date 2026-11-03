@@ -54,8 +54,9 @@ SETS = {  # name: (bundle dir under the NEST-C root, hw dir here, bitstream in /
 }
 #### JO added (2026-10-28): systolic GEMM bitstream per set, for the _sys* executables (built with
 #### -DVTALIB=<vtalib-zcu102-systolic>); run_all.sh gets SYS_BIN=, read by run_prof.sh -s _sys*
+#### JO changed (2026-11-03): single -> the ALU imm II = 1 build (docs/evta_runtime_compare.md 7.15); was ..._sa_400mhz.bin
 SYS_BINS = {
-    'single': 'vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_400mhz.bin',
+    'single': 'vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_400mhz_alu1_epr.bin',
     'multievtax4': 'vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz.bin',
 }
 #### JO added: per set, dirs made by a script here: (dir, executable, arguments, golden, generator command)
