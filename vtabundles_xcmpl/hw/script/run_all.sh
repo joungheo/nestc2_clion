@@ -3,7 +3,9 @@
 set -u
 cd "$(dirname "$0")/.."
 BIN=${BIN:-vtahw_zcu102_1x16_i8w8a32_16_16_19_18_380mhz.bin}
-SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_400mhz_alu1_epr.bin}
+#### JO changed (2026-11-04): SYS_BIN = the bias reset systolic bitstream (bit/evta_sys_bias_400MHz_pass_261104)
+#SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_400mhz_alu1_epr.bin}
+SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_400mhz_bias.bin}
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-1}
 [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
 exec 9>/tmp/evta_run.lock; flock -n 9 || { echo "another EVTA run is active (/tmp/evta_run.lock)"; exit 1; }

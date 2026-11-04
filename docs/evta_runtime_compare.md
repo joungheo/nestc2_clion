@@ -31,14 +31,15 @@ OMP 1로는 91.1 ms에서 28.83 ms가 됐다.** multi4 100회(4 copy 동시)는 
 | conv0 packed 입력 | §7.12 | 34.5 → 29.2 ms | `-vta-conv0-pack=false` |
 | conv0 + maxpool 합치기 | §7.13 | 29.2 → **28.83 ms** (OMP 4 27.71) | `-vta-fuse-pool=false` |
 | ALU imm 연산 II = 1 (bitstream) | §7.15 | 28.98 → **27.32 ms** (같은 날 측정) | 이전 bitstream `..._sa_400mhz` |
+| RMW reset에 bias (bitstream) | §7.16 | 27.30 → **26.59 ms** (같은 날 측정) | `EVTA_BIAS_RESET=0` 또는 이전 bitstream |
 
 - **남은 시간(§7.14):** EVTA 26.47 ms = GEMM 18.85(71 %) + ALU 4.63(17.5 %) + 그 밖 2.99. CPU와 호출은 약 2.4 ms다.
   - ALU가 큰 것은 HLS ALU 루프가 반복마다 acc를 두 번 읽어 II = 2이기 때문이다.
   - run 하나의 고정 비용은 4.7 µs뿐이다. 층 사이 DRAM 왕복을 모두 없애도 −2.36 ms(§7.11)라 하드웨어 경로는 만들지 않는다.
 - **ALU imm 연산 II = 1 (§7.15, 11-03):** 새 systolic bitstream `..._sa_400mhz_alu1_epr`로 EVTA 26.42 → 24.89 ms, Resnet18 single OMP 1
   28.98 → 27.32 ms(같은 날 측정). bundle과 vtalib은 그대로다.
-- **다음:** RMW에서 reset할 때 0 대신 bias를 쓴다(bias ALU ADD 0.91 ms 제거, RTL + HLS + ISA 비트 + vtalib).
-  그 뒤 후보: conv0 tile 키우기, 1×1 downsample conv 합치기, 한 장을 EVTA 4개로, 다른 모델.
+- **RMW reset에 bias (§7.16, 11-04):** bitstream `..._sa_400mhz_bias`로 EVTA 24.89 → 24.15 ms, Resnet18 single OMP 1 27.30 → 26.59 ms.
+- **다음** 후보: conv0 tile 키우기, 1×1 downsample conv 합치기, 한 장을 EVTA 4개로, 다른 모델.
 
 ### 1.2 10-29 분석 당시의 요약
 
@@ -763,6 +764,34 @@ bitstream과 byte 단위로 같다.
 - Resnet18 EVTA 시간(`_sysprof -n 25 -l -r`): 4 copy 동시 EVTA마다 26.73~26.85 → **25.24~25.37 ms**, single copy 26.49 → **24.97 ms**.
   `hw_multievtax4/script/run_all.sh`의 `SYS_BIN`을 이것으로 바꿨다.
 - multi4 `_sysprof` 실행 파일이 11-01 것이라 지금 bundle과 맞지 않아 죽었다(두 bitstream 모두 exit 139). `build_multievtax4_sysprof`에서 `make -j2 hw_bundles`로 다시 빌드했다.
+
+### 7.16 RMW reset에 bias (2026-11-04, bitstream `..._sa_400mhz_bias`)
+
+**어떻게:** conv의 bias를 GEMM 누산의 시작값으로 쓴다. 지금까지는 GEMM reset이 acc를 0으로 쓰고, GEMM 뒤에 bias를 acc에 LOAD한 뒤
+ALU ADD로 더했다. 이제는 bias LOAD를 tile 시작으로 옮기고, reset GEMM이 0 대신 acc[bias + f]를 acc[base + f·T + p]에 쓴다. 정수 덧셈이라 결과는 같다.
+- ISA: `VTAGemInsn`의 pad 1비트 `bias_reset`(hw_spec.h 3곳). reset이면서 bias_reset이면 uop의 src가 acc 주소다.
+- HLS(`vta.cc`, systolic과 multi4 사본 같음): GEMM uop stream의 비트 `VTA_SA_UOP_B + 5`. stream은 1비트 넓어진다(single 48비트).
+- RTL: `sa_ctrl`가 tag에 bias와 src를 싣고, `sa_rmw`는 bias 행이면 acc[src]를 읽어 행을 더하지 않고 dst에 쓴다.
+  forwarding은 읽는 주소로 비교한다.
+- vtalib(`vtalib-zcu102-systolic` `conv_kernel`): `VTAUopPush` reset_out 2 = bias reset. 이름에 `bias`가 있는 bitstream에서만 켠다
+  (`/tmp/evta_bitstream`, `EVTA_BIAS_RESET=0|1`로 강제). 다른 bitstream에서는 전과 같다(golden 30 PASS, `alu1_epr`).
+- 검증 순서: C 모델(`sim/systolic_model.cc`, 모드 `bias`, `biashazard`) → RTL testbench 48 vector × (그대로, GAP·BP 30 %) 96/96 PASS
+  → HLS CSim 0 errors → 보드.
+  - `build/rtl_sim`의 오래된 `xsim.dir`이 있으면 `xvlog`가 CPU 100 %로 멈췄다(`xsim.dir.old_261104`로 치움).
+- timing(400 MHz, `Performance_ExplorePostRoutePhysOpt`): WNS +0.000 ns, WHS +0.010, WPWS +0.001. LUT 34.3K, BRAM 258, DSP 273. stuckchk 0 extra.
+  - 이 빌드부터 single에도 acc / out 쓰기 앞 register와 RESET_MEM 파이프라인(§7.15 multi4)이 들어 있다.
+- 보드 bit dir: `/home/xilinx/JO/npuprg/bit/evta_sys_bias_400MHz_pass_261104/` (README 있음).
+
+**검증:** probes 10/10, golden 30 PASS(`run_prof.sh -s _systimed -n 2 all`). Resnet18 281 / 0.655530, Partition 281, Resnet50 281 / 0.581379,
+VGG16 0 / 0.453709로 전과 같다. `EVTA_DUMP_CONV`로 Resnet18 40개, Resnet50 106개 파일이 `alu1_epr`과 byte 단위로 같다.
+
+| 측정 (같은 실행 파일, 같은 날) | `..._sa_400mhz_alu1_epr` | `..._sa_400mhz_bias` |
+|---|---|---|
+| Resnet18 EVTA 시간 (`_sysprof -n 25 -r`, runs 2-25 중앙값) | 24.889 ms | **24.154 ms** (−0.735 ms) |
+| Resnet18 single OMP 1 (`_systimed -n 25 -r`, runs 2-25 중앙값) | 27.303 ms | **26.592 ms** |
+
+예상(bias ADD 0.91 ms)보다 0.18 ms 적게 줄었다. bias LOAD는 그대로 남고, reset GEMM이 bias를 읽어도 시간은 같기 때문이다.
+`hw/script/run_all.sh`의 `SYS_BIN`을 이것으로 바꿨다. multi4는 같은 소스로 `m4_build.sh bias`를 빌드 중이다.
 
 ## 8. 하드웨어도 같이 비교해야 하나
 

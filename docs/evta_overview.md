@@ -19,7 +19,7 @@ NEST-C의 EVTA(VTA 계열 NPU)를 ZCU102 보드에서 돌리고 빠르게 만든
 | 11-01 | 52.5 → 40.6 ms | 1.47 → 약 1.1 s | transpose 16 B 복사, buffer pool, NEON fc |
 | 11-02 | 40.6 → **28.83 ms** (OMP 4 27.71) | **0.820 s** | fc EVTA, 전처리 합치기, replay, conv0 pack, conv0+pool |
 | 11-03 | **27.32 ms** (같은 날 이전 bitstream 28.98) | | ALU imm II = 1 bitstream |
-| 다음 | 약 26.4 ms (예상) | | RMW reset에 bias |
+| 11-04 | **26.59 ms** (같은 날 이전 bitstream 27.30) | | RMW reset에 bias (bitstream) |
 
 현재 Resnet18 single OMP 1 28.83 ms의 구성(11-02, `evta_runtime_compare.md` §7.14): EVTA 26.47 ms
 (GEMM 18.85 + ALU 4.63 + 그 밖 2.99), CPU와 호출 약 2.4 ms.
@@ -92,8 +92,9 @@ NEST-C의 EVTA(VTA 계열 NPU)를 ZCU102 보드에서 돌리고 빠르게 만든
   400 MHz timing은 register 2개와 `Performance_ExplorePostRoutePhysOpt` 전략으로 WNS +0.001 ns에 맞췄다.
   golden 30 PASS, 층 출력 byte 동일, Resnet18 EVTA 26.42 → 24.89 ms, 추론 28.98 → 27.32 ms (11-03).
   → [evta_runtime_compare.md](evta_runtime_compare.md) §7.15
-- **다음: bias reset.** GEMM reset 단계에서 acc에 0 대신 bias를 쓴다(RTL `sa_rmw.v`, HLS uop 비트, ISA 비트 하나, vtalib).
-  bias ALU ADD 0.91 ms가 없어진다. ALU II = 1이 보드에서 확인된 뒤 한다.
+- **11-04 bias reset:** GEMM reset 단계에서 acc에 0 대신 bias를 쓴다(RTL `sa_rmw.v`, HLS uop 비트, ISA 비트 `bias_reset`, vtalib
+  `conv_kernel`; 이름에 `bias`가 있는 bitstream에서만). golden 30 PASS, 층 출력 byte 동일, Resnet18 EVTA 24.89 → 24.15 ms,
+  추론 27.30 → 26.59 ms. → [evta_runtime_compare.md](evta_runtime_compare.md) §7.16
 - 그 뒤 후보: conv0 tile 키우기(single EVTA는 inp buffer 전체), 1×1 downsample conv를 같은 입력의 conv와 합치기, 한 장을
   EVTA 4개로 나눠 latency 줄이기, 다른 모델(Resnet50, VGG, MobileNet)로 넓히기.
 
