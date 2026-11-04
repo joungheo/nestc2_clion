@@ -6,7 +6,7 @@ HLS 모듈은 `vta.cc`(fetch / load / compute / store), 연결은 Vivado block d
 생성: `python3 docs/figs/src/make_evta_hls_figs.py`.
 
 - 1장: 기존 HLS EVTA(single, `vta-hw-zcu102-single`, 16/16/19/18). GEMM이 HLS compute 안에 있는 원래 VTA 구조.
-- 2장(다음): systolic EVTA(`vta-hw-zcu102-systolic`, GEMM이 RTL `gemm_sa`).
+- 2장: systolic EVTA(`vta-hw-zcu102-systolic`, GEMM이 RTL `gemm_sa`).
 - 바꾼 것마다 이전 / 이후는 [evta_overview.md](evta_overview.md)의 "구조 그림"(st01~st17), 명령 비트는 [evta_isa_ext.md](evta_isa_ext.md).
 
 ## 1. 기존 HLS EVTA
@@ -46,4 +46,54 @@ HLS 모듈은 `vta.cc`(fetch / load / compute / store), 연결은 Vivado block d
 
 ## 2. systolic EVTA
 
-(다음에 같은 순서로 그린다.)
+`vta-hw-zcu102-systolic`(SYSTOLIC=1, FREQ=400; multi4는 같은 RTL을 EVTA마다 하나씩). 소스: `vta.cc`의 `VTA_SYSTOLIC` 부분,
+`rtl/gemm_sa_bd.v`, `gemm_sa.v`, `sa_ctrl.v`, `sa_array.v`, `sa_pe.v`, `sa_rmw.v`, `scripts/vivado.tcl`. 생성: `python3 docs/figs/src/make_evta_sa_figs.py`.
+초록이 HLS EVTA에서 바뀌거나 새로 생긴 것이다. 설계 근거와 측정은 [evta_systolic_design.md](evta_systolic_design.md), [evta_systolic.md](evta_systolic.md).
+
+### 2.1 전체
+
+![SA 1](figs/evta_sa_01_overall.svg)
+
+- GEMM 계산이 HLS compute에서 RTL `gemm_sa`로 나갔다. compute는 GEMM 단계마다 uop 하나(65비트)를 AXI-Stream으로 보내고 done을 센다.
+- acc_mem이 compute 안 배열에서 block design BRAM이 되어, compute(ALU, acc LOAD)와 gemm_sa가 port mux로 나눠 쓴다.
+- HP 쪽은 333 MHz(`hp_pll`), 나머지는 400 MHz. 레지스터 쪽에 `reg_dwc`(128 → 32비트).
+
+### 2.2 fetch (같음)
+
+![SA 2](figs/evta_sa_02_fetch.svg)
+
+### 2.3 load (reset_mem pipeline)
+
+![SA 3](figs/evta_sa_03_load.svg)
+
+### 2.4 compute (HLS 쪽)
+
+![SA 4](figs/evta_sa_04_compute.svg)
+
+### 2.5 gemm_sa (RTL)
+
+![SA 5](figs/evta_sa_05_gemm_sa.svg)
+
+### 2.6 sa_array와 PE (DSP48E2)
+
+![SA 6](figs/evta_sa_06_array_pe.svg)
+
+### 2.7 sa_ctrl (uop FIFO, run, weight fill, issue)
+
+![SA 7](figs/evta_sa_07_sa_ctrl.svg)
+
+### 2.8 sa_rmw (acc read-modify-write, out 쓰기)
+
+![SA 8](figs/evta_sa_08_sa_rmw.svg)
+
+### 2.9 store (같음)
+
+![SA 9](figs/evta_sa_09_store.svg)
+
+### 2.10 interface와 버퍼 (바뀐 것)
+
+![SA 10](figs/evta_sa_10_interfaces.svg)
+
+### 2.11 dependence (GEMM token은 gemm_sa가)
+
+![SA 11](figs/evta_sa_11_dependence.svg)

@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1460" height="760" viewBox="0 0 1460 760" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif">
+<title>systolic EVTA 11. dependence: 같은 token 규칙, GEMM의 push는 gemm_sa가</title>
+<defs>
+<marker id="ara" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#333333"/></marker>
+<marker id="arb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f5f98"/></marker>
+<marker id="aro" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c06a10"/></marker>
+<marker id="arg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3c8a35"/></marker>
+<marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker>
+<marker id="arp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6d4596"/></marker>
+<marker id="ary" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9a7b00"/></marker>
+<marker id="ark" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#888888"/></marker>
+</defs>
+<rect x="0.0" y="0.0" width="1460.0" height="760.0" rx="0" fill="#ffffff" stroke="none" stroke-width="1.2"/>
+<text x="24.0" y="38.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="22" text-anchor="start" font-weight="bold" fill="#222222" xml:space="preserve">systolic EVTA 11. dependence: 같은 token 규칙, GEMM의 push는 gemm_sa가</text>
+<text x="24.0" y="64.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13.5" text-anchor="start" font-weight="normal" fill="#444444" xml:space="preserve">명령의 비트 4개와 큐 4개는 HLS EVTA와 같다(그림 HLS 7). 다른 점은 GEMM 명령의 push(g2l, g2s)를 언제 누가 넣느냐다.</text>
+<rect x="60.0" y="130.0" width="220.0" height="90.0" rx="5" fill="#ece2f4" stroke="#6d4596" stroke-width="1.4"/>
+<text x="170.0" y="171.1" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">load</text>
+<text x="170.0" y="187.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">inp / wgt 씀</text>
+<rect x="420.0" y="130.0" width="240.0" height="90.0" rx="5" fill="#dcefd6" stroke="#3c8a35" stroke-width="1.4"/>
+<text x="540.0" y="164.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">compute</text>
+<text x="540.0" y="178.8" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">GEMM: uop 보냄</text>
+<text x="540.0" y="193.7" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">push 비트는 last uop에</text>
+<rect x="760.0" y="130.0" width="240.0" height="90.0" rx="5" fill="#dcefd6" stroke="#3c8a35" stroke-width="1.4"/>
+<text x="880.0" y="164.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">gemm_sa</text>
+<text x="880.0" y="178.8" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">last 단계를 acc / out에</text>
+<text x="880.0" y="193.7" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">쓴 clk에 token</text>
+<rect x="1120.0" y="130.0" width="220.0" height="90.0" rx="5" fill="#ece2f4" stroke="#6d4596" stroke-width="1.4"/>
+<text x="1230.0" y="171.1" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">store</text>
+<text x="1230.0" y="187.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">out 읽음</text>
+<line x1="662.0" y1="160.0" x2="758.0" y2="160.0" stroke="#3c8a35" stroke-width="1.8" marker-end="url(#arg)"/>
+<text x="710.0" y="154.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10" text-anchor="middle" font-weight="normal" fill="#3c8a35" xml:space="preserve">uop (g2l, g2s 비트)</text>
+<path d="M820,222 L820,280 L300,280 L300,200 L282,200" fill="none" stroke="#c0392b" stroke-width="1.8" marker-end="url(#arr)"/>
+<text x="500.0" y="275.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10.5" text-anchor="start" font-weight="normal" fill="#b03a2e" xml:space="preserve">g2l token (load가 inp / wgt를 덮어써도 됨)</text>
+<line x1="1002.0" y1="190.0" x2="1118.0" y2="190.0" stroke="#c0392b" stroke-width="1.8" marker-end="url(#arr)"/>
+<text x="1060.0" y="184.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10" text-anchor="middle" font-weight="normal" fill="#b03a2e" xml:space="preserve">g2s token</text>
+<rect x="24.0" y="300.0" width="1412.0" height="30.0" rx="4" fill="#f3f6fa" stroke="#c8d3e0" stroke-width="1"/>
+<text x="36.0" y="321.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="15.5" text-anchor="start" font-weight="bold" fill="#2f5f98" xml:space="preserve">HLS EVTA와 비교: GEMM 명령 X 뒤의 load / store가 시작하는 때</text>
+<text x="60.0" y="350.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="start" font-weight="normal" fill="#222222" xml:space="preserve">HLS EVTA: compute가 GEMM X의 모든 단계를 끝내고(II = 1, 같은 IP 안) push → load / store 시작.</text>
+<text x="60.0" y="366.2" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="start" font-weight="normal" fill="#222222" xml:space="preserve">systolic, 처음 생각: compute가 uop을 다 보낸 뒤 done을 기다렸다 push → 다음 GEMM의 II = 1 루프 안에 있는 compute가 done을 늦게 읽어</text>
+<text x="60.0" y="382.4" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="start" font-weight="normal" fill="#222222" xml:space="preserve">    load가 입력 블록마다 GEMM 명령 하나만큼 더 기다렸다(Phase D 측정).</text>
+<text x="60.0" y="398.6" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="start" font-weight="normal" fill="#222222" xml:space="preserve">systolic, 지금: push 비트를 X의 last uop에 실어 보내고, gemm_sa가 그 단계를 acc / out에 쓴 clk에 바로 token. compute는 done을 세기만 한다.</text>
+<text x="60.0" y="414.8" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="start" font-weight="normal" fill="#222222" xml:space="preserve">    gemm_sa_bd가 gemm_sa의 token과 compute의 token(ALU 등)을 같은 큐에 합친다(동시에 오면 gemm_sa 먼저, 한 번에 하나).</text>
+<rect x="24.0" y="500.0" width="1412.0" height="30.0" rx="4" fill="#f3f6fa" stroke="#c8d3e0" stroke-width="1"/>
+<text x="36.0" y="521.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="15.5" text-anchor="start" font-weight="bold" fill="#2f5f98" xml:space="preserve">규칙 (vta.cc compute, VTA_SYSTOLIC)</text>
+<text x="60.0" y="550.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="start" font-weight="normal" fill="#222222" xml:space="preserve">• GEMM이 아닌 명령(ALU, acc LOAD, token이 있는 uop LOAD, FINISH)은 시작 전에 sa_out(보낸 GEMM 수)이 0이 될 때까지 done을 읽는다:</text>
+<text x="60.0" y="566.2" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="start" font-weight="normal" fill="#222222" xml:space="preserve">  acc / out 포트를 gemm_sa에게서 넘겨받고, token 순서(GEMM의 push가 뒤 명령의 push보다 먼저)를 지키기 위해.</text>
+<text x="60.0" y="582.4" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="start" font-weight="normal" fill="#222222" xml:space="preserve">• token이 없는 uop LOAD는 기다리지 않는다(uop_mem은 compute만 쓰고, gemm_sa는 uop을 이미 stream으로 받았다).</text>
+<text x="60.0" y="598.6" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="start" font-weight="normal" fill="#222222" xml:space="preserve">• 단계가 0개인 GEMM은 gemm_sa로 가지 않아 compute가 직접 push한다. vtalib의 no-op(DepPush가 만드는 빈 명령)은 token이 있는 uop LOAD라 기다린다.</text>
+</svg>

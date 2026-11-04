@@ -294,7 +294,7 @@ NEST-C의 EVTA(VTA 계열 NPU)를 ZCU102 보드에서 돌리고 빠르게 만든
 | 문서 | 내용 |
 |---|---|
 | [evta_user_manual.md](evta_user_manual.md) | 명령, 옵션, 어느 dir에서 무엇을 실행하는지 |
-| [evta_hw_structure.md](evta_hw_structure.md) | EVTA 하드웨어 구조도: 전체, fetch, load, compute, store, interface와 버퍼, dependence (HLS, 다음은 systolic) |
+| [evta_hw_structure.md](evta_hw_structure.md) | EVTA 하드웨어 구조도: 전체, fetch, load, compute, store, interface와 버퍼, dependence (HLS EVTA와 systolic EVTA; systolic은 gemm_sa, 어레이 / PE, sa_ctrl, sa_rmw도) |
 | [evta_isa_ext.md](evta_isa_ext.md) | ISA 확장 비트(bias_reset, rq_*), bitstream별 기능, 다른 모델 돌리는 법 |
 | [../CLAUDE.md](../CLAUDE.md) | 빌드 환경, 보드 주의 사항, 변경마다 한두 줄 요약 |
 | [evta_runtime_compare.md](evta_runtime_compare.md) | runtime·backend 최적화 본문(§7.1~7.14), 시간 분석, 다른 가속기 비교 |
