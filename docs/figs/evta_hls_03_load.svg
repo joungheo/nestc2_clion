@@ -1,0 +1,143 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1460" height="900" viewBox="0 0 1460 900" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif">
+<title>HLS EVTA 3. load: DRAM의 2D 영역을 inp_mem / wgt_mem으로 (pad는 0으로 채움) (vta.cc load())</title>
+<defs>
+<marker id="ara" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#333333"/></marker>
+<marker id="arb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f5f98"/></marker>
+<marker id="aro" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c06a10"/></marker>
+<marker id="arg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3c8a35"/></marker>
+<marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker>
+<marker id="arp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6d4596"/></marker>
+<marker id="ary" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9a7b00"/></marker>
+<marker id="ark" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#888888"/></marker>
+</defs>
+<rect x="0.0" y="0.0" width="1460.0" height="900.0" rx="0" fill="#ffffff" stroke="none" stroke-width="1.2"/>
+<text x="24.0" y="38.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="22" text-anchor="start" font-weight="bold" fill="#222222" xml:space="preserve">HLS EVTA 3. load: DRAM의 2D 영역을 inp_mem / wgt_mem으로 (pad는 0으로 채움) (vta.cc load())</text>
+<text x="24.0" y="64.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13.5" text-anchor="start" font-weight="normal" fill="#444444" xml:space="preserve">AUTORESTART로 계속 돈다: 한 번 호출 = load_queue에서 명령 하나. 필요하면 g2l token을 먼저 꺼내(compute가 버퍼를 다 썼다는 뜻) 쓰기 시작하고,</text>
+<text x="24.0" y="84.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13.5" text-anchor="start" font-weight="normal" fill="#444444" xml:space="preserve">끝나면 l2g token을 넣는다(compute가 읽어도 된다는 뜻). DRAM 읽기는 m_axi data_port(128비트) burst.</text>
+<rect x="40.0" y="150.0" width="160.0" height="32.0" rx="3" fill="#fff3c4" stroke="#9a7b00" stroke-width="1.3"/>
+<line x1="66.7" y1="153.0" x2="66.7" y2="179.0" stroke="#9a7b00" stroke-width="0.6"/>
+<line x1="93.3" y1="153.0" x2="93.3" y2="179.0" stroke="#9a7b00" stroke-width="0.6"/>
+<line x1="120.0" y1="153.0" x2="120.0" y2="179.0" stroke="#9a7b00" stroke-width="0.6"/>
+<line x1="146.7" y1="153.0" x2="146.7" y2="179.0" stroke="#9a7b00" stroke-width="0.6"/>
+<line x1="173.3" y1="153.0" x2="173.3" y2="179.0" stroke="#9a7b00" stroke-width="0.6"/>
+<text x="120.0" y="144.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="bold" fill="#222222" xml:space="preserve">load_queue</text>
+<text x="120.0" y="195.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10" text-anchor="middle" font-weight="normal" fill="#555555" xml:space="preserve">명령 하나 꺼냄</text>
+<rect x="40.0" y="260.0" width="120.0" height="28.0" rx="3" fill="#fff3c4" stroke="#9a7b00" stroke-width="1.3"/>
+<line x1="60.0" y1="263.0" x2="60.0" y2="285.0" stroke="#9a7b00" stroke-width="0.6"/>
+<line x1="80.0" y1="263.0" x2="80.0" y2="285.0" stroke="#9a7b00" stroke-width="0.6"/>
+<line x1="100.0" y1="263.0" x2="100.0" y2="285.0" stroke="#9a7b00" stroke-width="0.6"/>
+<line x1="120.0" y1="263.0" x2="120.0" y2="285.0" stroke="#9a7b00" stroke-width="0.6"/>
+<line x1="140.0" y1="263.0" x2="140.0" y2="285.0" stroke="#9a7b00" stroke-width="0.6"/>
+<text x="100.0" y="254.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="bold" fill="#222222" xml:space="preserve">g2l_queue</text>
+<text x="100.0" y="301.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10" text-anchor="middle" font-weight="normal" fill="#555555" xml:space="preserve">pop_next_dep면 꺼냄</text>
+<rect x="40.0" y="360.0" width="120.0" height="28.0" rx="3" fill="#fff3c4" stroke="#9a7b00" stroke-width="1.3"/>
+<line x1="60.0" y1="363.0" x2="60.0" y2="385.0" stroke="#9a7b00" stroke-width="0.6"/>
+<line x1="80.0" y1="363.0" x2="80.0" y2="385.0" stroke="#9a7b00" stroke-width="0.6"/>
+<line x1="100.0" y1="363.0" x2="100.0" y2="385.0" stroke="#9a7b00" stroke-width="0.6"/>
+<line x1="120.0" y1="363.0" x2="120.0" y2="385.0" stroke="#9a7b00" stroke-width="0.6"/>
+<line x1="140.0" y1="363.0" x2="140.0" y2="385.0" stroke="#9a7b00" stroke-width="0.6"/>
+<text x="100.0" y="354.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="bold" fill="#222222" xml:space="preserve">l2g_queue</text>
+<text x="100.0" y="401.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10" text-anchor="middle" font-weight="normal" fill="#555555" xml:space="preserve">push_next_dep면 넣음</text>
+<rect x="250.0" y="120.0" width="760.0" height="520.0" rx="8" fill="#ece2f4" stroke="#6d4596" stroke-width="1.8"/>
+<text x="264.0" y="142.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13" text-anchor="start" font-weight="bold" fill="#6d4596" xml:space="preserve">load (HLS IP)</text>
+<rect x="280.0" y="160.0" width="330.0" height="70.0" rx="5" fill="#ffffff" stroke="#888888" stroke-width="1.4"/>
+<text x="445.0" y="184.5" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10.5" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">명령 해독</text>
+<text x="445.0" y="198.7" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">VTAMemInsn: sram_base, dram_base,</text>
+<text x="445.0" y="212.8" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">y_size, x_size, x_stride, y/x_pad_0/1, memory_type</text>
+<rect x="640.0" y="160.0" width="340.0" height="70.0" rx="5" fill="#ece2f4" stroke="#6d4596" stroke-width="1.4"/>
+<text x="810.0" y="184.5" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10.5" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">pad 계산</text>
+<text x="810.0" y="198.7" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">x_width = pad0 + x_size + pad1</text>
+<text x="810.0" y="212.8" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">y_offset_0/1 = x_width × y_pad (Mul_LUT, 4단)</text>
+<rect x="280.0" y="270.0" width="700.0" height="170.0" rx="5" fill="#ece2f4" stroke="#6d4596" stroke-width="1.4"/>
+<text x="630.0" y="316.2" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10.5" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">load_pad_2d / load_2d</text>
+<text x="630.0" y="330.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">① reset_mem: 위쪽 pad y_offset_0줄을 0으로 (한 clk에 entry 하나)</text>
+<text x="630.0" y="344.5" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">② 행 y = 0 … y_size−1 (PIPELINE):</text>
+<text x="630.0" y="358.7" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">     왼쪽 pad x_pad_0개를 0 → memcpy(DRAM[dram_idx], x_size × 16 B) burst → 오른쪽 pad x_pad_1개를 0</text>
+<text x="630.0" y="372.9" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">     sram_idx += x_width, dram_idx += x_stride</text>
+<text x="630.0" y="387.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">③ reset_mem: 아래쪽 pad y_offset_1줄을 0으로</text>
+<text x="630.0" y="401.2" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">wgt는 pad 없음(load_2d): 행마다 memcpy, entry 하나 = 16 bank × 128b = 16×16 int8</text>
+<rect x="280.0" y="470.0" width="330.0" height="60.0" rx="5" fill="#eeeeee" stroke="#666666" stroke-width="1.4"/>
+<text x="445.0" y="496.6" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">m_axi data_port (128비트 = 16 B / beat)</text>
+<text x="445.0" y="510.8" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">inp 1 entry = 1 beat, wgt 1 entry = 16 beat</text>
+<rect x="640.0" y="470.0" width="340.0" height="60.0" rx="5" fill="#ffffff" stroke="#888888" stroke-width="1.4"/>
+<text x="810.0" y="496.6" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">inp_mem / wgt_mem 포트 A</text>
+<text x="810.0" y="510.8" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">주소 sram_idx, 쓰기 enable (byte)</text>
+<line x1="202.0" y1="166.0" x2="278.0" y2="190.0" stroke="#6d4596" stroke-width="1.6" marker-end="url(#arp)"/>
+<line x1="162.0" y1="274.0" x2="278.0" y2="230.0" stroke="#c0392b" stroke-width="1.4" marker-end="url(#arr)"/>
+<text x="220.0" y="272.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10" text-anchor="middle" font-weight="normal" fill="#b03a2e" xml:space="preserve">g2l pop</text>
+<line x1="610.0" y1="195.0" x2="638.0" y2="195.0" stroke="#333333" stroke-width="1.2" marker-end="url(#ara)"/>
+<line x1="445.0" y1="442.0" x2="445.0" y2="468.0" stroke="#333333" stroke-width="1.2" marker-end="url(#ara)"/>
+<line x1="612.0" y1="500.0" x2="638.0" y2="500.0" stroke="#2f5f98" stroke-width="1.6" marker-end="url(#arb)"/>
+<line x1="278.0" y1="520.0" x2="162.0" y2="380.0" stroke="#c0392b" stroke-width="1.4" marker-end="url(#arr)"/>
+<text x="210.0" y="460.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10" text-anchor="middle" font-weight="normal" fill="#b03a2e" xml:space="preserve">l2g push</text>
+<rect x="1060.0" y="140.0" width="360.0" height="80.0" rx="5" fill="#efe6d6" stroke="#8a6d3b" stroke-width="1.4"/>
+<text x="1240.0" y="169.5" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10.5" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">DRAM</text>
+<text x="1240.0" y="183.7" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">inputs (activations), weights</text>
+<text x="1240.0" y="197.8" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">dram_base × 16 B (inp) / × 256 B (wgt)</text>
+<path d="M1240,222 L1240,455 L560,455 L560,468" fill="none" stroke="#2f5f98" stroke-width="1.8" marker-end="url(#arb)"/>
+<text x="900.0" y="450.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10.5" text-anchor="start" font-weight="normal" fill="#2f5f98" xml:space="preserve">DRAM burst 읽기 (128b beat)</text>
+<rect x="1090.0" y="470.0" width="150.0" height="60.0" rx="3" fill="#e6eef7" stroke="#4a6f9a" stroke-width="1.4"/>
+<text x="1165.0" y="497.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="bold" fill="#222222" xml:space="preserve">inp_mem</text>
+<text x="1165.0" y="512.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10" text-anchor="middle" font-weight="normal" fill="#222222" xml:space="preserve">4096 × 128b</text>
+<rect x="1086.0" y="474.0" width="22.0" height="16.0" rx="2" fill="#ffffff" stroke="#4a6f9a" stroke-width="0.8"/>
+<text x="1097.0" y="486.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10" text-anchor="middle" font-weight="bold" fill="#222222" xml:space="preserve">A</text>
+<text x="1082.0" y="486.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="9.5" text-anchor="end" font-weight="normal" fill="#4a6f9a" xml:space="preserve">load</text>
+<rect x="1275.0" y="455.0" width="150.0" height="60.0" rx="3" fill="#e6eef7" stroke="#4a6f9a" stroke-width="0.8"/>
+<rect x="1270.0" y="460.0" width="150.0" height="60.0" rx="3" fill="#e6eef7" stroke="#4a6f9a" stroke-width="0.8"/>
+<rect x="1265.0" y="465.0" width="150.0" height="60.0" rx="3" fill="#e6eef7" stroke="#4a6f9a" stroke-width="0.8"/>
+<rect x="1260.0" y="470.0" width="150.0" height="60.0" rx="3" fill="#e6eef7" stroke="#4a6f9a" stroke-width="1.4"/>
+<text x="1335.0" y="497.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="bold" fill="#222222" xml:space="preserve">wgt_mem ×16</text>
+<text x="1335.0" y="512.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10" text-anchor="middle" font-weight="normal" fill="#222222" xml:space="preserve">2048 × 128b</text>
+<rect x="1256.0" y="474.0" width="22.0" height="16.0" rx="2" fill="#ffffff" stroke="#4a6f9a" stroke-width="0.8"/>
+<text x="1267.0" y="486.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10" text-anchor="middle" font-weight="bold" fill="#222222" xml:space="preserve">A</text>
+<text x="1252.0" y="486.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="9.5" text-anchor="end" font-weight="normal" fill="#4a6f9a" xml:space="preserve">load</text>
+<line x1="982.0" y1="500.0" x2="1086.0" y2="500.0" stroke="#2f5f98" stroke-width="1.6" marker-end="url(#arb)"/>
+<text x="1034.0" y="494.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10" text-anchor="middle" font-weight="normal" fill="#2f5f98" xml:space="preserve">A 쓰기</text>
+<text x="40.0" y="670.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="start" font-weight="bold" fill="#222222" xml:space="preserve">예: y_size 3, x_size 4, x_stride 9, x_pad 1/1, y_pad 1/1 → SRAM에 6 × 5 = 30 entry (회색은 0)</text>
+<rect x="60.0" y="686.0" width="32.0" height="28.0" rx="0" fill="#e0e0e0" stroke="#999999" stroke-width="0.6"/>
+<rect x="94.0" y="686.0" width="32.0" height="28.0" rx="0" fill="#e0e0e0" stroke="#999999" stroke-width="0.6"/>
+<rect x="128.0" y="686.0" width="32.0" height="28.0" rx="0" fill="#e0e0e0" stroke="#999999" stroke-width="0.6"/>
+<rect x="162.0" y="686.0" width="32.0" height="28.0" rx="0" fill="#e0e0e0" stroke="#999999" stroke-width="0.6"/>
+<rect x="196.0" y="686.0" width="32.0" height="28.0" rx="0" fill="#e0e0e0" stroke="#999999" stroke-width="0.6"/>
+<rect x="230.0" y="686.0" width="32.0" height="28.0" rx="0" fill="#e0e0e0" stroke="#999999" stroke-width="0.6"/>
+<rect x="60.0" y="716.0" width="32.0" height="28.0" rx="0" fill="#e0e0e0" stroke="#999999" stroke-width="0.6"/>
+<rect x="94.0" y="716.0" width="32.0" height="28.0" rx="0" fill="#dce8f5" stroke="#999999" stroke-width="0.6"/>
+<text x="110.0" y="735.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#222222" xml:space="preserve">0</text>
+<rect x="128.0" y="716.0" width="32.0" height="28.0" rx="0" fill="#dce8f5" stroke="#999999" stroke-width="0.6"/>
+<text x="144.0" y="735.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#222222" xml:space="preserve">1</text>
+<rect x="162.0" y="716.0" width="32.0" height="28.0" rx="0" fill="#dce8f5" stroke="#999999" stroke-width="0.6"/>
+<text x="178.0" y="735.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#222222" xml:space="preserve">2</text>
+<rect x="196.0" y="716.0" width="32.0" height="28.0" rx="0" fill="#dce8f5" stroke="#999999" stroke-width="0.6"/>
+<text x="212.0" y="735.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#222222" xml:space="preserve">3</text>
+<rect x="230.0" y="716.0" width="32.0" height="28.0" rx="0" fill="#e0e0e0" stroke="#999999" stroke-width="0.6"/>
+<rect x="60.0" y="746.0" width="32.0" height="28.0" rx="0" fill="#e0e0e0" stroke="#999999" stroke-width="0.6"/>
+<rect x="94.0" y="746.0" width="32.0" height="28.0" rx="0" fill="#dce8f5" stroke="#999999" stroke-width="0.6"/>
+<text x="110.0" y="765.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#222222" xml:space="preserve">9</text>
+<rect x="128.0" y="746.0" width="32.0" height="28.0" rx="0" fill="#dce8f5" stroke="#999999" stroke-width="0.6"/>
+<text x="144.0" y="765.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#222222" xml:space="preserve">10</text>
+<rect x="162.0" y="746.0" width="32.0" height="28.0" rx="0" fill="#dce8f5" stroke="#999999" stroke-width="0.6"/>
+<text x="178.0" y="765.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#222222" xml:space="preserve">11</text>
+<rect x="196.0" y="746.0" width="32.0" height="28.0" rx="0" fill="#dce8f5" stroke="#999999" stroke-width="0.6"/>
+<text x="212.0" y="765.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#222222" xml:space="preserve">12</text>
+<rect x="230.0" y="746.0" width="32.0" height="28.0" rx="0" fill="#e0e0e0" stroke="#999999" stroke-width="0.6"/>
+<rect x="60.0" y="776.0" width="32.0" height="28.0" rx="0" fill="#e0e0e0" stroke="#999999" stroke-width="0.6"/>
+<rect x="94.0" y="776.0" width="32.0" height="28.0" rx="0" fill="#dce8f5" stroke="#999999" stroke-width="0.6"/>
+<text x="110.0" y="795.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#222222" xml:space="preserve">18</text>
+<rect x="128.0" y="776.0" width="32.0" height="28.0" rx="0" fill="#dce8f5" stroke="#999999" stroke-width="0.6"/>
+<text x="144.0" y="795.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#222222" xml:space="preserve">19</text>
+<rect x="162.0" y="776.0" width="32.0" height="28.0" rx="0" fill="#dce8f5" stroke="#999999" stroke-width="0.6"/>
+<text x="178.0" y="795.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#222222" xml:space="preserve">20</text>
+<rect x="196.0" y="776.0" width="32.0" height="28.0" rx="0" fill="#dce8f5" stroke="#999999" stroke-width="0.6"/>
+<text x="212.0" y="795.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="9.5" text-anchor="middle" font-weight="normal" fill="#222222" xml:space="preserve">21</text>
+<rect x="230.0" y="776.0" width="32.0" height="28.0" rx="0" fill="#e0e0e0" stroke="#999999" stroke-width="0.6"/>
+<rect x="60.0" y="806.0" width="32.0" height="28.0" rx="0" fill="#e0e0e0" stroke="#999999" stroke-width="0.6"/>
+<rect x="94.0" y="806.0" width="32.0" height="28.0" rx="0" fill="#e0e0e0" stroke="#999999" stroke-width="0.6"/>
+<rect x="128.0" y="806.0" width="32.0" height="28.0" rx="0" fill="#e0e0e0" stroke="#999999" stroke-width="0.6"/>
+<rect x="162.0" y="806.0" width="32.0" height="28.0" rx="0" fill="#e0e0e0" stroke="#999999" stroke-width="0.6"/>
+<rect x="196.0" y="806.0" width="32.0" height="28.0" rx="0" fill="#e0e0e0" stroke="#999999" stroke-width="0.6"/>
+<rect x="230.0" y="806.0" width="32.0" height="28.0" rx="0" fill="#e0e0e0" stroke="#999999" stroke-width="0.6"/>
+<text x="290.0" y="730.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="start" font-weight="normal" fill="#222222" xml:space="preserve">← DRAM entry 번호 (dram_base 기준). 한 행 x_size개는 burst 하나.</text>
+<text x="290.0" y="750.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="start" font-weight="normal" fill="#222222" xml:space="preserve">   행 사이는 x_stride만큼 건너뛴다(입력 tile을 잘라 올 때).</text>
+<text x="290.0" y="780.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="start" font-weight="normal" fill="#222222" xml:space="preserve">• pad는 DRAM에서 읽지 않고 SRAM에 0을 쓴다: conv의 0 padding을 따로 메모리에 두지 않는다.</text>
+<text x="290.0" y="800.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="start" font-weight="normal" fill="#222222" xml:space="preserve">• 한 번에 명령 하나만 처리 → 명령 사이에 HLS IP 재시작(AUTORESTART) 시간이 든다.</text>
+</svg>

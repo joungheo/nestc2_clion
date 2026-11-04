@@ -45,18 +45,18 @@
 <text x="381.0" y="584.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">out_mem → DRAM</text>
 <rect x="460.0" y="158.0" width="118.0" height="62.0" rx="6" fill="#eeeeee" stroke="#777777" stroke-width="1.3"/>
 <text x="519.0" y="185.4" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">inp_mem (SRAM)</text>
-<text x="519.0" y="200.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">2048×16 int8</text>
+<text x="519.0" y="200.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">4096×16 int8</text>
 <rect x="592.0" y="158.0" width="118.0" height="62.0" rx="6" fill="#eeeeee" stroke="#777777" stroke-width="1.3"/>
 <text x="651.0" y="185.4" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">wgt_mem (SRAM)</text>
-<text x="651.0" y="200.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">1024×16×16 int8</text>
+<text x="651.0" y="200.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">2048×16×16 int8</text>
 <rect x="460.0" y="256.0" width="250.0" height="92.0" rx="6" fill="#dce8f5" stroke="#2f5f98" stroke-width="1.3"/>
 <text x="585.0" y="298.4" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">GEMM 16×16 MAC (DSP 256)</text>
 <text x="585.0" y="313.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">acc[d] += inp[s] · wgt[w]ᵀ</text>
 <rect x="460.0" y="380.0" width="250.0" height="62.0" rx="6" fill="#eeeeee" stroke="#777777" stroke-width="1.3"/>
 <text x="585.0" y="407.4" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">acc_mem (SRAM)</text>
-<text x="585.0" y="422.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">2048×16 int32</text>
+<text x="585.0" y="422.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">4096×16 int32</text>
 <rect x="460.0" y="476.0" width="250.0" height="56.0" rx="6" fill="#eeeeee" stroke="#777777" stroke-width="1.3"/>
-<text x="585.0" y="500.4" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">out_mem (SRAM) 2048×16 int8</text>
+<text x="585.0" y="500.4" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">out_mem (SRAM) 4096×16 int8</text>
 <text x="585.0" y="515.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">= acc의 하위 8비트</text>
 <line x1="275.4" y1="324.0" x2="366.1" y2="202.0" stroke="#888888" stroke-width="1.0" stroke-dasharray="3 3" marker-end="url(#ark)"/>
 <line x1="426.4" y1="240.0" x2="462.7" y2="220.0" stroke="#888888" stroke-width="1.0" stroke-dasharray="3 3" marker-end="url(#ark)"/>
@@ -109,16 +109,16 @@
 <text x="1101.0" y="584.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">out_mem → DRAM</text>
 <rect x="1180.0" y="158.0" width="118.0" height="62.0" rx="6" fill="#eeeeee" stroke="#777777" stroke-width="1.3"/>
 <text x="1239.0" y="185.4" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">inp_mem (SRAM)</text>
-<text x="1239.0" y="200.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">2048×16 int8</text>
+<text x="1239.0" y="200.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">4096×16 int8</text>
 <rect x="1312.0" y="158.0" width="118.0" height="62.0" rx="6" fill="#eeeeee" stroke="#777777" stroke-width="1.3"/>
 <text x="1371.0" y="185.4" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">wgt_mem (SRAM)</text>
-<text x="1371.0" y="200.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">1024×16×16 int8</text>
+<text x="1371.0" y="200.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">2048×16×16 int8</text>
 <rect x="1180.0" y="256.0" width="250.0" height="92.0" rx="6" fill="#dce8f5" stroke="#2f5f98" stroke-width="1.3"/>
 <text x="1305.0" y="298.4" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">GEMM 16×16 MAC (DSP 256)</text>
 <text x="1305.0" y="313.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">acc[d] += inp[s] · wgt[w]ᵀ</text>
 <rect x="1180.0" y="380.0" width="250.0" height="62.0" rx="6" fill="#eeeeee" stroke="#777777" stroke-width="1.3"/>
 <text x="1305.0" y="407.4" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">acc_mem (SRAM)</text>
-<text x="1305.0" y="422.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">2048×16 int32</text>
+<text x="1305.0" y="422.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">4096×16 int32</text>
 <rect x="1180.0" y="476.0" width="250.0" height="56.0" rx="6" fill="#eeeeee" stroke="#777777" stroke-width="1.3"/>
 <text x="1305.0" y="500.4" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">out_mem</text>
 <text x="1305.0" y="515.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">pool 영역만 STORE</text>

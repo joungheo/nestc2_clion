@@ -65,9 +65,9 @@ LAYOUT = {
 LABEL = {
     "fetch": ["fetch", "명령 256비트"], "load": ["LOAD 모듈", "DRAM → SRAM (pad)"], "uop": ["uop_mem (SRAM)", "주소 묶음"],
     "alu": ["ALU 16 lane", "MIN MAX ADD SHR"], "store": ["STORE 모듈", "out_mem → DRAM"],
-    "inp": ["inp_mem (SRAM)", "2048×16 int8"], "wgt": ["wgt_mem (SRAM)", "1024×16×16 int8"],
-    "gemm": ["GEMM 16×16 MAC (DSP 256)", "acc[d] += inp[s] · wgt[w]ᵀ"], "acc": ["acc_mem (SRAM)", "2048×16 int32"],
-    "out": ["out_mem (SRAM) 2048×16 int8", "= acc의 하위 8비트"],
+    "inp": ["inp_mem (SRAM)", "4096×16 int8"], "wgt": ["wgt_mem (SRAM)", "2048×16×16 int8"],
+    "gemm": ["GEMM 16×16 MAC (DSP 256)", "acc[d] += inp[s] · wgt[w]ᵀ"], "acc": ["acc_mem (SRAM)", "4096×16 int32"],
+    "out": ["out_mem (SRAM) 4096×16 int8", "= acc의 하위 8비트"],
 }
 KIND = {"fetch": "evta", "load": "evta", "uop": "mem", "alu": "hls", "store": "evta", "inp": "mem", "wgt": "mem",
         "gemm": "evta", "acc": "mem", "out": "mem"}
