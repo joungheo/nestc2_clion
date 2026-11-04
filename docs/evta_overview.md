@@ -134,10 +134,6 @@ NEST-C의 EVTA(VTA 계열 NPU)를 ZCU102 보드에서 돌리고 빠르게 만든
 | [13](figs/evta_fig13_alu_ii.svg) | ALU: II = 2 → imm II = 1, 다음은 RMW reset에 bias |
 | [14](figs/evta_fig14_time_waterfall.svg) | Resnet18 추론 시간: 단계별로 줄어든 폭 |
 | [15](figs/evta_fig15_evta_time_now.svg) | 지금 EVTA 시간 26.47 ms의 구성과 줄어들 몫 |
-| [16](figs/evta_fig16_alu_ii1_registers.svg) | ALU imm II = 1과 acc / out 쓰기 앞 register: 고친 경로와 결과 |
-| [17](figs/evta_fig17_bias_reset.svg) | bias reset: 명령 순서, sa_rmw.v의 바뀐 곳, conv별로 줄어든 시간 |
-| [18](figs/evta_fig18_requantize.svg) | requantize를 acc → out 쓰기에: 필드가 가는 길, sa_rmw.v S4~S6, 빠지는 ALU 명령, 결과 |
-| [19](figs/evta_fig19_hw_steps_time.svg) | 하드웨어 단계별 Resnet18 EVTA / 추론 시간 (26.42 → 23.05 ms) |
 
 ### 그림 1. Resnet18 추론 한 번: CPU와 EVTA가 하는 일 (10-29 → 11-02)
 
@@ -199,21 +195,99 @@ NEST-C의 EVTA(VTA 계열 NPU)를 ZCU102 보드에서 돌리고 빠르게 만든
 
 ![그림 15](figs/evta_fig15_evta_time_now.svg)
 
-### 그림 16. ALU imm II = 1과 acc / out 쓰기 앞 register: 고친 경로와 결과
+## 구조 그림: 단계마다 무엇을 옮기고 없앴나 (2026-11-04)
 
-![그림 16](figs/evta_fig16_alu_ii1_registers.svg)
+같은 그림 틀(CPU, DRAM 버퍼, EVTA의 LOAD / compute / STORE와 SRAM, GEMM, ALU)에 단계마다 이전과 이후를 나란히 그리고,
+바뀐 곳(초록 = 새로 / 옮겨 온 것, 빨강 점선 = 없어진 것)과 측정 시간(차이와 %)을 넣었다. 하드웨어 단계(13~16)는 acc_mem 포트, pipeline 단, register, mux까지 그렸다.
+생성: `python3 docs/figs/src/make_evta_struct_figs.py`.
 
-### 그림 17. bias reset: 명령 순서, sa_rmw.v의 바뀐 곳, conv별로 줄어든 시간
+| 그림 | 단계 |
+|---|---|
+| [1](figs/evta_st01_conv0_to_evta.svg) | conv0(3채널)을 CPU float에서 EVTA로 (0 채움) |
+| [2](figs/evta_st02_keep_layout.svg) | 층 사이 활성화를 EVTA layout 그대로 |
+| [3](figs/evta_st03_residual_fusion.svg) | residual(elemadd + relu)을 conv 호출 안의 EVTA로 |
+| [4](figs/evta_st04_maxpool_evta.svg) | max pool을 EVTA ALU로 |
+| [5](figs/evta_st05_transpose_neon.svg) | CPU layout 변환을 16바이트 복사로 |
+| [6](figs/evta_st06_buffer_pool.svg) | VTA 버퍼 pool |
+| [7](figs/evta_st07_cpu_fc_neon.svg) | CPU fc NEON |
+| [8](figs/evta_st08_fc_evta.svg) | fc를 EVTA GEMM으로 |
+| [9](figs/evta_st09_preprocess_fuse.svg) | 입력 전처리를 conv0 입력 복사 하나로 |
+| [10](figs/evta_st10_replay.svg) | EVTA 명령 기록 / 재생 |
+| [11](figs/evta_st11_conv0_pack.svg) | conv0을 packed 입력의 4×1 conv로 |
+| [12](figs/evta_st12_conv0_pool.svg) | conv0 + max pool을 EVTA 호출 하나로 |
+| [13](figs/evta_st13_systolic_gemm.svg) | GEMM: HLS broadcast → RTL systolic 어레이 (HW) |
+| [14](figs/evta_st14_alu_ii1_regs.svg) | ALU imm II = 1, acc / out 쓰기 앞 register (HW) |
+| [15](figs/evta_st15_bias_reset.svg) | bias reset: acc를 bias로 시작 (HW) |
+| [16](figs/evta_st16_requantize.svg) | requantize를 acc → out 쓰기 길에 (HW) |
+| [17](figs/evta_st17_summary.svg) | Resnet18 추론 시간을 줄인 단계 요약 |
 
-![그림 17](figs/evta_fig17_bias_reset.svg)
+### 구조 1. conv0(3채널)을 CPU float에서 EVTA로 (0 채움)
 
-### 그림 18. requantize를 acc → out 쓰기에: 필드가 가는 길, sa_rmw.v S4~S6, 빠지는 ALU 명령, 결과
+![구조 1](figs/evta_st01_conv0_to_evta.svg)
 
-![그림 18](figs/evta_fig18_requantize.svg)
+### 구조 2. 층 사이 활성화를 EVTA layout 그대로
 
-### 그림 19. 하드웨어 단계별 Resnet18 EVTA / 추론 시간 (26.42 → 23.05 ms)
+![구조 2](figs/evta_st02_keep_layout.svg)
 
-![그림 19](figs/evta_fig19_hw_steps_time.svg)
+### 구조 3. residual(elemadd + relu)을 conv 호출 안의 EVTA로
+
+![구조 3](figs/evta_st03_residual_fusion.svg)
+
+### 구조 4. max pool을 EVTA ALU로
+
+![구조 4](figs/evta_st04_maxpool_evta.svg)
+
+### 구조 5. CPU layout 변환을 16바이트 복사로
+
+![구조 5](figs/evta_st05_transpose_neon.svg)
+
+### 구조 6. VTA 버퍼 pool
+
+![구조 6](figs/evta_st06_buffer_pool.svg)
+
+### 구조 7. CPU fc NEON
+
+![구조 7](figs/evta_st07_cpu_fc_neon.svg)
+
+### 구조 8. fc를 EVTA GEMM으로
+
+![구조 8](figs/evta_st08_fc_evta.svg)
+
+### 구조 9. 입력 전처리를 conv0 입력 복사 하나로
+
+![구조 9](figs/evta_st09_preprocess_fuse.svg)
+
+### 구조 10. EVTA 명령 기록 / 재생
+
+![구조 10](figs/evta_st10_replay.svg)
+
+### 구조 11. conv0을 packed 입력의 4×1 conv로
+
+![구조 11](figs/evta_st11_conv0_pack.svg)
+
+### 구조 12. conv0 + max pool을 EVTA 호출 하나로
+
+![구조 12](figs/evta_st12_conv0_pool.svg)
+
+### 구조 13. GEMM: HLS broadcast → RTL systolic 어레이 (HW)
+
+![구조 13](figs/evta_st13_systolic_gemm.svg)
+
+### 구조 14. ALU imm II = 1, acc / out 쓰기 앞 register (HW)
+
+![구조 14](figs/evta_st14_alu_ii1_regs.svg)
+
+### 구조 15. bias reset: acc를 bias로 시작 (HW)
+
+![구조 15](figs/evta_st15_bias_reset.svg)
+
+### 구조 16. requantize를 acc → out 쓰기 길에 (HW)
+
+![구조 16](figs/evta_st16_requantize.svg)
+
+### 구조 17. Resnet18 추론 시간을 줄인 단계 요약
+
+![구조 17](figs/evta_st17_summary.svg)
 
 ## 문서 지도
 

@@ -3,7 +3,7 @@
 원래 VTA ISA에 EVTA 작업 중 덧붙이거나 바꾼 비트 필드를 한곳에 모은다. 어떤 bitstream이 어떤 필드를 해석하는지,
 vtalib이 언제 그 필드를 쓰는지, 다른 모델을 돌릴 때 무엇을 확인하는지를 이 문서만 보고 알 수 있게 쓴다.
 명령 전체의 사용법(빌드, 실행, 측정)은 [evta_user_manual.md](evta_user_manual.md), 일의 경과는 [evta_overview.md](evta_overview.md)에 있다.
-구조 그림: bias reset [evta_fig17](figs/evta_fig17_bias_reset.svg), requantize [evta_fig18](figs/evta_fig18_requantize.svg).
+구조 그림: bias reset [구조 15](figs/evta_st15_bias_reset.svg), requantize [구조 16](figs/evta_st16_requantize.svg).
 
 ## 1. 한눈에
 
