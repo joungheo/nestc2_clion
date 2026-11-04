@@ -55,9 +55,10 @@ SETS = {  # name: (bundle dir under the NEST-C root, hw dir here, bitstream in /
 #### JO added (2026-10-28): systolic GEMM bitstream per set, for the _sys* executables (built with
 #### -DVTALIB=<vtalib-zcu102-systolic>); run_all.sh gets SYS_BIN=, read by run_prof.sh -s _sys*
 #### JO changed (2026-11-03): single -> the ALU imm II = 1 build (docs/evta_runtime_compare.md 7.15); was ..._sa_400mhz.bin
+#### JO changed (2026-11-04): the requantize builds (docs/evta_isa_ext.md); were ..._sa_400mhz_alu1_epr.bin / ..._4evta_sa_400mhz.bin
 SYS_BINS = {
-    'single': 'vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_400mhz_alu1_epr.bin',
-    'multievtax4': 'vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz.bin',
+    'single': 'vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_400mhz_rq.bin',
+    'multievtax4': 'vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_396mhz_rq.bin',
 }
 #### JO added: per set, dirs made by a script here: (dir, executable, arguments, golden, generator command)
 #### JO changed (2026-10-26): + the hw/ dir the generator copies from (ResConv10Test: the fastest conv shape)
@@ -200,7 +201,9 @@ def main():
                 #### JO changed: BIN can be overridden, e.g. sudo BIN=evta_zcu102_1evta.bin ./run_all.sh
                 #### JO changed (2026-10-27): in <hw dir>/script/, runs in the hw dir
                 # f'set -u\ncd "$(dirname "$0")"\nBIN=${{BIN:-{BIN}}}\n'
-                f'set -u\ncd "$(dirname "$0")/.."\nBIN=${{BIN:-{BIN}}}\n'
+                #### JO changed (2026-11-04): + --help and where BIN came from (printed at the start)
+                # f'set -u\ncd "$(dirname "$0")/.."\nBIN=${{BIN:-{BIN}}}\n'
+                'set -u\ncd "$(dirname "$0")/.."\n' + '#### JO added (2026-11-04): --help; the output starts with the bitstream and its features (../bininfo.sh)\ncase " $* " in *" -h "*|*" --help "*) echo "usage: sudo $0 [Dir ...]   (in hw*/script/; no Dir = every run line)"\n  echo "  Reloads BIN (below; BIN=<file in /lib/firmware> in the environment wins) before each run line, runs the executable,"\n  echo "  compares output.bin with the golden -> result/results.txt. HLS vtalib executables (build${PWD##*/hw}/)."\n  echo "  Timing runs and the systolic bitstream (SYS_BIN): script/run_prof.sh --help"; exit 0;; esac\n[ -n "${BIN:-}" ] && BSRC="BIN= in the environment" || BSRC="BIN of $0"\n' + f'BIN=${{BIN:-{BIN}}}\n'
                 #### JO added (2026-10-28): systolic bitstream for run_prof.sh -s _sys*
                 + (f'SYS_BIN=${{SYS_BIN:-{SYS_BINS[SET]}}}\n' if SET in SYS_BINS else '') +
                 #### JO added (2026-10-31): OpenMP threads of the CPU ops, 1 by default for every set (as run_prof.sh -t)
@@ -214,6 +217,8 @@ def main():
                 #### JO changed (2026-10-27): + trace/ for the sds_trace_data.dat libcma.so writes at exit
                 # 'ONLY="$*"\nmkdir -p result; : > result/results.txt\n'
                 'ONLY="$*"\nmkdir -p result trace; : > result/results.txt\n'
+                #### JO added (2026-11-04): header (../bininfo.sh)
+                + '#### JO added (2026-11-04): what this run is, at the start of the output and of result/results.txt\n. ../bininfo.sh\n{ echo "== run_all.sh ${PWD##*/} $(date \'+%F %T\')"; echo "  bitstream from $BSRC"; bin_info $BIN\n  echo "  OMP_NUM_THREADS: $OMP_NUM_THREADS   Dirs: ${ONLY:-every run line}"; } | tee -a result/results.txt; echo\n'
                 #### JO changed: multi-EVTA sets have several executables per Dir -> one log/rc per executable
                 f'LOG() {{ echo {"$1.log" if ALL_EXES else "run.log"}; }}  # log name for executable $1\n'
                 'run() {  # dir exe input golden\n'

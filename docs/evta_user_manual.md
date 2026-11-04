@@ -189,7 +189,14 @@ sudo /bin/sh -c "hw_multievtax4/script/run_prof.sh -s _sysprof -n 25 -l -r Multi
 | `-r` | `chrt -f 10`(SCHED_FIFO). 4 ms scheduler tick 때문에 흔들리는 run이 없어진다. 시간 측정에는 붙인다 |
 | `-t <n>` | `OMP_NUM_THREADS`(기본 1). single은 `-t 4`로 4코어 |
 | 환경 `BIN=<file>` | bitstream 바꾸기 |
+| `-h`, `--help` | 옵션 설명을 출력하고 끝난다(sudo 없이 된다). `run_all.sh --help`, `load_bit.sh --help`도 있다 |
 
+- **실행 시작 때 출력(2026-11-04):** 어느 bitstream으로 도는지와 그 설정을 먼저 출력하고, summary 파일 맨 앞에도 같은 내용을 넣는다.
+  `run_all.sh`와 `load_bit.sh`도 bitstream 부분을 출력한다(`vtabundles_xcmpl/bininfo.sh`). 나오는 항목은 다음과 같다.
+  - bitstream: 파일 이름, 어디서 왔는지(`run_all.sh`의 `BIN` / `SYS_BIN`, 또는 환경 변수 `BIN=`), 날짜, md5 앞 8자리
+  - 이름에서 읽은 것: EVTA 수, clock, GEMM 종류(HLS / systolic), 기능(ALU imm II = 1, bias reset, requantize, AXI perf monitor). vtalib이 읽는 규칙과 같다
+  - 실행 설정: `EVTA_*` / `MULTI_*` / `BUNDLE_*` 환경 변수, `-s`의 build dir과 무엇을 재는지, 횟수, lockstep, `chrt`, `OMP_NUM_THREADS`, Dir 목록
+  - 경고: `-s`와 bitstream이 맞지 않으면 `WARNING`을 출력한다(`_sys*` 실행 파일을 HLS bitstream에서 돌리는 경우, 또는 그 반대).
 - **결과:**
   - 로그는 `hw/<Dir>/<suffix>.log`이고, `_prof` 로그에는 `prof_summary.py` 요약(`<log>.sum`)이 붙는다.
   - `_timed`는 `timing.csv`를 남긴다.

@@ -11,6 +11,8 @@
 #        (-s suffix: _prof _timed _sysprof _systimed _sys; -n runs; -l lockstep (multi-EVTA); -r chrt -f 10;
 #         -t OMP_NUM_THREADS, default 1 or OMP_NUM_THREADS of the environment)
 # One line per Dir (exit, golden check, total time) is also written to result/<suffix>_summary.txt, printed at the end.
+#### JO added (2026-11-04): --help lists the options; the output and the summary start with the bitstream (name, date, md5,
+#### EVTA count, clock and features read from the name, ../bininfo.sh) and the settings of this run.
 #### JO added (2026-10-26): also in hw_multievtax2/ and hw_multievtax4/ (copied there by collect_hw_bundles.py):
 #### build dirs build_<set>_prof / build_<set>_timed. An executable with several timed .cpp (one per EVTA or VTA
 #### partition) prints one table each (header names the .cpp) and writes timing_<cpp>.csv each.
@@ -29,6 +31,35 @@ HWD=$(basename "$PWD"); BLD=../build${HWD#hw}
 #### JO changed (2026-10-28): after -s (below): -s _sys* takes SYS_BIN of run_all.sh (the systolic bitstream)
 #BIN=${BIN:-$(sed -n 's/^BIN=\${BIN:-\(.*\)}$/\1/p; s/^BIN=\([^$].*\)$/\1/p' $RUN_ALL)}
 #[ -f /lib/firmware/$BIN ] || { echo "bitstream /lib/firmware/$BIN not found"; exit 1; }
+#### JO added (2026-11-04): --help / -h (anywhere in the arguments) prints the options and exits, no sudo needed
+usage() {
+  cat <<EOU
+usage: sudo $0 [options] [Dir ...|all]
+  Runs the bundles of the run lines of $RUN_ALL (no Dir or 'all' = every one), reloading the bitstream before each.
+options:
+  -s <suffix>   which build of the executables to run (default _prof):
+                  _prof      ${BLD}_prof      EVTA time per EVTA call (VTA_SYNC events; prof_summary.py: per-conv ms, GOPS)
+                  _timed     ${BLD}_timed     wall time per bundle statement (timing.csv; run_times.py: medians of runs 2..n)
+                  _sysprof   ${BLD}_sysprof   as _prof, systolic vtalib (vtalib-zcu102-systolic), on SYS_BIN
+                  _systimed  ${BLD}_systimed  as _timed, systolic vtalib, on SYS_BIN
+                  _sys       ${BLD}_sys       systolic vtalib without timing, on SYS_BIN
+                -s _sys* loads SYS_BIN of $RUN_ALL, the others BIN of $RUN_ALL
+  -n <runs>     inferences per executable (default 25): hw/ BUNDLE_RUNS, hw_<set>/ MULTI_RUNS per EVTA copy
+  -l            lockstep: the multi-EVTA copies start every EVTA call together (MULTI_LOCKSTEP=1)
+  -r            real time: chrt -f 10 (no other process takes a core from the EVTA polling threads)
+  -t <threads>  OMP_NUM_THREADS of the executable (default 1, or OMP_NUM_THREADS of the environment)
+  -h, --help    this text
+environment:
+  BIN=<file in /lib/firmware>   run on this bitstream instead of BIN / SYS_BIN of $RUN_ALL
+  EVTA_BIAS_RESET=0|1, EVTA_REQUANT=0|1 (override what the bitstream name turns on), EVTA_DUMP_CONV=<dir>,
+  EVTA_RES_CHECK=1, EVTA_REPLAY=0, ... (docs/evta_user_manual.md); with sudo give them inside: sudo /bin/sh -c "X=1 $0 ..."
+output: the start lists the bitstream, its features and the settings; <Dir>/<suffix>.log per executable;
+  one line per executable in result/<suffix>_summary.txt (with the same header), printed at the end.
+e.g.: sudo /bin/sh -c "hw_multievtax4/script/run_prof.sh -s _sysprof -n 25 -l -r MultiEVTAResnet18Test"
+      sudo hw/script/run_prof.sh -s _systimed -r -t 4 Resnet18Test
+EOU
+}
+for a in "$@"; do case $a in -h|--help) usage; exit 0;; esac; done
 [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
 #### JO added (2026-10-26): one EVTA run at a time on the board (the same lock as run_all.sh): each run reloads the
 #### PL, and two runs swap bitstreams under each other (SError, bus errors, mismatches)
@@ -56,6 +87,8 @@ OMP=${OMP_NUM_THREADS:-1}
 while [ "${1:-}" = -s ] || [ "${1:-}" = -n ] || [ "${1:-}" = -l ] || [ "${1:-}" = -r ] || [ "${1:-}" = -t ]; do
   case $1 in -l) export MULTI_LOCKSTEP=1; shift;; -r) RT="chrt -f 10"; shift;; -s) SUFFIX=$2; shift 2;; -t) OMP=$2; shift 2;; *) RUNS=$2; shift 2;; esac
 done
+#### JO added (2026-11-04): an unknown option is an error (it was taken as a Dir name)
+case "${1:-}" in -*) echo "unknown option $1"; usage; exit 1;; esac
 export OMP_NUM_THREADS=$OMP
 #### JO changed (2026-10-29): hw_<set>/: MULTI_RUNS = runs per EVTA copy of the multi-EVTA mains (4 x for single_thread_main)
 # [ "$HWD" = hw ] && export BUNDLE_RUNS=$RUNS || unset BUNDLE_RUNS
@@ -63,6 +96,8 @@ if [ "$HWD" = hw ]; then export BUNDLE_RUNS=$RUNS; unset MULTI_RUNS; else export
 #### JO added (2026-10-28): _sys* executables are built with vtalib-zcu102-systolic (weight-stationary uop order)
 #### -> run them on the systolic bitstream SYS_BIN of run_all.sh; BIN=<file> in the environment still wins
 V=BIN; case $SUFFIX in _sys*) V=SYS_BIN;; esac
+#### JO added (2026-11-04): where the bitstream came from (printed at the start)
+[ -n "${BIN:-}" ] && BSRC="BIN= in the environment" || BSRC="$V of $RUN_ALL"
 BIN=${BIN:-$(sed -n 's/^'$V'=\${'$V':-\(.*\)}$/\1/p; s/^'$V'=\([^$].*\)$/\1/p' $RUN_ALL)}
 [ -n "$BIN" ] && [ -f /lib/firmware/$BIN ] || { echo "bitstream /lib/firmware/$BIN not found ($V in $RUN_ALL)"; exit 1; }
 #### JO changed (2026-10-29): set per run line below
@@ -76,6 +111,25 @@ fi
 #SUM=${SUFFIX#_}_summary.txt; : > $SUM
 #### JO changed (2026-10-27): + trace/ (sds_trace_data.dat of the Xlnk reset)
 mkdir -p result trace; chown --reference=. result trace; SUM=result/${SUFFIX#_}_summary.txt; : > $SUM
+#### JO added (2026-11-04): what this run is, at the start of the output and of the summary
+. ../bininfo.sh
+case $SUFFIX in
+  _prof) SD="EVTA time per EVTA call (VTA_SYNC events), HLS vtalib";;  _timed) SD="wall time per bundle statement, HLS vtalib";;
+  _sysprof) SD="EVTA time per EVTA call (VTA_SYNC events), systolic vtalib";;  _systimed) SD="wall time per bundle statement, systolic vtalib";;
+  _sys) SD="no timing, systolic vtalib";;  *) SD="";; esac
+[ "$HWD" = hw ] && RD="$RUNS inferences per executable (BUNDLE_RUNS)" || RD="$RUNS runs per EVTA copy (MULTI_RUNS)"
+{ echo "== run_prof.sh $HWD $(date '+%F %T')"
+  echo "  bitstream from $BSRC"; bin_info $BIN
+  echo "  build     : -s $SUFFIX = ${BLD}$SUFFIX ($SD)"
+  echo "  runs      : $RD"
+  echo "  lockstep  : $([ -n "${MULTI_LOCKSTEP:-}" ] && echo on '(-l)' || echo off)   real time: $([ -n "$RT" ] && echo "$RT (-r)" || echo off)   OMP_NUM_THREADS: $OMP"
+  echo "  Dirs      : $*"
+  echo "  logs      : <Dir>/${SUFFIX#_}.log (or ${SUFFIX#_}_<exe>.log), summary $SUM"
+  # the systolic vtalib orders the uops for gemm_sa: an HLS bitstream with _sys* executables (or the reverse) gives wrong results
+  case "$SUFFIX:$BIN" in _sys*:*_sa_*|_prof:*|_timed:*) ;; *) echo "  WARNING   : -s $SUFFIX executables on a bitstream without _sa_ (systolic vtalib on an HLS GEMM)";; esac
+  case "$SUFFIX:$BIN" in _prof:*_sa_*|_timed:*_sa_*) echo "  WARNING   : -s $SUFFIX executables on a systolic (_sa_) bitstream (HLS vtalib on gemm_sa)";; esac
+} | tee -a $SUM
+echo
 
 for D in "$@"; do
   #### JO changed: a Dir can have several run lines (multi-EVTA: threaded + single-thread executable)
