@@ -144,8 +144,12 @@ $(BIT_PATH): $(IP_PATH) $(SCRIPT_DIR)/vivado.tcl $(SA_RTL)
 			$(PROFILE)
 
 #### JO added
+#### JO changed (2026-11-04): no .bit with IMPL_TO_STEP (impl_1 stopped before write_bitstream) -> no .bin either, rc 0
+#$(BIN_PATH): $(BIT_PATH)
+#	$(PYTHON) $(SCRIPT_DIR)/bit2bin.py $< $@
 $(BIN_PATH): $(BIT_PATH)
-	$(PYTHON) $(SCRIPT_DIR)/bit2bin.py $< $@
+	@if [ -n "$(IMPL_TO_STEP)" ]; then echo "IMPL_TO_STEP=$(IMPL_TO_STEP): no bitstream, $@ not made"; \
+	else $(PYTHON) $(SCRIPT_DIR)/bit2bin.py $< $@; fi
 
 clean:
 	rm -rf *.out *.log

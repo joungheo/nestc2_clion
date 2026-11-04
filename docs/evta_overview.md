@@ -94,7 +94,9 @@ NEST-C의 EVTA(VTA 계열 NPU)를 ZCU102 보드에서 돌리고 빠르게 만든
   → [evta_runtime_compare.md](evta_runtime_compare.md) §7.15
 - **11-04 bias reset:** GEMM reset 단계에서 acc에 0 대신 bias를 쓴다(RTL `sa_rmw.v`, HLS uop 비트, ISA 비트 `bias_reset`, vtalib
   `conv_kernel`; 이름에 `bias`가 있는 bitstream에서만). golden 30 PASS, 층 출력 byte 동일, Resnet18 EVTA 24.89 → 24.15 ms,
-  추론 27.30 → 26.59 ms. → [evta_runtime_compare.md](evta_runtime_compare.md) §7.16
+  추론 27.30 → 26.59 ms. multi4도 같은 소스로 통과(WNS +0.037 ns, probes 40/40, golden 3 PASS, 층 출력 byte 동일),
+  EVTA마다 25.23-25.37 → 24.49-24.62 ms. stage3/4에서는 ADD가 inp LOAD / STORE에 가려져 있어 덜 준다.
+  → [evta_runtime_compare.md](evta_runtime_compare.md) §7.16
 - 그 뒤 후보: conv0 tile 키우기(single EVTA는 inp buffer 전체), 1×1 downsample conv를 같은 입력의 conv와 합치기, 한 장을
   EVTA 4개로 나눠 latency 줄이기, 다른 모델(Resnet50, VGG, MobileNet)로 넓히기.
 

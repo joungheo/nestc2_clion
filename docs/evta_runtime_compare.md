@@ -807,7 +807,22 @@ VGG16 0 / 0.453709로 전과 같다. `EVTA_DUMP_CONV`로 Resnet18 40개, Resnet5
   그래서 빼도 시간이 거의 줄지 않는다. inp만 빼면(`EVTA_MEMEXP=1`) stage3 conv1/conv4, stage4 conv1/conv4가 줄고,
   STORE만 빼면(`8`) stage3 conv0/conv2/conv3, stage4 conv0/conv2/conv3이 준다. wgt(`2`)나 acc(`4`)만 빼면 바뀌지 않는다.
 - traffic을 빼도 0.832 ms이고 0.91보다 적다. §7.14가 반복 × 2 cycle로 셈해서 조금 크게 잡은 것이다(회귀 계수 1.9).
-`hw/script/run_all.sh`의 `SYS_BIN`을 이것으로 바꿨다. multi4는 같은 소스로 `m4_build.sh bias`를 빌드 중이다.
+`hw/script/run_all.sh`의 `SYS_BIN`을 이것으로 바꿨다.
+
+**multi4** (`..._4evta_sa_400mhz_bias.bin`, 같은 소스, 보드 bit dir `/home/xilinx/JO/npuprg/bit/evta_multi4_bias_400MHz_pass_261104/`):
+- 빌드: `flow/m4_build.sh bias SYSTOLIC=1 FREQ=400 IMPL_STRATEGY=Performance_ExtraTimingOpt`(이 스크립트를 처음 씀). impl_1은 opt_design 뒤에서
+  멈췄고 HLS부터 bitstream까지 약 1.5시간 걸렸다. WNS +0.037 ns, WHS +0.010, WPWS +0.001, Y219 PIP 0, stuckchk 0 extra, holdpin 필요 없음.
+  LUT 133.3K, BRAM 580, DSP 1092.
+- 검증: probes 40/40(EVTA 0-3), `hw_multievtax4/script/run_prof.sh -s _systimed -n 2 all`에서 Conv4, ConvTest, ResConv10 PASS,
+  Resnet18 ×4 / ×1 exit 0. `EVTA_DUMP_CONV` 80개 파일이 `..._4evta_sa_400mhz_alu1`과 byte 단위로 같다.
+- 시간(`_sysprof -n 25 -l -r`, runs 2-25 중앙값, 두 bitstream을 번갈아 두 번씩, 두 번 모두 ±0.02 ms 안):
+
+| Resnet18 EVTA 시간 | `..._4evta_sa_400mhz_alu1` | `..._4evta_sa_400mhz_bias` |
+|---|---|---|
+| 4 copy 동시, EVTA마다 | 25.23-25.37 ms | **24.49-24.62 ms** (−0.75) |
+| copy 하나(100회) | 24.97 ms | **24.22 ms** |
+
+`hw_multievtax4/script/run_all.sh`의 `SYS_BIN`도 이것으로 바꿨다.
 
 ## 8. 하드웨어도 같이 비교해야 하나
 

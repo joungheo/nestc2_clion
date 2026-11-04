@@ -183,7 +183,7 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
 - Default bitstreams of `vtabundles_xcmpl/hw*/script/run_all.sh` (2026-10-28, `docs/evta_systolic.md` §8 8)): 380 MHz HLS GEMM with the
   HP ports on a separate 333 MHz clock (single `..._16_16_19_18_380mhz`, multi2 `..._2evta_380mhz_hp333`, multi4 `..._4evta_380mhz`);
   `SYS_BIN` = systolic 400 MHz (single, multi4), used by `run_prof.sh -s _sys*` (executables built with `-DVTALIB=<vtalib-zcu102-systolic>`);
-  single `SYS_BIN` is the bias reset build `..._sa_400mhz_bias.bin` since 2026-11-04 (before: ALU imm II = 1 `..._alu1_epr.bin`), multi4 `..._4evta_sa_400mhz_alu1.bin` since 2026-11-04 (§7.15).
+  single `SYS_BIN` is the bias reset build `..._sa_400mhz_bias.bin` since 2026-11-04 (before: ALU imm II = 1 `..._alu1_epr.bin`), multi4 `..._4evta_sa_400mhz_bias.bin` since 2026-11-04 (before: `..._4evta_sa_400mhz_alu1.bin`, §7.15).
   The 333 MHz `vtahw_*_y219.bin` stay usable with `BIN=<file>`.
 - Measuring (2026-10-29, `vtabundles_xcmpl/README.md`): `hw*/script/run_prof.sh -s _prof|_timed|_sysprof|_systimed` (build dirs
   `build[_<set>]<suffix>`), `-n <runs>` (default 25), `-l` lockstep of the multi-EVTA copies, `-r` `chrt -f 10`, `-t <threads>`
@@ -249,7 +249,8 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
 - Bias reset (2026-11-04, §7.16; systolic `sa_rmw.v` / `sa_ctrl.v`, ISA `VTAGemInsn.bias_reset`, vtalib `conv_kernel`): the conv bias is
   LOADed into acc before the reset GEMM and the reset writes it to the tile instead of 0 (no ALU ADD); only on a bitstream with `bias` in
   the name (`/tmp/evta_bitstream`; `EVTA_BIAS_RESET=0|1` overrides). Single `..._sa_400mhz_bias.bin` (WNS +0.000 ns): golden 30 PASS, dumps
-  byte-identical, Resnet18 EVTA 24.89 -> 24.15 ms, single OMP 1 27.30 -> 26.59 ms.
+  byte-identical, Resnet18 EVTA 24.89 -> 24.15 ms, single OMP 1 27.30 -> 26.59 ms. multi4 `..._4evta_sa_400mhz_bias.bin` (WNS +0.037 ns):
+  probes 40/40, golden 3 PASS, dumps byte-identical, EVTA per copy 25.23-25.37 -> 24.49-24.62 ms.
 - The lab board's PL has a defective configuration row (tile row SLICE Y219, cells stuck at 0; `log/BOARD_TODO.md`
   2026-10-23/24). `vivado.tcl` on zcu102 fences the design below it by default (`VTA_BRAM_FENCE=y219|upper|none`).
   multi2 fits below it and works (2026-10-24); multi4 needs more BRAM than the rows below, so it crosses the row with

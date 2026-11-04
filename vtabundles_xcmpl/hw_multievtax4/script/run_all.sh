@@ -5,7 +5,9 @@ cd "$(dirname "$0")/.."
 BIN=${BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_380mhz.bin}
 #### JO changed (2026-11-04): SYS_BIN = the ALU imm II 1 systolic bitstream (bit/evta_multi4_alu1_400MHz_pass_261104)
 #SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz.bin}
-SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz_alu1.bin}
+#### JO changed (2026-11-04): SYS_BIN = the bias reset build (bit/evta_multi4_bias_400MHz_pass_261104)
+#SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz_alu1.bin}
+SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz_bias.bin}
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-1}
 [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
 exec 9>/tmp/evta_run.lock; flock -n 9 || { echo "another EVTA run is active (/tmp/evta_run.lock)"; exit 1; }
