@@ -790,7 +790,23 @@ VGG16 0 / 0.453709로 전과 같다. `EVTA_DUMP_CONV`로 Resnet18 40개, Resnet5
 | Resnet18 EVTA 시간 (`_sysprof -n 25 -r`, runs 2-25 중앙값) | 24.889 ms | **24.154 ms** (−0.735 ms) |
 | Resnet18 single OMP 1 (`_systimed -n 25 -r`, runs 2-25 중앙값) | 27.303 ms | **26.592 ms** |
 
-예상(bias ADD 0.91 ms)보다 0.18 ms 적게 줄었다. bias LOAD는 그대로 남고, reset GEMM이 bias를 읽어도 시간은 같기 때문이다.
+예상(bias ADD 0.91 ms)보다 0.15~0.18 ms 적게 줄었다. bias LOAD는 전에도 tile마다 한 번이었고 위치만 앞으로 옮겼으므로 원인이 아니다.
+같은 `bias` bitstream에서 `EVTA_BIAS_RESET=0|1`로 conv별 시간(`_sysprof -n 25 -r`, runs 2-25 중앙값)을 비교했다.
+`EVTA_MEMEXP`로 DRAM traffic도 뺐다(결과는 쓰레기, 시간만 본다).
+
+| conv | 그대로 | traffic 모두 뺌(`EVTA_MEMEXP=15`) | ADD 반복 × 2 cycle |
+|---|---|---|---|
+| conv0 (+ pool) | −0.316 ms | −0.292 | 0.28 |
+| stage1 3×3 (4개, 개당) | −0.064 ~ −0.068 | −0.062 ~ −0.064 | 0.063 |
+| stage2 (5개, 개당) | −0.019 ~ −0.035 | −0.031 ~ −0.036 | 0.031 |
+| stage3 (5개, 개당) | +0.001 ~ −0.010 | −0.016 | 0.016 |
+| stage4 (5개, 개당) | +0.002 ~ −0.004 | −0.007 ~ −0.009 | 0.008 |
+| 합 | **−0.760** | **−0.832** | 0.91 |
+
+- traffic을 빼면 층마다 ADD 시간만큼 줄어든다. stage3/4에서는 tile 끝의 ADD가 다음 tile의 inp LOAD나 앞 tile의 STORE와 겹쳐 있었다.
+  그래서 빼도 시간이 거의 줄지 않는다. inp만 빼면(`EVTA_MEMEXP=1`) stage3 conv1/conv4, stage4 conv1/conv4가 줄고,
+  STORE만 빼면(`8`) stage3 conv0/conv2/conv3, stage4 conv0/conv2/conv3이 준다. wgt(`2`)나 acc(`4`)만 빼면 바뀌지 않는다.
+- traffic을 빼도 0.832 ms이고 0.91보다 적다. §7.14가 반복 × 2 cycle로 셈해서 조금 크게 잡은 것이다(회귀 계수 1.9).
 `hw/script/run_all.sh`의 `SYS_BIN`을 이것으로 바꿨다. multi4는 같은 소스로 `m4_build.sh bias`를 빌드 중이다.
 
 ## 8. 하드웨어도 같이 비교해야 하나
