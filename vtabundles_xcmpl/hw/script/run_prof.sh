@@ -33,9 +33,13 @@ HWD=$(basename "$PWD"); BLD=../build${HWD#hw}
 #[ -f /lib/firmware/$BIN ] || { echo "bitstream /lib/firmware/$BIN not found"; exit 1; }
 #### JO added (2026-11-04): --help / -h (anywhere in the arguments) prints the options and exits, no sudo needed
 usage() {
+  echo "usage: sudo $0 [options] [Dir ...|all]"
+  echo "  Runs the bundles of the run lines of $RUN_ALL (no Dir or 'all' = every one), reloading the bitstream before each."
+  #### JO added (2026-11-04): the bitstreams of this hw dir
+  for v in BIN SYS_BIN; do d=$(sed -n 's/^'$v'=\${'$v':-\(.*\)}$/\1/p; s/^'$v'=\([^$].*\)$/\1/p' script/run_all.sh)
+    [ -n "$d" ] && echo "  $v of script/run_all.sh: $d$([ -f /lib/firmware/$d ] || echo '  (not in /lib/firmware)')"; done
+  [ -n "${BIN:-}" ] && echo "  BIN= in the environment: $BIN (used instead)"
   cat <<EOU
-usage: sudo $0 [options] [Dir ...|all]
-  Runs the bundles of the run lines of $RUN_ALL (no Dir or 'all' = every one), reloading the bitstream before each.
 options:
   -s <suffix>   which build of the executables to run (default _prof):
                   _prof      ${BLD}_prof      EVTA time per EVTA call (VTA_SYNC events; prof_summary.py: per-conv ms, GOPS)

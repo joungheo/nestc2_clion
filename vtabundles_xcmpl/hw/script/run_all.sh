@@ -6,7 +6,11 @@ cd "$(dirname "$0")/.."
 case " $* " in *" -h "*|*" --help "*) echo "usage: sudo $0 [Dir ...]   (in hw*/script/; no Dir = every run line)"
   echo "  Reloads BIN (below; BIN=<file in /lib/firmware> in the environment wins) before each run line, runs the executable,"
   echo "  compares output.bin with the golden -> result/results.txt. HLS vtalib executables (build${PWD##*/hw}/)."
-  echo "  Timing runs and the systolic bitstream (SYS_BIN): script/run_prof.sh --help"; exit 0;; esac
+  echo "  Timing runs and the systolic bitstream (SYS_BIN): script/run_prof.sh --help"
+  for v in BIN SYS_BIN; do d=$(sed -n 's/^'$v'=\${'$v':-\(.*\)}$/\1/p; s/^'$v'=\([^$].*\)$/\1/p' script/run_all.sh)
+    [ -n "$d" ] && echo "  $v of script/run_all.sh: $d$([ -f /lib/firmware/$d ] || echo '  (not in /lib/firmware)')"; done
+  [ -n "${BIN:-}" ] && echo "  BIN= in the environment: $BIN (used instead)"
+  exit 0;; esac
 [ -n "${BIN:-}" ] && BSRC="BIN= in the environment" || BSRC="BIN of $0"
 BIN=${BIN:-vtahw_zcu102_1x16_i8w8a32_16_16_19_18_380mhz.bin}
 #### JO changed (2026-11-04): SYS_BIN = the bias reset systolic bitstream (bit/evta_sys_bias_400MHz_pass_261104)
