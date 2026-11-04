@@ -100,7 +100,7 @@ NEST-C의 EVTA(VTA 계열 NPU)를 ZCU102 보드에서 돌리고 빠르게 만든
   → [evta_runtime_compare.md](evta_runtime_compare.md) §7.16
 - **11-04 requantize:** GEMM / ALU가 out에 쓸 때 shift, 반올림, clip을 하드웨어로 한다(명령 필드 `rq_*`, `sa_rmw.v`, `vta.cc`).
   ALU SHR / MAX / MIN이 빠졌다. golden PASS, 층 출력 byte 동일, Resnet18 EVTA 24.15 → 23.05 ms, 추론 26.61 → 25.49 ms.
-  multi4는 400 MHz를 7 ps 못 맞춰 395.8 MHz로: EVTA마다 24.49-24.62 → 23.65-23.77 ms.
+  multi4는 처음에 400 MHz를 7 ps 못 맞춰 395.8 MHz(23.65-23.77 ms), 배치를 바꿔 400 MHz: EVTA마다 24.49-24.62 → 23.44-23.56 ms, 610.4 GOPS.
   → [evta_runtime_compare.md](evta_runtime_compare.md) §7.18. 명령 비트와 bitstream별 기능, 다른 모델 돌리는 법: [evta_isa_ext.md](evta_isa_ext.md)
 - **다음 후보:** 남은 EVTA 시간 24.15 ms의 구성과 후보(acc → out 변환에 requantize, reg-reg ALU II = 1, run 사이 겹치기,
   한 장을 EVTA 4개로, HAL / DRM accel). → [evta_runtime_compare.md](evta_runtime_compare.md) §7.17

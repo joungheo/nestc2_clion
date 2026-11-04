@@ -134,7 +134,8 @@ public class Y219RWRoute {
     }
     System.out.println("nets with a PIP in row " + row + ": " + nets + ", sinks to route: " + pins.size());
     RWRouteConfig c = new RWRouteConfig(new String[0]);
-    c.setTimingDriven(true);
+    // -Dtd=0: wirelength-driven (RWRoute 2025.2 throws in printRoutingStatistics when the nets to route have no timed path)
+    c.setTimingDriven(!"0".equals(System.getProperty("td")));
     c.setVerbose(true);
     Router.run(d, c, pins);
     int left = 0;

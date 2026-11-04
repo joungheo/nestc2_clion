@@ -921,7 +921,22 @@ bias reset처럼(§7.16) stage3/4에서는 ALU 시간 일부가 inp LOAD / STORE
 | 4 EVTA busy union | 583.8 GOPS | **605.1 GOPS** |
 | 25회 `total_time` | 706.4 ms | **684.0 ms** |
 
-clock이 1 % 낮아 single(−1.10 ms)보다 덜 줄었다. `hw_multievtax4/script/run_all.sh`의 `SYS_BIN`을 이것으로 바꿨다.
+clock이 1 % 낮아 single(−1.10 ms)보다 덜 줄었다.
+
+**multi4 400 MHz** (`..._4evta_sa_400mhz_rq.bin`, 같은 synth, 보드 bit dir `/home/xilinx/JO/npuprg/bit/evta_multi4_rq_400MHz_pass_261104/`):
+- placer directive만 바꿔(`VTA_PLACE_DIRECTIVE=ExtraNetDelay_high flow/run_flow.sh mrqp2`; `ExtraTimingOpt`은 −0.009 ns에서 멈춤) Y219 flow 전 +0.002 ns,
+  RapidWright 뒤 −0.205 ns. `route_s.tcl opt`(post-route phys_opt)로 +0.002 ns가 됐고, row Y219에 PIP이 남은 net 1개(fetch_3 CONTROL_BUS FSM,
+  100 MHz 쪽이라 timing path 없음)는 `Y219RWRoute.java -Dtd=0`(wirelength-driven; timing-driven이면 RWRoute 2025.2가 통계 출력에서 예외)으로 옮기고
+  `route_s.tcl`(phys_opt 없이): **WNS +0.002 ns, WHS +0.005, WPWS +0.001**, row Y219 PIP 0, stuckchk 0 extra.
+- 보드: probes 40/40, golden 3 PASS, Resnet18 `EVTA_DUMP_CONV` 80개가 395.8 MHz 판과 byte 단위로 같다.
+
+| Resnet18 EVTA 시간 (`_sysprof -n 25 -l -r`, 번갈아 두 번) | `..._4evta_sa_396mhz_rq` | `..._4evta_sa_400mhz_rq` |
+|---|---|---|
+| copy 0 / 1 / 2 / 3 | 23.64 / 23.76 / 23.76 / 23.65 ms | **23.44 / 23.56 / 23.56 / 23.44 ms** (−0.9 %) |
+| 4 EVTA busy union | 604.8 GOPS | **610.4 GOPS** |
+| 25회 `total_time` | 683.3 ms | **678.6 ms** |
+
+bias(400 MHz)보다 EVTA마다 −1.06 ms(−4.3 %). `hw_multievtax4/script/run_all.sh`의 `SYS_BIN`을 400 MHz 판으로 바꿨다.
 
 ## 8. 하드웨어도 같이 비교해야 하나
 

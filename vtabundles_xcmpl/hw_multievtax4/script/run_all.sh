@@ -19,7 +19,9 @@ BIN=${BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_380mhz.bin}
 #SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz_alu1.bin}
 #### JO changed (2026-11-04): SYS_BIN = the requantize build at 395.8 MHz (bit/evta_multi4_rq_396MHz_pass_261104; 400 MHz missed by 7 ps)
 #SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz_bias.bin}
-SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_396mhz_rq.bin}
+#SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_396mhz_rq.bin}
+#### JO changed (2026-11-04): SYS_BIN = the requantize build at 400 MHz (bit/evta_multi4_rq_400MHz_pass_261104; placer ExtraNetDelay_high)
+SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz_rq.bin}
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-1}
 [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
 exec 9>/tmp/evta_run.lock; flock -n 9 || { echo "another EVTA run is active (/tmp/evta_run.lock)"; exit 1; }

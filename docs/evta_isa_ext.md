@@ -152,6 +152,7 @@ GEMM과 ALU 명령에 그 값이 들어가고, `en = 0`으로 다시 끈다(`cmd
 | `..._16_15_18_17_4evta_sa_400mhz_alu1.bin` | 4 | × | × | `build_multievtax4_sys*` |
 | `..._16_15_18_17_4evta_sa_400mhz_bias.bin` | 4 | ○ | × | `build_multievtax4_sys*` |
 | `..._16_15_18_17_4evta_sa_396mhz_rq.bin` (395.8 MHz) | 4 | ○ | ○ | `build_multievtax4_sys*` |
+| `..._16_15_18_17_4evta_sa_400mhz_rq.bin` | 4 | ○ | ○ | `build_multievtax4_sys*` |
 
 - **`vtalib-zcu102-systolic`은 systolic bitstream에만 쓴다.** uop 순서가 HLS GEMM과 다르다.
 - **기능은 bitstream 이름으로 켠다.** `run_all.sh`, `run_prof.sh`, `load_bit.sh`, `hwtest/*.sh`가 `/tmp/evta_bitstream`에 이름을 쓴다.

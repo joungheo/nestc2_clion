@@ -39,6 +39,9 @@ with no PIP in row Y219 wins (alu1r 2026-11-04: WHS -0.032 -> +0.007 at 310 ps; 
 If setup is a few ps short after `route_s.tcl`: `route_s.tcl <rs>.dcp <out> opt` (post-route phys_opt), then, if it put a net back into
 row Y219, `write_edif <out>.edf` and `Y219RWRoute.java` / `route_s.tcl ... opt2` again; what is left can go to the MMCM (`mmcm_set.tcl <dcp> <out> 11.875`
 = 395.8 MHz instead of 12 = 400). rq 2026-11-04: -0.127 -> -0.007 ns (store_queue FIFO36 RDEN), 395.8 MHz +0.004 ns, board pass.
+Another placer directive may do better: rq with `VTA_PLACE_DIRECTIVE=ExtraNetDelay_high` +0.002 ns before RapidWright, -0.205 after,
+`opt` +0.002 ns with one net back in the row; that net (no timed path) rerouted with `Y219RWRoute.java -Dtd=0` (wirelength-driven: timing-driven
+RWRoute 2025.2 throws in printRoutingStatistics when no routed connection is timed), then `route_s.tcl` with no opt: 400 MHz +0.002 ns, board pass.
 `run_flow.sh` takes `VTA_PLACE_DIRECTIVE` (placer directive in `place_d.tcl`, default Explore) and `RW_XMX` (RapidWright heap, default 64g).
 
 ## Tools
