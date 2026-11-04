@@ -134,6 +134,10 @@ NEST-C의 EVTA(VTA 계열 NPU)를 ZCU102 보드에서 돌리고 빠르게 만든
 | [13](figs/evta_fig13_alu_ii.svg) | ALU: II = 2 → imm II = 1, 다음은 RMW reset에 bias |
 | [14](figs/evta_fig14_time_waterfall.svg) | Resnet18 추론 시간: 단계별로 줄어든 폭 |
 | [15](figs/evta_fig15_evta_time_now.svg) | 지금 EVTA 시간 26.47 ms의 구성과 줄어들 몫 |
+| [16](figs/evta_fig16_alu_ii1_registers.svg) | ALU imm II = 1과 acc / out 쓰기 앞 register: 고친 경로와 결과 |
+| [17](figs/evta_fig17_bias_reset.svg) | bias reset: 명령 순서, sa_rmw.v의 바뀐 곳, conv별로 줄어든 시간 |
+| [18](figs/evta_fig18_requantize.svg) | requantize를 acc → out 쓰기에: 필드가 가는 길, sa_rmw.v S4~S6, 빠지는 ALU 명령, 결과 |
+| [19](figs/evta_fig19_hw_steps_time.svg) | 하드웨어 단계별 Resnet18 EVTA / 추론 시간 (26.42 → 23.05 ms) |
 
 ### 그림 1. Resnet18 추론 한 번: CPU와 EVTA가 하는 일 (10-29 → 11-02)
 
@@ -194,6 +198,22 @@ NEST-C의 EVTA(VTA 계열 NPU)를 ZCU102 보드에서 돌리고 빠르게 만든
 ### 그림 15. 지금 EVTA 시간 26.47 ms의 구성과 줄어들 몫
 
 ![그림 15](figs/evta_fig15_evta_time_now.svg)
+
+### 그림 16. ALU imm II = 1과 acc / out 쓰기 앞 register: 고친 경로와 결과
+
+![그림 16](figs/evta_fig16_alu_ii1_registers.svg)
+
+### 그림 17. bias reset: 명령 순서, sa_rmw.v의 바뀐 곳, conv별로 줄어든 시간
+
+![그림 17](figs/evta_fig17_bias_reset.svg)
+
+### 그림 18. requantize를 acc → out 쓰기에: 필드가 가는 길, sa_rmw.v S4~S6, 빠지는 ALU 명령, 결과
+
+![그림 18](figs/evta_fig18_requantize.svg)
+
+### 그림 19. 하드웨어 단계별 Resnet18 EVTA / 추론 시간 (26.42 → 23.05 ms)
+
+![그림 19](figs/evta_fig19_hw_steps_time.svg)
 
 ## 문서 지도
 

@@ -215,6 +215,8 @@ sudo /bin/sh -c "hw_multievtax4/script/run_prof.sh -s _sysprof -n 25 -l -r Multi
 | `EVTA_PRE_RUN_US`, `EVTA_PRE_RUN_MASK`, `EVTA_PRE_RUN_AT` | 0 | 멈춤 추적용: run 앞 대기 시간(µs), 대기할 EVTA mask, 대기 위치 |
 | `EVTA_STORE_SENTINEL`, `EVTA_DOUBLE_QUEUE` | 0 | 멈춤 추적용: STORE 영역 표식, 명령 buffer 번갈아 쓰기 |
 | `EVTA_FC_PROBE=1` | 0 | fc EVTA 경로 bring-up 시험(결과는 틀린다) |
+| `EVTA_BIAS_RESET=0\|1` | bitstream 이름 | bias reset 강제(이름에 `bias`나 `_rq`가 있으면 켜짐). [evta_isa_ext.md](evta_isa_ext.md) |
+| `EVTA_REQUANT=0\|1` | bitstream 이름 | out 쓰기 requantize 강제(이름에 `_rq`가 있으면 켜짐). 기능이 없는 bitstream에서 1이면 결과가 틀린다 |
 | `MULTI_RUNS`, `MULTI_LOCKSTEP` | 25, 0 | multi-EVTA main의 copy당 추론 수, lockstep(`run_prof.sh -n`, `-l`이 설정) |
 | `BUNDLE_RUNS` | | `_prof` / `_timed` 실행 파일의 추론 수(`run_prof.sh -n`이 설정) |
 

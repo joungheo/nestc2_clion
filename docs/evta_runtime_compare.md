@@ -727,6 +727,8 @@ case를 한 프로세스에서 모두 돈다: runtime의 CMA는 `xlnk_reset`으�
 
 ### 7.15 ALU imm 연산을 II = 1로 (2026-11-03, bitstream `..._sa_400mhz_alu1_epr`, `vta-hw-zcu102-systolic` `vta.cc` `alu()`)
 
+그림: [evta_fig16](figs/evta_fig16_alu_ii1_registers.svg).
+
 **어떻게:** systolic 빌드(`VTA_SYSTOLIC`)의 `alu()`에 `use_imm`인 명령만 도는 루프를 따로 둔다. 반복마다 acc를 dst 한 번만 읽고(포트 A)
 한 번 쓰므로(포트 B) II = 1이다. reg 연산(bias ADD, pool MAX)은 그대로 II = 2 루프다. ISA, vtalib, 컴파일러, bundle은 바뀌지 않는다.
 - 같은 반복 안에서 읽은 dst를 몇 clk 뒤 쓰므로, 그 사이 같은 dst를 다시 읽으면 안 된다(acc는 `DEPENDENCE inter false`).
@@ -766,6 +768,8 @@ bitstream과 byte 단위로 같다.
 - multi4 `_sysprof` 실행 파일이 11-01 것이라 지금 bundle과 맞지 않아 죽었다(두 bitstream 모두 exit 139). `build_multievtax4_sysprof`에서 `make -j2 hw_bundles`로 다시 빌드했다.
 
 ### 7.16 RMW reset에 bias (2026-11-04, bitstream `..._sa_400mhz_bias`)
+
+그림: [evta_fig17](figs/evta_fig17_bias_reset.svg).
 
 **어떻게:** conv의 bias를 GEMM 누산의 시작값으로 쓴다. 지금까지는 GEMM reset이 acc를 0으로 쓰고, GEMM 뒤에 bias를 acc에 LOAD한 뒤
 ALU ADD로 더했다. 이제는 bias LOAD를 tile 시작으로 옮기고, reset GEMM이 0 대신 acc[bias + f]를 acc[base + f·T + p]에 쓴다. 정수 덧셈이라 결과는 같다.
@@ -869,7 +873,8 @@ EVTA 하나의 속도는 1번, 실제 추론 latency는 6번이 가장 크다.
 
 ### 7.18 acc → out 쓰기에 requantize (2026-11-04, bitstream `..._sa_400mhz_rq`)
 
-필드와 실행 방법은 [evta_isa_ext.md](evta_isa_ext.md)에 정리했다.
+필드와 실행 방법은 [evta_isa_ext.md](evta_isa_ext.md)에 정리했다. 그림: [evta_fig18](figs/evta_fig18_requantize.svg),
+단계별 시간 [evta_fig19](figs/evta_fig19_hw_steps_time.svg).
 
 **어떻게:** GEMM과 ALU는 단계마다 acc의 하위 8비트를 out에 쓴다. 지금까지는 그 값이 결과가 되도록 ALU SHR / MAX / MIN(반올림 ADD)으로
 acc 자체를 바꿨다. 이제는 명령의 `rq_*` 필드(en, round, shift, lo, hi)로 out에 쓰는 값을 clip((acc + round) >> shift, lo, hi)로 만들고,
