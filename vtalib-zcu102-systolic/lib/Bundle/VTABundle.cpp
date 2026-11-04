@@ -590,6 +590,9 @@ static bool evtaBiasReset() {
   }
   return on;
 }
+//#### JO added (2026-11-04): declared here: this file includes vta/vtalib's runtime.h (not this copy's include/zcu102/vta/runtime.h,
+//#### where it is declared); defined in this copy's lib/zcu102/api.cc
+extern "C" void VTARequant(VTACommandHandle cmd, int en, int round, int shift, int lo, int hi);
 //#### JO added (2026-11-04, requantize): the requantize of conv / fc outputs on the write to out (VTARequant, GEMM / ALU rq_*)
 //#### instead of the ALU SHR / MAX / MIN (+ the rounding ADD); only on a bitstream that has it (gemm_sa sa_rmw.v, vta.cc
 //#### alu(), 2026-11-04): "_rq" in the name of the bitstream the run scripts loaded (/tmp/evta_bitstream); EVTA_REQUANT=0|1
