@@ -907,6 +907,22 @@ conv별로 conv0(+ pool) −0.47 ms, stage1 −0.06~−0.13, stage2 −0.02~−0
 bias reset처럼(§7.16) stage3/4에서는 ALU 시간 일부가 inp LOAD / STORE와 겹쳐 있었던 것으로 보인다(`EVTA_MEMEXP`로 따로 재지 않았다).
 `hw/script/run_all.sh`의 `SYS_BIN`을 이것으로 바꿨다.
 
+**multi4** (`..._4evta_sa_396mhz_rq.bin`, 같은 소스, 보드 bit dir `/home/xilinx/JO/npuprg/bit/evta_multi4_rq_396MHz_pass_261104/`):
+- 빌드: `flow/m4_build.sh rq SYSTOLIC=1 FREQ=400 IMPL_STRATEGY=Performance_ExtraTimingOpt`. LUT 133.3K → 164.1K(EVTA 4개 × 약 7.7K), BRAM 580, DSP 그대로.
+  Y219 flow 뒤 400 MHz WNS −0.127 ns(115 endpoint). route 뒤 `phys_opt_design`(`route_s.tcl opt`)으로 −0.007 ns가 됐지만 row Y219에 PIP 1개가
+  남아, 그 net만 RapidWright로 다시 옮겼다(`write_edif` 후 `Y219RWRoute.java`, `route_s.tcl opt2`). 남은 경로는 `store_queue_1` FIFO36 cascade의
+  RDEN(2.5 ns 중 1.77 ns, 로직 2단). `phys_opt`을 더 돌려도 −0.007 ns 그대로라, placement · route는 두고 MMCM 배수만 12 → 11.875
+  (`mmcm_set.tcl rs_mrqo2.dcp rs_mrqm 11.875`, 395.8 MHz): WNS +0.004 ns, WHS +0.006, WPWS +0.001, row Y219 PIP 0, stuckchk 0 extra.
+- 보드: probes 40/40, `run_prof.sh -s _systimed -n 2 all` golden 3 PASS, Resnet18 `EVTA_DUMP_CONV` 80개가 `bias` bitstream과 byte 단위로 같다.
+
+| Resnet18 EVTA 시간 (`_sysprof -n 25 -l -r`, 4 copy 동시, runs 2-25 중앙값, 두 번) | `..._4evta_sa_400mhz_bias` | `..._4evta_sa_396mhz_rq` |
+|---|---|---|
+| copy 0 / 1 / 2 / 3 | 24.49 / 24.62 / 24.62 / 24.51 ms | **23.65 / 23.77 / 23.77 / 23.66 ms** (−0.85, −3.5 %) |
+| 4 EVTA busy union | 583.8 GOPS | **605.1 GOPS** |
+| 25회 `total_time` | 706.4 ms | **684.0 ms** |
+
+clock이 1 % 낮아 single(−1.10 ms)보다 덜 줄었다. `hw_multievtax4/script/run_all.sh`의 `SYS_BIN`을 이것으로 바꿨다.
+
 ## 8. 하드웨어도 같이 비교해야 하나
 
 해야 한다. 다만 §7의 ①~④를 가르는 것은 어레이가 아니라 다음 네 가지다.

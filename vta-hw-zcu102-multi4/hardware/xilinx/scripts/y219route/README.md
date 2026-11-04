@@ -36,6 +36,10 @@ cost hours for nothing (alu1r 2026-11-03: route still not done after 4 h).
 If hold still fails after `route_s.tcl` and `holdnets.tcl` does not move it (the reroute takes the same wires), `flow/holdpin.tcl
 -tclargs <in.dcp> <out> <min delay ps> ...` reroutes each failing endpoint with a minimum route delay, the first delay that meets hold
 with no PIP in row Y219 wins (alu1r 2026-11-04: WHS -0.032 -> +0.007 at 310 ps; 400 ps took a detour through the row).
+If setup is a few ps short after `route_s.tcl`: `route_s.tcl <rs>.dcp <out> opt` (post-route phys_opt), then, if it put a net back into
+row Y219, `write_edif <out>.edf` and `Y219RWRoute.java` / `route_s.tcl ... opt2` again; what is left can go to the MMCM (`mmcm_set.tcl <dcp> <out> 11.875`
+= 395.8 MHz instead of 12 = 400). rq 2026-11-04: -0.127 -> -0.007 ns (store_queue FIFO36 RDEN), 395.8 MHz +0.004 ns, board pass.
+`run_flow.sh` takes `VTA_PLACE_DIRECTIVE` (placer directive in `place_d.tcl`, default Explore) and `RW_XMX` (RapidWright heap, default 64g).
 
 ## Tools
 - `Y219RWRoute.java` reroute the nets with a PIP in the row (`-Dpips=stuck_int_pips.txt`: only stuck-cell PIPs,

@@ -606,7 +606,7 @@ def st15():
 
 @fig(16, "requantize")
 def st16():
-    s = Svg(1460, 1260, "16. requantize를 acc → out 쓰기 길에: ALU SHR / MAX / MIN 명령 대신 out에 쓸 때 반올림 · shift · clip (11-04)",
+    s = Svg(1460, 1280, "16. requantize를 acc → out 쓰기 길에: ALU SHR / MAX / MIN 명령 대신 out에 쓸 때 반올림 · shift · clip (11-04)",
             ["out_mem은 STORE가 DRAM으로 옮기는 int8이고, 원래는 acc의 하위 8비트를 배선으로 받기만 했다(logic 없음). 그래서 requantize를",
              "acc 값 자체에 ALU 명령으로 했다. 이제 GEMM / ALU 명령의 rq_* 필드로 out 쓰기 길에서 한다. 자세히: evta_runtime_compare.md §7.18, evta_isa_ext.md."])
     s.section(110, "A. GEMM의 sa_rmw.v: acc 쪽(S0~S3)은 그대로, out 쪽에 S4~S6 (lane 16개마다 덧셈기, barrel shifter, 비교기 2개)")
@@ -648,8 +648,9 @@ def st16():
         s.text(x + 10, yy + 23, note, 11.5, color="#2a6a24")
     times(s, 40, 990, [("Resnet18 EVTA 시간 (single, bias → _rq bitstream)", 24.153, 23.053, "ms"),
                        ("Resnet18 추론 (single, OMP 1)", 26.611, 25.493, "ms"),
-                       ("conv0 + pool EVTA", 3.761, 3.295, "ms"), ("stage1 conv1 EVTA", 1.586, 1.454, "ms")])
-    s.lines(40, 1160, ["• 비용: LUT 34.3K → 42.1K(single), BRAM / DSP 그대로, 400 MHz WNS +0.039 ns.",
+                       ("conv0 + pool EVTA", 3.761, 3.295, "ms"), ("stage1 conv1 EVTA", 1.586, 1.454, "ms"),
+                       ("multi4 4 copy 동시, EVTA마다 (가운데 값, 400 → 395.8 MHz)", 24.555, 23.71, "ms")])
+    s.lines(40, 1180, ["• 비용: LUT 34.3K → 42.1K(single), 133.3K → 164.1K(multi4), BRAM / DSP 그대로. single 400 MHz WNS +0.039 ns, multi4 395.8 MHz +0.004 ns.",
                        "• 정확도: golden 27 PASS + 분류 4개 같음, 층 출력 Resnet18 40개 · Resnet50 106개 byte 동일, EVTA_RES_CHECK 0, EVTA_REQUANT=0 우회도 동일."], 12.5)
     return s
 

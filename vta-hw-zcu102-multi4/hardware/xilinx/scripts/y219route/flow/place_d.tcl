@@ -13,7 +13,9 @@ foreach re {{SLICE_X\d+Y21[89]} {SLICE_X\d+Y220} {RAMB36_X\d+Y4[34]} {RAMB18_X\d
   set_property PROHIBIT true [get_sites -quiet -regexp $re]
 }
 foreach pb [get_pblocks] { set_property CONTAIN_ROUTING false $pb }
-place_design -directive Explore
+#### JO changed (2026-11-04): VTA_PLACE_DIRECTIVE picks another placer directive (multi4 rq missed 400 MHz by 7 ps with Explore)
+#place_design -directive Explore
+place_design -directive [expr {[info exists ::env(VTA_PLACE_DIRECTIVE)] && $::env(VTA_PLACE_DIRECTIVE) ne "" ? $::env(VTA_PLACE_DIRECTIVE) : "Explore"}]
 phys_opt_design -directive AggressiveExplore
 write_checkpoint -force [string map {routed placed} $out].dcp
 route_design -directive AggressiveExplore
