@@ -824,6 +824,49 @@ VGG16 0 / 0.453709로 전과 같다. `EVTA_DUMP_CONV`로 Resnet18 40개, Resnet5
 
 `hw_multievtax4/script/run_all.sh`의 `SYS_BIN`도 이것으로 바꿨다.
 
+### 7.17 bias reset 다음에 남은 것 (2026-11-04)
+
+지금 Resnet18 single은 EVTA 24.15 ms, 추론 26.59 ms다. §7.14의 측정에 그 뒤 바뀐 것(§7.15 imm II = 1, §7.16 bias reset)을 반영한 추정은 다음과 같다.
+
+| 덩어리 | 대략 | 비고 |
+|---|---|---|
+| GEMM | 18.85 ms | 16×16, 400 MHz, 1 cycle / 반복. 이론 최소 17.7 ms(3628 Mops ÷ 204.8 GOPS)의 94 % |
+| ALU 남은 것 | 약 2.0 ms | imm 연산(SHR, MIN, MAX, 반올림 ADD) 약 1.5(II = 1), pool MAX 0.45(II = 2) |
+| 그 밖의 고정 비용 | 약 3 ms | conv0 tile 1.08, run마다 60~130 µs(첫 LOAD, 마지막 STORE, 명령 fetch), load-bound 층 |
+| CPU (추론 − EVTA) | 약 2.4 ms | 전처리, softmax, run 호출 |
+
+하드웨어:
+1. **acc → out 변환에 requantize** (약 −1.5 ms, 가장 큼)
+   - 지금은 GEMM과 ALU가 단계마다 acc의 하위 8비트를 out에 쓴다(`sa_rmw.v` `out_wr_data`, HLS `vta.cc`의 `accum.range(7, 0)`).
+     STORE는 그 int8 out을 DRAM으로 옮기기만 한다. 그래서 STORE 모듈이 아니라 이 변환 자리에서 반올림 → shift → clip(relu 포함)을
+     하고, ALU 명령 4~5개(ADD imm, SHR, MIN, MAX)를 없앤다.
+   - out은 단계마다 덮어쓰므로 tile의 마지막 GEMM이 쓴 값이 남는다. 추가 cycle 없이 변환 pipeline 단만 늘어난다.
+   - ISA: GEMM 명령의 `pad_0`(31비트 남음)에 shift 5비트, relu 1비트, 반올림 1비트, 켜기 1비트 정도면 된다. `memory_type`,
+     `alu_opcode`의 2비트 필드는 손대지 않는다. 이전 bitstream은 새 비트를 무시하므로, vtalib은 bias reset처럼 bitstream 이름으로 켜고 끈다(끄면 지금의 ALU 명령).
+   - 고려할 점: residual(identity GEMM으로 acc에 더함)과 conv0 + pool(acc에서 MAX)은 순서가 다르다. 처음에는 일반 conv에만 쓴다.
+2. **reg-reg ALU를 II = 1로** (약 −0.25 ms): pool MAX와 residual ADD는 acc를 한 번에 두 개 읽어야 한다. acc bank를 나누거나
+   읽기 포트를 늘려야 해서 BRAM 비용이 크다.
+3. **GEMM 자체** (큰 작업): 이미 이론치의 94 %다. 어레이를 키우거나(DSP 여유: single 273, multi4 1092 / 2448) clock을 올려야 한다
+   (400 MHz WNS 0; 32×32, 64×64의 자원과 예상은 §6). 어레이를 키우면 16채널 단위 layout이 ISA, vtalib, 컴파일러 전체에 걸려 있다. DSP 하나에 int8 곱 두 개를
+   넣는 것은 속도가 아니라 DSP를 아낀다.
+
+소프트웨어(bitstream 그대로):
+
+4. **run 사이 고정 비용** (약 −1 ms): 층마다 EVTA run을 따로 시작하는 대신 여러 층을 명령 stream 하나로 이어, 다음 층의 LOAD가
+   앞 층의 STORE와 겹치게 한다(replay, AOT stage 0을 넓히기).
+5. **conv0 tile 키우기**(single EVTA는 inp buffer 전체), **1×1 downsample conv를 같은 입력의 conv와 합치기** (각각 수백 µs).
+6. **한 장을 EVTA 4개로 나눠 latency 줄이기** (약 26 → 8~10 ms 예상): 지금 multi4는 copy 4개로 처리량만 늘린다. 층마다 출력
+   채널이나 행을 나누고, EVTA 사이를 동기화해야 한다.
+7. **CPU 2.4 ms**: 전처리, softmax, run 호출 overhead를 나눠 잰다.
+
+방향:
+
+8. **runtime / driver**: `/dev/mem` mmap과 bitstream 이름으로 기능을 판별하는 대신 HAL 경계(buffer, 명령, 완료 대기)를 정하고
+   DRM accel driver로 옮긴다([npu_stack_survey.md](npu_stack_survey.md) §2.3).
+9. **다른 모델**: Resnet50과 VGG16은 돌지만 시간을 줄인 것은 Resnet18뿐이다. MobileNet 등은 아직 해 보지 않았다.
+
+EVTA 하나의 속도는 1번, 실제 추론 latency는 6번이 가장 크다.
+
 ## 8. 하드웨어도 같이 비교해야 하나
 
 해야 한다. 다만 §7의 ①~④를 가르는 것은 어레이가 아니라 다음 네 가지다.
