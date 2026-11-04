@@ -836,7 +836,7 @@ VGG16 0 / 0.453709로 전과 같다. `EVTA_DUMP_CONV`로 Resnet18 40개, Resnet5
 | CPU (추론 − EVTA) | 약 2.4 ms | 전처리, softmax, run 호출 |
 
 하드웨어:
-1. **acc → out 변환에 requantize** (약 −1.5 ms, 가장 큼)
+1. **acc → out 변환에 requantize** (약 −1.5 ms, 가장 큼) → **했다(§7.18, −1.10 ms)**
    - 지금은 GEMM과 ALU가 단계마다 acc의 하위 8비트를 out에 쓴다(`sa_rmw.v` `out_wr_data`, HLS `vta.cc`의 `accum.range(7, 0)`).
      STORE는 그 int8 out을 DRAM으로 옮기기만 한다. 그래서 STORE 모듈이 아니라 이 변환 자리에서 반올림 → shift → clip(relu 포함)을
      하고, ALU 명령 4~5개(ADD imm, SHR, MIN, MAX)를 없앤다.
@@ -866,6 +866,41 @@ VGG16 0 / 0.453709로 전과 같다. `EVTA_DUMP_CONV`로 Resnet18 40개, Resnet5
 9. **다른 모델**: Resnet50과 VGG16은 돌지만 시간을 줄인 것은 Resnet18뿐이다. MobileNet 등은 아직 해 보지 않았다.
 
 EVTA 하나의 속도는 1번, 실제 추론 latency는 6번이 가장 크다.
+
+### 7.18 acc → out 쓰기에 requantize (2026-11-04, bitstream `..._sa_400mhz_rq`)
+
+필드와 실행 방법은 [evta_isa_ext.md](evta_isa_ext.md)에 정리했다.
+
+**어떻게:** GEMM과 ALU는 단계마다 acc의 하위 8비트를 out에 쓴다. 지금까지는 그 값이 결과가 되도록 ALU SHR / MAX / MIN(반올림 ADD)으로
+acc 자체를 바꿨다. 이제는 명령의 `rq_*` 필드(en, round, shift, lo, hi)로 out에 쓰는 값을 clip((acc + round) >> shift, lo, hi)로 만들고,
+그 ALU 명령을 없앤다. acc는 바뀌지 않는다.
+- ISA: `VTAGemInsn` 비트 141~164, `VTAAluInsn` 144~167(pad 자리). round 0 없음, 1 half up, 2 half away from zero. `rq_en = 0`이면 전과 같다.
+- RTL `sa_rmw.v`: acc 쓰기(S3) 뒤에 S4 덧셈, S5 산술 shift, S6 clip. out 쓰기, done, token, busy를 S6으로 옮겼다(forwarding은 그대로).
+  `sa_ctrl.v`는 rq 24비트를 FIFO와 tag로 실어 보낸다(uop stream + 24비트).
+- HLS `vta.cc`: `requant()`를 ALU 두 루프와 CSim의 GEMM 모델에. HLS 추정 clock과 critical path는 bias 빌드와 같다.
+- vtalib `VTARequant(cmd, en, round, shift, lo, hi)`. 일반 conv는 GEMM에, conv + pool은 열 방향 pool MAX에, residual은 residual GEMM에,
+  fc는 fc GEMM에 쓴다. 이름에 `_rq`가 있는 bitstream에서만 켠다(`EVTA_REQUANT=0|1`로 강제). `_rq`는 bias reset도 켠다.
+- 식의 확인: C 모델 `rqout()`이 지금 vtalib의 ALU 순서(conv, residual 끝, fc)와 5,750만 값에서 같다.
+- 검증 순서: C 모델 무작위 300 → RTL testbench 49 vector × (그대로, GAP·BP 30 %) 98/98 → HLS CSim 0 errors → 보드.
+- 함께 고친 것: vtalib `NextInsn()`과 `test_lib.cc` `getGEMMInsn()`이 명령을 0으로 채우지 않아 pad 비트가 쓰레기였다. 이제 0으로 채운다.
+  새 vtalib으로 `bias` bitstream에서 돌린 Resnet50 층 출력 106개는 전과 같다.
+- timing(400 MHz, `Performance_ExplorePostRoutePhysOpt`): WNS +0.039 ns, WHS +0.006, WPWS +0.001. LUT 34.3K → 42.1K, BRAM 258, DSP 273. stuckchk 0 extra.
+- 보드 bit dir: `/home/xilinx/JO/npuprg/bit/evta_sys_rq_400MHz_pass_261104/` (README 있음).
+
+**검증:**
+- probes 10/10. `run_prof.sh -s _systimed -n 2 all`에서 golden 27 PASS. Resnet18 281 / 0.655530, Partition 281 / 0.530282, Resnet50 281 / 0.581379,
+  VGG16 0 / 0.453709로 전과 같다.
+- `EVTA_DUMP_CONV`: Resnet18 40개, Resnet50 106개가 `bias` bitstream과 byte 단위로 같다. `EVTA_RES_CHECK=1` 20건 불일치 0.
+- 우회: 같은 `_rq` bitstream에서 `EVTA_REQUANT=0`이면 Resnet18 40개가 `bias`와 같다.
+
+| 측정 (같은 실행 파일, 같은 날) | `..._sa_400mhz_bias` | `..._sa_400mhz_rq` |
+|---|---|---|
+| Resnet18 EVTA 시간 (`_sysprof -n 25 -r`, runs 2-25 중앙값, 번갈아 두 번) | 24.153 / 24.154 ms | **23.053 / 23.054 ms** (−1.10) |
+| Resnet18 single OMP 1 (`_systimed -n 25 -r`, runs 2-25 중앙값) | 26.611 ms | **25.493 ms** |
+
+conv별로 conv0(+ pool) −0.47 ms, stage1 −0.06~−0.13, stage2 −0.02~−0.07, stage3/4 −0.01~−0.03, fc −0.005 ms다. 예상 −1.5 ms(§7.14의 imm 연산 시간)보다 적다.
+bias reset처럼(§7.16) stage3/4에서는 ALU 시간 일부가 inp LOAD / STORE와 겹쳐 있었던 것으로 보인다(`EVTA_MEMEXP`로 따로 재지 않았다).
+`hw/script/run_all.sh`의 `SYS_BIN`을 이것으로 바꿨다.
 
 ## 8. 하드웨어도 같이 비교해야 하나
 

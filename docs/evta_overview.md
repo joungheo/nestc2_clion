@@ -20,6 +20,7 @@ NEST-C의 EVTA(VTA 계열 NPU)를 ZCU102 보드에서 돌리고 빠르게 만든
 | 11-02 | 40.6 → **28.83 ms** (OMP 4 27.71) | **0.820 s** | fc EVTA, 전처리 합치기, replay, conv0 pack, conv0+pool |
 | 11-03 | **27.32 ms** (같은 날 이전 bitstream 28.98) | | ALU imm II = 1 bitstream |
 | 11-04 | **26.59 ms** (같은 날 이전 bitstream 27.30) | | RMW reset에 bias (bitstream) |
+| 11-04 | **25.49 ms** (같은 날 이전 bitstream 26.61) | | out 쓰기에 requantize (bitstream) |
 
 현재 Resnet18 single OMP 1 28.83 ms의 구성(11-02, `evta_runtime_compare.md` §7.14): EVTA 26.47 ms
 (GEMM 18.85 + ALU 4.63 + 그 밖 2.99), CPU와 호출 약 2.4 ms.
@@ -97,6 +98,9 @@ NEST-C의 EVTA(VTA 계열 NPU)를 ZCU102 보드에서 돌리고 빠르게 만든
   추론 27.30 → 26.59 ms. multi4도 같은 소스로 통과(WNS +0.037 ns, probes 40/40, golden 3 PASS, 층 출력 byte 동일),
   EVTA마다 25.23-25.37 → 24.49-24.62 ms. stage3/4에서는 ADD가 inp LOAD / STORE에 가려져 있어 덜 준다.
   → [evta_runtime_compare.md](evta_runtime_compare.md) §7.16
+- **11-04 requantize:** GEMM / ALU가 out에 쓸 때 shift, 반올림, clip을 하드웨어로 한다(명령 필드 `rq_*`, `sa_rmw.v`, `vta.cc`).
+  ALU SHR / MAX / MIN이 빠졌다. golden PASS, 층 출력 byte 동일, Resnet18 EVTA 24.15 → 23.05 ms, 추론 26.61 → 25.49 ms.
+  → [evta_runtime_compare.md](evta_runtime_compare.md) §7.18. 명령 비트와 bitstream별 기능, 다른 모델 돌리는 법: [evta_isa_ext.md](evta_isa_ext.md)
 - **다음 후보:** 남은 EVTA 시간 24.15 ms의 구성과 후보(acc → out 변환에 requantize, reg-reg ALU II = 1, run 사이 겹치기,
   한 장을 EVTA 4개로, HAL / DRM accel). → [evta_runtime_compare.md](evta_runtime_compare.md) §7.17
 
