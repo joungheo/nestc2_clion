@@ -774,7 +774,10 @@ class InsnQueue : public BaseQueue<VTAGenericInsn> {
  protected:
   /*! \return Add new instruction to the buffer. */
   VTAGenericInsn* NextInsn() {
-    VTAGenericInsn insn;
+    //#### JO changed (2026-11-04): zeroed, the pad bits of the 256-bit instruction were left as they were (the bitstream
+    //#### fields bias_reset / rq_* live in former pad bits)
+    //VTAGenericInsn insn;
+    VTAGenericInsn insn{};
     dram_buffer_.push_back(insn);
     return &dram_buffer_.back();
   }

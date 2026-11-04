@@ -359,6 +359,19 @@ void gemm(
   }
 }
 
+//#### JO added (2026-11-04, requantize): the int8 written to out for the new acc value v, rq_* of VTAGemInsn / VTAAluInsn
+//#### (as sa_rmw.v): o (the low 8 bits) when off, else clip((v + round) >> shift, lo, hi), the add 32-bit (wraps as the
+//#### ALU ADD), round 1: + 2^(shift-1), 2: + 2^(shift-1) - (v < 0) (half away from zero), none with shift 0.
+inline out_T requant(acc_T v, out_T o, bool en, ap_uint<2> rnd, ap_uint<5> shift, ap_int<8> lo, ap_int<8> hi) {
+#pragma HLS INLINE
+  ap_uint<32> h = (rnd != 0 && shift != 0) ? (ap_uint<32>) ((ap_uint<32>) 1 << (shift - 1)) : (ap_uint<32>) 0;
+  if (rnd == 2 && shift != 0 && v < 0) h = h - 1;
+  acc_T t = (acc_T) ((ap_uint<32>) v.range(VTA_ACC_WIDTH - 1, 0) + h);
+  acc_T q = t >> shift;
+  out_T c = q < lo ? (out_T) lo : q > hi ? (out_T) hi : (out_T) q.range(VTA_OUT_WIDTH - 1, 0);
+  return en ? c : o;
+}
+
 #ifdef VTA_SYSTOLIC
 //#### JO added (2026-10-27, systolic Phase D, docs/evta_systolic_design.md §3): the GEMM loop of gemm() with the
 //#### computation replaced by one uop to gemm_sa per step (final addresses, last on the instruction's final step).
@@ -399,6 +412,12 @@ bool gemm_sa_issue(
         u[VTA_SA_UOP_B + 3] = last && ginsn.push_prev_dep;   // g2l token, pushed by gemm_sa
         u[VTA_SA_UOP_B + 4] = last && ginsn.push_next_dep;   // g2s token
         u[VTA_SA_UOP_B + 5] = insn.reset_reg && insn.bias_reset;   //#### JO added (2026-11-04): bias reset step
+        //#### JO added (2026-11-04): requantize of the out writes (sa_rmw.v)
+        u[VTA_SA_RQ] = insn.rq_en;
+        u.range(VTA_SA_RQ + 2, VTA_SA_RQ + 1) = insn.rq_round;
+        u.range(VTA_SA_RQ + 7, VTA_SA_RQ + 3) = insn.rq_shift;
+        u.range(VTA_SA_RQ + 15, VTA_SA_RQ + 8) = (ap_uint<8>) insn.rq_lo;
+        u.range(VTA_SA_RQ + 23, VTA_SA_RQ + 16) = (ap_uint<8>) insn.rq_hi;
         gemm_uop.write(u);
       }
       dst_offset_in += insn.dst_factor_in;
@@ -430,6 +449,12 @@ void gemm_sa_csim(
     wgt_idx_T wgt_idx = u.range(VTA_SA_UOP_B - 1, VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH);
     bool reset = u[VTA_SA_UOP_B];
     bool bias = u[VTA_SA_UOP_B + 5];   //#### JO added (2026-11-04): acc[dst] = acc[src], as sa_rmw.v
+    //#### JO added (2026-11-04): requantize of the out writes
+    bool rq_en = u[VTA_SA_RQ];
+    ap_uint<2> rq_round = u.range(VTA_SA_RQ + 2, VTA_SA_RQ + 1);
+    ap_uint<5> rq_shift = u.range(VTA_SA_RQ + 7, VTA_SA_RQ + 3);
+    ap_int<8> rq_lo = u.range(VTA_SA_RQ + 15, VTA_SA_RQ + 8);
+    ap_int<8> rq_hi = u.range(VTA_SA_RQ + 23, VTA_SA_RQ + 16);
     wgt_T w_tensor[VTA_BLOCK_OUT][VTA_BLOCK_IN];
     read_tensor<bus_T, wgt_T, wgt_idx_T, VTA_BUS_WIDTH, VTA_WGT_WIDTH, VTA_BLOCK_OUT, VTA_BLOCK_IN>(wgt_idx, wgt_mem, w_tensor);
     inp_T i_tensor[VTA_BATCH][VTA_BLOCK_IN];
@@ -451,7 +476,8 @@ void gemm_sa_csim(
         //a_tensor[b][oc] = reset ? (acc_T) 0 : accum;
         if (!bias) accum += (acc_T) tmp;
         a_tensor[b][oc] = reset && !bias ? (acc_T) 0 : accum;
-        o_tensor[b][oc] = (out_T) accum.range(VTA_OUT_WIDTH - 1, 0);
+        //o_tensor[b][oc] = (out_T) accum.range(VTA_OUT_WIDTH - 1, 0);
+        o_tensor[b][oc] = requant(accum, (out_T) accum.range(VTA_OUT_WIDTH - 1, 0), rq_en, rq_round, rq_shift, rq_lo, rq_hi);
       }
     }
     write_tensor<bus_T, acc_T, acc_idx_T, VTA_BUS_WIDTH, VTA_ACC_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, a_tensor, acc_mem);
@@ -518,6 +544,9 @@ void alu(
           for (int i = 0; i < VTA_BATCH; i++) {
             for (int b = 0; b < VTA_BLOCK_OUT; b++) {
               alu_lane(insn.alu_opcode, dst_tensor[i][b], (acc_T) insn.imm, dst_tensor[i][b], o_tensor[i][b]);
+              //#### JO added (2026-11-04): requantize of the out write
+              o_tensor[i][b] = requant(dst_tensor[i][b], o_tensor[i][b], insn.rq_en, insn.rq_round, insn.rq_shift,
+                                       (ap_int<8>) insn.rq_lo, (ap_int<8>) insn.rq_hi);
               //#### JO (2026-11-03): registers before the acc / out writes (multi4 400 MHz: acc read -> op -> acc_mem data)
               dst_tensor[i][b] = alu_reg(dst_tensor[i][b]);
               o_tensor[i][b] = alu_reg(o_tensor[i][b]);
@@ -594,6 +623,9 @@ void alu(
               o_tensor[i][b] = (out_T) shr_val.range(VTA_OUT_WIDTH - 1, 0);
             }
 #ifdef VTA_SYSTOLIC
+            //#### JO added (2026-11-04): requantize of the out write
+            o_tensor[i][b] = requant(dst_tensor[i][b], o_tensor[i][b], insn.rq_en, insn.rq_round, insn.rq_shift,
+                                     (ap_int<8>) insn.rq_lo, (ap_int<8>) insn.rq_hi);
             //#### JO (2026-11-03): registers before the writes as in the imm loop above (both loops drive acc_mem's data)
             dst_tensor[i][b] = alu_reg(dst_tensor[i][b]);
             o_tensor[i][b] = alu_reg(o_tensor[i][b]);

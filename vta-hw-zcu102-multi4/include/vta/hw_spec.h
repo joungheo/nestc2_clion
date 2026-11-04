@@ -348,7 +348,17 @@ typedef struct {
   //#### acc, where the bias was LOADed); systolic bitstreams with "bias" in the name (gemm_sa sa_rmw.v)
   //uint64_t pad_0          : 32;
   uint64_t bias_reset     : 1;
-  uint64_t pad_0          : 31;
+  //#### JO changed (2026-11-04, requantize): the int8 written to out by every step of this instruction is
+  //#### clip((acc + round) >> rq_shift, rq_lo, rq_hi) instead of the low 8 bits of acc (VTARequant, systolic bitstreams
+  //#### with "rq" in the name: gemm_sa sa_rmw.v, vta.cc alu()); rq_round 0 none, 1 + 2^(shift-1), 2 + 2^(shift-1) - (acc < 0)
+  //#### (half away from zero); acc itself is not changed
+  //uint64_t pad_0          : 31;
+  uint64_t rq_en          : 1;
+  uint64_t rq_round       : 2;
+  uint64_t rq_shift       : 5;
+  int64_t  rq_lo          : 8;
+  int64_t  rq_hi          : 8;
+  uint64_t pad_0          : 7;
   uint64_t pad_1          : 64;
 } VTAGemInsn;
 
@@ -455,7 +465,14 @@ typedef struct {
   uint64_t use_imm        : 1;
   /*! \brief Immediate value: allow negative value */
   int64_t imm            : VTA_ALUOP_IMM_BIT_WIDTH;
-  uint64_t pad_0          : 32;
+  //#### JO changed (2026-11-04, requantize): as VTAGemInsn rq_* (the int8 written to out)
+  //uint64_t pad_0          : 32;
+  uint64_t rq_en          : 1;
+  uint64_t rq_round       : 2;
+  uint64_t rq_shift       : 5;
+  int64_t  rq_lo          : 8;
+  int64_t  rq_hi          : 8;
+  uint64_t pad_0          : 8;
   uint64_t pad_1          : 64;
 } VTAAluInsn;
 

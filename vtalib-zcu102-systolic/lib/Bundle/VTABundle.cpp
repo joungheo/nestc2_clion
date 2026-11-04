@@ -582,7 +582,28 @@ static bool evtaBiasReset() {
     else {
       char name[256] = {0};
       FILE *f = fopen("/tmp/evta_bitstream", "r");
-      on = f && fgets(name, sizeof(name), f) && strstr(name, "bias") && strncmp(name, "FAILED", 6);
+      //#### JO changed (2026-11-04): an "_rq" bitstream (requantize, below) has the bias reset too
+      //on = f && fgets(name, sizeof(name), f) && strstr(name, "bias") && strncmp(name, "FAILED", 6);
+      on = f && fgets(name, sizeof(name), f) && (strstr(name, "bias") || strstr(name, "_rq")) && strncmp(name, "FAILED", 6);
+      if (f) fclose(f);
+    }
+  }
+  return on;
+}
+//#### JO added (2026-11-04, requantize): the requantize of conv / fc outputs on the write to out (VTARequant, GEMM / ALU rq_*)
+//#### instead of the ALU SHR / MAX / MIN (+ the rounding ADD); only on a bitstream that has it (gemm_sa sa_rmw.v, vta.cc
+//#### alu(), 2026-11-04): "_rq" in the name of the bitstream the run scripts loaded (/tmp/evta_bitstream); EVTA_REQUANT=0|1
+//#### overrides. Used by conv_kernel (plain conv: on its GEMMs; fused max pool: on the column MAX passes; fused residual: on
+//#### the residual GEMM) and fc_evta_core (on its GEMMs).
+static bool evtaRequant() {
+  static int on = -1;
+  if (on < 0) {
+    const char *e = getenv("EVTA_REQUANT");
+    if (e && *e) on = atoi(e) > 0;
+    else {
+      char name[256] = {0};
+      FILE *f = fopen("/tmp/evta_bitstream", "r");
+      on = f && fgets(name, sizeof(name), f) && strstr(name, "_rq") && strncmp(name, "FAILED", 6);
       if (f) fclose(f);
     }
   }
@@ -708,6 +729,13 @@ void conv_kernel(uint32_t sizeOutTileH,
 #endif
     //#### JO added (2026-11-04): bias reset (evtaBiasReset): the bias LOAD of the bias / shift / relu part below comes here
     const bool biasReset = bias && evtaBiasReset();
+    //#### JO added (2026-11-04, requantize, evtaRequant): rqConv: the GEMMs of this tile (and the bias ADD without the bias
+    //#### reset) write the requantized int8 (out = clip(acc >> shift, relu ? 0 : -128, 127), what SHR / MAX / MIN did);
+    //#### rqPool: the column MAX passes of the fused pool write it (pool on the raw acc: max and requantize commute, the
+    //#### pooled area starts at 0 = relu); rqRes: the residual GEMM writes it (round + sumShr + clip after the residual add)
+    const bool rqOn = evtaRequant();
+    const bool rqConv = rqOn && !res && !pool, rqPool = rqOn && pool && relu, rqRes = rqOn && res;
+    if (rqConv) VTARequant(vtaCmdH, 1, 0, shift, relu ? 0 : -128, 127);
     // Push operations for resetting Acc memory
     for (uint32_t threadIdx = 0; threadIdx < nVirtualThread; threadIdx++) {
       // acc buffer reset
@@ -936,6 +964,8 @@ void conv_kernel(uint32_t sizeOutTileH,
       shift_ctx.size_ = resizedOutTileH * resizedOutTileW * nFilterinLoop;
       shift_ctx.shift_ = shift;
 
+      //#### JO added (2026-11-04, requantize): no SHR / MAX / MIN when the out write requantizes
+      if (!rqConv && !rqPool) {
       {
         void **uopHandle_shift;
 
@@ -1024,6 +1054,7 @@ void conv_kernel(uint32_t sizeOutTileH,
         }
         VTAPushALUOp(vtaCmdH, uopHandle_reset, &alu_min, &alu_ctx, 0);
       }
+      }   //#### JO: !rqConv && !rqPool
       //#### JO added (2026-10-31): fused elementadd (+ relu) on the requantized conv output (ConvResidual)
       if (res) {
         uint32_t size = resizedOutTileH * resizedOutTileW * nFilterinLoop;
@@ -1031,6 +1062,12 @@ void conv_kernel(uint32_t sizeOutTileH,
         for (uint32_t i = 0; i < res->convShl; i++)
           pushAlu(vtaCmdH, idEVTA, outputSramBaseAddr, outputSramBaseAddr, size, RES_ALU_ADD, 0, 0);
         VTADepPop(vtaCmdH, 1, 2);
+        //#### JO added (2026-11-04, requantize): rqRes: the residual GEMM writes round / shift / clip of the sum to out
+        if (rqRes) {
+          VTARequant(vtaCmdH, 1, res->sumShr ? 1 : 0, res->sumShr, res->relu ? 0 : -128, 127);
+          pushResGemm(vtaCmdH, idEVTA, outputSramBaseAddr, resSramBaseAddr, size);
+          VTARequant(vtaCmdH, 0, 0, 0, 0, 0);
+        } else {
         pushResGemm(vtaCmdH, idEVTA, outputSramBaseAddr, resSramBaseAddr, size);
         if (res->sumShr) {
           pushAlu(vtaCmdH, idEVTA, outputSramBaseAddr, outputSramBaseAddr, size, RES_ALU_ADD, 1,
@@ -1040,6 +1077,7 @@ void conv_kernel(uint32_t sizeOutTileH,
         pushAlu(vtaCmdH, idEVTA, outputSramBaseAddr, outputSramBaseAddr, size, RES_ALU_MAX, 1,
                 res->relu ? 0 : -128);
         pushAlu(vtaCmdH, idEVTA, outputSramBaseAddr, outputSramBaseAddr, size, RES_ALU_MIN, 1, 127);
+        }
       }
       //#### JO added (2026-11-02): fused max pool (ConvPool): pooled area after the bias entries
       if (pool) {
@@ -1053,14 +1091,18 @@ void conv_kernel(uint32_t sizeOutTileH,
                                        2, nF, T, T});
         pushPoolMax2(vtaCmdH, idEVTA, {centre, centre + 1, resizedOutTileH, pool->ptw, TW, 2, TW, 2, nF, T, T});
         // cols: pooled (i, j) takes centre column j of rows 2i + haloH + dy - 1 (i >= 1 for dy = 0 without the halo)
+        //#### JO added (2026-11-04, requantize): rqPool: these passes write the requantized max to out
+        if (rqPool) VTARequant(vtaCmdH, 1, 0, shift, 0, 127);
         for (uint32_t dy = 0; dy < 3; dy++) {
           uint32_t i0 = (!pool->haloH && dy == 0) ? 1 : 0, r = 2 * i0 + pool->haloH + dy - 1;
           pushPoolMax2(vtaCmdH, idEVTA, {pooled + i0 * pool->ptw, centre + r * TW, pool->pth - i0, pool->ptw,
                                          pool->ptw, 1, 2 * TW, 2, nF, P, T});
         }
+        if (rqPool) VTARequant(vtaCmdH, 0, 0, 0, 0, 0);
       }
       VTADepPush(vtaCmdH, 2, 3);
     }
+    if (rqConv) VTARequant(vtaCmdH, 0, 0, 0, 0, 0);   //#### JO added (2026-11-04)
 
     // Push operations for storing the results
     for (uint32_t threadIdx = 0; threadIdx < nVirtualThread; threadIdx++) {
@@ -3596,6 +3638,10 @@ static void fc_evta_core(const FcEvtaBuffers &b, uint32_t CIN, uint32_t NB, uint
   VTALoadBuffer2D(cmdh, b.bias, 0, NB, 1, NB, 0, 0, 0, 0, 0, 3);  // compute stage, before the GEMMs
   VTADepPush(cmdh, 2, 1);
   VTADepPush(cmdh, 2, 1);
+  //#### JO added (2026-11-04, requantize, evtaRequant): the GEMMs write round half away from zero / shift / clip to out
+  //#### (the ALU part below goes away); each output block's last write is in its chunk's GEMM
+  const bool rq = evtaRequant();
+  if (rq) VTARequant(cmdh, 1, shift > 0 ? 2 : 0, shift > 0 ? shift : 0, -128, 127);
   for (uint32_t ch = 0; ch < nChunks; ch++) {
     uint32_t o0 = ch * gEven, gc = std::min(gEven, NB - o0), wb = (ch % 2) * WGT_HALF;
     VTADepPop(cmdh, 2, 1);
@@ -3609,6 +3655,8 @@ static void fc_evta_core(const FcEvtaBuffers &b, uint32_t CIN, uint32_t NB, uint
   }
   VTADepPop(cmdh, 2, 1);
   VTADepPop(cmdh, 2, 1);
+  if (rq) VTARequant(cmdh, 0, 0, 0, 0, 0);
+  if (!rq) {   //#### JO added (2026-11-04)
   if (shift > 0) {
     pushReset(cmdh, idEVTA, NB, NB);
     pushAlu(cmdh, idEVTA, NB, 0, NB, RES_ALU_ADD, 0, 0);
@@ -3621,6 +3669,7 @@ static void fc_evta_core(const FcEvtaBuffers &b, uint32_t CIN, uint32_t NB, uint
   }
   pushAlu(cmdh, idEVTA, 0, 0, NB, RES_ALU_MAX, 1, -128);
   pushAlu(cmdh, idEVTA, 0, 0, NB, RES_ALU_MIN, 1, 127);
+  }   //#### JO: !rq
   VTADepPush(cmdh, 2, 3);
   VTADepPop(cmdh, 2, 3);
   VTAStoreBuffer2D(cmdh, 0, 4, b.out, 0, NB, 1, NB);

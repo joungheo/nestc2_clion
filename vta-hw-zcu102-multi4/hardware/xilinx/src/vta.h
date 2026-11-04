@@ -53,7 +53,11 @@ typedef ap_uint<VTA_BUS_WIDTH> bus_T;
 //#define VTA_SA_UOP_WIDTH (VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH + VTA_LOG_WGT_BUFF_DEPTH + 2)
 #define VTA_SA_UOP_B (VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH + VTA_LOG_WGT_BUFF_DEPTH)
 //#define VTA_SA_UOP_WIDTH (VTA_SA_UOP_B + 5)
-#define VTA_SA_UOP_WIDTH (VTA_SA_UOP_B + 6)
+//#### requantize (2026-11-04): bits VTA_SA_UOP_B + 6 .. + 29 = the instruction's {rq_hi, rq_lo, rq_shift, rq_round, rq_en}
+//#### (VTA_SA_RQ), the int8 that sa_rmw.v writes to out
+//#define VTA_SA_UOP_WIDTH (VTA_SA_UOP_B + 6)
+#define VTA_SA_RQ (VTA_SA_UOP_B + 6)
+#define VTA_SA_UOP_WIDTH (VTA_SA_UOP_B + 30)
 typedef ap_uint<VTA_SA_UOP_WIDTH> sa_uop_T;
 #endif
 

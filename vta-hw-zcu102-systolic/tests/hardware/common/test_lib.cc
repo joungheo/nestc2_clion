@@ -336,7 +336,9 @@ VTAGenericInsn getGEMMInsn(int uop_offset, int batch, int in_feat, int out_feat,
   // Converter
   union VTAInsn converter;
   // GEMM instruction initialization
-  VTAGemInsn insn;
+  //#### JO changed (2026-11-04): zeroed (bias_reset / rq_* are in former pad bits)
+  //VTAGemInsn insn;
+  VTAGemInsn insn = {};
   insn.opcode = VTA_OPCODE_GEMM;
   insn.pop_prev_dep = pop_prev_dep;
   insn.pop_next_dep = pop_next_dep;

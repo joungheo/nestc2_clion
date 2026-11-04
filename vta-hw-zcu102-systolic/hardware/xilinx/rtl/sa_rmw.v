@@ -8,6 +8,11 @@
 // acc[tag_src] instead of acc[dst] and writes that value to acc[dst] (the row from the array is not added): the conv bias,
 // LOADed into acc before the reset GEMM, becomes the start of the accumulation and the ALU ADD of the bias goes away.
 // The forwarding compares are against the address read (src for a bias row), so a bias entry still in flight is forwarded.
+// #### JO changed (2026-11-04, requantize): the out write is no longer the low 8 bits of the sum in S3 but, with rq_en of
+// the instruction (tag_rq = {hi, lo, shift, round, en}, VTAGemInsn rq_*), clip((sum + round) >> shift, lo, hi), in three
+// more stages: S4 sum + round (round 1: 2^(shift-1), 2: 2^(shift-1) - (sum < 0)), S5 arithmetic shift, S6 clip; out is
+// written in S6 (without rq_en the low 8 bits, also in S6). acc is written in S3 as before (the forwarding is unchanged);
+// done / tokens / busy come with the out write in S6, so nothing reads out (store) or uses the ports before it.
 `timescale 1ns / 1ps
 module sa_rmw #(
   parameter N = 16,
@@ -22,6 +27,7 @@ module sa_rmw #(
   input  wire              tag_reset,
   input  wire              tag_bias,     // #### JO added (2026-11-04): reset row that takes acc[tag_src] (with tag_reset)
   input  wire [DW-1:0]     tag_src,
+  input  wire [23:0]       tag_rq,       // #### JO added (2026-11-04): {hi, lo, shift, round, en}
   input  wire              tag_last,
   input  wire [1:0]        tag_tok,
   // acc_mem: read port (address cycle -> data two cycles later) and write port
@@ -53,6 +59,17 @@ module sa_rmw #(
   reg [1:0]      k1, k2, k3;               // tokens
   reg [DW-1:0]   a1;                       // #### JO added (2026-11-04): address read (dst, or src for a bias row)
   reg [32*N-1:0] s3, sw1, sw2;               // sums
+  //#### JO added (2026-11-04, requantize): rq with the row (q1..q3), the out stages S4..S6
+  reg [23:0]     q1, q2, q3;
+  reg            v4, v5, v6, l4, l5, l6, e4, e5;
+  reg [DW-1:0]   d4, d5, d6;
+  reg [1:0]      k4, k5, k6;
+  (* max_fanout = 64 *) reg [4:0] sh4;
+  reg [7:0]      lo4, lo5, hi4, hi5;
+  reg [31:0]     hb3, hm3;                   // 2^(shift-1) (0 without round / shift 0), and minus 1 for round 2
+  reg            m3;                         // round 2: a negative sum takes hm3
+  reg [32*N-1:0] t4, h5;
+  reg [8*N-1:0]  o6;
 
   //#### JO changed (2026-10-27, Phase D4): the dst compares are done one stage early (S1, against the rows that will be in
   //#### S3 / written 1 / written 2 cycles ago when this row is in S2) and registered, so S2 is only the select and the add
@@ -70,9 +87,42 @@ module sa_rmw #(
   generate
     for (k = 0; k < N; k = k + 1) begin : lane
       assign sum[32*k+31:32*k] = old[32*k+31:32*k] + {{(32-PW){r2[PW*k+PW-1]}}, r2[PW*k+PW-1:PW*k]};
-      assign out_wr_data[8*k+7:8*k] = s3[32*k+7:32*k];
+      //#### JO changed (2026-11-04, requantize): out from S6
+      //assign out_wr_data[8*k+7:8*k] = s3[32*k+7:32*k];
+      assign out_wr_data[8*k+7:8*k] = o6[8*k+7:8*k];
+      wire [31:0] sk = s3[32*k+31:32*k];
+      wire [31:0] tk = t4[32*k+31:32*k];
+      wire signed [31:0] hk = h5[32*k+31:32*k];
+      always @(posedge clk) begin
+        t4[32*k+31:32*k] <= sk + ((m3 && sk[31]) ? hm3 : hb3);
+        h5[32*k+31:32*k] <= $signed(tk) >>> sh4;
+        o6[8*k+7:8*k]    <= !e5 ? hk[7:0] :
+                            hk < $signed({{24{lo5[7]}}, lo5}) ? lo5 :
+                            hk > $signed({{24{hi5[7]}}, hi5}) ? hi5 : hk[7:0];
+      end
     end
   endgenerate
+
+  // rq fields: en q[0], round q[2:1], shift q[7:3], lo q[15:8], hi q[23:16]
+  wire       qe = q2[0];
+  wire [1:0] qr = q2[2:1];
+  wire [4:0] qs = q2[7:3];
+  always @(posedge clk) begin
+    q1 <= tag_rq; q2 <= q1; q3 <= q2;
+    // S3 (with s3): the round constants of the row now in S2
+    hb3 <= (qe && qr != 2'd0 && qs != 5'd0) ? (32'd1 << (qs - 5'd1)) : 32'd0;
+    hm3 <= (qe && qr != 2'd0 && qs != 5'd0) ? (32'd1 << (qs - 5'd1)) - 32'd1 : 32'd0;
+    m3  <= qe && qr == 2'd2 && qs != 5'd0;
+    // S4
+    sh4 <= q3[0] ? q3[7:3] : 5'd0; e4 <= q3[0]; lo4 <= q3[15:8]; hi4 <= q3[23:16];
+    d4 <= d3; l4 <= l3; k4 <= k3;
+    // S5
+    e5 <= e4; lo5 <= lo4; hi5 <= hi4; d5 <= d4; l5 <= l4; k5 <= k4;
+    // S6
+    d6 <= d5; l6 <= l5; k6 <= k5;
+    if (rst) begin v4 <= 0; v5 <= 0; v6 <= 0; end
+    else begin v4 <= v3; v5 <= v4; v6 <= v5; end
+  end
 
   always @(posedge clk) begin
     // compare in S1: when this row (d1) is in S2, S3 holds the row now in S2 (d2), written-1 the row now in S3 (d3),
@@ -99,9 +149,15 @@ module sa_rmw #(
   assign acc_wr_en   = v3;
   assign acc_wr_addr = d3;
   assign acc_wr_data = z3 ? {32*N{1'b0}} : s3;
-  assign out_wr_en   = v3;
-  assign out_wr_addr = d3;
-  assign done        = v3 && l3;
-  assign done_tok    = (v3 && l3) ? k3 : 2'b00;
-  assign busy        = v1 || v2 || v3;
+  //#### JO changed (2026-11-04, requantize): out, done, tokens in S6
+  //assign out_wr_en   = v3;
+  //assign out_wr_addr = d3;
+  //assign done        = v3 && l3;
+  //assign done_tok    = (v3 && l3) ? k3 : 2'b00;
+  //assign busy        = v1 || v2 || v3;
+  assign out_wr_en   = v6;
+  assign out_wr_addr = d6;
+  assign done        = v6 && l6;
+  assign done_tok    = (v6 && l6) ? k6 : 2'b00;
+  assign busy        = v1 || v2 || v3 || v4 || v5 || v6;
 endmodule

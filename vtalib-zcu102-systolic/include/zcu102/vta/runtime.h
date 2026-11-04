@@ -308,6 +308,12 @@ TVM_DLL int VTADepPush(VTACommandHandle cmd, int from_qid, int to_qid);
  */
 TVM_DLL int VTADepPop(VTACommandHandle cmd, int from_qid, int to_qid);
 
+//#### JO added (2026-11-04, requantize): the GEMM and ALU instructions pushed after this call write
+//#### clip((acc + round) >> shift, lo, hi) to out instead of the low 8 bits of acc (VTAGemInsn / VTAAluInsn rq_*; only a
+//#### systolic bitstream with "_rq" in the name does it, others ignore the fields). round 0: none, 1: + 2^(shift-1),
+//#### 2: + 2^(shift-1) - (acc < 0) (half away from zero); shift 0..31. en 0 turns it off again.
+TVM_DLL void VTARequant(VTACommandHandle cmd, int en, int round, int shift, int lo, int hi);
+
 /*!
  * \brief Synchronize the command handle.
  *  Commit all the instructions to VTA and wait until

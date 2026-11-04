@@ -266,6 +266,11 @@ int VTADepPop(VTACommandHandle cmd, int from_qid, int to_qid) {
   return 0;
 }
 
+//#### JO added (2026-11-04, requantize)
+void VTARequant(VTACommandHandle cmd, int en, int round, int shift, int lo, int hi) {
+  static_cast<vta::CommandQueue*>(cmd)->SetRequant(en, round, shift, lo, hi);
+}
+
 void VTASynchronize(VTACommandHandle cmd, uint32_t wait_cycles) {
   static_cast<vta::CommandQueue*>(cmd)->
       Synchronize(wait_cycles);

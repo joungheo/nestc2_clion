@@ -131,6 +131,20 @@ class CommandQueue {
 
   }
 
+  //#### JO added (2026-11-04, requantize): rq_* of the GEMM / ALU instructions pushed from now on (VTARequant)
+  struct Requant { bool en = false; int round = 0, shift = 0, lo = -128, hi = 127; };
+  Requant rq_;
+  void SetRequant(int en, int round, int shift, int lo, int hi) {
+    rq_.en = en != 0; rq_.round = round; rq_.shift = shift; rq_.lo = lo; rq_.hi = hi;
+  }
+  template <class T> void ApplyRequant(T *insn) const {
+    insn->rq_en = rq_.en;
+    insn->rq_round = rq_.en ? rq_.round : 0;
+    insn->rq_shift = rq_.en ? rq_.shift : 0;
+    insn->rq_lo = rq_.en ? rq_.lo : 0;
+    insn->rq_hi = rq_.en ? rq_.hi : 0;
+  }
+
   void DepPush(int from_qid, int to_qid) {
    // printf("dep_push(%d %d)\n",from_qid, to_qid);
     insn_queue_.DepPush(from_qid, to_qid);
@@ -596,12 +610,15 @@ class CommandQueue {
                 (unsigned)x->uop_end, (unsigned)x->iter_out, (unsigned)x->iter_in, (unsigned)x->dst_factor_out,
                 (unsigned)x->dst_factor_in, (unsigned)x->src_factor_out, (unsigned)x->src_factor_in,
                 (unsigned)x->wgt_factor_out, (unsigned)x->wgt_factor_in);
+        //#### JO added (2026-11-04): requantize
+        if (x->rq_en) fprintf(fp, " rq %d %d %d %d", (int)x->rq_round, (int)x->rq_shift, (int)x->rq_lo, (int)x->rq_hi);
       } else if (p->opcode == VTA_OPCODE_ALU) {
         VTAAluInsn *x = reinterpret_cast<VTAAluInsn *>(p);
         fprintf(fp, " reset %d uop %u %u iter %u %u dst %u %u src %u %u alu %d imm %d %d", (int)x->reset_reg,
                 (unsigned)x->uop_bgn, (unsigned)x->uop_end, (unsigned)x->iter_out, (unsigned)x->iter_in,
                 (unsigned)x->dst_factor_out, (unsigned)x->dst_factor_in, (unsigned)x->src_factor_out,
                 (unsigned)x->src_factor_in, (int)x->alu_opcode, (int)x->use_imm, (int)x->imm);
+        if (x->rq_en) fprintf(fp, " rq %d %d %d %d", (int)x->rq_round, (int)x->rq_shift, (int)x->rq_lo, (int)x->rq_hi);
       }
       fputc('\n', fp);
     }
@@ -786,6 +803,7 @@ class CommandQueue {
     //insn->reset_reg = kernel->reset_out_;
     insn->reset_reg = kernel->reset_out_ == 2 ? 1 : kernel->reset_out_;
     insn->bias_reset = kernel->reset_out_ == 2;
+    ApplyRequant(insn);   //#### JO added (2026-11-04)
     insn->uop_bgn = kernel->sram_begin_;
     insn->uop_end = kernel->sram_end_;
     insn->gemm_from_output = from_outmem;
@@ -869,6 +887,7 @@ class CommandQueue {
     insn->alu_opcode = kernel->opcode_;
     insn->use_imm = kernel->use_imm_;
     insn->imm = kernel->imm_val_;
+    ApplyRequant(insn);   //#### JO added (2026-11-04)
     const std::vector<UopKernel::LoopEntry> &loop = kernel->loop();
     if (loop.size() == 0) {
       insn->iter_out = 1;

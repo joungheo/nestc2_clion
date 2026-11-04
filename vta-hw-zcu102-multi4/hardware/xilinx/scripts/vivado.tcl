@@ -262,8 +262,9 @@ proc add_evta {i} {
     #### JO changed (2026-11-04, bias reset): uop + 1 bit (bias), was
     #set_property -dict [ list CONFIG.DW $sa_dw CONFIG.SW $sa_sw CONFIG.WW $sa_ww \
     #  CONFIG.UB [expr {(($sa_dw + $sa_sw + $sa_ww + 5 + 7) / 8) * 8}] ] $sa
+    #### JO changed (2026-11-04, requantize): + 24 bits (rq), was + 6
     set_property -dict [ list CONFIG.DW $sa_dw CONFIG.SW $sa_sw CONFIG.WW $sa_ww \
-      CONFIG.UB [expr {(($sa_dw + $sa_sw + $sa_ww + 6 + 7) / 8) * 8}] ] $sa
+      CONFIG.UB [expr {(($sa_dw + $sa_sw + $sa_ww + 30 + 7) / 8) * 8}] ] $sa
     set acc [ create_bd_cell -type ip -vlnv xilinx.com:ip:blk_mem_gen:8.4 acc_mem_$i ]
     init_bram_property $acc 512 $OUT_MEM_DEPTH true true
     connect_bd_intf_net [get_bd_intf_pins gemm_sa_$i/mem_acc_a] [get_bd_intf_pins acc_mem_$i/BRAM_PORTA]
