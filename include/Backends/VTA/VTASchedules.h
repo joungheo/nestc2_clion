@@ -84,3 +84,34 @@ convTune.ConvolutionTune_.push_back({1, 14, 14, 256, 512, 3, 3, 256, 2, 1, 2, 7,
                                      7});
 convTune.ConvolutionTune_.push_back({1, 7, 7, 512, 512, 3, 3, 512, 1, 1, 2, 7,
                                      7});
+//#### JO added (2026-11-05): Resnet50 and VGG16 (CIFAR-10) shapes, measured on the board (systolic _rq bitstream, single EVTA):
+//#### the bundle schedule replaced at run time (vtalib-zcu102-systolic EVTA_SCHED) by candidates nVirtualThread 1 / 2 x output
+//#### tiles that divide the output, per-conv time from _sysprof, fastest kept; layer dumps byte-identical to the default
+//#### schedule (1, 14, 14). Resnet50 EVTA 115.3 -> 78.0 ms, VGG16 15.2 -> 9.1 ms (docs/evta_runtime_compare.md 7.19).
+convTune.ConvolutionTune_.push_back({1, 56, 56, 64, 64, 1, 1, 64, 1, 0, 2, 8, 56});
+convTune.ConvolutionTune_.push_back({1, 56, 56, 64, 256, 1, 1, 64, 1, 0, 2, 8, 56});
+convTune.ConvolutionTune_.push_back({1, 56, 56, 256, 64, 1, 1, 256, 1, 0, 2, 8, 56});
+convTune.ConvolutionTune_.push_back({1, 56, 56, 256, 128, 1, 1, 256, 1, 0, 2, 8, 56});
+convTune.ConvolutionTune_.push_back({1, 56, 56, 128, 128, 3, 3, 128, 2, 1, 2, 7, 28});
+convTune.ConvolutionTune_.push_back({1, 28, 28, 128, 512, 1, 1, 128, 1, 0, 2, 7, 28});
+convTune.ConvolutionTune_.push_back({1, 56, 56, 256, 512, 1, 1, 256, 2, 0, 2, 7, 28});
+convTune.ConvolutionTune_.push_back({1, 28, 28, 512, 128, 1, 1, 512, 1, 0, 2, 7, 28});
+convTune.ConvolutionTune_.push_back({1, 28, 28, 512, 256, 1, 1, 512, 1, 0, 2, 7, 28});
+convTune.ConvolutionTune_.push_back({1, 28, 28, 256, 256, 3, 3, 256, 2, 1, 2, 7, 14});
+convTune.ConvolutionTune_.push_back({1, 14, 14, 256, 1024, 1, 1, 256, 1, 0, 2, 7, 14});
+convTune.ConvolutionTune_.push_back({1, 28, 28, 512, 1024, 1, 1, 512, 2, 0, 2, 7, 14});
+convTune.ConvolutionTune_.push_back({1, 14, 14, 1024, 256, 1, 1, 1024, 1, 0, 2, 7, 14});
+convTune.ConvolutionTune_.push_back({1, 14, 14, 1024, 512, 1, 1, 1024, 1, 0, 2, 7, 14});
+convTune.ConvolutionTune_.push_back({1, 14, 14, 512, 512, 3, 3, 512, 2, 1, 2, 7, 7});
+convTune.ConvolutionTune_.push_back({1, 7, 7, 512, 2048, 1, 1, 512, 1, 0, 2, 7, 7});
+convTune.ConvolutionTune_.push_back({1, 14, 14, 1024, 2048, 1, 1, 1024, 2, 0, 2, 7, 7});
+convTune.ConvolutionTune_.push_back({1, 7, 7, 2048, 512, 1, 1, 2048, 1, 0, 2, 7, 7});
+convTune.ConvolutionTune_.push_back({1, 34, 32, 16, 64, 3, 1, 16, 1, 0, 2, 16, 32});
+convTune.ConvolutionTune_.push_back({1, 32, 32, 64, 64, 3, 3, 64, 1, 1, 2, 8, 32});
+convTune.ConvolutionTune_.push_back({1, 16, 16, 64, 128, 3, 3, 64, 1, 1, 2, 16, 16});
+convTune.ConvolutionTune_.push_back({1, 16, 16, 128, 128, 3, 3, 128, 1, 1, 2, 16, 16});
+convTune.ConvolutionTune_.push_back({1, 8, 8, 128, 256, 3, 3, 128, 1, 1, 2, 8, 8});
+convTune.ConvolutionTune_.push_back({1, 8, 8, 256, 256, 3, 3, 256, 1, 1, 2, 8, 8});
+convTune.ConvolutionTune_.push_back({1, 4, 4, 256, 512, 3, 3, 256, 1, 1, 2, 4, 4});
+convTune.ConvolutionTune_.push_back({1, 4, 4, 512, 512, 3, 3, 512, 1, 1, 2, 4, 4});
+convTune.ConvolutionTune_.push_back({1, 2, 2, 512, 512, 3, 3, 512, 1, 1, 2, 2, 2});
