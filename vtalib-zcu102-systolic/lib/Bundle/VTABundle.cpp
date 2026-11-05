@@ -712,8 +712,14 @@ void conv_kernel(uint32_t sizeOutTileH,
   uint32_t INP_MEM_ENTRY = 2048;
   uint32_t WGT_MEM_ENTRY = 1024;
 
+  //#### JO changed (2026-11-05): a thread's half of acc holds the tile padded to the minimum (padT) x nFilterinLoop entries
+  //#### and the nFilterinLoop bias entries after them (not with the bias reset: the reset of thread 1 rewrites those rows) (was: the tile before the padding, no
+  //#### bias entries; the bias LOAD of thread 0 overwrote the first rows of thread 1 when T x nFilterinLoop filled the half,
+  //#### VGG16 conv0 nVirtualThread 2 / 16 x 32 on the HLS GEMM)
+  const uint32_t padT = max(resizedOutTileH, evtaMinTile(MIN_H_SIZE)) * max(resizedOutTileW, evtaMinTile(MIN_W_SIZE));
+  const uint32_t biasRows = bias && !evtaBiasReset() ? 1 : 0;
   uint32_t nFilterinLoop = KN / nVirtualThread / 16 ;
-  nFilterinLoop = min(nFilterinLoop, ACC_MEM_ENTRY/ nVirtualThread / resizedOutTileH / resizedOutTileW);
+  nFilterinLoop = min(nFilterinLoop, ACC_MEM_ENTRY / nVirtualThread / (padT + biasRows));
   for(;nFilterinLoop>0;nFilterinLoop--){
     if((KN/16) % (nFilterinLoop*nVirtualThread) ==0) break;
   }
