@@ -5748,19 +5748,16 @@ void finalizeBundleEntrySave(struct BundleSaveCtx &bundleCtx,
   // initConst.append("  vtaCmdH = VTATLSCommandHandle();\n");
 
   for (auto ste : *ctx.getConstantSymbols()) {
+    //#### JO changed (2026-11-06): VTAConstBufferAlloc (VTABufferAlloc + VTABufferCopy, one buffer for the same bytes in
+    //#### the process: the multi-EVTA copies of a model share their weights)
     if (ste.kind == '0') {
       initConst.append("  ");
       initConst.append(ste.name);
-      initConst.append(" = (int8_t *)VTABufferAlloc(");
+      initConst.append(" = (int8_t *)VTAConstBufferAlloc(constantWeight + ");
+      initConst.append(std::to_string(ste.offset));
+      initConst.append(", ");
       initConst.append(std::to_string(ste.size));
       initConst.append(");\n");
-      initConst.append("  VTABufferCopy((int8_t *)(constantWeight + ");
-      initConst.append(std::to_string(ste.offset));
-      initConst.append("), 0, ");
-      initConst.append(ste.name);
-      initConst.append(", 0, ");
-      initConst.append(std::to_string(ste.size));
-      initConst.append(", 1);\n");
     }
 #ifdef VTA_MEMOPT_DISABLE
     else if (ste.kind == '1') {
@@ -5781,7 +5778,7 @@ void finalizeBundleEntrySave(struct BundleSaveCtx &bundleCtx,
   for (auto ste : *ctx.getConstantSymbols()) {
     if (ste.kind == '0') {
       destroyConst.append("  ");
-      destroyConst.append("VTABufferFree(");
+      destroyConst.append("VTAConstBufferFree(");
       destroyConst.append(ste.name);
       destroyConst.append(");\n");
     }

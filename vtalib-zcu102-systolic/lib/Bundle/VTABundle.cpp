@@ -64,6 +64,53 @@ uint32_t b0 = 0;
 
 
 
+//#### JO added (2026-11-06): the constant VTA buffers of a bundle's load_module (weights, bias, tables; VTASave.cpp),
+//#### one buffer for every request with the same bytes in the process: the multi-EVTA executables run one bundle copy
+//#### per EVTA with the same weights (Resnet50 x 4 copies = 4 x 25.6 MB of the board's 128 MB CMA). The EVTAs only
+//#### read them. Reference counted; EVTA_CONST_SHARE=0 gives every request its own buffer.
+struct ConstBuffer {
+  void *buf;
+  size_t size;
+  uint64_t hash;
+  int refs;
+};
+static std::mutex constBufferMutex;
+static std::vector<ConstBuffer> constBuffers;
+
+void *VTAConstBufferAlloc(const void *src, size_t size) {
+  static int share = -1;
+  if (share < 0) {
+    const char *e = getenv("EVTA_CONST_SHARE");
+    share = !e || atoi(e) != 0;
+  }
+  uint64_t h = 1469598103934665603ull;  // FNV-1a
+  for (size_t i = 0; share && i < size; i++)
+    h = (h ^ ((const uint8_t *)src)[i]) * 1099511628211ull;
+  std::lock_guard<std::mutex> lock(constBufferMutex);
+  for (auto &c : constBuffers)
+    if (share && c.size == size && c.hash == h && !memcmp(VTABufferGetVirtAddr(c.buf), src, size)) {
+      c.refs++;
+      return c.buf;
+    }
+  void *b = VTABufferAlloc(size);
+  VTABufferCopy(src, 0, b, 0, size, 1);
+  constBuffers.push_back({b, size, h, 1});
+  return b;
+}
+
+void VTAConstBufferFree(void *buf) {
+  std::lock_guard<std::mutex> lock(constBufferMutex);
+  for (size_t i = 0; i < constBuffers.size(); i++)
+    if (constBuffers[i].buf == buf) {
+      if (--constBuffers[i].refs == 0) {
+        VTABufferFree(buf);
+        constBuffers.erase(constBuffers.begin() + i);
+      }
+      return;
+    }
+  VTABufferFree(buf);
+}
+
 void xlnk_reset() {
 #if(!(NESTC_USE_VTASIM==1))
   int xlnkfd = open("/dev/xlnk", O_RDWR | O_CLOEXEC);

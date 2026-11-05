@@ -7,6 +7,9 @@
 #include <string>
 
 void xlnk_reset();
+//#### JO added (2026-11-06): load_module's constant VTA buffers, shared by the bundle copies of a process (VTABundle.cpp)
+void *VTAConstBufferAlloc(const void *src, size_t size);
+void VTAConstBufferFree(void *buf);
 
 int elemsign(int8_t* input, int8_t *output, unsigned_t size);
 int convolution(int8_t* input, int8_t *kernel, int8_t *output, int N, int H, int W, int C, int KN, int KH, int KW, int pad_size,

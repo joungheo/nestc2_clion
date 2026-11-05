@@ -186,6 +186,18 @@ add_bundle_if_present(MultiEVTAResnet18Test singlevtaMxnetResnet18Bundle single_
   mxnet_exported_resnet18.cpp)
 add_bundle_if_present(MultiEVTAResnet18Test multivtaMxnetResnet18Bundle multi_threads_main.cpp
   mxnet_exported_resnet18.cpp mxnet_exported_resnet18_1.cpp mxnet_exported_resnet18_2.cpp mxnet_exported_resnet18_3.cpp)
+#### JO added (2026-11-06): Resnet50 / VGG16 CIFAR-10 on 4 EVTAs (vta/multievta_bundles/<dir>, gen_multi4_bundles.sh)
+add_bundle_if_present(MultiEVTAResnet50Test singlevtaCaffe2Resnet50Bundle single_thread_main.cpp resnet50.cpp)
+add_bundle_if_present(MultiEVTAResnet50Test multivtaCaffe2Resnet50Bundle multi_threads_main.cpp
+  resnet50.cpp resnet50_1.cpp resnet50_2.cpp resnet50_3.cpp)
+add_bundle_if_present(MultiEVTAVgg16Cifar10Test singlevtaVGG16Cifar10Bundle single_thread_main.cpp vgg16_cifar10.cpp)
+add_bundle_if_present(MultiEVTAVgg16Cifar10Test multivtaVGG16Cifar10Bundle multi_threads_main.cpp
+  vgg16_cifar10.cpp vgg16_cifar10_1.cpp vgg16_cifar10_2.cpp vgg16_cifar10_3.cpp)
+foreach(t multivtaCaffe2Resnet50Bundle multivtaVGG16Cifar10Bundle)
+  if(TARGET ${t})
+    target_link_libraries(${t} pthread)
+  endif()
+endforeach()
 #### JO added: Conv4Test on 1-4 EVTAs at once (hw_multievtax4/MultiEVTAConv4TestSrc/make_multi4conv4.py, run by
 #### collect_hw_bundles.py, writes hw_multievtax4/ and hw_multievtax2/MultiEVTAConv4Test)
 add_bundle_if_present(MultiEVTAConv4Test multi4conv4Bundle multi4conv4Main.cpp
