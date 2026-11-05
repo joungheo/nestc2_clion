@@ -87,7 +87,9 @@ convTune.ConvolutionTune_.push_back({1, 7, 7, 512, 512, 3, 3, 512, 1, 1, 2, 7,
 //#### JO added (2026-11-05): Resnet50 and VGG16 (CIFAR-10) shapes, measured on the board (systolic _rq bitstream, single EVTA):
 //#### the bundle schedule replaced at run time (vtalib-zcu102-systolic EVTA_SCHED) by candidates nVirtualThread 1 / 2 x output
 //#### tiles that divide the output, per-conv time from _sysprof, fastest kept; layer dumps byte-identical to the default
-//#### schedule (1, 14, 14). Resnet50 EVTA 115.3 -> 78.0 ms, VGG16 15.2 -> 9.1 ms (docs/evta_runtime_compare.md 7.19).
+//#### schedule (1, 14, 14). Resnet50 EVTA 115.3 -> 78.1 ms, VGG16 15.2 -> 13.3 ms (docs/evta_runtime_compare.md 7.19).
+//#### Not for outputs smaller than MIN_H_SIZE / MIN_W_SIZE (7, vtalib pads the tile to 7 x 7): nVirtualThread 2 there changes
+//#### the result (VGG16 4 x 4 and 2 x 2 convs, every tile tried), nVirtualThread 1 with smaller tiles is right but not faster.
 convTune.ConvolutionTune_.push_back({1, 56, 56, 64, 64, 1, 1, 64, 1, 0, 2, 8, 56});
 convTune.ConvolutionTune_.push_back({1, 56, 56, 64, 256, 1, 1, 64, 1, 0, 2, 8, 56});
 convTune.ConvolutionTune_.push_back({1, 56, 56, 256, 64, 1, 1, 256, 1, 0, 2, 8, 56});
@@ -112,6 +114,3 @@ convTune.ConvolutionTune_.push_back({1, 16, 16, 64, 128, 3, 3, 64, 1, 1, 2, 16, 
 convTune.ConvolutionTune_.push_back({1, 16, 16, 128, 128, 3, 3, 128, 1, 1, 2, 16, 16});
 convTune.ConvolutionTune_.push_back({1, 8, 8, 128, 256, 3, 3, 128, 1, 1, 2, 8, 8});
 convTune.ConvolutionTune_.push_back({1, 8, 8, 256, 256, 3, 3, 256, 1, 1, 2, 8, 8});
-convTune.ConvolutionTune_.push_back({1, 4, 4, 256, 512, 3, 3, 256, 1, 1, 2, 4, 4});
-convTune.ConvolutionTune_.push_back({1, 4, 4, 512, 512, 3, 3, 512, 1, 1, 2, 4, 4});
-convTune.ConvolutionTune_.push_back({1, 2, 2, 512, 512, 3, 3, 512, 1, 1, 2, 2, 2});
