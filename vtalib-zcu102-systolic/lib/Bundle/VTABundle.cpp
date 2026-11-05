@@ -613,6 +613,18 @@ static bool evtaRequant() {
   }
   return on;
 }
+//#### JO added (2026-11-05): smallest conv output tile (conv_kernel pads smaller tiles with dummy rows / columns), default
+//#### MIN_H_SIZE / MIN_W_SIZE. The HLS GEMM (vta/vtalib) needs it: its acc read-modify-write has no hazard check and the same
+//#### dst comes back every tile_h * tile_w uops (gemmop_mxn). The systolic GEMM forwards in-flight dsts (sa_rmw.v), so a
+//#### smaller tile only saves the dummy GEMM / ALU work. EVTA_MIN_TILE=<n> overrides it.
+static uint32_t evtaMinTile(uint32_t dflt) {
+  static int m = -1;
+  if (m < 0) {
+    const char *e = getenv("EVTA_MIN_TILE");
+    m = e && *e ? std::max(1, atoi(e)) : 0;
+  }
+  return m ? m : dflt;
+}
 struct BiasResetContext {
   uint32_t base_, bias_, T_, nF_;
   bool operator==(BiasResetContext &op) { return base_ == op.base_ && bias_ == op.bias_ && T_ == op.T_ && nF_ == op.nF_; }
@@ -706,16 +718,18 @@ void conv_kernel(uint32_t sizeOutTileH,
   for (uint32_t filterIdx = 0; filterIdx < KN / nFilterinLoop / nVirtualThread / 16; filterIdx++) {
 
     uint32_t inputSramPtr = 0;
-    if (resizedOutTileH < MIN_H_SIZE) {
-      outDummyH = MIN_H_SIZE - resizedOutTileH;
-      resizedOutTileH = MIN_H_SIZE;
+    //#### JO changed (2026-11-05): evtaMinTile (was MIN_H_SIZE / MIN_W_SIZE)
+    const uint32_t minH = evtaMinTile(MIN_H_SIZE), minW = evtaMinTile(MIN_W_SIZE);
+    if (resizedOutTileH < minH) {
+      outDummyH = minH - resizedOutTileH;
+      resizedOutTileH = minH;
       resizedInTileH = (resizedOutTileH - 1) * stride_size + KH;
       inDummyH = resizedInTileH - sizeInTileH;
     }
 
-    if (resizedOutTileW < MIN_W_SIZE) {
-      outDummyW = MIN_W_SIZE - resizedOutTileW;
-      resizedOutTileW = MIN_W_SIZE;
+    if (resizedOutTileW < minW) {
+      outDummyW = minW - resizedOutTileW;
+      resizedOutTileW = minW;
       resizedInTileW = (resizedOutTileW - 1) * stride_size + KW;
       inDummyW = resizedInTileW - sizeInTileW;
     }
@@ -906,11 +920,11 @@ void conv_kernel(uint32_t sizeOutTileH,
           for (uint32_t fIdx = 0; fIdx < nFilterinLoop; fIdx++)
             for (uint32_t hIdx = 0; hIdx < sizeOutTileH; hIdx++)
               VTALoadBuffer2D(vtaCmdH, res->buf,
-                              ((filterIdx + fIdx) * nVirtualThread + threadIdx) * out_w * out_h +
+                              ((filterIdx * nVirtualThread + threadIdx) * nFilterinLoop + fIdx) * out_w * out_h +
                                   (outputHOffset + hIdx) * out_w + outputWOffset,
                               sizeOutTileW, 1, out_w, 0, 0, 0, 0,
                               resSramBaseAddr + (hIdx + fIdx * sizeOutTileH) * resizedOutTileW +
-                                  fIdx * outDummyH * resizedOutTileH,
+                                  fIdx * outDummyH * resizedOutTileW,
                               2);
         }
         VTADepPush(vtaCmdH, 1, 2);
@@ -1146,9 +1160,9 @@ void conv_kernel(uint32_t sizeOutTileH,
 #ifdef NESTC_EVTA_PROFILE_AUTOTUNE
           f17 ++;
 #endif
-            VTAStoreBuffer2D(vtaCmdH, outputSramBaseAddr + (hIdx+fIdx*sizeOutTileH) * resizedOutTileW + fIdx * outDummyH * resizedOutTileH,
+            VTAStoreBuffer2D(vtaCmdH, outputSramBaseAddr + (hIdx+fIdx*sizeOutTileH) * resizedOutTileW + fIdx * outDummyH * resizedOutTileW,
                              4, vta_output_buf,
-                             ((filterIdx+fIdx) * nVirtualThread + threadIdx) *
+                             ((filterIdx * nVirtualThread + threadIdx) * nFilterinLoop + fIdx) *
                                  out_w * out_h +
                                  (outputHOffset + hIdx) * out_w + outputWOffset,
                              sizeOutTileW, 1, out_w);
@@ -1554,9 +1568,9 @@ void conv_kernel_scale(uint32_t sizeOutTileH,
       } else {
         for (int fIdx = 0; fIdx < nFilterinLoop; fIdx++) {
           for (int hIdx = 0; hIdx < sizeOutTileH; hIdx++) {
-            VTAStoreBuffer2D(vtaCmdH, outputSramBaseAddr + (hIdx+fIdx*sizeOutTileH) * resizedOutTileW + fIdx * outDummyH * resizedOutTileH,
+            VTAStoreBuffer2D(vtaCmdH, outputSramBaseAddr + (hIdx+fIdx*sizeOutTileH) * resizedOutTileW + fIdx * outDummyH * resizedOutTileW,
                              4, vta_output_buf,
-                             ((filterIdx+fIdx) * nVirtualThread + threadIdx) *
+                             ((filterIdx * nVirtualThread + threadIdx) * nFilterinLoop + fIdx) *
                                  out_w * out_h +
                                  (outputHOffset + hIdx) * out_w + outputWOffset,
                              sizeOutTileW, 1, out_w);
