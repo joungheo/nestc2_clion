@@ -13,14 +13,6 @@ case " $* " in *" -h "*|*" --help "*) echo "usage: sudo $0 [Dir ...]   (in hw*/s
   exit 0;; esac
 [ -n "${BIN:-}" ] && BSRC="BIN= in the environment" || BSRC="BIN of $0"
 BIN=${BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_380mhz.bin}
-#### JO changed (2026-11-04): SYS_BIN = the ALU imm II 1 systolic bitstream (bit/evta_multi4_alu1_400MHz_pass_261104)
-#SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz.bin}
-#### JO changed (2026-11-04): SYS_BIN = the bias reset build (bit/evta_multi4_bias_400MHz_pass_261104)
-#SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz_alu1.bin}
-#### JO changed (2026-11-04): SYS_BIN = the requantize build at 395.8 MHz (bit/evta_multi4_rq_396MHz_pass_261104; 400 MHz missed by 7 ps)
-#SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz_bias.bin}
-#SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_396mhz_rq.bin}
-#### JO changed (2026-11-04): SYS_BIN = the requantize build at 400 MHz (bit/evta_multi4_rq_400MHz_pass_261104; placer ExtraNetDelay_high)
 SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz_rq.bin}
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-1}
 [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }

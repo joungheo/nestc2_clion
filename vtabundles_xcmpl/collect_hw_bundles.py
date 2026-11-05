@@ -73,6 +73,22 @@ RUN_ALL_HDR = r'''#### JO added (2026-11-04): what this run is, at the start of 
 #### -DVTALIB=<vtalib-zcu102-systolic>); run_all.sh gets SYS_BIN=, read by run_prof.sh -s _sys*
 #### JO changed (2026-11-03): single -> the ALU imm II = 1 build (docs/evta_runtime_compare.md 7.15); was ..._sa_400mhz.bin
 #### JO changed (2026-11-04): the requantize builds (docs/evta_isa_ext.md); were ..._sa_400mhz_alu1_epr.bin / ..._4evta_sa_400mhz.bin
+#### JO added (2026-11-06): the earlier SYS_BIN lines (and their #### notes) that were kept by hand in the run_all.sh
+#### files, here so run_all.sh is exactly what this script writes:
+####   hw/script/run_all.sh:
+####     JO changed (2026-11-04): SYS_BIN = the bias reset systolic bitstream (bit/evta_sys_bias_400MHz_pass_261104)
+####     SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_400mhz_alu1_epr.bin}
+####     JO changed (2026-11-04): SYS_BIN = the requantize build (bit/evta_sys_rq_400MHz_pass_261104, docs/evta_isa_ext.md)
+####     SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_400mhz_bias.bin}
+####   hw_multievtax4/script/run_all.sh:
+####     JO changed (2026-11-04): SYS_BIN = the ALU imm II 1 systolic bitstream (bit/evta_multi4_alu1_400MHz_pass_261104)
+####     SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz.bin}
+####     JO changed (2026-11-04): SYS_BIN = the bias reset build (bit/evta_multi4_bias_400MHz_pass_261104)
+####     SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz_alu1.bin}
+####     JO changed (2026-11-04): SYS_BIN = the requantize build at 395.8 MHz (bit/evta_multi4_rq_396MHz_pass_261104; 400 MHz missed by 7 ps)
+####     SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz_bias.bin}
+####     SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_396mhz_rq.bin}
+####     JO changed (2026-11-04): SYS_BIN = the requantize build at 400 MHz (bit/evta_multi4_rq_400MHz_pass_261104; placer ExtraNetDelay_high)
 SYS_BINS = {
     'single': 'vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_400mhz_rq.bin',
     'multievtax4': 'vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz_rq.bin',

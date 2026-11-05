@@ -13,10 +13,6 @@ case " $* " in *" -h "*|*" --help "*) echo "usage: sudo $0 [Dir ...]   (in hw*/s
   exit 0;; esac
 [ -n "${BIN:-}" ] && BSRC="BIN= in the environment" || BSRC="BIN of $0"
 BIN=${BIN:-vtahw_zcu102_1x16_i8w8a32_16_16_19_18_380mhz.bin}
-#### JO changed (2026-11-04): SYS_BIN = the bias reset systolic bitstream (bit/evta_sys_bias_400MHz_pass_261104)
-#SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_400mhz_alu1_epr.bin}
-#### JO changed (2026-11-04): SYS_BIN = the requantize build (bit/evta_sys_rq_400MHz_pass_261104, docs/evta_isa_ext.md)
-#SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_400mhz_bias.bin}
 SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_400mhz_rq.bin}
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-1}
 [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
