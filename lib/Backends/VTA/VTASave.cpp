@@ -102,6 +102,7 @@ struct ResidualFusion {
   const Value *residual; // the other elementadd operand
   const Value *out;      // relu dest: written by the fused call
   int convShl, resShl, sumShr;
+  int reluShl;           //#### JO added (2026-11-05): relu dest scale = elementadd dest scale / 2^reluShl
   bool hoistOut;         // out is allocated after the conv: its allocation is emitted before the conv
 };
 
@@ -2496,7 +2497,10 @@ void generateVTAConvolutionCall(const glow::ConvolutionInst *Inst,
     bundle->append(std::to_string(fu->resShl));
     bundle->append(", ");
     bundle->append(std::to_string(fu->sumShr));
-    bundle->append(", 1");
+    //#### JO changed (2026-11-05): 1 + reluShl (vtalib sumRelu: 1 = relu, 1 + q = relu, << q, clip 127)
+    // bundle->append(", 1");
+    bundle->append(", ");
+    bundle->append(std::to_string(1 + fu->reluShl));
   }
   bundle->append(", vtaCmdH");
   uint32_t idxMultiEVTA = ctx->getIdxMultiEVTA();
@@ -3583,7 +3587,8 @@ void findPackedActivations(const IRFunction *IR, VTASaveContext *ctx) {
 //####   EVTA conv C -> D;  elementadd E(D, R) -> O;  relu(O) -> O'
 //#### with only deallocactivations between them becomes one call at the place of C that writes O' (C, E and the relu
 //#### then emit nothing else). Needs D, R, O, O' in the EVTA layout (findPackedActivations), power-of-two ratios of
-//#### the scales (sD / sO = 2^-a, sR / sO = 2^-b, offsets 0), the relu with equal scales, O' not the conv input,
+//#### the scales (sD / sO = 2^-a, sR / sO = 2^-b, offsets 0), the relu with sO / sO' = 2^q, q = 0..7 (2026-11-05; was equal
+//#### scales only; q > 0: the relu'd sum << q, clipped to 127), O' not the conv input,
 //#### O' allocated before C, and no other user of D (unless D is O or O') or of O (unless O is O').
 //#### (An allocation of O' between C and the relu is moved before C.)
 //#### With m = max(a, b, 0): O' = relu(round((D << (m - a)) + (R << (m - b))) >> m), exactly the CPU elemadd + relu
@@ -3673,15 +3678,21 @@ void findResidualFusions(const IRFunction *IR, VTASaveContext *ctx) {
     if (O != O2 && users[O] != 2) // E, relu
       continue;
     auto tD = D->getType(), tR = R->getType(), tO = O->getType(), tO2 = O2->getType();
+    //#### JO changed (2026-11-05): the relu may also go to a scale 2^q smaller (Resnet50 res2_0: 1/8 -> 1/16); the call
+    //#### then shifts the relu'd sum left by q and clips it to 127, as the CPU relu (which clips since 2026-11-05)
+    // if (tD->getOffset() || tR->getOffset() || tO->getOffset() || tO2->getOffset() ||
+    //     tO->getScale() != tO2->getScale())
+    //   continue;
+    int q = 0; // sO / sO2 = 2^q
     if (tD->getOffset() || tR->getOffset() || tO->getOffset() || tO2->getOffset() ||
-        tO->getScale() != tO2->getScale())
+        !powerOfTwoExp(tO->getScale() / tO2->getScale(), &q) || q < 0 || q > 7)
       continue;
     int eD, eR; // sD / sO = 2^eD, sR / sO = 2^eR
     if (!powerOfTwoExp(tD->getScale() / tO->getScale(), &eD) ||
         !powerOfTwoExp(tR->getScale() / tO->getScale(), &eR))
       continue;
     int m = std::max(0, std::max(-eD, -eR));
-    ResidualFusion f = {R, O2, m + eD, m + eR, m, hoist};
+    ResidualFusion f = {R, O2, m + eD, m + eR, m, q, hoist};
     if (f.convShl > 8 || f.resShl > 6 || f.sumShr > 15)
       continue;
     (*ctx->getFusions())[C] = f;

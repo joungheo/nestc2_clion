@@ -672,7 +672,10 @@ int relu(int8_t* input, int8_t *output, unsigned_t size, float inputScale, float
       output[i]=input[i];
     else
       output[i]=0;
-    output[i] *= (int)(inputScale/outputScale);
+    //#### JO changed (2026-11-05): clip to 127 (int8 *= wrapped)
+    // output[i] *= (int)(inputScale/outputScale);
+    int v = output[i] * (int)(inputScale/outputScale);
+    output[i] = (int8_t)(v > 127 ? 127 : v);
   }
 
   return 0;

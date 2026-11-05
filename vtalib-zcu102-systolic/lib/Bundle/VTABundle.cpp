@@ -405,6 +405,7 @@ struct ConvResidual {
   uint32_t convShl;
   uint32_t sumShr;
   bool relu;
+  uint32_t reluShl;   //#### JO added (2026-11-05): relu output scale = sum scale / 2^reluShl (relu, then << reluShl, clip 127)
 };
 #define RES_MAX_SHL 6
 #define RES_WGT_ENTRY 1023  // last entry of WGT_MEM_ENTRY (1024) in conv_kernel
@@ -737,7 +738,7 @@ void conv_kernel(uint32_t sizeOutTileH,
     //#### rqPool: the column MAX passes of the fused pool write it (pool on the raw acc: max and requantize commute, the
     //#### pooled area starts at 0 = relu); rqRes: the residual GEMM writes it (round + sumShr + clip after the residual add)
     const bool rqOn = evtaRequant();
-    const bool rqConv = rqOn && !res && !pool, rqPool = rqOn && pool && relu, rqRes = rqOn && res;
+    const bool rqConv = rqOn && !res && !pool, rqPool = rqOn && pool && relu, rqRes = rqOn && res && !res->reluShl;
     if (rqConv) VTARequant(vtaCmdH, 1, 0, shift, relu ? 0 : -128, 127);
     // Push operations for resetting Acc memory
     for (uint32_t threadIdx = 0; threadIdx < nVirtualThread; threadIdx++) {
@@ -1079,6 +1080,9 @@ void conv_kernel(uint32_t sizeOutTileH,
         }
         pushAlu(vtaCmdH, idEVTA, outputSramBaseAddr, outputSramBaseAddr, size, RES_ALU_MAX, 1,
                 res->relu ? 0 : -128);
+        //#### JO added (2026-11-05): relu to a scale 2^reluShl smaller: shift left (SHR by a negative amount) before the clip
+        if (res->reluShl)
+          pushAlu(vtaCmdH, idEVTA, outputSramBaseAddr, outputSramBaseAddr, size, RES_ALU_SHR, 1, -(int)res->reluShl);
         pushAlu(vtaCmdH, idEVTA, outputSramBaseAddr, outputSramBaseAddr, size, RES_ALU_MIN, 1, 127);
         }
       }
@@ -2999,7 +3003,7 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
   int32_t replayKey[] = {1, N, H, W, C, KN, KH, KW, pad_size, stride_size, doRelu, doBias, shift, out_h, out_w,
                          nVirtualThread, tileHSize, tileWSize, (int32_t)idEVTA, res != nullptr,
                          res ? (int32_t)res->resShl : 0, res ? (int32_t)res->convShl : 0,
-                         res ? (int32_t)res->sumShr : 0, res ? res->relu : 0, res ? res->buf == output : 0,
+                         res ? (int32_t)res->sumShr : 0, res ? (int32_t)res->relu + 2 * (int32_t)res->reluShl : 0, res ? res->buf == output : 0,
                          pool != nullptr};
   //#### JO changed (2026-11-02): a fused max pool writes its output, not the conv's
   void *replayBufs[] = {input, kernel, doBias ? bias : nullptr, pool ? pool->out : (void *)output, res ? res->buf : nullptr};
@@ -3341,14 +3345,17 @@ int convolution_wo_tr_pool(int8_t* input, int8_t *kernel, int32_t *bias, int8_t 
 
 int convolution_wo_tr_res(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *output, int N, int H, int W, int C, int KN, int KH, int KW, int pad_size,
                           int stride_size, bool doRelu, bool doBias, uint8_t shift, int out_h, int out_w,
-                          int8_t *residual, int convShl, int resShl, int sumShr, bool sumRelu,
+                          int8_t *residual, int convShl, int resShl, int sumShr, int sumRelu,
                           void* vtaCmdH, int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA) {
-  if (convShl < 0 || convShl > 8 || resShl < 0 || resShl > RES_MAX_SHL || sumShr < 0 || sumShr > 15 || N != 1) {
+  //#### JO changed (2026-11-05): sumRelu 0 = no relu, 1 = relu, 1 + q = relu, then << q and clip to 127 (the relu's output
+  //#### scale is the sum's / 2^q; was bool, the bundles generated before pass 0 / 1)
+  if (convShl < 0 || convShl > 8 || resShl < 0 || resShl > RES_MAX_SHL || sumShr < 0 || sumShr > 15 || N != 1 ||
+      sumRelu < 0 || sumRelu > 8) {
     printf("convolution_wo_tr_res: unsupported shifts conv %d residual %d sum %d (N %d)\n", convShl, resShl, sumShr, N);
     return -1;
   }
   ConvResidual res = {residual, getIdentityWeights(idEVTA), (uint32_t)resShl, (uint32_t)convShl, (uint32_t)sumShr,
-                      sumRelu};
+                      sumRelu > 0, sumRelu > 1 ? (uint32_t)sumRelu - 1 : 0};
   //#### EVTA_RES_CHECK=1: also run the plain conv into a scratch buffer and the CPU elemadd + relu on it
   //#### (std::round as CPUBundle elemadd), compare with the fused output and print the mismatches
   static int check = -1;
@@ -3378,6 +3385,8 @@ int convolution_wo_tr_res(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *
     v = v > 127 ? 127 : (v < -128 ? -128 : v);
     if (sumRelu && v < 0)
       v = 0;
+    if (sumRelu > 1)
+      v = std::min(v * (float)(1 << (sumRelu - 1)), 127.f);
     if ((int8_t)v != o[i]) {
       if (!bad)
         first = i;

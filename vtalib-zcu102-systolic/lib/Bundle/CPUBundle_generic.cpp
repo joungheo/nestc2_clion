@@ -724,9 +724,11 @@ int relu(int8_t* input, int8_t *output, unsigned_t size, float inputScale, float
     const ssize_t e = std::min(n, b + CH);
 #pragma omp simd
     for (ssize_t i = b; i < e; i++) {
-      int8_t v = input[i] > 0 ? input[i] : 0;
-      v *= mul;
-      output[i] = v;
+      //#### JO changed (2026-11-05): clip to 127 when the output scale is smaller (int8 v *= mul wrapped: 64 * 2 = -128)
+      // int8_t v = input[i] > 0 ? input[i] : 0;
+      // v *= mul;
+      int v = input[i] > 0 ? input[i] * mul : 0;
+      output[i] = (int8_t)(v > 127 ? 127 : v);
     }
   };
   if (n <= CH) { chunk(0); return 0; }
