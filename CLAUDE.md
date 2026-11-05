@@ -262,8 +262,11 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
 - Other models (2026-11-05, `docs/evta_runtime_compare.md` §7.19): Resnet50 res2_0 residual fused (relu to a 2^q smaller scale), schedules of the
   Resnet50 / VGG16 shapes in `VTASchedules.h` (found with vtalib-systolic `EVTA_SCHED`), conv tiles below 7 x 7: the dummy-padded store
   used the wrong channel block with nVirtualThread 2 (fixed in both vtalibs) and the systolic vtalib's minimum tile is 1 on an `_sa_` bitstream
-  (`EVTA_MIN_TILE`; the 7 x 7 minimum is for the HLS GEMM's acc hazard, `sa_rmw.v` forwards). Single rq: Resnet50 147.9 -> 85.7 ms,
-  VGG16 15.5 -> 7.3 ms, Resnet18 25.4 ms; dumps and classifications unchanged.
+  (`EVTA_MIN_TILE`; the 7 x 7 minimum is for the HLS GEMM's acc hazard, `sa_rmw.v` forwards); EVTA fc for any chunk size (Resnet50
+  2048 -> 1000; vtalib computes it on the CPU from the packed weights where the GEMM cannot, `fc_packed_cpu`). Single rq: Resnet50
+  147.9 -> 83.4 ms, VGG16 15.5 -> 7.3 ms, Resnet18 25.4 ms; dumps and classifications unchanged. vtalib `conv_kernel` now leaves room
+  for the bias entries in `nFilterinLoop` (thread 0's bias LOAD overwrote thread 1's first acc rows without the bias reset: VGG16 on the
+  HLS bitstream and the simulator were wrong); simulator, HLS and systolic dumps identical.
 - The lab board's PL has a defective configuration row (tile row SLICE Y219, cells stuck at 0; `log/BOARD_TODO.md`
   2026-10-23/24). `vivado.tcl` on zcu102 fences the design below it by default (`VTA_BRAM_FENCE=y219|upper|none`).
   multi2 fits below it and works (2026-10-24); multi4 needs more BRAM than the rows below, so it crosses the row with

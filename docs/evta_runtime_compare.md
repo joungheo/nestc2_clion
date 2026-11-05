@@ -1028,9 +1028,26 @@ VGG16의 conv 전부가 기본값(virtual thread 1, tile 14×14)으로 돌았다
 
 VGG16 추론은 오늘 15.5 → 7.3 ms(−53 %)다. 최소 1에서 schedule을 다시 찾지는 않았다(vt 2, tile = 출력 전체만 재 봄).
 
+**④ fc를 EVTA로 (2026-11-05):**
+- Resnet50 fc(2048 → 1000, shift 7)는 chunk당 출력 블록이 4개(wgt 반쪽 512 entry / 입력 블록 128)라 "≥ 8 블록" 조건에서 빠졌다. VGG16 마지막 fc(512 → 10)는 1개다.
+  이 조건도 ③과 같은 HLS GEMM acc hazard 때문이다(`gemm_fc`는 같은 acc가 g uop마다 다시 온다). TVM VTA도 batch 1의 마지막 dense는 CPU에 둔다(`graph_pack`의 `stop_pack`).
+- 바꾼 것: VTASave는 크기와 상관없이 `fullyconnected_evta_packed`를 낸다. systolic vtalib `fc_evta_plan`은 systolic bitstream에서 1블록부터 받는다(`evtaSystolic`).
+  plan이 맞지 않으면(HLS GEMM, 또는 다른 vtalib) packed weight로 CPU에서 같은 반올림·clip으로 계산한다(`fc_packed_cpu`, 두 vtalib).
+- 검증: `EVTA_RES_CHECK` fc 3개(2048 → 1000, 512 → 512, 512 → 10) 0 differ, 분류 그대로. Resnet50 fc 2.69 ms(CPU) → 0.44 ms(EVTA),
+  **추론 85.69 → 83.40 ms**, EVTA 78.04 → 78.48 ms. VGG16 7.33 → 7.28 ms.
+
+**⑤ 검증 중 찾은 vtalib 버그 — bias entry가 thread 1을 덮음 (2026-11-05):**
+- HLS bitstream에서 VGG16 confidence가 0.4247(systolic 0.4537)이었다. simulator도 0.4247이었다(같은 vtalib).
+- 원인: `conv_kernel`은 thread마다 acc 절반(1024)에 tile × `nFilterinLoop` 행을 두고 bias를 그 바로 뒤(`base + T·nF`)에 LOAD한다.
+  `nFilterinLoop`는 `1024 / T`까지 허용해 bias 자리를 빼지 않았다. T·nF가 절반을 꽉 채우면 thread 0의 bias LOAD가 thread 1의 첫 행
+  (GEMM이 끝난 결과)을 덮는다. VGG16 conv0(vt 2, 16×32, nF 2), Conv_5 / Conv_7(16×16, nF 4)이 그렇다. dump 차이도 thread 1의 tile마다 첫 nF 픽셀에만 있었다.
+  systolic rq / bias bitstream은 bias reset이 GEMM 전에 thread 1 영역을 다시 쓰므로 맞았다.
+- 수정(두 vtalib): `nFilterinLoop ≤ 1024 / (T + 1)`(bias reset이 없을 때). T는 최소 tile로 늘린 뒤의 크기를 쓴다(늘리기 전 크기로 정하면 큰 KN에서 넘칠 수 있었다).
+- 검증: VGG16 simulator / HLS / systolic dump 17개 모두 같고 셋 다 0.453709. HLS와 systolic의 3회 dump가 VGG16 51, Resnet50 159, Resnet18 60개 모두 같다.
+  systolic 시간은 그대로다(bias reset이 있으면 계산이 같다).
+
 **남은 것:**
-- Resnet50 CPU: fc 2.7 ms(2048 → 1000, EVTA fc 조건 밖), avgpool 0.9 ms, conv0 입력 복사 1.4 ms. multi-EVTA bundle에도 같은 표가 쓰인다(buffer는 vtalib이 2048 / 1024 entry로 가정).
-- `nFilterinLoop`는 더미를 붙이기 전 tile 크기로 정해진다. HLS vtalib에서 작은 tile + 큰 KN이면 늘린 tile이 acc 몫(2048 / vt)을 넘을 수 있다(지금 모델에는 없음).
+- Resnet50 CPU: avgpool 0.9 ms(ALU에 나눗셈 없음, 2단계 ISA), conv0 입력 복사 1.4 ms. multi-EVTA bundle에도 같은 표가 쓰인다(buffer는 vtalib이 2048 / 1024 entry로 가정).
 
 ## 8. 하드웨어도 같이 비교해야 하나
 
