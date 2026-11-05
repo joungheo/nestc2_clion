@@ -88,13 +88,15 @@ static bool readPngImage(const char *filename, float lo, float hi, float *&image
   imageDims[1] = height;
   imageDims[2] = numChannels;
   imageT = static_cast<float *>(calloc(1, width * height * numChannels * sizeof(float)));
-  const float scale = (hi - lo) / 255.0f;
+  const double scale = (hi - lo) / 255.0;  // double as in the single mains (the same float values)
   for (size_t r = 0; r < height; r++)
     for (size_t c = 0; c < width; c++) {
       png_byte *p = &rows[r][c * (hasAlpha ? numChannels + 1 : numChannels)];
-      // the same element order as the single bundles' mains (getXYZ(dims, row, col, z), z = 2 - RGB index)
+      // the same element order as the single bundle's main (getXYZ(dims, row, col, z)): z = RGB index, or
+      // 2 - RGB index with MODEL_PNG_REVERSE (the mains differ: Resnet50 keeps RGB, VGG16 / Resnet18 reverse it)
       for (size_t z = 0; z < numChannels; z++)
-        imageT[(r * height + c) * numChannels + z] = float(p[isGray ? 0 : numChannels - 1 - z]) * scale + lo;
+        imageT[(r * height + c) * numChannels + z] =
+            float(p[isGray ? 0 : MODEL_PNG_REVERSE ? numChannels - 1 - z : z]) * scale + lo;
     }
   for (size_t y = 0; y < height; y++)
     free(rows[y]);

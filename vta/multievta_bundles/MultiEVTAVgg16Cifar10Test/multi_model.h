@@ -29,6 +29,8 @@
 // pixel range and layout of the input as the single bundle's main makes it (BGR)
 #define MODEL_RANGE_LO 0.0f
 #define MODEL_RANGE_HI 1.0f
+// 1: the main's PNG reader stores R G B at z = 2 1 0 (then the BGR swap of the input), 0: at z = 0 1 2
+#define MODEL_PNG_REVERSE 1
 #define MODEL_NHWC 0
 #define MODEL_INPUT "input"
 #define MODEL_OUTPUT "output"
