@@ -981,8 +981,32 @@ elementadd 출력(1/8)과 달라서였다(조건이 "같은 scale"). CPU `relu`�
 | 추론 한 장 (`_systimed`) | 147.92 ms | **122.46 ms** (−25.5 ms, −17 %) |
 | EVTA 시간 (`_sysprof`) | 113.36 ms | 115.27 ms (res2_0 elemadd + relu가 EVTA로, 1.9 ms) |
 
-**② schedule:** `VTASchedules.h`에는 Resnet18 모양만 있어서 Resnet50의 1×1 conv 36개와 3×3 일부, VGG16의 conv 전부가 기본값
-(virtual thread 1, tile 14×14)으로 돈다. virtual thread가 1이면 LOAD와 GEMM이 겹치지 않는다.
+**② schedule (2026-11-05, `include/Backends/VTA/VTASchedules.h`):** 표에는 Resnet18 모양만 있어서 Resnet50의 1×1 conv 36개와 3×3 일부,
+VGG16의 conv 전부가 기본값(virtual thread 1, tile 14×14)으로 돌았다. virtual thread가 1이면 다음 입력 채널의 LOAD가 앞 GEMM을 기다린다.
+- TVM VTA(`tvm/vta/python/vta/top/vta_conv2d.py`)는 층마다 AutoTVM으로 tile_h / w / ci / co와 virtual thread(`oc_nthread`, `h_nthread`
+  1~2)를 찾고, 미리 찾은 값(TopHub log)을 쓴다. 같은 방식으로 보드에서 찾았다.
+- vtalib-systolic에 `EVTA_SCHED=<H>,<W>,<C>,<KN>,<K>,<stride>:<vt>,<tileH>,<tileW>[;...]`(실행 때 schedule 바꾸기)와 `EVTA_SCHED_LOG=1`을 넣었다.
+  모양마다 후보(virtual thread 1 / 2 × 출력을 나누는 tile, inp 반쪽 1024 · acc 2048 entry 안, 최대 16개)를 `_sysprof`로 재어 가장 빠른 것을 골랐다.
+- 확인은 같은 실행 파일에서 기본 schedule과 새 schedule의 `EVTA_DUMP_CONV`를 모델마다 따로 비교했다(Resnet50 106개, VGG16 51개 모두 같음).
+  처음 확인은 `EVTA_SCHED`가 없는 `_systimed` 실행 파일의 dump라 무효였고, 다시 해 보니 **출력이 7×7보다 작은 conv(VGG16 4×4, 2×2)에서
+  virtual thread 2는 결과가 틀렸다**(vtalib이 tile을 `MIN_H_SIZE` / `MIN_W_SIZE` 7로 늘리는 경로; virtual thread 1은 어떤 tile이든 맞지만 빨라지지 않음). 그 둘은 기본값으로 뒀다.
+- 거의 모든 모양에서 virtual thread 2와 큰 tile이 이겼다: 1×1 56×56은 (2, 8, 56)으로 −48~61 %, 28×28은 (2, 7, 28)로 −45 %, 14×14는 (2, 7, 14)로 −30 %, 7×7은 (2, 7, 7)로 −23 %.
+
+| (`rq`, single, 25회 중앙값) | 전 | 후 |
+|---|---|---|
+| Resnet50 EVTA (`_sysprof`) | 115.27 ms (71 GOPS) | **78.08 ms (105 GOPS)** |
+| Resnet50 추론 (`_systimed`) | 122.46 ms | **85.71 ms** |
+| VGG16 CIFAR-10 EVTA | 15.23 ms (41 GOPS) | **13.30 ms (47 GOPS)** |
+| VGG16 CIFAR-10 추론 | 15.51 ms | **13.59 ms** |
+| Resnet18 | 23.05 / 25.53 ms | 그대로 (bundle byte 단위로 같음) |
+
+분류는 Resnet50 281 / 0.581379, VGG16 0 / 0.453709로 그대로다. Resnet50 추론은 오늘 두 단계로 147.9 → 85.7 ms(−42 %)다.
+
+**남은 것:**
+- VGG16 뒤쪽 conv(출력 4×4, 2×2)는 tile을 7×7로 늘려 계산한다(2×2면 12배). weight LOAD가 아니라 이것이 9.8 GOPS의 원인으로 보인다.
+  `MIN_H_SIZE` 7은 ETRI 첫 코드부터 있고, 같은 acc entry를 다시 읽는 간격(HLS GEMM 파이프라인 hazard)을 위한 것으로 보인다.
+  systolic RTL은 `sa_rmw` forwarding이 있어 줄일 수 있는지, virtual thread 2에서 틀리는 원인과 함께 확인할 것.
+- Resnet50 CPU: fc 2.7 ms(2048 → 1000, EVTA fc 조건 밖), avgpool 0.9 ms, conv0 입력 복사 1.4 ms. multi-EVTA bundle에도 같은 표가 쓰인다(buffer는 vtalib이 2048 / 1024 entry로 가정).
 
 ## 8. 하드웨어도 같이 비교해야 하나
 
