@@ -2983,9 +2983,58 @@ static void dumpConvOutput(void *output, size_t bytes) {
   }
 }
 
+//#### JO added (2026-11-05): schedule override at run time, to try schedules on the board without a new bundle.
+//#### EVTA_SCHED=<H>,<W>,<C>,<KN>,<K>,<stride>:<nVirtualThread>,<tileH>,<tileW>[;...] replaces the bundle's schedule of the convs
+//#### of that shape (input H x W x C, KN filters K x K); EVTA_SCHED_LOG=1 prints each conv's shape and schedule once.
+//#### A schedule whose tiles do not divide the output can change the result: compare EVTA_DUMP_CONV dumps.
+static void schedOverride(int H, int W, int C, int KN, int KH, int stride, int &vt, int &th, int &tw) {
+  struct Sched { int key[6], vt, th, tw; };
+  static std::vector<Sched> table;
+  static int log = -1;
+  static std::mutex mu;
+  std::lock_guard<std::mutex> lock(mu);
+  if (log < 0) {
+    const char *l = getenv("EVTA_SCHED_LOG");
+    log = l && atoi(l) > 0;
+    if (const char *e = getenv("EVTA_SCHED")) {
+      std::string all(e);
+      size_t b = 0;
+      while (b < all.size()) {
+        size_t n = all.find(';', b);
+        std::string one = all.substr(b, n == std::string::npos ? std::string::npos : n - b);
+        Sched t;
+        if (sscanf(one.c_str(), "%d,%d,%d,%d,%d,%d:%d,%d,%d", &t.key[0], &t.key[1], &t.key[2], &t.key[3], &t.key[4],
+                   &t.key[5], &t.vt, &t.th, &t.tw) == 9)
+          table.push_back(t);
+        else if (!one.empty())
+          printf("EVTA_SCHED: cannot parse '%s'\n", one.c_str());
+        if (n == std::string::npos) break;
+        b = n + 1;
+      }
+    }
+  }
+  const int key[6] = {H, W, C, KN, KH, stride};
+  int vt0 = vt, th0 = th, tw0 = tw;
+  for (auto &t : table)
+    if (!memcmp(t.key, key, sizeof(key))) { vt = t.vt; th = t.th; tw = t.tw; break; }
+  if (log) {
+    static std::vector<std::vector<int>> seen;
+    std::vector<int> k = {H, W, C, KN, KH, stride, vt, th, tw};
+    bool first = true;
+    for (auto &x : seen)
+      if (x == k) { first = false; break; }
+    if (first) {
+      seen.push_back(k);
+      printf("EVTA_SCHED %d,%d,%d,%d,%d,%d:%d,%d,%d%s\n", H, W, C, KN, KH, stride, vt, th, tw,
+             (vt != vt0 || th != th0 || tw != tw0) ? " (override)" : "");
+    }
+  }
+}
+
 static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *output, int N, int H, int W, int C, int KN, int KH, int KW, int pad_size,
                       int stride_size, bool doRelu, bool doBias, uint8_t shift, int out_h, int out_w, void* vtaCmdH, int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA,
                       const ConvResidual *res, const ConvPool *pool = nullptr) {
+  schedOverride(H, W, C, KN, KH, stride_size, nVirtualThread, tileHSize, tileWSize);  //#### JO added (2026-11-05)
 
   int8_t *in_NC_HW16 = input;
   int8_t *filter_N_C_HW1616 = kernel;
