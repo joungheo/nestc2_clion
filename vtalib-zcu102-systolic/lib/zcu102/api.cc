@@ -294,3 +294,12 @@ int VTAReplayBegin(VTACommandHandle cmdH, const void* key, int key_bytes, void* 
 void VTAReplayEnd(VTACommandHandle cmdH, int ok) {
   static_cast<vta::CommandQueue*>(cmdH)->ReplayEnd(ok != 0);
 }
+
+//#### JO added (2026-11-05): CPU work while a replayed call runs (cmd_queue.h SetSegmentHook)
+void VTASetSegmentTag(VTACommandHandle cmdH, int tag) {
+  static_cast<vta::CommandQueue*>(cmdH)->SetSegmentTag(tag);
+}
+
+void VTASetSegmentHook(VTACommandHandle cmdH, void (*hook)(void *ctx, int tag), void *ctx) {
+  static_cast<vta::CommandQueue*>(cmdH)->SetSegmentHook(hook, ctx);
+}

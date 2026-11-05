@@ -85,6 +85,9 @@ int VTADeviceRun(VTADeviceHandle device,
                  vta_phy_addr_t insn_phy_addr,
                  uint32_t insn_count,
                  uint32_t wait_cycles);
+//#### JO added (2026-11-05): VTADeviceRun in two halves: start the run, then wait for its done (0, or 1 on a timeout)
+void VTADeviceRunStart(VTADeviceHandle device, vta_phy_addr_t insn_phy_addr, uint32_t insn_count);
+int VTADeviceRunWait(VTADeviceHandle device, uint32_t wait_cycles);
 
 /*!
  * \brief Allocates physically contiguous region in memory readable/writeable by FPGA.

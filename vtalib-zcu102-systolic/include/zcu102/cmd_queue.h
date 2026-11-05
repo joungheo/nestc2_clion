@@ -376,6 +376,7 @@ class CommandQueue {
     if (replay_bytes_ >= ReplayLimit()) return 0;
     rec_ = new Replay;
     rec_key_ = k;
+    seg_tag_ = -1;
     for (int i = 0; i < nbufs; i++) {
       rec_->bufs.push_back(bufs[i] ? DataBuffer::FromHandle(bufs[i])->phy_addr() : 0);
       rec_bufs_.push_back(bufs[i] ? DataBuffer::FromHandle(bufs[i]) : nullptr);
@@ -401,6 +402,16 @@ class CommandQueue {
     replays_[rec_key_] = rec_;
     rec_ = nullptr;
     rec_bufs_.clear();
+  }
+
+  //#### JO added (2026-11-05): CPU work overlapped with a replayed call (VTASetSegmentHook): each run recorded after
+  //#### SetSegmentTag(t) keeps t; the replay calls hook(ctx, tag of run 0) before run 0 and, while run s is running,
+  //#### hook(ctx, tag of run s + 1) (vtalib conv: tag = input rows the run reads, the hook writes them; VTABundle.cpp
+  //#### InputStream). The hook is the caller's until SetSegmentHook(nullptr).
+  void SetSegmentTag(int tag) { seg_tag_ = tag; }
+  void SetSegmentHook(void (*hook)(void *, int), void *ctx) {
+    seg_hook_ = hook;
+    seg_hook_ctx_ = ctx;
   }
 
   // Get record kernel
@@ -555,6 +566,7 @@ class CommandQueue {
     // what the run does (EVTA_REPLAY_LOG=2): GEMM / ALU inner iterations, DRAM bytes of the LOADs (uop, wgt, inp, acc)
     // and of the STOREs (out)
     uint64_t gemm{0}, alu{0}, bytes[5]{};
+    int tag{-1};  // SetSegmentTag when it was recorded
   };
   struct ReplayReloc {
     uint32_t seg, idx, buf, elem_bytes, elem_offset;
@@ -732,6 +744,7 @@ class CommandQueue {
     }
     VTAFlushCache(g.insn, g.insn_phy, ib);
     CountSegment(g);
+    g.tag = seg_tag_;
     rec_->segs.push_back(g);
     rec_->bytes += ib + g.uop_bytes;
     rec_->insns += g.count;
@@ -754,7 +767,10 @@ class CommandQueue {
       PreRunWait();
       struct timespec t0, t1;
       if (ReplayLogLevel() >= 2) clock_gettime(CLOCK_MONOTONIC, &t0);
-      int timeout = VTADeviceRun(device_, g.insn_phy, g.count, 1u << 31);
+      if (seg_hook_ && s == 0) seg_hook_(seg_hook_ctx_, g.tag);
+      VTADeviceRunStart(device_, g.insn_phy, g.count);
+      if (seg_hook_ && s + 1 < r.segs.size()) seg_hook_(seg_hook_ctx_, r.segs[s + 1].tag);
+      int timeout = VTADeviceRunWait(device_, 1u << 31);
       if (ReplayLogLevel() >= 2) {
         clock_gettime(CLOCK_MONOTONIC, &t1);
         fprintf(stderr, "EVTA_RUN %d %u %zu %u %.1f %llu %llu %llu %llu %llu %llu %llu\n", evta_index_, r.id, s, g.count,
@@ -781,6 +797,9 @@ class CommandQueue {
     uop_queue_.UopReset();
   }
   std::unordered_map<std::string, Replay *> replays_;
+  int seg_tag_{-1};
+  void (*seg_hook_)(void *, int){nullptr};
+  void *seg_hook_ctx_{nullptr};
   Replay *rec_{nullptr};
   bool rec_ok_{true};
   std::string rec_key_;

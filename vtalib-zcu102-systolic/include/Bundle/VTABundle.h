@@ -154,4 +154,12 @@ void conv0pack_nhwc2vtaio(const int8_t *input, int8_t *output, int N, int H, int
                           int pad, int CO);
 void preprocess_conv0pack(const float *input, int8_t *output, int N, int H, int W, int C, int nchw, float scale,
                           int32_t offset, const int8_t *lut, int KH, int KW, int stride, int pad, int CO);
+void preprocess_conv0pack_rows(const float *input, int8_t *output, int N, int H, int W, int C, int nchw, float scale,
+                               int32_t offset, const int8_t *lut, int KH, int KW, int stride, int pad, int CO, int q0,
+                               int q1);
+//#### JO added (2026-11-05): preprocess_conv0pack into the VTA buffer buf (a VTABufferAlloc handle), flushed for the EVTA,
+//#### for the EVTA conv that reads buf next (VTASave.cpp). vtalib-zcu102-systolic writes the packed rows while that conv
+//#### runs (VTABundle.cpp InputStream); vta/vtalib writes them at once.
+void preprocess_conv0pack_stream(const float *input, void *buf, int N, int H, int W, int C, int nchw, float scale,
+                                 int32_t offset, const int8_t *lut, int KH, int KW, int stride, int pad, int CO);
 #endif //VTALIB_EXAMPLE_VTABUNDLE_H

@@ -2996,6 +2996,59 @@ int convolution_wo_tr_wo_ch(int8_t* input, int8_t *kernel, int32_t *bias, int8_t
   return 0;
 }
 
+//#### JO added (2026-11-05): the input of an EVTA conv written while the conv runs (preprocess_conv0pack_stream, the
+//#### packed conv0 input: 1.3 ms on one A53 core for Resnet18 / 50, mostly NEON quantize and byte shuffles, not DRAM).
+//#### The conv that reads buf (convolution_wo_tr_impl) makes one EVTA run per tile row, tagged with the input rows the
+//#### row reads (VTASetSegmentTag); its replay calls inputStreamHook with the next run's rows while a run is running
+//#### (cmd_queue.h SetSegmentHook), so the CPU packs and flushes those rows meanwhile. The recording call (the first)
+//#### writes all rows first. One stream pending per thread (multi-EVTA copies). EVTA_INPUT_STREAM=0 writes the rows at once.
+struct InputStream {
+  void *buf;
+  int rows, done, W2, CB;
+  // the preprocess_conv0pack_rows arguments
+  const float *input;
+  int N, H, W, C, nchw;
+  float scale;
+  int32_t offset;
+  const int8_t *lut;
+  int KH, KW, stride, pad, CO;
+};
+static thread_local InputStream gInputStream = {nullptr};
+
+// rows 0 .. rows - 1 (-1 = all) written and flushed
+static void inputStreamTo(InputStream *s, int rows) {
+  rows = rows < 0 ? s->rows : std::min(rows, s->rows);
+  if (rows <= s->done)
+    return;
+  preprocess_conv0pack_rows(s->input, (int8_t *)VTABufferGetVirtAddr(s->buf), s->N, s->H, s->W, s->C, s->nchw,
+                            s->scale, s->offset, s->lut, s->KH, s->KW, s->stride, s->pad, s->CO, s->done, rows);
+  const size_t rowBytes = (size_t)s->W2 * 16;
+  for (int b = 0; b < s->N * s->CB; b++)
+    VTABufferFlush(s->buf, ((size_t)b * s->rows + s->done) * rowBytes, (size_t)(rows - s->done) * rowBytes);
+  s->done = rows;
+}
+static void inputStreamHook(void *ctx, int tag) { inputStreamTo(static_cast<InputStream *>(ctx), tag); }
+static void inputStreamEnd(InputStream *s) {
+  inputStreamTo(s, -1);
+  s->buf = nullptr;
+}
+
+void preprocess_conv0pack_stream(const float *input, void *buf, int N, int H, int W, int C, int nchw, float scale,
+                                 int32_t offset, const int8_t *lut, int KH, int KW, int stride, int pad, int CO) {
+  if (gInputStream.buf)
+    inputStreamEnd(&gInputStream);  // one that no conv read
+  static int on = -1;
+  if (on < 0) {
+    const char *e = getenv("EVTA_INPUT_STREAM");
+    on = !e || atoi(e) != 0;
+  }
+  const int KH2 = (KH + stride - 1) / stride;
+  gInputStream = {buf, (H + 2 * pad - KH) / stride + KH2, 0, (W + 2 * pad - KW) / stride + 1, CO / 16,
+                  input, N, H, W, C, nchw, scale, offset, lut, KH, KW, stride, pad, CO};
+  if (!on || N != 1)
+    inputStreamEnd(&gInputStream);
+}
+
 //#### JO changed (2026-10-31): body of convolution_wo_tr and convolution_wo_tr_res (res = nullptr: plain conv)
 //#### JO added (2026-11-02): EVTA_DUMP_CONV=<dir> writes the output of every EVTA conv call (the EVTA layout as the
 //#### buffer holds it) to <dir>/conv_<n>.bin, n counting the calls of the process from 0: compares two bundles' layers
@@ -3066,6 +3119,13 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
                       int stride_size, bool doRelu, bool doBias, uint8_t shift, int out_h, int out_w, void* vtaCmdH, int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA,
                       const ConvResidual *res, const ConvPool *pool = nullptr) {
   schedOverride(H, W, C, KN, KH, stride_size, nVirtualThread, tileHSize, tileWSize);  //#### JO added (2026-11-05)
+  //#### JO added (2026-11-05): input written while this call runs (InputStream): one run per tile row
+  InputStream *ins = gInputStream.buf && gInputStream.buf == (void *)input && N == 1 ? &gInputStream : nullptr;
+  const bool stream = ins != nullptr;
+  auto streamRows = [&](uint32_t tileHIdx, uint32_t tileH) {
+    int o1 = std::min<int>(out_h, (tileHIdx + 1) * tileH);
+    return std::min(H, (o1 - 1) * stride_size + KH - pad_size);
+  };
 
   int8_t *in_NC_HW16 = input;
   int8_t *filter_N_C_HW1616 = kernel;
@@ -3084,12 +3144,19 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
                          nVirtualThread, tileHSize, tileWSize, (int32_t)idEVTA, res != nullptr,
                          res ? (int32_t)res->resShl : 0, res ? (int32_t)res->convShl : 0,
                          res ? (int32_t)res->sumShr : 0, res ? (int32_t)res->relu + 2 * (int32_t)res->reluShl : 0, res ? res->buf == output : 0,
-                         pool != nullptr};
+                         pool != nullptr, stream};
   //#### JO changed (2026-11-02): a fused max pool writes its output, not the conv's
   void *replayBufs[] = {input, kernel, doBias ? bias : nullptr, pool ? pool->out : (void *)output, res ? res->buf : nullptr};
   void *dumpBuf = pool ? pool->out : (void *)output;
   const size_t dumpBytes = pool ? (size_t)KN * pool->PH * pool->PW : (size_t)N * KN * out_h * out_w;
-  if (VTAReplayBegin(vtaCmdH, replayKey, sizeof(replayKey), replayBufs, 5)) {
+  if (stream)
+    VTASetSegmentHook(vtaCmdH, inputStreamHook, ins);
+  const int replayed = VTAReplayBegin(vtaCmdH, replayKey, sizeof(replayKey), replayBufs, 5);
+  if (stream) {
+    VTASetSegmentHook(vtaCmdH, nullptr, nullptr);
+    inputStreamEnd(ins);  // the rows a replay wrote; all of them before a recording
+  }
+  if (replayed) {
     dumpConvOutput(dumpBuf, dumpBytes);
     return 0;
   }
@@ -3192,6 +3259,8 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
   //#### JO added (2026-11-02): fused max pool (ConvPool): tiles with the extra row / column of the pool window
   //#### (convolution_wo_tr_pool checked the shapes: tiles even, dividing the output, no remainder tiles)
   for (uint32_t tileHIdx = 0; pool && tileHIdx < nTileH; tileHIdx++) {
+    if (stream)
+      VTASetSegmentTag(vtaCmdH, streamRows(tileHIdx, sizeOutTileH));
     for (uint32_t tileWIdx = 0; tileWIdx < nTileW; tileWIdx++) {
       ConvPool tp = *pool;
       tp.haloH = tileHIdx > 0;
@@ -3209,8 +3278,12 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
                   C, H, W, vta_input_buf, KN, KH, KW, vta_filter_buf, out_h, out_w, vta_output_buf, doRelu, shift,
                   doBias, vta_bias_buf, vtaCmdH, idEVTA, nVirtualThread, nullptr, &tp);
     }
+    if (stream)
+      VTASynchronize(vtaCmdH, 1 << 31);
   }
   for (int tileHIdx = 0; !pool && tileHIdx < nTileH; tileHIdx++) {
+    if (stream)
+      VTASetSegmentTag(vtaCmdH, streamRows(tileHIdx, sizeOutTileH));
     for (int tileWIdx = 0; tileWIdx < nTileW; tileWIdx++) {
       uint32_t x_pad_before = tileWIdx == 0 ? pad_size : 0;
       uint32_t x_pad_after = tileWIdx == (nTileW - 1) ? pad_size : 0;
@@ -3252,12 +3325,17 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
                     doBias, vta_bias_buf, vtaCmdH, idEVTA, nVirtualThread, res);
       }
     }
+    if (stream)
+      VTASynchronize(vtaCmdH, 1 << 31);
   }
 
 #ifdef VTA_DEBUG_MODE
   clock_t conv_stage2_end = clock();
 #endif
-  VTASynchronize(vtaCmdH, 1 << 31);
+  if (stream)
+    VTASetSegmentTag(vtaCmdH, -1);
+  else
+    VTASynchronize(vtaCmdH, 1 << 31);
   VTAReplayEnd(vtaCmdH, 1);
 
 

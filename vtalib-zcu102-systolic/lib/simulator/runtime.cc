@@ -1786,3 +1786,7 @@ int VTAReplayBegin(VTACommandHandle cmdH, const void* key, int key_bytes, void* 
 }
 
 void VTAReplayEnd(VTACommandHandle cmdH, int ok) {}
+
+void VTASetSegmentTag(VTACommandHandle cmdH, int tag) {}
+
+void VTASetSegmentHook(VTACommandHandle cmdH, void (*hook)(void *ctx, int tag), void *ctx) {}

@@ -2080,11 +2080,13 @@ void generateFirstBNNInputTranspose(const glow::ConvolutionInst *Inst,
         ctx->getWeightFileStream()->write((const char *)pre->lut.data(), pre->lut.size());
         lutName = std::string("(const int8_t *)VTABufferGetVirtAddr(") + ste.name + ")";
       }
-      bundle->append(packed ? "  preprocess_conv0pack((const float *)" : "  preprocess_nhwc2vtaio_zerofill((const float *)");
+      //#### JO changed (2026-11-05): the packed input as preprocess_conv0pack_stream (into the VTA buffer, flushed; the
+      //#### systolic vtalib writes it while the conv runs)
+      bundle->append(packed ? "  preprocess_conv0pack_stream((const float *)" : "  preprocess_nhwc2vtaio_zerofill((const float *)");
       bundle->append(qsrcMut ? addSymbolEntry(qsrcWeight, ctx).name : qsrc->getName().data());
-      bundle->append(", (int8_t* )VTABufferGetVirtAddr(");
+      bundle->append(packed ? ", " : ", (int8_t* )VTABufferGetVirtAddr(");
       bundle->append(Inst->getName());
-      bundle->append("_input_transpose), ");
+      bundle->append(packed ? "_input_transpose, " : "_input_transpose), ");
       if (packed) {
         for (int v : {N, H, W, (int)srcDims[3], (int)pre->nchw}) {
           bundle->append(std::to_string(v));
@@ -2137,12 +2139,14 @@ void generateFirstBNNInputTranspose(const glow::ConvolutionInst *Inst,
     bundle->append(");\n");
     }
     //#### JO added: flush the CPU-written transposed input before the EVTA reads it
-    //#### (non-coherent EVTA, VTA_COHERENT_ACCESSES=false; no-op otherwise)
+    //#### (non-coherent EVTA, VTA_COHERENT_ACCESSES=false; no-op otherwise; preprocess_conv0pack_stream flushes itself)
+    if (!(packed && ctx->getPreproc(Inst))) {
     bundle->append("  VTABufferFlush(");
     bundle->append(Inst->getName());
     bundle->append("_input_transpose, 0, ");
     bundle->append(inBytes);
     bundle->append(");\n");
+    }
 
   #ifdef VTA_PROFILE
     bundle->append("  clock_t ");

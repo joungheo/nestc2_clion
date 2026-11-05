@@ -1742,9 +1742,12 @@ struct Conv0PackDims {
 //#### writes those s rows (fill(h, dst): input row h, its first w1 = min(W, PW - pad) pixels, at dst) into its own
 //#### buffer of s padded rows (the pad columns stay 0) and packs them at once (no padded image in memory). Board, Resnet18
 //#### conv0 input, OMP 1: 2.18 -> 1.69 ms (zero-filled copy 1.56 ms; most of it is the quantize, docs/evta_runtime_compare.md 7.12).
+//#### JO changed (2026-11-05): packed rows q0 .. q1 - 1 only (preprocess_conv0pack_rows: written while the EVTA conv runs)
 template <class Fill>
 static void conv0packRows(int8_t *output, int n, int H, int pad, const Conv0PackDims &d, int KW, int C, int CO,
-                          Fill fill) {
+                          Fill fill, int q0 = 0, int q1 = -1) {
+  if (q1 < 0 || q1 > d.H2)
+    q1 = d.H2;
   const int run = KW * C, used = d.s * run;
   const size_t rowBytes = (size_t)d.PW * C, plane = (size_t)d.H2 * d.W2 * 16;
 #if defined(__aarch64__)
@@ -1763,7 +1766,7 @@ static void conv0packRows(int8_t *output, int n, int H, int pad, const Conv0Pack
     // s padded rows, 32 bytes to spare for the 16- / 32-byte reads at the last pixel
     std::vector<int8_t> rows(d.s * rowBytes + 32, 0);
 #pragma omp for schedule(static)
-    for (int q = 0; q < d.H2; q++) {
+    for (int q = q0; q < q1; q++) {
       for (int dh = 0; dh < d.s; dh++) {
         int8_t *dst = rows.data() + dh * rowBytes;
         const int h = d.s * q + dh - pad;
@@ -1817,6 +1820,12 @@ void conv0pack_nhwc2vtaio(const int8_t *input, int8_t *output, int N, int H, int
 // with the quantize / table of preprocess_nhwc2vtaio_zerofill (findInputPreprocess) written into the padded rows
 void preprocess_conv0pack(const float *input, int8_t *output, int N, int H, int W, int C, int nchw, float scale,
                           int32_t offset, const int8_t *lut, int KH, int KW, int stride, int pad, int CO) {
+  preprocess_conv0pack_rows(input, output, N, H, W, C, nchw, scale, offset, lut, KH, KW, stride, pad, CO, 0, -1);
+}
+// packed rows q0 .. q1 - 1 (-1 = all) of every image
+void preprocess_conv0pack_rows(const float *input, int8_t *output, int N, int H, int W, int C, int nchw, float scale,
+                               int32_t offset, const int8_t *lut, int KH, int KW, int stride, int pad, int CO, int q0,
+                               int q1) {
   const Conv0PackDims d(H, W, KH, KW, stride, pad, CO);
   assert(CO <= 256 && CO % 16 == 0 && stride * KW * C <= CO);
 #if defined(__aarch64__)
@@ -1873,7 +1882,7 @@ void preprocess_conv0pack(const float *input, int8_t *output, int N, int H, int 
                                       scale, offset);
           row[(size_t)w * C + c] = lut ? lut[c * 256 + v + 128] : v;
         }
-    });
+    }, q0, q1);
 }
 
 void transpose_nhwc2vtaio_zerofill_old(int8_t* input, int8_t* output, int N, int H, int W, int C){

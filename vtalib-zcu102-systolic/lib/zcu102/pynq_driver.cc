@@ -359,12 +359,18 @@ class VTADevice {
   int Run(vta_phy_addr_t insn_phy_addr,
           uint32_t insn_count,
           uint32_t wait_cycles) {
+    RunStart(insn_phy_addr, insn_count);
+    return RunWait(wait_cycles);
+  }
+
+  //#### JO changed (2026-11-05): Run split into the start and the wait for the done (VTADeviceRunStart / VTADeviceRunWait:
+  //#### the CPU can work between them, cmd_queue.h RunReplay's segment hook)
+  void RunStart(vta_phy_addr_t insn_phy_addr, uint32_t insn_count) {
 
 #ifdef VTA_DEBUG_MODE		  
 	printf("VTA RUN (IDX=%d)\n", vta_index_);
 	printf("insn_phyaddr=%p\n",insn_phy_addr);
 	printf("insn_count=%d\n",insn_count);
-	printf("wait_cycles=%u\n",wait_cycles);
 #endif	
 
     VTAWriteMappedReg(vta_fetch_handle_, VTA_FETCH_INSN_COUNT_OFFSET, insn_count);
@@ -397,9 +403,15 @@ class VTADevice {
     VTAWriteMappedReg(vta_compute_handle_, 0x0, VTA_AUTORESTART);
     VTAWriteMappedReg(vta_store_handle_, 0x0, VTA_AUTORESTART);
 
-    struct timeval start_time, stop_time;
+    gettimeofday(&run_start_, nullptr);
+    run_count_++;
+    in_run_ = true;
+    insn_count_ = insn_count;
+    insn_phy_ = insn_phy_addr;
+  }
 
-    gettimeofday(&start_time, nullptr);
+  int RunWait(uint32_t wait_cycles) {
+    struct timeval start_time = run_start_, stop_time;
     // Loop until the VTA is done
     //#### JO changed (2026-10-23): done race. compute's done_o register (0x18) keeps the 1 of the previous
     //#### run's FINISH: compute (vta.cc) pops the instruction, then blocks on the l2g/s2g dependence pops, and
@@ -424,11 +436,6 @@ class VTADevice {
       const char *e = getenv("EVTA_RUN_TIMEOUT_MS");
       return (uint64_t)(e ? atoll(e) : 5000) * 1000;
     }();
-    run_count_++;
-    in_run_ = true;
-    run_start_ = start_time;
-    insn_count_ = insn_count;
-    insn_phy_ = insn_phy_addr;
     for (t = 0; t < wait_cycles; ++t) {
       if (!written)
         written = VTAReadMappedReg(vta_compute_handle_, VTA_COMPUTE_DONE_RD_OFFSET + 4) & 1;
@@ -612,5 +619,14 @@ int VTADeviceRun(VTADeviceHandle handle,
                  uint32_t wait_cycles) {
   return static_cast<VTADevice*>(handle)->Run(
       insn_phy_addr, insn_count, wait_cycles);
+}
+
+//#### JO added (2026-11-05): VTADeviceRun in two halves
+void VTADeviceRunStart(VTADeviceHandle handle, vta_phy_addr_t insn_phy_addr, uint32_t insn_count) {
+  static_cast<VTADevice*>(handle)->RunStart(insn_phy_addr, insn_count);
+}
+
+int VTADeviceRunWait(VTADeviceHandle handle, uint32_t wait_cycles) {
+  return static_cast<VTADevice*>(handle)->RunWait(wait_cycles);
 }
 
