@@ -233,18 +233,27 @@ int main(int argc, char **argv) {
   }
   float *input = loadInput();
 #ifdef MULTI_SINGLE
-  const int n = 1, runs = 4 * multiRuns();
+  const int runs = 4 * multiRuns();
+  std::vector<int> sel = {0};
 #else
-  const int n = nCopies, runs = multiRuns();
+  //#### MULTI_MASK=<bits>: only these copies (copy i = EVTA i, e.g. 6 = EVTAs 1 and 2 at once), default all
+  const char *mk = getenv("MULTI_MASK");
+  const int mask = mk && *mk ? (int)strtol(mk, nullptr, 0) : (1 << nCopies) - 1, runs = multiRuns();
+  std::vector<int> sel;
+  for (int i = 0; i < nCopies; i++)
+    if (mask >> i & 1) sel.push_back(i);
+  printf("MULTI_MASK 0x%x: %zu copies\n", mask, sel.size());
 #endif
+  const int n = (int)sel.size();
   std::vector<ThreadArg> args(n);
-  for (int i = 0; i < n; i++) {
+  for (int j = 0; j < n; j++) {
+    const int i = sel[j];
     const BundleConfig &c = *copies[i].config;
-    args[i] = {i, runs, 0, initConstantWeights(copies[i].weights, c),
+    args[j] = {i, runs, 0, initConstantWeights(copies[i].weights, c),
                static_cast<uint8_t *>(alignedAlloc(c, c.mutableWeightVarsMemSize)),
                static_cast<uint8_t *>(alignedAlloc(c, c.activationsMemSize))};
     const SymbolTableEntry &in = getMutableWeightVar(c, MODEL_INPUT);
-    memcpy(args[i].mutableWeights + in.offset, input, 3 * MODEL_HEIGHT * MODEL_WIDTH * sizeof(float));
+    memcpy(args[j].mutableWeights + in.offset, input, 3 * MODEL_HEIGHT * MODEL_WIDTH * sizeof(float));
   }
   free(input);
   pthread_barrier_init(&runBarrier, NULL, n);
