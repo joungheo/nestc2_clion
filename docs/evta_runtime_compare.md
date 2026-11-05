@@ -938,6 +938,36 @@ clock이 1 % 낮아 single(−1.10 ms)보다 덜 줄었다.
 
 bias(400 MHz)보다 EVTA마다 −1.06 ms(−4.3 %). `hw_multievtax4/script/run_all.sh`의 `SYS_BIN`을 400 MHz 판으로 바꿨다.
 
+### 7.19 Resnet50, VGG16에서도 줄었나 (2026-11-05, 측정)
+
+같은 `_sysprof` / `_systimed` 실행 파일(11-04 빌드, bundle은 지금의 backend 옵션 그대로)을 systolic bitstream 네 개에서 차례로 돌렸다
+(single EVTA, `-n 25 -r`, runs 2-25 중앙값, OMP 1). VGG16은 CIFAR-10용(32×32 입력)이다.
+
+| EVTA 시간 (`_sysprof`) | `sa_400mhz` | `alu1_epr` | `bias` | `rq` | 합 |
+|---|---|---|---|---|---|
+| Resnet18 (3628 Mops) | 26.43 ms (137 GOPS) | 24.89 | 24.15 | **23.05 ms (157 GOPS)** | −12.8 % |
+| Resnet50 (8174 Mops) | 125.56 ms (65 GOPS) | 120.27 | 118.58 | **113.36 ms (72 GOPS)** | −9.7 % |
+| VGG16 CIFAR-10 (627 Mops) | 15.82 ms (40 GOPS) | 15.60 | 15.46 | **15.23 ms (41 GOPS)** | −3.8 % |
+
+| 추론 한 장 (`_systimed`) | `sa_400mhz` | `rq` | EVTA 밖 (`rq`) |
+|---|---|---|---|
+| Resnet18 | 28.84 ms | 25.53 ms | 2.3 ms |
+| Resnet50 | 160.27 ms | 147.92 ms | **33.4 ms** |
+| VGG16 CIFAR-10 | 16.11 ms | 15.51 ms | 0.2 ms |
+
+하드웨어 세 단계는 세 모델 모두 줄였지만, 다른 두 모델은 GOPS가 Resnet18의 절반 이하다. 원인은 하드웨어가 아니라 다음 셋이다.
+- **Resnet50 1×1 conv (backend schedule):** 3×3 conv 16개는 178~192 GOPS(이론 204.8의 90 % 이상)인데, 1×1 conv 36개는 27~69 GOPS다.
+  EVTA 113.4 ms 중 1×1이 약 87 ms다. 1×1은 GEMM 대비 LOAD가 커서 지금 schedule(tile, virtual thread)로는 LOAD가 숨지 않는다.
+- **Resnet50 res2_0의 residual이 합쳐지지 않음:** 16개 중 15개는 `convolution_wo_tr_res`이고, res2_0(56×56×256, 두 입력이 모두 conv)만 CPU
+  `elemadd` 17.9 ms + `relu` 9.3 ms = **27.2 ms**다(EVTA 밖 33.4 ms의 대부분). 나머지는 CPU fc 2.7 ms(2048 → 1000, EVTA fc 조건 밖),
+  avgpool 0.92 ms(7×7 평균은 ALU에 나눗셈이 없어 CPU), conv0 입력 복사 1.39 ms.
+- **VGG16 CIFAR-10 뒤쪽 conv (weight LOAD):** 2×2 출력의 512 → 512 conv 3개가 각 1.92 ms(9.8 GOPS), 4×4의 conv 3개가 1.0~1.95 ms(38 GOPS).
+  weight 2.36 MB를 1.92 ms에 읽으니 약 1.2 GB/s로, HP 포트(333 MHz × 16 B = 5.3 GB/s)보다 훨씬 느리다. weight를 tile마다 다시 읽는지
+  (`EVTA_REPLAY_LOG=2`의 DRAM 바이트) 확인해야 한다. maxpool 4개는 EVTA, 1개(`MaxPool_30`)와 fc 1개는 CPU지만 합쳐 0.2 ms다.
+
+그래서 Resnet18에서 한 backend / runtime 일(layout 유지, fusion, replay)은 다른 모델에도 들어갔지만, Resnet18에 없던 모양(1×1이 많은 bottleneck,
+두 conv의 합, 작은 공간에 큰 weight)이 새 병목이다.
+
 ## 8. 하드웨어도 같이 비교해야 하나
 
 해야 한다. 다만 §7의 ①~④를 가르는 것은 어레이가 아니라 다음 네 가지다.

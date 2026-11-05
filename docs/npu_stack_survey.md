@@ -263,8 +263,8 @@ EVTA 쪽 수치는 저장소 utilization report에서, 보드 쪽은 공식 페�
 | 후보 | 내용 | 예상 효과 | 비용 | 상태 |
 |---|---|---|---|---|
 | ALU imm II=1 | imm 연산은 acc 읽기·쓰기 한 번씩 | ALU 4.63 → 약 3.1 ms | 작음 | **완료** (single 11-03, multi4 11-04 보드 통과) |
-| RMW reset에 bias | GEMM 첫 누산을 0 대신 bias로 | bias ADD 0.91 ms 제거 | 약 2일 (RTL tag, ISA pad bit, vtalib) | **완료** single 11-04 (EVTA 24.89 → 24.15 ms), multi4 빌드 중 |
-| 후처리를 출력 경로로 | Gemmini/NVDLA처럼 SHR, clip, relu를 STORE 경로에 | ALU 시간 대부분 | 중간~큼, ISA | 검토 |
+| RMW reset에 bias | GEMM 첫 누산을 0 대신 bias로 | bias ADD 0.91 ms 제거 | 약 2일 (RTL tag, ISA pad bit, vtalib) | **완료** single 11-04 (EVTA 24.89 → 24.15 ms), multi4 11-04 |
+| 후처리를 출력 경로로 | Gemmini/NVDLA처럼 SHR, clip, relu를 STORE 경로에 | ALU 시간 대부분 | 중간~큼, ISA | **완료** requantize(out 쓰기 길, `rq_*`), single 23.05 ms, multi4 400 MHz (11-04, `evta_isa_ext.md`) |
 | ALU opcode 폭 | 지금 2비트라 MUL(4), MOVE(5)를 못 씀 | avgpool, 곱 scale, BNN | ISA, 컴파일러 | 검토 |
 | 하드웨어 루프 FSM | Gemmini `LoopConv`처럼 tile을 하드웨어가 펼침 | 명령 수와 CPU 일 감소 | 큼 | 검토 |
 | interrupt + 명령 링 버퍼 + doorbell | §1의 공통 제어 규약 | 폴링 제거, driver 공통화 | 중간 (PS-PL IRQ) | 검토 |
@@ -312,3 +312,4 @@ EVTA 쪽 수치는 저장소 utilization report에서, 보드 쪽은 공식 페�
 - 2026-11-03: 처음 씀. 10-26 ~ 11-03의 조사(런타임 비교 10-28/29, 다른 NPU 10-28/31, 싼 보드 10-29/30, 하드웨어 조사 10-27)와 11-03까지의 측정을 모았다.
 - 2026-11-03: §2.3 MLIR 계열(IREE, iree-amd-aie, MLIR-AIE, Intel NPU, PJRT)의 컴파일러 → runtime → driver 구성과 EVTA 대응을 추가. §3.3을 원문(IREE HAL, DRM accel, amdxdna, qaic) 확인으로 고침. 옛 §2.3은 §2.4.
 - 2026-11-04: §5.3 ALU imm II=1이 multi4에서도 보드 통과(Resnet18 copy당 EVTA 26.8 → 25.3 ms).
+- 2026-11-05: §5.3 bias reset, requantize 완료로. 다른 모델 측정(`evta_runtime_compare.md` §7.19): Resnet50은 1×1 conv schedule과 합쳐지지 않은 residual 하나, VGG16 CIFAR-10은 weight LOAD가 병목.
