@@ -968,6 +968,22 @@ bias(400 MHz)보다 EVTA마다 −1.06 ms(−4.3 %). `hw_multievtax4/script/run_
 그래서 Resnet18에서 한 backend / runtime 일(layout 유지, fusion, replay)은 다른 모델에도 들어갔지만, Resnet18에 없던 모양(1×1이 많은 bottleneck,
 두 conv의 합, 작은 공간에 큰 weight)이 새 병목이다.
 
+**① res2_0 residual (2026-11-05, `VTASave.cpp` `findResidualFusions`, vtalib `convolution_wo_tr_res`):** 합쳐지지 않은 이유는 relu의 출력 scale(1/16)이
+elementadd 출력(1/8)과 달라서였다(조건이 "같은 scale"). CPU `relu`는 이때 `int8_t v *= 2`라 64 이상이 음수로 넘어갔다(wrap).
+- 이제 sO / sO' = 2^q(q = 0~7)도 합친다. vtalib `sumRelu`를 bool에서 int로: 0 없음, 1 relu, 1 + q는 relu 뒤 << q(ALU SHR에 음수 imm), MIN 127.
+  q > 0이면 requantize 대신 ALU 명령으로 한다(반올림 shift와 왼쪽 shift를 한 번에 못 한다). 예전 bundle은 0 / 1을 넘기므로 그대로 돈다.
+- CPU `relu`(generic, x86)는 127에서 자른다.
+- 검증: `EVTA_RES_CHECK=1`로 Resnet50의 합친 호출 16개와 conv0 + pool 모두 0 differ, 분류 281 / 0.581379(전과 같음).
+  Resnet18 bundle은 다시 생성해도 byte 단위로 같고, 새 vtalib으로 EVTA 23.056 ms(전 23.054).
+
+| Resnet50 (`rq`) | 전 | 후 |
+|---|---|---|
+| 추론 한 장 (`_systimed`) | 147.92 ms | **122.46 ms** (−25.5 ms, −17 %) |
+| EVTA 시간 (`_sysprof`) | 113.36 ms | 115.27 ms (res2_0 elemadd + relu가 EVTA로, 1.9 ms) |
+
+**② schedule:** `VTASchedules.h`에는 Resnet18 모양만 있어서 Resnet50의 1×1 conv 36개와 3×3 일부, VGG16의 conv 전부가 기본값
+(virtual thread 1, tile 14×14)으로 돈다. virtual thread가 1이면 LOAD와 GEMM이 겹치지 않는다.
+
 ## 8. 하드웨어도 같이 비교해야 하나
 
 해야 한다. 다만 §7의 ①~④를 가르는 것은 어레이가 아니라 다음 네 가지다.
