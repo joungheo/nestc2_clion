@@ -1068,8 +1068,34 @@ VGG16 추론은 오늘 15.5 → 7.3 ms(−53 %)다. 최소 1에서 schedule을 �
   conv0이 늘어난 0.25~0.30 ms는 대부분 첫 run 전에 채우는 첫 행 묶음(115행 중 19행)이다. run을 7개로 나눈 비용은 거의 없다.
   CPU 일을 EVTA와 겹치는 구조(start / wait 분리, run마다 hook)는 3단계(인터럽트 + command ring)의 바탕이기도 하다.
 
+**⑦ multi4에도 (2026-11-06):**
+- Resnet18 multi4는 같은 bundle 생성기라 ⑥이 그대로 들어간다. Resnet50, VGG16 CIFAR-10도 multi4 set을 만들었다(`vta/multievta_bundles/MultiEVTAResnet50Test`,
+  `MultiEVTAVgg16Cifar10Test`; copy i = EVTA i). main은 하나(`multi_threads_main.cpp`)에 모델만 `multi_model.h`로 다르고, copy 생성은
+  `vtabundles_xcmpl/gen_multi4_bundles.sh`(model-compiler 직접 호출; NEST-C CMake에 디렉터리를 더하면 Debug2_remote cmake가 다시 돌아 Glow 전체 재빌드).
+- CMA: copy마다 weight를 VTA buffer에 올리면 Resnet50 4 × 25.6 MB = 102 MB로 128 MB에 들어가지 않는다(단일 Resnet50도 queue 64 MB 포함 96 MB).
+  load_module의 상수 buffer를 내용이 같으면 process 안에서 하나로 공유한다(vtalib `VTAConstBufferAlloc`, VTASave가 냄; `EVTA_CONST_SHARE=0` = copy마다).
+  Resnet50 multi4 실행 중 CMA 여유 85 MB.
+- 찾은 버그 둘:
+  - 새 main의 PNG 읽기가 단일 main과 달랐다(Resnet50 main은 RGB를 뒤집지 않고 VGG16 / Resnet18 main은 뒤집음, scale은 double). `MODEL_PNG_REVERSE`로 맞춤.
+  - systolic vtalib `conv_kernel`: bias reset이 있으면 bias entry 자리를 빼지 않아(⑤) 마지막 thread의 bias가 acc 절반 뒤(2048 이후)에 LOAD된다.
+    단일 buffer는 물리 acc가 4096이라 우연히 괜찮았고 multi buffer(2048)는 넘쳤다(VGG16 conv0 vt 2 / 16×32, systolic multi4만 틀림, HLS multi4는 맞음).
+    마지막 thread의 bias가 물리 acc(`-DVTA_LOG_ACC_BUFF_SIZE`) 밖이면 자리를 남긴다. 단일은 그대로.
+- 검증: 세 모델 모두 multi4 copy 0의 dump가 단일 EVTA와 같고(Resnet50은 HLS multi4도), copy 4개 × 25회 분류가 단일과 같다(281 / 0.581379, 0 / 0.453709).
+  단일 bundle의 dump·시간은 그대로.
+- 결과(systolic rq multi4, 4 copy 동시, OMP 1, copy별 `_systimed` 25회 중앙값, stream 끔 → 켬):
+
+| | 4 copy 동시 | copy 0 혼자(multi4 bitstream) |
+|---|---|---|
+| Resnet18 | 25.86~25.97 → **24.58~24.67 ms** | 25.52 → 24.15 ms |
+| Resnet50 | 86.88~87.49 → **85.68~86.26 ms** | 84.32 → 83.09 ms |
+| VGG16 CIFAR-10 | 8.18~8.51 → 8.19~8.53 ms | 7.38 → 7.37 ms |
+
+  copy 0 혼자도 단일 bitstream보다 조금 느리다(Resnet50 82.18 ms): multi buffer가 작아 schedule이 같지 않다(표는 단일 buffer로 찾음).
+  4 copy를 같이 돌리면 copy마다 Resnet50 +2.6~3.1 ms, VGG16 +0.8~1.1 ms 더 걸린다(copy 1, 2가 0, 3보다 느림).
+
 **남은 것:**
 - Resnet50 CPU: avgpool 0.9 ms(ALU에 나눗셈 없음, 2단계 ISA). conv0 첫 행 묶음 약 0.2 ms(첫 tile 행을 더 잘게 나누면 줄어듦).
+- multi4: schedule을 multi buffer로 다시 찾기, 4 copy 동시일 때 느려지는 원인(copy 1, 2).
   multi-EVTA bundle에도 같은 표가 쓰인다(buffer는 vtalib이 2048 / 1024 entry로 가정).
 
 ## 8. 하드웨어도 같이 비교해야 하나

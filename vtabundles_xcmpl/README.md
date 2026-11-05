@@ -76,6 +76,11 @@ Bundle sources are generated in the simulator build, then compiled for the board
   and adds the run line (`multi4conv4Bundle 15 100` / `3 100`: one thread per EVTA, the same bundle on every EVTA at
   once). `multi4conv4Bundle <mask> [iters] [conv]` prints per-EVTA and wall time and GOPS, writes the lowest EVTA's
   output to `output.bin` (golden check of run_all.sh) and exits 1 if any EVTA's output is wrong. Results in BOARD_TODO.
+- `MultiEVTAResnet50Test`, `MultiEVTAVgg16Cifar10Test` (multievtax4, 2026-11-06; `../vta/multievta_bundles/<Dir>`): one copy per EVTA as
+  MultiEVTAResnet18Test, one main for both (`multi_threads_main.cpp`, the model in `multi_model.h`; `single_thread_main.cpp` = copy 0 alone).
+  Generate the copies (and MultiEVTAResnet18Test's) on the board with `./gen_multi4_bundles.sh <Dir> ...` after `build_sim_bundles.sh` of the
+  single bundle (model and profile come from its build dir), then `./collect_hw_bundles.py --set multievtax4 <Dir> ...`; a build dir configured
+  before the Dir existed needs `cmake .` first (make of an unknown target stops before cmake re-runs).
 - `MultiEVTAResConv10Test` (both multi sets, 2026-10-26): the same generator and main for `hw/ResConv10Test`
   (3x3, 7x7x512 -> 512, the conv shape with the highest GOPS on one EVTA): `make_multi4conv4.py hw/<Name>Test` takes
   any single-conv bundle of `hw/` and writes `MultiEVTA<Name>Test` (names and op count in `multiconv.h`); run line

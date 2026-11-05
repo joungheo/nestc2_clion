@@ -271,6 +271,12 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   (`InputStream`) runs the conv that reads it one EVTA run per tile row and its replay packs and flushes the next row's input while a run
   is running (pynq driver `RunStart` / `RunWait`, `cmd_queue.h` segment tag / hook; `EVTA_INPUT_STREAM=0` = all at once; vta/vtalib
   writes it at once). Dumps identical; Resnet50 83.4 -> 82.2 ms, Resnet18 25.4 -> 24.1 ms (single rq, OMP 1).
+- multi4 Resnet50 / VGG16 (2026-11-06, §7.19 ⑦): `vta/multievta_bundles/MultiEVTAResnet50Test`, `MultiEVTAVgg16Cifar10Test` (common
+  `multi_threads_main.cpp`, model in `multi_model.h`), copies generated with `vtabundles_xcmpl/gen_multi4_bundles.sh` (also Resnet18;
+  these dirs are not in the NEST-C CMake on purpose: a cmake re-run in Debug2_remote rebuilds Glow). load_module's constant VTA buffers
+  are shared by the copies (`VTAConstBufferAlloc`; Resnet50 x 4 does not fit the 128 MB CMA otherwise; `EVTA_CONST_SHARE=0`).
+  vtalib-systolic `conv_kernel` leaves bias room when the last thread's bias would lie past the physical acc (multi buffers 2048 entries).
+  copy 0 dumps = single EVTA; per copy with 4 at once, stream off -> on: Resnet18 25.9 -> 24.6 ms, Resnet50 87.1 -> 86.0 ms, VGG16 8.3 ms.
 - The lab board's PL has a defective configuration row (tile row SLICE Y219, cells stuck at 0; `log/BOARD_TODO.md`
   2026-10-23/24). `vivado.tcl` on zcu102 fences the design below it by default (`VTA_BRAM_FENCE=y219|upper|none`).
   multi2 fits below it and works (2026-10-24); multi4 needs more BRAM than the rows below, so it crosses the row with
