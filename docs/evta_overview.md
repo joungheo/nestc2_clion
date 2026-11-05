@@ -22,8 +22,9 @@ NEST-C의 EVTA(VTA 계열 NPU)를 ZCU102 보드에서 돌리고 빠르게 만든
 | 11-04 | **26.59 ms** (같은 날 이전 bitstream 27.30) | | RMW reset에 bias (bitstream) |
 | 11-04 | **25.49 ms** (같은 날 이전 bitstream 26.61) | | out 쓰기에 requantize (bitstream) |
 
-현재 Resnet18 single OMP 1 28.83 ms의 구성(11-02, `evta_runtime_compare.md` §7.14): EVTA 26.47 ms
-(GEMM 18.85 + ALU 4.63 + 그 밖 2.99), CPU와 호출 약 2.4 ms.
+11-02 Resnet18 single OMP 1 28.83 ms의 구성(`evta_runtime_compare.md` §7.14): EVTA 26.47 ms
+(GEMM 18.85 + ALU 4.63 + 그 밖 2.99), CPU와 호출 약 2.4 ms. 11-03 ~ 11-04 bitstream 세 단계(ALU imm II = 1, bias reset, requantize)로
+ALU는 pool MAX만 남아 EVTA 23.05 ms, 추론 25.49 ms다(그림 15, §7.17).
 
 ## 1. 보드에서 EVTA를 처음 돌리기 (2026-09-29 ~ 10-17)
 
@@ -132,9 +133,9 @@ NEST-C의 EVTA(VTA 계열 NPU)를 ZCU102 보드에서 돌리고 빠르게 만든
 | [10](figs/evta_fig10_multi4_hang_dsb.svg) | multi4 멈춤의 원인과 dsb sy |
 | [11](figs/evta_fig11_evta_block.svg) | EVTA 블록도: HLS GEMM → systolic gemm_sa, 클럭 분리 |
 | [12](figs/evta_fig12_gemm_hls_vs_systolic.svg) | GEMM 한 단계: HLS broadcast → systolic 어레이 |
-| [13](figs/evta_fig13_alu_ii.svg) | ALU: II = 2 → imm II = 1, 다음은 RMW reset에 bias |
+| [13](figs/evta_fig13_alu_ii.svg) | ALU: II = 2 → imm II = 1, RMW reset에 bias, requantize |
 | [14](figs/evta_fig14_time_waterfall.svg) | Resnet18 추론 시간: 단계별로 줄어든 폭 |
-| [15](figs/evta_fig15_evta_time_now.svg) | 지금 EVTA 시간 26.47 ms의 구성과 줄어들 몫 |
+| [15](figs/evta_fig15_evta_time_now.svg) | EVTA 시간 26.47 ms(11-02)의 구성과 하드웨어 세 단계 뒤 23.05 ms |
 
 ### 그림 1. Resnet18 추론 한 번: CPU와 EVTA가 하는 일 (10-29 → 11-02)
 
@@ -184,7 +185,7 @@ NEST-C의 EVTA(VTA 계열 NPU)를 ZCU102 보드에서 돌리고 빠르게 만든
 
 ![그림 12](figs/evta_fig12_gemm_hls_vs_systolic.svg)
 
-### 그림 13. ALU: II = 2 → imm II = 1, 다음은 RMW reset에 bias
+### 그림 13. ALU: II = 2 → imm II = 1, RMW reset에 bias, requantize
 
 ![그림 13](figs/evta_fig13_alu_ii.svg)
 
@@ -192,7 +193,7 @@ NEST-C의 EVTA(VTA 계열 NPU)를 ZCU102 보드에서 돌리고 빠르게 만든
 
 ![그림 14](figs/evta_fig14_time_waterfall.svg)
 
-### 그림 15. 지금 EVTA 시간 26.47 ms의 구성과 줄어들 몫
+### 그림 15. EVTA 시간 26.47 ms(11-02)의 구성과 하드웨어 세 단계 뒤 23.05 ms
 
 ![그림 15](figs/evta_fig15_evta_time_now.svg)
 

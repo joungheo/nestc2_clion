@@ -450,7 +450,8 @@ def fig14():
              ("11-02", "conv0 packed 입력 4×1", 34.5, 29.19, "§7.12"),
              ("11-02", "conv0 + maxpool 한 호출", 29.19, 28.83, "§7.13"),
              ("11-03", "ALU imm 연산 II = 1 (bitstream, 같은 날 28.98 기준)", 28.98, 27.32, "§7.15"),
-             ("예상", "RMW reset에 bias (bitstream)", 27.32, 26.4, "")]
+             ("11-04", "RMW reset에 bias (bitstream, 같은 날 27.30 기준)", 27.30, 26.59, "§7.16"),
+             ("11-04", "out 쓰기에 requantize (bitstream, 같은 날 26.61 기준)", 26.61, 25.49, "§7.18")]
     rh = 46
     H = 150 + len(steps) * rh + 150
     s = Svg(W, H, "그림 14. Resnet18 추론 한 장의 시간: 단계별로 줄어든 폭",
@@ -482,9 +483,10 @@ def fig14():
             s.text(x0 + now * scale + 8, yy + 27, f"{now} ms", 12.5, weight="bold")
     yb = y + len(steps) * rh + 30
     s.lines(30, yb, [("합", "bold"),
-                     "• 148.9 → 27.32 ms (5.4배). 가장 큰 것은 transpose 제거(−57.8 ms)와 CPU elementwise를 EVTA로 옮긴 것(−38.6 ms).",
-                     "• OMP 4로는 73.6 → 27.71 ms. multi4 (4 copy 동시) 100회는 약 3.9 s → 0.820 s.",
-                     "• ALU II = 1은 11-03 보드 측정(EVTA −1.53 ms). 점선(bias reset −0.9 ms)은 예상치다."], 13)
+                     "• 148.9 → 25.49 ms (5.8배). 가장 큰 것은 transpose 제거(−57.8 ms)와 CPU elementwise를 EVTA로 옮긴 것(−38.6 ms).",
+                     "• 11-03 ~ 11-04 bitstream 세 단계(ALU II = 1, bias reset, requantize): EVTA 26.42 → 23.05 ms (−3.37 ms), 소프트웨어는 vtalib만.",
+                     "• OMP 4로는 73.6 → 27.71 ms(11-02). multi4 4 copy 동시: 100회 약 3.9 s → 0.820 s(11-02, _sys),"
+                     " 11-04 _rq 400 MHz에서 EVTA마다 23.44~23.56 ms, 610.4 GOPS."], 13)
     s.legend(30, H - 18, [("evta", "그 단계 뒤의 시간"), ("new", "그 단계로 줄어든 몫")])
     return s
 
@@ -686,8 +688,8 @@ def fig02():
     s.text(712, y2 - 20, "생성된 bundle .cpp가 vtalib 함수를 부른다 (보드에서 함께 빌드)", 12, color="#2f5f98")
     s.section(y2, "runtime: vtalib (vta/vtalib 와 vtalib-zcu102-systolic, 보드 vtabundles_xcmpl에서 bundle과 함께 빌드)")
     y3 = y2 + 50
-    rt = [("VTABundle.cpp", ["convolution_wo_tr_res / _pool", "maxpool_evta", "fullyconnected_evta_packed",
-                             "EVTA_DUMP_CONV, EVTA_RES_CHECK"]),
+    rt = [("VTABundle.cpp", ["convolution_wo_tr_res / _pool", "maxpool_evta, fc_evta_packed",
+                             "VTARequant, bias reset", "EVTA_DUMP_CONV, EVTA_RES_CHECK"]),
           ("CPUBundle_generic.cpp", ["transpose 16 B 복사", "cpuFullyConnected (NEON)", "preprocess_*, conv0pack_*"]),
           ("cmd_queue.h", ["record / replay (EVTA_REPLAY)", "EVTA_REPLAY_LOG, _DUMP", "멈춤 진단 옵션"]),
           ("api.cc", ["VTA buffer pool", "(EVTA_BUF_POOL_MB)"]),
@@ -702,9 +704,9 @@ def fig02():
     s.section(y4, "하드웨어: bitstream (PC docker의 Vivado 2020.1)")
     y5 = y4 + 50
     hw = [("new", ["vivado.tcl", "Y219 결함 행 fence,", "FREQ, HP 333 MHz 분리,", "multi4 Y219 배선"], 260),
-          ("new", ["HLS vta.cc", "systolic: GEMM은 uop만,", "ALU imm 루프 II = 1 (진행 중)"], 270),
-          ("new", ["RTL gemm_sa", "16×16 DSP48E2 WS 어레이,", "RMW, weight 채우기", "(다음: reset에 bias)"], 270),
-          ("mem", ["ISA, buffer 크기", "256비트 명령, 2비트 opcode", "그대로"], 250),
+          ("new", ["HLS vta.cc", "systolic: GEMM은 uop만,", "ALU imm 루프 II = 1,", "ALU 결과에 requantize"], 270),
+          ("new", ["RTL gemm_sa", "16×16 DSP48E2 WS 어레이,", "RMW, weight 채우기,", "reset에 bias, out에 requantize"], 270),
+          ("new", ["ISA: 명령의 pad 비트", "GEMM bias_reset, rq_*,", "ALU rq_* (opcode 2비트,", "buffer 크기는 그대로)"], 250),
           ("mem", ["fetch / load / store", "그대로"], 240)]
     x = 40
     for kind, lines, w in hw:
@@ -941,7 +943,7 @@ def fig11():
 @fig(13, "alu_ii")
 def fig13():
     W = 1460
-    s = Svg(W, 950, "그림 13. ALU 한 반복의 acc_mem 포트 사용: II = 2 → imm 연산은 II = 1 (진행 중), 다음은 RMW reset에 bias",
+    s = Svg(W, 1010, "그림 13. ALU 한 반복의 acc_mem 포트 사용: II = 2 → imm 연산 II = 1 (11-03), RMW reset에 bias와 requantize (11-04)",
             ["ALU 반복 하나 = acc[dst] ← op(acc[dst], imm 또는 acc[src]) (16 lane int32). acc_mem은 포트 2개(A, B)짜리 BRAM."
              " 자세히: evta_runtime_compare.md §7.14, vta-hw-zcu102-systolic/hardware/xilinx/src/vta.cc alu()."])
 
@@ -973,7 +975,7 @@ def fig13():
     s.lines(40, ya + 170, ["imm 연산(SHR, clip MIN/MAX, relu, 반올림 ADD)은 src를 쓰지 않는데도 같은 루프라 2 clk였다.",
                            "Resnet18 ALU 4.63 ms 중 imm 연산이 69 %. (runbench: ALU 반복 2.0 clk, imm도 reg도)"], 12.5)
     yb = ya + 230
-    s.section(yb, "B. 진행 중 (systolic bitstream만): use_imm인 명령은 따로 루프 — dst 읽기(포트 A) + dst 쓰기(포트 B) = II = 1", color="#2f7a2a")
+    s.section(yb, "B. 11-03 (systolic bitstream만): use_imm인 명령은 따로 루프 — dst 읽기(포트 A) + dst 쓰기(포트 B) = II = 1", color="#2f7a2a")
     seq = []
     for k in range(8):
         seq.append((0, k, f"dst{k}", "hls"))
@@ -982,32 +984,35 @@ def fig13():
     ports(yb + 50, "loop ALU_IMM_OUT_LOOP..._UOP: II = 1, depth 9", seq, 8, "반복 8개에 8 clk (파이프라인이 차면)", "#2a6a24")
     s.lines(40, yb + 170, ["• 같은 반복 안에서 읽은 dst를 몇 clk 뒤 쓴다. 그 사이 같은 dst를 다시 읽는 반복이 없어야 한다(DEPENDENCE inter false):",
                            "  Resnet18의 ALU 명령 1,566개를 덤프(EVTA_REPLAY_DUMP)로 보면, imm 명령 중 16 반복 안에 같은 주소를 다시 쓰는 것은 없다.",
-                           "• 첫 빌드는 uop 읽기 → 주소 덧셈 → acc_mem 주소(BRAM 58개)가 한 clk이라 WNS −0.819 ns. 그 둘 뒤에 register를 넣어 다시 빌드 중.",
-                           "• 예상: imm 반복 60만 clk이 반으로, EVTA −1.5 ms. ISA, vtalib, 컴파일러는 그대로(기존 bundle을 그대로 쓴다)."], 12.5)
+                           "• 첫 빌드는 uop 읽기 → 주소 덧셈 → acc_mem 주소(BRAM 58개)가 한 clk이라 WNS −0.819 ns. 그 둘 뒤에 register를 넣어 +0.001 ns.",
+                           "• 보드: runbench aluimm 2.0 → 1.0 clk, Resnet18 EVTA 26.42 → 24.89 ms (−1.53, 예상 −1.5). ISA, vtalib, 컴파일러는 그대로 (§7.15)."], 12.5)
     yc = yb + 290
-    s.section(yc, "C. 다음: GEMM reset 단계에서 acc에 0 대신 bias를 쓴다 (RTL sa_rmw, ISA 비트 하나, vtalib) — bias ADD 0.91 ms가 없어진다",
+    s.section(yc, "C. 11-04: GEMM reset에서 acc에 0 대신 bias (ISA 비트 하나), out에 쓸 때 requantize (rq_* 필드) — ALU 명령이 pool MAX만 남는다",
               color="#9a7b00")
     y1 = yc + 50
     s.text(40, y1 + 14, "conv 출력 원소 하나의 requant (tile의 모든 원소에 대해, 원소당 clk)", 13, weight="bold")
     rowsA = [("ALU ADD bias (reg)", 2, "hls"), ("ALU SHR (imm)", 2, "hls"), ("ALU MAX (imm)", 2, "hls"), ("ALU MIN (imm)", 2, "hls")]
     rowsB = [("ALU ADD bias (reg)", 2, "hls"), ("SHR", 1, "new"), ("MAX", 1, "new"), ("MIN", 1, "new")]
     rowsC = [("bias는 reset 때 RMW가 씀", 0, "rtl"), ("SHR", 1, "new"), ("MAX", 1, "new"), ("MIN", 1, "new")]
-    for i, (lbl, rows_) in enumerate([("지금 bitstream", rowsA), ("ALU II = 1 뒤", rowsB), ("+ bias reset 뒤", rowsC)]):
+    rowsD = [("bias는 reset 때 RMW가 씀", 0, "rtl"), ("shift · clip은 out 쓰기 길에서", 0, "rtl")]
+    for i, (lbl, rows_) in enumerate([("11-02 bitstream", rowsA), ("ALU II = 1 (11-03)", rowsB), ("+ bias reset (11-04)", rowsC),
+                                      ("+ requantize (11-04)", rowsD)]):
         yy = y1 + 36 + i * 50
         s.text(40, yy + 22, lbl, 12.5, weight="bold")
         x = 200
         tot = 0
         for name, clk, kind in rows_:
-            w = max(clk, 0.0) * 120 if clk else 190
+            w = max(clk, 0.0) * 120 if clk else 230
             fill, stroke = C[kind]
             s.rect(x, yy, w, 32, fill, stroke, 1, 3, dash="4 3" if clk == 0 else None)
             s.text(x + w / 2, yy + 21, f"{name} {clk} clk" if clk else name, 11.5, "middle")
             x += w + 6
             tot += clk
         s.text(x + 12, yy + 21, f"= {tot} clk", 13, weight="bold")
-    s.lines(40, y1 + 200, ["• RMW: reset인 단계에서 읽는 주소를 dst 대신 uop의 src(= bias가 있는 acc entry)로, 쓰는 값을 0 대신 읽은 값으로.",
-                           "  S1에서 행 값을 0으로 미리 만들어 S2(선택 + 덧셈, 400 MHz에서 가장 빡빡한 경로)에는 logic을 더하지 않는다.",
-                           "• 예전 bitstream은 새 비트를 무시하고 0으로 reset하므로 vtalib은 /tmp/evta_bitstream 이름을 보고 새 방식을 쓴다."], 12.5)
+    s.lines(40, y1 + 250, ["• bias reset (§7.16): reset인 단계에서 읽는 주소를 dst 대신 uop의 src(= bias가 있는 acc entry)로, 쓰는 값을 0 대신 읽은 값으로."
+                           " EVTA 24.89 → 24.15 ms.",
+                           "• requantize (§7.18): out에 쓰는 값을 clip((acc + round) >> shift, lo, hi)로 (sa_rmw S4-S6, 추가 clk 없음). EVTA 24.15 → 23.05 ms.",
+                           "• 예전 bitstream은 새 비트를 무시하므로 vtalib은 /tmp/evta_bitstream 이름(bias, _rq)을 보고 새 방식을 쓴다 (evta_isa_ext.md)."], 12.5)
     return s
 
 
@@ -1015,8 +1020,9 @@ def fig13():
 @fig(15, "evta_time_now")
 def fig15():
     W = 1460
-    s = Svg(W, 760, "그림 15. 지금 EVTA 시간 26.47 ms의 구성과 하드웨어 개선으로 줄어들 몫",
-            ["Resnet18 single, systolic 400 MHz, 24 inference median (EVTA_REPLAY_LOG=2 + EVTA_REPLAY_DUMP). 자세히: evta_runtime_compare.md §7.14."])
+    s = Svg(W, 850, "그림 15. EVTA 시간 26.47 ms(11-02)의 구성과 하드웨어 개선 세 단계 (11-03 ~ 11-04)",
+            ["Resnet18 single, systolic 400 MHz. 11-02 막대는 측정(24 inference median, EVTA_REPLAY_LOG=2 + EVTA_REPLAY_DUMP, §7.14),"
+             " 그 아래는 그 측정에서 뺀 추정이고 오른쪽 '측정'은 각 bitstream의 보드 _sysprof 값(§7.15, §7.16, §7.18)."])
     gemm = ("GEMM", 18.85, "#7aa6d6", None)
     rest = [("conv0 tile 고정", 1.08, "#d9d9d9", None), ("3×3 conv run당", 1.32, "#e6e6e6", None),
             ("1×1 conv", 0.46, "#cfcfcf", None), ("fc", 0.13, "#bdbdbd", None)]
@@ -1026,9 +1032,11 @@ def fig15():
     imm = {"SHR", "MIN 127", "relu MAX 0", "−128", "기타"}
     alu_ii1 = [(n, m / 2 if n in imm else m, c, "4 3" if n in imm else None) for n, m, c, _ in alu_now]
     alu_bias = [q for q in alu_ii1 if q[0] != "bias ADD"]
-    cases = [("지금", alu_now), ("ALU II = 1 (예상)", alu_ii1), ("+ bias reset (예상)", alu_bias)]
+    alu_rq = [q for q in alu_bias if q[0] == "pool MAX"]
+    cases = [("11-02 측정", alu_now, None), ("+ ALU II = 1", alu_ii1, 24.89), ("+ bias reset", alu_bias, 24.15),
+             ("+ requantize", alu_rq, 23.05)]
 
-    def stack(x0, scale, yy, label, segs, h=36, small=11):
+    def stack(x0, scale, yy, label, segs, h=36, small=11, meas=None):
         s.text(x0 - 12, yy + h / 2 + 5, label, 13, "end", "bold")
         x = x0
         for name, ms, col, dash in segs:
@@ -1038,21 +1046,24 @@ def fig15():
                 s.text(x + w / 2, yy + h / 2 - 2, name, small, "middle")
                 s.text(x + w / 2, yy + h / 2 + 13, f"{ms:.2f}", small, "middle", "bold")
             x += w
-        s.text(x + 10, yy + h / 2 + 5, f"{sum(m for _, m, _, _ in segs):.2f} ms", 14, weight="bold")
+        tot = sum(m for _, m, _, _ in segs)
+        s.text(x + 10, yy + h / 2 + 5, f"{tot:.2f} ms" + ("" if meas is None else f" 추정 · 측정 {meas:.2f}"), 13.5, weight="bold")
 
-    s.section(92, "A. 전체 (1 ms = 42 px): GEMM이 71 %")
-    for i, (lbl, alu) in enumerate(cases):
-        stack(220, 42, 140 + i * 56, lbl, [gemm] + alu + rest)
-    s.section(330, "B. GEMM 밖만 크게 (1 ms = 140 px): ALU 연산별, 그 밖의 고정 비용")
-    for i, (lbl, alu) in enumerate(cases):
-        stack(220, 140, 380 + i * 70, lbl, alu + rest, 46, 11.5)
-    s.lines(40, 610, [("읽는 법", "bold"),
+    s.section(92, "A. 전체 (1 ms = 42 px): 11-02에 GEMM이 71 %, requantize 뒤 82 %")
+    for i, (lbl, alu, meas) in enumerate(cases):
+        stack(220, 42, 140 + i * 48, lbl, [gemm] + alu + rest, meas=meas)
+    s.section(350, "B. GEMM 밖만 크게 (1 ms = 140 px): ALU 연산별, 그 밖의 고정 비용")
+    for i, (lbl, alu, _) in enumerate(cases):
+        stack(220, 140, 400 + i * 62, lbl, alu + rest, 46, 11.5)
+    s.lines(40, 670, [("읽는 법", "bold"),
                       "• GEMM 18.85 ms는 GEMM 반복 수 ÷ 400 MHz(1 반복 = 1 clk)로, 줄이기 어려운 하한이다.",
                       "• ALU 4.63 ms = ALU 반복 수 × 2 clk('−128'은 MAX −128, 아래쪽 clip). 연산별 몫(conv0과 다른 conv 합). '기타'는 반올림 ADD imm 0.16 ms와, 같은 기록을 두 번 쓰는 run의 몫.",
                       "• 나머지 2.99 ms: conv0 tile 98개의 고정 비용 1.08 ms, 3×3 conv run마다 60~130 µs(첫 tile LOAD, 마지막 ALU·STORE),",
                       "  1×1 downsample conv 3개는 GEMM이 작아 LOAD가 숨지 못한다(0.46 ms), fc는 weight 504 KB LOAD. run 하나의 시작·끝 비용은 4.7 µs뿐이다(runbench).",
-                      "• 점선은 예상: imm 연산 반복이 반으로(약 −1.6 ms), bias ADD가 없어짐(−0.9 ms) → EVTA 약 24 ms, 추론 약 26.4 ms."], 12.5)
-    s.legend(40, 742, [("evta", "GEMM"), ("gone", "ALU (색은 연산별)"), ("mem", "그 밖의 고정 비용")])
+                      "• 점선 = II = 1이 된 imm 연산(반복 시간 반). bias reset은 bias ADD를, requantize는 SHR · clip · 반올림 ADD를 없앤다(pool MAX만 남음).",
+                      "• 측정이 추정보다 0.4~0.8 ms 크다: stage3/4에서는 ALU가 inp LOAD / STORE와 겹쳐 있어 없애도 그만큼 줄지 않는다(§7.16 EVTA_MEMEXP).",
+                      "  추론(OMP 1)은 28.98 → 25.49 ms. 남은 큰 덩어리는 GEMM 18.85 ms(이론 최소의 94 %)와 고정 비용 약 3 ms(§7.17)."], 12.5)
+    s.legend(40, 832, [("evta", "GEMM"), ("gone", "ALU (색은 연산별)"), ("mem", "그 밖의 고정 비용")])
     return s
 
 
