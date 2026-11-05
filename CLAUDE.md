@@ -267,6 +267,10 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   147.9 -> 83.4 ms, VGG16 15.5 -> 7.3 ms, Resnet18 25.4 ms; dumps and classifications unchanged. vtalib `conv_kernel` now leaves room
   for the bias entries in `nFilterinLoop` (thread 0's bias LOAD overwrote thread 1's first acc rows without the bias reset: VGG16 on the
   HLS bitstream and the simulator were wrong); simulator, HLS and systolic dumps identical.
+- conv0 input copy overlapped with the conv (2026-11-06, §7.19 ⑥): VTASave emits `preprocess_conv0pack_stream`; the systolic vtalib
+  (`InputStream`) runs the conv that reads it one EVTA run per tile row and its replay packs and flushes the next row's input while a run
+  is running (pynq driver `RunStart` / `RunWait`, `cmd_queue.h` segment tag / hook; `EVTA_INPUT_STREAM=0` = all at once; vta/vtalib
+  writes it at once). Dumps identical; Resnet50 83.4 -> 82.2 ms, Resnet18 25.4 -> 24.1 ms (single rq, OMP 1).
 - The lab board's PL has a defective configuration row (tile row SLICE Y219, cells stuck at 0; `log/BOARD_TODO.md`
   2026-10-23/24). `vivado.tcl` on zcu102 fences the design below it by default (`VTA_BRAM_FENCE=y219|upper|none`).
   multi2 fits below it and works (2026-10-24); multi4 needs more BRAM than the rows below, so it crosses the row with

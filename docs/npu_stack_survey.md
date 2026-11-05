@@ -315,3 +315,4 @@ EVTA 쪽 수치는 저장소 utilization report에서, 보드 쪽은 공식 페�
 - 2026-11-05: §5.3 bias reset, requantize 완료로. 다른 모델 측정(`evta_runtime_compare.md` §7.19): Resnet50은 1×1 conv schedule과 합쳐지지 않은 residual 하나, VGG16 CIFAR-10은 weight LOAD가 병목.
 - 2026-11-05: 위 VGG16 원인 정정 — weight LOAD가 아니라 7×7 미만 출력을 7×7로 늘려 계산한 것(HLS GEMM의 acc hazard 회피용 최소 tile; Gemmini는 stall, 우리 systolic `sa_rmw`는 forwarding이라 필요 없음). 더미 tile STORE의 채널 블록 버그(vt 2에서 틀림)도 고침. 결과: Resnet50 147.9 → 85.7 ms, VGG16 15.5 → 7.3 ms(§7.19 ①~③).
 - 2026-11-05: fc chunk 조건(≥ 8 블록)도 HLS GEMM hazard용이라 systolic에서 풂(TVM VTA는 batch 1 마지막 dense를 CPU에 둠): Resnet50 83.4 ms. bias entry가 virtual thread 1의 acc를 덮던 vtalib 버그(HLS·simulator만 틀림) 고침(§7.19 ④⑤).
+- 2026-11-06: conv0 입력 복사(A53 한 코어에서 NEON 명령 수가 한계, 1.4~1.65 ms)를 conv와 겹침: driver run을 start / wait로 나누고 replay가 run마다 hook으로 다음 타일 행 입력을 채움(double buffering, CPU–NPU overlap의 첫 단계). Resnet50 83.4 → 82.2 ms, Resnet18 25.4 → 24.1 ms(§7.19 ⑥).

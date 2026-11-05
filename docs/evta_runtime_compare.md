@@ -1046,8 +1046,31 @@ VGG16 추론은 오늘 15.5 → 7.3 ms(−53 %)다. 최소 1에서 schedule을 �
 - 검증: VGG16 simulator / HLS / systolic dump 17개 모두 같고 셋 다 0.453709. HLS와 systolic의 3회 dump가 VGG16 51, Resnet50 159, Resnet18 60개 모두 같다.
   systolic 시간은 그대로다(bias reset이 있으면 계산이 같다).
 
+**⑥ conv0 입력 복사를 conv와 겹침 (2026-11-06):**
+- conv0 입력 복사(`preprocess_conv0pack`: float quantize + 7×7/2 packing, 224×224×3 → 115×112×48)는 OMP 1에서 Resnet50 1.42 ms, Resnet18 1.65 ms였다.
+  보드 microbenchmark(A53 1.2 GHz, 한 코어): quantize만 0.47 ms, packing만 0.44 ms, 같은 크기 memset 0.06 ms, float 읽기 0.13 ms.
+  DRAM이 아니라 NEON 명령 수가 한계다(128비트 연산이 2 cycle). offset 0이면 add 생략, `vqtbl4q` 대신 load + `vbsl`, prefetch, `stnp`를 다 해도 1.25 → 1.14 ms 정도였다.
+- 그래서 줄이지 않고 숨겼다. conv tile은 행이 바깥 loop이므로 행 i의 EVTA 계산 중에 행 i+1의 입력을 CPU가 채운다(double buffering).
+  - pynq driver `Run` → `RunStart` + `RunWait`(`VTADeviceRunStart/Wait`). 기존 `Run`은 둘을 이어 부르는 것이라 다른 호출은 그대로다.
+  - `cmd_queue.h`: 기록한 run마다 tag(그 run이 읽는 입력 행 수, `VTASetSegmentTag`)를 두고, replay가 run s를 시작한 뒤 hook(run s+1의 tag)을 부른다(`VTASetSegmentHook`).
+  - systolic vtalib `InputStream`: `preprocess_conv0pack_stream`은 인자만 기억하고, 그 buffer를 읽는 conv가 타일 행마다 run을 나눈다.
+    hook은 그 행들만 packing하고 그 범위만 flush한다(`preprocess_conv0pack_rows`). 기록하는 첫 호출은 미리 다 채운다. `EVTA_INPUT_STREAM=0`이면 예전처럼 한 번에 채운다.
+  - VTASave는 `preprocess_conv0pack` + `VTABufferFlush` 대신 `preprocess_conv0pack_stream(…, buffer, …)`를 낸다. vta/vtalib(HLS)은 한 번에 채우고 flush한다.
+- 검증: 세 모델 모두 systolic(stream 켬·끔)·HLS의 3회 dump가 전날 기준과 같다(Resnet50 159, Resnet18 60, VGG16 51개). 분류도 그대로다.
+- 결과(`_systimed`, 25회 중앙값, stream 끔 → 켬):
+
+| | 입력 복사 + conv0 | 추론 |
+|---|---|---|
+| Resnet50 | 1.42 + 3.31 → 3.56 ms | 83.41 → **82.21 ms** |
+| Resnet18 | 1.65 + 3.36 → 3.66 ms | 25.43 → **24.08 ms** |
+| VGG16 CIFAR-10 | 0.05 + 0.11 → 0.14 ms | 7.29 → 7.27 ms |
+
+  conv0이 늘어난 0.25~0.30 ms는 대부분 첫 run 전에 채우는 첫 행 묶음(115행 중 19행)이다. run을 7개로 나눈 비용은 거의 없다.
+  CPU 일을 EVTA와 겹치는 구조(start / wait 분리, run마다 hook)는 3단계(인터럽트 + command ring)의 바탕이기도 하다.
+
 **남은 것:**
-- Resnet50 CPU: avgpool 0.9 ms(ALU에 나눗셈 없음, 2단계 ISA), conv0 입력 복사 1.4 ms. multi-EVTA bundle에도 같은 표가 쓰인다(buffer는 vtalib이 2048 / 1024 entry로 가정).
+- Resnet50 CPU: avgpool 0.9 ms(ALU에 나눗셈 없음, 2단계 ISA). conv0 첫 행 묶음 약 0.2 ms(첫 tile 행을 더 잘게 나누면 줄어듦).
+  multi-EVTA bundle에도 같은 표가 쓰인다(buffer는 vtalib이 2048 / 1024 entry로 가정).
 
 ## 8. 하드웨어도 같이 비교해야 하나
 
