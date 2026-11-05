@@ -195,6 +195,13 @@ struct gemmop_mxn {
 #else
 #define GEMM_UOP_BUFF_DEPTH 8192
 #endif
+//#### JO added (2026-11-06): the acc depth the same way (-DVTA_LOG_ACC_BUFF_SIZE, 16 x 32-bit entries): 4096 on the
+//#### single-EVTA buffers, 2048 on the multi-EVTA ones (vtalib's conv code uses ACC_MEM_ENTRY = 2048 of it)
+#ifdef VTA_LOG_ACC_BUFF_SIZE
+#define ACC_BUFF_DEPTH ((1 << VTA_LOG_ACC_BUFF_SIZE) / 64)
+#else
+#define ACC_BUFF_DEPTH 4096
+#endif
 static int gemmop_mxn_old(struct gemmop_mxn *ctx, VTACommandHandle cmdh) {
   VTAUopLoopBegin(cmdh, ctx->tile_size_w_, 1, ctx->stride_w_, 0);
   VTAUopLoopBegin(cmdh, ctx->kernel_w_, 0, 1, 1);
@@ -764,12 +771,20 @@ void conv_kernel(uint32_t sizeOutTileH,
   //#### bias entries; the bias LOAD of thread 0 overwrote the first rows of thread 1 when T x nFilterinLoop filled the half,
   //#### VGG16 conv0 nVirtualThread 2 / 16 x 32 on the HLS GEMM)
   const uint32_t padT = max(resizedOutTileH, evtaMinTile(MIN_H_SIZE)) * max(resizedOutTileW, evtaMinTile(MIN_W_SIZE));
-  const uint32_t biasRows = bias && !evtaBiasReset() ? 1 : 0;
-  uint32_t nFilterinLoop = KN / nVirtualThread / 16 ;
-  nFilterinLoop = min(nFilterinLoop, ACC_MEM_ENTRY / nVirtualThread / (padT + biasRows));
-  for(;nFilterinLoop>0;nFilterinLoop--){
-    if((KN/16) % (nFilterinLoop*nVirtualThread) ==0) break;
-  }
+  //#### JO changed (2026-11-06): with the bias reset too when the last thread's bias entries (its base + T x nFilterinLoop)
+  //#### would lie past the physical acc: the multi-EVTA buffers have 2048 acc entries (the single ones 4096), VGG16 conv0
+  //#### (nVirtualThread 2, 16 x 32, nFilterinLoop 2) on the multi4 systolic bitstream was wrong
+  auto pickNF = [&](uint32_t rows) {
+    uint32_t n = min(KN / nVirtualThread / 16, ACC_MEM_ENTRY / nVirtualThread / (padT + rows));
+    for (; n > 0; n--)
+      if ((KN / 16) % (n * nVirtualThread) == 0) break;
+    return n;
+  };
+  uint32_t biasRows = bias && !evtaBiasReset() ? 1 : 0;
+  uint32_t nFilterinLoop = pickNF(biasRows);
+  if (bias && !biasRows &&
+      (nVirtualThread - 1) * (ACC_MEM_ENTRY / nVirtualThread) + padT * nFilterinLoop + nFilterinLoop > ACC_BUFF_DEPTH)
+    nFilterinLoop = pickNF(biasRows = 1);
 #ifdef NESTC_EVTA_PROFILE_AUTOTUNE
   f7 = nFilterinLoop;
   f8 = KN / nFilterinLoop / nVirtualThread / 16;
