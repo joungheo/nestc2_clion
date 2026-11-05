@@ -224,6 +224,8 @@ sudo /bin/sh -c "hw_multievtax4/script/run_prof.sh -s _sysprof -n 25 -l -r Multi
 | `EVTA_FC_PROBE=1` | 0 | fc EVTA 경로 bring-up 시험(결과는 틀린다) |
 | `EVTA_BIAS_RESET=0\|1` | bitstream 이름 | bias reset 강제(이름에 `bias`나 `_rq`가 있으면 켜짐). [evta_isa_ext.md](evta_isa_ext.md) |
 | `EVTA_REQUANT=0\|1` | bitstream 이름 | out 쓰기 requantize 강제(이름에 `_rq`가 있으면 켜짐). 기능이 없는 bitstream에서 1이면 결과가 틀린다 |
+| `EVTA_MIN_TILE=<n>` | bitstream 이름 | systolic vtalib: 가장 작은 conv 출력 tile(작으면 더미로 채움). 이름에 `_sa_`면 1, 아니면 7. HLS GEMM bitstream에서 7 미만이면 3×3 conv가 틀릴 수 있다 |
+| `EVTA_SCHED=<H>,<W>,<C>,<KN>,<K>,<stride>:<vt>,<tileH>,<tileW>[;...]`, `EVTA_SCHED_LOG=1` | 없음 | systolic vtalib: conv 모양의 schedule을 실행 중에 바꾼다(bundle 없이 schedule 찾기), conv마다 모양과 schedule 출력. [evta_runtime_compare.md](evta_runtime_compare.md) §7.19 |
 | `MULTI_RUNS`, `MULTI_LOCKSTEP` | 25, 0 | multi-EVTA main의 copy당 추론 수, lockstep(`run_prof.sh -n`, `-l`이 설정) |
 | `BUNDLE_RUNS` | | `_prof` / `_timed` 실행 파일의 추론 수(`run_prof.sh -n`이 설정) |
 

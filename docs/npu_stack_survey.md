@@ -313,3 +313,4 @@ EVTA 쪽 수치는 저장소 utilization report에서, 보드 쪽은 공식 페�
 - 2026-11-03: §2.3 MLIR 계열(IREE, iree-amd-aie, MLIR-AIE, Intel NPU, PJRT)의 컴파일러 → runtime → driver 구성과 EVTA 대응을 추가. §3.3을 원문(IREE HAL, DRM accel, amdxdna, qaic) 확인으로 고침. 옛 §2.3은 §2.4.
 - 2026-11-04: §5.3 ALU imm II=1이 multi4에서도 보드 통과(Resnet18 copy당 EVTA 26.8 → 25.3 ms).
 - 2026-11-05: §5.3 bias reset, requantize 완료로. 다른 모델 측정(`evta_runtime_compare.md` §7.19): Resnet50은 1×1 conv schedule과 합쳐지지 않은 residual 하나, VGG16 CIFAR-10은 weight LOAD가 병목.
+- 2026-11-05: 위 VGG16 원인 정정 — weight LOAD가 아니라 7×7 미만 출력을 7×7로 늘려 계산한 것(HLS GEMM의 acc hazard 회피용 최소 tile; Gemmini는 stall, 우리 systolic `sa_rmw`는 forwarding이라 필요 없음). 더미 tile STORE의 채널 블록 버그(vt 2에서 틀림)도 고침. 결과: Resnet50 147.9 → 85.7 ms, VGG16 15.5 → 7.3 ms(§7.19 ①~③).

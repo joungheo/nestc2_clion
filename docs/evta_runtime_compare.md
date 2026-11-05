@@ -1002,11 +1002,35 @@ VGG16의 conv 전부가 기본값(virtual thread 1, tile 14×14)으로 돌았다
 
 분류는 Resnet50 281 / 0.581379, VGG16 0 / 0.453709로 그대로다. Resnet50 추론은 오늘 두 단계로 147.9 → 85.7 ms(−42 %)다.
 
+**③ 출력이 7×7보다 작은 conv (2026-11-05):**
+- **원인 1 — virtual thread 2가 틀린 이유:** vtalib `conv_kernel`은 출력 tile이 `MIN_H_SIZE`/`MIN_W_SIZE`(7)보다 작으면 더미 행·열을 붙여
+  7×7로 계산하고, STORE(와 fused residual의 LOAD)를 행마다 나눠 낸다. 이 경로의 출력 채널 블록이 `((filterIdx + fIdx)·vt + thread)`였다.
+  맞는 식은 다른 경로와 같은 `(filterIdx·vt + thread)·nFilterinLoop + fIdx`다. vt 1이고 filter loop가 한 번이면(작은 출력에서 그렇다) 두 식이 같아
+  드러나지 않았다. acc 쪽 행 offset도 `fIdx·outDummyH·resizedOutTileH`를 `…TileW`로 고쳤다(H, W를 같은 7로 늘릴 때만 같다).
+  `vta/vtalib`(020d041), `vtalib-zcu102-systolic` 둘 다 고쳤다.
+- **원인 2 — 왜 7×7인가:** HLS GEMM(`vta.cc` `gemm`)은 `DEPENDENCE variable=acc_mem inter false`로 acc 읽기-더하기-쓰기에 hazard 검사가 없다.
+  3×3 conv의 uop 순서(`gemmop_mxn`)에서는 같은 acc 주소가 `tile_h·tile_w` uop마다 다시 온다. 그 간격을 파이프라인 깊이보다 길게 하는 것이 최소 tile이다
+  (1×1 conv는 명령 하나에서 주소마다 한 번이라 상관없다). Gemmini는 같은 경우 `AccumulatorMem`에서 stall하고, systolic RTL `sa_rmw.v`는
+  처리 중인 dst(≤ 3)를 forwarding하므로(§ `evta_systolic.md` §5, 모델·RTL 무작위 검사) 최솟값이 필요 없다. 남는 것은 weight를 바꿀 때의
+  16클럭 채우기뿐이라, 2×2 출력은 weight 블록당 49 → 16클럭, ALU는 49 → 4 entry다.
+- **바꾼 것:** systolic vtalib의 최소 tile은 systolic bitstream(`/tmp/evta_bitstream`에 `_sa_`)에서 1, 아니면 7(`EVTA_MIN_TILE=<n>`로 바꿈).
+  `VTASchedules.h`에 VGG16 4×4 / 2×2 conv 세 개를 vt 2로 다시 넣었다. HLS vtalib(`vta/vtalib`)은 7 그대로다.
+- **검증:** 같은 실행 파일에서 기본 / vt 2 / 최소 1 / 최소 1 + vt 2의 VGG16 레이어 dump 51개 모두 같음. Resnet50(159개), Resnet18(60개)도
+  최소 1과 기본이 같음. 새 bundle의 dump도 고치기 전 기본 schedule과 같고, 분류는 VGG16 0 / 0.453709, Resnet50 281 / 0.581379,
+  Resnet18 281 / 0.655530 그대로다.
+
+| (`rq`, single, 25회 중앙값) | ② 후 | ③ 후 |
+|---|---|---|
+| VGG16 CIFAR-10 EVTA (`_sysprof`) | 13.30 ms (47 GOPS) | **7.03 ms (89 GOPS)** |
+| VGG16 CIFAR-10 추론 (`_systimed`) | 13.59 ms | **7.33 ms** |
+| Resnet50 EVTA / 추론 | 78.08 / 85.71 ms | 78.04 / 85.69 ms (7×7 미만 tile 없음) |
+| Resnet18 EVTA / 추론 | 23.05 / 25.53 ms | 22.99 / 25.42 ms |
+
+VGG16 추론은 오늘 15.5 → 7.3 ms(−53 %)다. 최소 1에서 schedule을 다시 찾지는 않았다(vt 2, tile = 출력 전체만 재 봄).
+
 **남은 것:**
-- VGG16 뒤쪽 conv(출력 4×4, 2×2)는 tile을 7×7로 늘려 계산한다(2×2면 12배). weight LOAD가 아니라 이것이 9.8 GOPS의 원인으로 보인다.
-  `MIN_H_SIZE` 7은 ETRI 첫 코드부터 있고, 같은 acc entry를 다시 읽는 간격(HLS GEMM 파이프라인 hazard)을 위한 것으로 보인다.
-  systolic RTL은 `sa_rmw` forwarding이 있어 줄일 수 있는지, virtual thread 2에서 틀리는 원인과 함께 확인할 것.
 - Resnet50 CPU: fc 2.7 ms(2048 → 1000, EVTA fc 조건 밖), avgpool 0.9 ms, conv0 입력 복사 1.4 ms. multi-EVTA bundle에도 같은 표가 쓰인다(buffer는 vtalib이 2048 / 1024 entry로 가정).
+- `nFilterinLoop`는 더미를 붙이기 전 tile 크기로 정해진다. HLS vtalib에서 작은 tile + 큰 KN이면 늘린 tile이 acc 몫(2048 / vt)을 넘을 수 있다(지금 모델에는 없음).
 
 ## 8. 하드웨어도 같이 비교해야 하나
 
