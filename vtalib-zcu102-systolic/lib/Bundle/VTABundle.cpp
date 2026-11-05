@@ -616,12 +616,19 @@ static bool evtaRequant() {
 //#### JO added (2026-11-05): smallest conv output tile (conv_kernel pads smaller tiles with dummy rows / columns), default
 //#### MIN_H_SIZE / MIN_W_SIZE. The HLS GEMM (vta/vtalib) needs it: its acc read-modify-write has no hazard check and the same
 //#### dst comes back every tile_h * tile_w uops (gemmop_mxn). The systolic GEMM forwards in-flight dsts (sa_rmw.v), so a
-//#### smaller tile only saves the dummy GEMM / ALU work. EVTA_MIN_TILE=<n> overrides it.
+//#### smaller tile only saves the dummy GEMM / ALU work: 1 on a systolic bitstream (_sa_ in /tmp/evta_bitstream; VGG16 EVTA
+//#### 13.3 -> 7.0 ms with nVirtualThread 2 on its 4 x 4 / 2 x 2 convs, dumps identical), else dflt. EVTA_MIN_TILE=<n> overrides it.
 static uint32_t evtaMinTile(uint32_t dflt) {
   static int m = -1;
   if (m < 0) {
     const char *e = getenv("EVTA_MIN_TILE");
-    m = e && *e ? std::max(1, atoi(e)) : 0;
+    if (e && *e) m = std::max(1, atoi(e));
+    else {
+      char name[256] = {0};
+      FILE *f = fopen("/tmp/evta_bitstream", "r");
+      m = f && fgets(name, sizeof(name), f) && strstr(name, "_sa_") && strncmp(name, "FAILED", 6) ? 1 : 0;
+      if (f) fclose(f);
+    }
   }
   return m ? m : dflt;
 }
