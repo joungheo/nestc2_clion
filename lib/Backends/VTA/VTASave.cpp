@@ -3997,7 +3997,9 @@ void saveBNNConvolutionInst(const glow::BNNConvolutionInst *Inst,
 //#### the EVTA layout of vtalib fullyconnected_evta_packed: NB = ceil(OUT/16) output blocks x IN/16 input blocks of 16x16
 //#### ([16 out][16 in]), output-block major, zero padded; the bias as NB x 16 int32, rounded to the GEMM scale as the CPU
 //#### fullyconnected does. The plan of the chunks must match vtalib fc_evta_plan (half of the 1024 wgt entries per chunk,
-//#### chunks of >= 8 output blocks, 2 NB acc entries). Returns false (nothing written) when it does not fit.
+//#### 2 NB acc entries). Returns false (nothing written) when it does not fit.
+//#### 2026-11-05: chunks of any size (was >= 8 output blocks, which only the HLS GEMM needs: vtalib fc_evta_plan checks it
+//#### there and computes the fc on the CPU from the packed weights, fc_packed_cpu); Resnet50 2048 -> 1000 runs on the EVTA.
 static bool saveEvtaFullyConnectedInst(const glow::FullyConnectedInst *Inst, std::string *bundle,
                                        VTASaveContext *ctx) {
   auto src = Inst->getSrc();
@@ -4022,7 +4024,7 @@ static bool saveEvtaFullyConnectedInst(const glow::FullyConnectedInst *Inst, std
       shift = k;
   const uint32_t CIN = IN / 16, NB = (OUT + 15) / 16, g = std::min<uint32_t>(NB, 512 / CIN);
   const uint32_t nChunks = g ? (NB + g - 1) / g : 0, gEven = nChunks ? (NB + nChunks - 1) / nChunks : 0;
-  if (shift < 0 || gEven < 8 || 2 * NB > 2048 || hasConstantSymbol(filter, ctx) || hasConstantSymbol(bias, ctx))
+  if (shift < 0 || gEven < 1 || 2 * NB > 2048 || hasConstantSymbol(filter, ctx) || hasConstantSymbol(bias, ctx))
     return false;
 
   const Tensor *tensor = nullptr, *tensorBias = nullptr;

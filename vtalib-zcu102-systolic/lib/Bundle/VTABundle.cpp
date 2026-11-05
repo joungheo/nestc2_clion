@@ -618,17 +618,21 @@ static bool evtaRequant() {
 //#### dst comes back every tile_h * tile_w uops (gemmop_mxn). The systolic GEMM forwards in-flight dsts (sa_rmw.v), so a
 //#### smaller tile only saves the dummy GEMM / ALU work: 1 on a systolic bitstream (_sa_ in /tmp/evta_bitstream; VGG16 EVTA
 //#### 13.3 -> 7.0 ms with nVirtualThread 2 on its 4 x 4 / 2 x 2 convs, dumps identical), else dflt. EVTA_MIN_TILE=<n> overrides it.
+static bool evtaSystolic() {   // systolic GEMM bitstream loaded (_sa_ in /tmp/evta_bitstream)
+  static int on = -1;
+  if (on < 0) {
+    char name[256] = {0};
+    FILE *f = fopen("/tmp/evta_bitstream", "r");
+    on = f && fgets(name, sizeof(name), f) && strstr(name, "_sa_") && strncmp(name, "FAILED", 6);
+    if (f) fclose(f);
+  }
+  return on;
+}
 static uint32_t evtaMinTile(uint32_t dflt) {
   static int m = -1;
   if (m < 0) {
     const char *e = getenv("EVTA_MIN_TILE");
-    if (e && *e) m = std::max(1, atoi(e));
-    else {
-      char name[256] = {0};
-      FILE *f = fopen("/tmp/evta_bitstream", "r");
-      m = f && fgets(name, sizeof(name), f) && strstr(name, "_sa_") && strncmp(name, "FAILED", 6) ? 1 : 0;
-      if (f) fclose(f);
-    }
+    m = e && *e ? std::max(1, atoi(e)) : evtaSystolic() ? 1 : 0;
   }
   return m ? m : dflt;
 }
@@ -3697,14 +3701,47 @@ static void pushFcGemm(VTACommandHandle &cmdh, uint32_t idEVTA, const FcGemmCont
 }
 
 // chunks of the output blocks (one half of the wgt buffer each, sizes as even as possible); false: not on the EVTA
-// (the same acc entry must come back no closer than 8 uops, both acc halves must hold the output)
+// (the same acc entry must come back no closer than minG uops, both acc halves must hold the output)
 static bool fc_evta_plan(uint32_t IN, uint32_t OUT, uint32_t *gEven, uint32_t *nChunks) {
   const uint32_t WGT_HALF = 1024 / 2, ACC_ENTRY = 2048;  // as conv_kernel (WGT_MEM_ENTRY, ACC_MEM_ENTRY)
+  //#### JO changed (2026-11-05): the 8 uops only for the HLS GEMM (no acc hazard check); the systolic GEMM forwards
+  //#### (sa_rmw.v), there any chunk size (evtaSystolic)
+  const uint32_t minG = evtaSystolic() ? 1 : 8;
   const uint32_t CIN = IN / 16, NB = (OUT + 15) / 16;
   const uint32_t g = CIN ? std::min<uint32_t>(NB, WGT_HALF / CIN) : 0;
   *nChunks = g ? (NB + g - 1) / g : 0;
   *gEven = *nChunks ? (NB + *nChunks - 1) / *nChunks : 0;
-  return IN % 16 == 0 && *gEven >= 8 && 2 * NB <= ACC_ENTRY;
+  return IN % 16 == 0 && g > 0 && *gEven >= minG && 2 * NB <= ACC_ENTRY;
+}
+
+//#### JO added (2026-11-05): fullyconnected_evta_packed on the CPU over the packed weights / bias, the same result as the
+//#### EVTA (round half away from zero, clip), when the plan does not fit this vtalib / bitstream (the bundle checks only
+//#### what fits some EVTA)
+static void fc_packed_cpu(const int8_t *input, const int8_t *w, const int32_t *bb, int8_t *output, uint32_t IN,
+                          uint32_t OUT, int shift) {
+  const uint32_t CIN = IN / 16;
+  for (uint32_t ob = 0; ob * 16 < OUT; ob++) {
+    int32_t acc[16];
+    for (int r = 0; r < 16; r++)
+      acc[r] = bb[ob * 16 + r];
+    for (uint32_t ib = 0; ib < CIN; ib++) {
+      const int8_t *blk = w + ((size_t)ob * CIN + ib) * 256, *x = input + ib * 16;
+      for (int r = 0; r < 16; r++) {
+        int32_t s = 0;
+        for (int c = 0; c < 16; c++)
+          s += (int16_t)blk[r * 16 + c] * (int16_t)x[c];
+        acc[r] += s;
+      }
+    }
+    for (uint32_t r = 0; r < 16 && ob * 16 + r < OUT; r++) {
+      int64_t v = acc[r];
+      if (shift > 0) {
+        const int64_t h = (int64_t)1 << (shift - 1);
+        v = v >= 0 ? (v + h) >> shift : -((-v + h) >> shift);
+      }
+      output[ob * 16 + r] = (int8_t)std::max<int64_t>(-128, std::min<int64_t>(127, v));
+    }
+  }
 }
 
 struct FcEvtaBuffers {
@@ -3977,9 +4014,14 @@ int fullyconnected_evta(int8_t *input, float inputScale, int32_t inputOffset, in
 int fullyconnected_evta_packed(int8_t *input, void *wgt, void *bias, int8_t *output, int IN, int OUT, int shift,
                                void *vtaCmdH, uint32_t idEVTA) {
   uint32_t gEven, nChunks;
-  if (!fc_evta_plan(IN, OUT, &gEven, &nChunks) || shift < 0 || shift > 15) {
+  if (IN % 16 || shift < 0 || shift > 15) {
     printf("fullyconnected_evta_packed: %d -> %d shift %d does not fit the EVTA\n", IN, OUT, shift);
     return -1;
+  }
+  if (!fc_evta_plan(IN, OUT, &gEven, &nChunks)) {   //#### JO added (2026-11-05)
+    fc_packed_cpu(input, (const int8_t *)VTABufferGetVirtAddr(wgt), (const int32_t *)VTABufferGetVirtAddr(bias), output,
+                  IN, OUT, shift);
+    return 0;
   }
   const uint32_t CIN = IN / 16, NB = (OUT + 15) / 16;
   // the input / output buffers of this call site (EVTA copy), made on the first call
