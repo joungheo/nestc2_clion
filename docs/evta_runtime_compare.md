@@ -1093,9 +1093,29 @@ VGG16 추론은 오늘 15.5 → 7.3 ms(−53 %)다. 최소 1에서 schedule을 �
   copy 0 혼자도 단일 bitstream보다 조금 느리다(Resnet50 82.18 ms): multi buffer가 작아 schedule이 같지 않다(표는 단일 buffer로 찾음).
   4 copy를 같이 돌리면 copy마다 Resnet50 +2.6~3.1 ms, VGG16 +0.8~1.1 ms 더 걸린다(copy 1, 2가 0, 3보다 느림).
 
+**⑧ multi4가 느린 두 원인 (2026-11-06):**
+- copy 0 혼자인데 단일 bitstream보다 느림(Resnet50 83.09 vs 82.18 ms): schedule이 아니다. 호출마다 ops가 같고, 0.9 ms가 conv마다 1~3 %씩 퍼져 있으며
+  load 비중이 큰 stride 2 1×1 conv(`branch1`)에서 가장 크다(+0.06~0.10 ms). HP 포트 clock은 둘 다 333 MHz이고, multi4는 Y219 timing 때문에 HP 포트 앞에
+  `axi_register_slice`가 하나 더 있다(`vta-hw-zcu102-multi4` `vivado.tcl`) → load latency. bitstream 쪽 일이다.
+- 4 copy 동시일 때 느려짐: Resnet50 multi4를 EVTA 조합별로 돌렸다(`MULTI_MASK`, copy별 25회 중앙값).
+
+| 돌린 EVTA | copy별 | 혼자 대비 |
+|---|---|---|
+| 하나씩 (0, 1, 2, 3) | 83.12 / 83.28 / 83.31 / 83.27 ms | |
+| 0+1, 0+2, 0+3, 1+3, 2+3 | 83.95~84.22 ms | +0.85~0.95 ms |
+| 1+2 | 84.56 / 84.53 ms | +1.25 ms |
+| 0+1+2+3 | 85.65 / 86.25 / 86.24 / 85.79 ms | +2.5 / +2.95 ms |
+
+  어느 쌍이든 약 +0.9 ms(DDR controller 공유), 1+2만 0.35 ms 더(HP1·HP2가 DDR port를 같이 쓰는 구조와 맞다; HP0, HP3은 따로). Resnet50 한 추론의
+  EVTA DRAM 전송은 86.6 MB(weight 42.5, inp 30.5, out 12.1; `EVTA_REPLAY_LOG=2`), EVTA 하나 평균 약 1 GB/s, 4개 4 GB/s로 DDR 대역에는 한참 못 미친다:
+  대역이 아니라 load 구간의 latency가 경합으로 늘어난다(compute-bound인 ResConv10은 4개 동시에도 그대로였다, `evta_multi4_609gops_report.md`).
+  4 copy 처리량은 단일의 3.87배(4 × 83.1 / 85.98).
+- 할 수 있는 것(하드웨어): Y219 fence가 필요 없는 보드에서 register slice 빼기, EVTA 1 또는 2를 HPC 포트(다른 DDR port)로 옮기기, HP 포트의 read outstanding 늘리기.
+  소프트웨어로는 EVTA 2~3개만 쓸 때 1과 2를 같이 고르지 않기 정도다.
+
 **남은 것:**
 - Resnet50 CPU: avgpool 0.9 ms(ALU에 나눗셈 없음, 2단계 ISA). conv0 첫 행 묶음 약 0.2 ms(첫 tile 행을 더 잘게 나누면 줄어듦).
-- multi4: schedule을 multi buffer로 다시 찾기, 4 copy 동시일 때 느려지는 원인(copy 1, 2).
+- multi4 하드웨어: ⑧의 register slice, HP1/HP2 port 공유.
   multi-EVTA bundle에도 같은 표가 쓰인다(buffer는 vtalib이 2048 / 1024 entry로 가정).
 
 ## 8. 하드웨어도 같이 비교해야 하나
