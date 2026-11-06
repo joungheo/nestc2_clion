@@ -2,7 +2,8 @@
 
 다른 컴파일러·runtime(TVM VTA, TFLite delegate, Vitis AI VART, IREE, ONNX Runtime EP, NVDLA UMD/KMD 등)과 비교하려는 사람이
 **VTA, Glow, NEST-C를 몰라도** 읽을 수 있도록, ZCU102의 EVTA를 움직이는 소프트웨어를 위에서 아래로 설명한다.
-backend(NEST-C VTA backend, `VTASave.cpp`)와 compiler(Glow 파이프라인)는 다음 문서에서 다룬다.
+컴파일러 쪽은 [evta_compiler_frontend.md](evta_compiler_frontend.md)(frontend, lowering, 양자화)와
+[evta_compiler_backend.md](evta_compiler_backend.md)(VTA backend), 전체를 그림으로 훑는 입구는 [evta_stack_arch.md](evta_stack_arch.md)다.
 
 - 기준: 2026-11-07의 `main`. 코드 위치는 **`vtalib-zcu102-systolic/`**(systolic bitstream용 runtime). `vta/vtalib/`(HLS bitstream과
   simulator용, git submodule)도 구조와 API가 같고, 다른 점은 §9에 적었다.
