@@ -21,6 +21,7 @@ add_custom_command(
         -m=${MNV2_ONNX}
         -model-input-name=input
         -backend=VTAInterpreter
+        -do-not-lower-nodes-for-profiling=Convolution   # depthwise lowered = C convs: hours (gen_mobilenetv2_bundle.sh)
         -image-layout=NCHW
         -image-mode=neg1to1
         -image-channel-order=RGB

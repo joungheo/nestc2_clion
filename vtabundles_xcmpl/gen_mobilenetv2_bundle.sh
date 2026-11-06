@@ -3,6 +3,8 @@
 #### image-classifier / model-compiler, as its CMakeLists.txt says, without a cmake re-run of Debug2_remote (a new day
 #### rebuilds all of Glow). The model Debug2_remote/vta/bundles/MobileNetV2Test/mobilenetv2_qat_f32.onnx comes from
 #### tfl2onnx.py (see that CMakeLists.txt). Output and gen.log / prof.log there; then collect_hw_bundles.py MobileNetV2Test.
+#### Profiling lowers every node; a depthwise conv (group = C) lowered is C convs + slices + concat, thousands of nodes, and
+#### the profile took hours (O(n^2) graph verify, LLVM register allocation): -do-not-lower-nodes-for-profiling=Convolution (27 s).
 #### usage (on the board): vtabundles_xcmpl/gen_mobilenetv2_bundle.sh [model-compiler options, e.g. -vta-conv0-pack=0]
 set -u
 B=$(cd "$(dirname "$0")/../Debug2_remote" && pwd)
@@ -14,7 +16,7 @@ cd $O || exit 1
 [ -f $M ] || { echo "$M missing"; exit 1; }
 if [ ! -s mobilenetv2_calib.yaml ]; then
   $B/glow/bin/image-classifier $B/../glow/tests/images/imagenet/cat_285.png -m=$M -model-input-name=input \
-    -backend=VTAInterpreter -image-layout=NCHW -image-mode=neg1to1 -image-channel-order=RGB -compute-softmax -topk=5 \
+    -backend=VTAInterpreter -do-not-lower-nodes-for-profiling=Convolution -image-layout=NCHW -image-mode=neg1to1 -image-channel-order=RGB -compute-softmax -topk=5 \
     -dump-profile=mobilenetv2_calib.yaml $Q > prof.log 2>&1 || { echo "profile failed (prof.log)"; exit 1; }
 fi
 $B/glow/bin/model-compiler -g -model=$M -backend=VTA -emit-bundle=$O -bundle-api=dynamic -network-name=mobilenetv2 \
