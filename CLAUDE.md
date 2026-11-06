@@ -123,6 +123,8 @@ from CLion over remote.
 ### EVTA on this board (verified 2026-09-29/30)
 
 Overview of all EVTA work in date order with pointers to the detailed docs: [docs/evta_overview.md](docs/evta_overview.md);
+how the runtime / driver works (layers, programming model, one call, replay, multi-EVTA; for comparing with other runtimes):
+[docs/evta_runtime_arch.md](docs/evta_runtime_arch.md);
 commands, options and where to run them: [docs/evta_user_manual.md](docs/evta_user_manual.md).
 Survey of other compilers, runtimes / drivers, NPUs and cheaper FPGAs, and the direction (a stack for several accelerators; kept up to date):
 [docs/npu_stack_survey.md](docs/npu_stack_survey.md).

@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="560" viewBox="0 0 1240 560" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif">
+<title>그림 5. 추론 한 번: CPU와 EVTA의 시간 (Resnet18, single systolic _rq, OMP 1)</title>
+<defs>
+<marker id="ara" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#333333"/></marker>
+<marker id="arb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f5f98"/></marker>
+<marker id="aro" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c06a10"/></marker>
+<marker id="arg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3c8a35"/></marker>
+<marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker>
+<marker id="arp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6d4596"/></marker>
+<marker id="ary" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9a7b00"/></marker>
+<marker id="ark" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#888888"/></marker>
+</defs>
+<rect x="0.0" y="0.0" width="1240.0" height="560.0" rx="0" fill="#ffffff" stroke="none" stroke-width="1.2"/>
+<text x="24.0" y="38.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="22" text-anchor="start" font-weight="bold" fill="#222222" xml:space="preserve">그림 5. 추론 한 번: CPU와 EVTA의 시간 (Resnet18, single systolic _rq, OMP 1)</text>
+<text x="24.0" y="64.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13.5" text-anchor="start" font-weight="normal" fill="#444444" xml:space="preserve">2026-11-06 측정: 24.07 ms (EVTA call 약 23.4 ms). 대부분 EVTA가 일하고 CPU는 기다린다 (폴링).</text>
+<text x="24.0" y="84.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13.5" text-anchor="start" font-weight="normal" fill="#444444" xml:space="preserve">bundle은 call을 하나씩 동기적으로 부른다: call 사이에만 CPU 일(입력 pack, invalidate, elemadd 없음 – fused).</text>
+<text x="40.0" y="170.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="15" text-anchor="start" font-weight="bold" fill="#c06a10" xml:space="preserve">CPU</text>
+<text x="40.0" y="270.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="15" text-anchor="start" font-weight="bold" fill="#2f5f98" xml:space="preserve">EVTA</text>
+<rect x="140.0" y="240.0" width="81.7" height="50.0" rx="6" fill="#dce8f5" stroke="#2f5f98" stroke-width="1.4"/>
+<text x="180.8" y="269.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">conv0+pool</text>
+<rect x="223.7" y="240.0" width="205.0" height="50.0" rx="6" fill="#dce8f5" stroke="#2f5f98" stroke-width="1.4"/>
+<text x="326.2" y="269.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">stage1 (4 conv)</text>
+<rect x="430.7" y="240.0" width="218.2" height="50.0" rx="6" fill="#dce8f5" stroke="#2f5f98" stroke-width="1.4"/>
+<text x="539.7" y="269.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">stage2</text>
+<rect x="650.8" y="240.0" width="227.0" height="50.0" rx="6" fill="#dce8f5" stroke="#2f5f98" stroke-width="1.4"/>
+<text x="764.3" y="269.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">stage3</text>
+<rect x="879.8" y="240.0" width="266.6" height="50.0" rx="6" fill="#dce8f5" stroke="#2f5f98" stroke-width="1.4"/>
+<text x="1013.2" y="269.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">stage4</text>
+<rect x="1148.5" y="240.0" width="20.0" height="50.0" rx="6" fill="#dce8f5" stroke="#2f5f98" stroke-width="1.4"/>
+<text x="1158.5" y="269.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">fc</text>
+<rect x="140.0" y="140.0" width="81.7" height="50.0" rx="6" fill="#fde5cc" stroke="#c06a10" stroke-width="1.4"/>
+<text x="180.8" y="161.6" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">입력 행 pack</text>
+<text x="180.8" y="175.8" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">(conv0과 겹침)</text>
+<rect x="1170.5" y="140.0" width="29.5" height="50.0" rx="6" fill="#fde5cc" stroke="#c06a10" stroke-width="1.4"/>
+<text x="1185.2" y="168.7" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">출력</text>
+<line x1="223.7" y1="195.0" x2="223.7" y2="236.0" stroke="#c06a10" stroke-width="1" stroke-dasharray="3,3"/>
+<line x1="430.7" y1="195.0" x2="430.7" y2="236.0" stroke="#c06a10" stroke-width="1" stroke-dasharray="3,3"/>
+<line x1="650.8" y1="195.0" x2="650.8" y2="236.0" stroke="#c06a10" stroke-width="1" stroke-dasharray="3,3"/>
+<line x1="879.8" y1="195.0" x2="879.8" y2="236.0" stroke="#c06a10" stroke-width="1" stroke-dasharray="3,3"/>
+<line x1="1148.5" y1="195.0" x2="1148.5" y2="236.0" stroke="#c06a10" stroke-width="1" stroke-dasharray="3,3"/>
+<rect x="223.7" y="150.0" width="946.8" height="30.0" rx="3" fill="#ffffff" stroke="#c06a10" stroke-width="1" stroke-dasharray="3,3"/>
+<text x="697.1" y="170.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#c06a10" xml:space="preserve">done 폴링 (yield) — call 사이에 짧은 CPU 일: 다음 call의 인자, 필요한 invalidate</text>
+<line x1="140.0" y1="300.0" x2="140.0" y2="310.0" stroke="#555555" stroke-width="1"/>
+<text x="140.0" y="326.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#555555" xml:space="preserve">0 ms</text>
+<line x1="360.2" y1="300.0" x2="360.2" y2="310.0" stroke="#555555" stroke-width="1"/>
+<text x="360.2" y="326.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#555555" xml:space="preserve">5 ms</text>
+<line x1="580.4" y1="300.0" x2="580.4" y2="310.0" stroke="#555555" stroke-width="1"/>
+<text x="580.4" y="326.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#555555" xml:space="preserve">10 ms</text>
+<line x1="800.6" y1="300.0" x2="800.6" y2="310.0" stroke="#555555" stroke-width="1"/>
+<text x="800.6" y="326.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#555555" xml:space="preserve">15 ms</text>
+<line x1="1020.8" y1="300.0" x2="1020.8" y2="310.0" stroke="#555555" stroke-width="1"/>
+<text x="1020.8" y="326.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#555555" xml:space="preserve">20 ms</text>
+<line x1="1200.0" y1="300.0" x2="1200.0" y2="310.0" stroke="#555555" stroke-width="1"/>
+<text x="1200.0" y="326.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#555555" xml:space="preserve">24.07 ms</text>
+<rect x="140.0" y="360.0" width="1060.0" height="170.0" rx="6" fill="#ffffff" stroke="#999999" stroke-width="1.4"/>
+<text x="148.0" y="407.2" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="left" font-weight="bold" fill="#111111" xml:space="preserve">숫자 (docs/evta_runtime_compare.md §7.14, §7.18, §7.19)</text>
+<text x="148.0" y="424.1" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="left" font-weight="normal" fill="#111111" xml:space="preserve">EVTA 안: GEMM ~18 ms, ALU(pool MAX) 소량, LOAD/STORE 대기·run 시작 비용 나머지. run 하나 시작+끝 비용 수십 µs.</text>
+<text x="148.0" y="440.9" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="left" font-weight="normal" fill="#111111" xml:space="preserve">replay 전 (11-02 이전): call마다 명령 생성(JIT)이 CPU에서 2.6 ms → replay로 사라짐.</text>
+<text x="148.0" y="457.8" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="left" font-weight="normal" fill="#111111" xml:space="preserve">conv0 입력 pack 1.3 ms는 tile 행 단위 run으로 나눠 EVTA 계산 뒤에 숨김 (InputStream, 11-06): 25.4 → 24.1 ms.</text>
+<text x="148.0" y="474.7" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="left" font-weight="normal" fill="#111111" xml:space="preserve">층 사이 activation은 EVTA layout 그대로 CMA에 남고, CPU를 거치지 않는다 (-vta-keep-layout).</text>
+<text x="148.0" y="491.6" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="left" font-weight="normal" fill="#111111" xml:space="preserve">구간 경계는 그림을 위한 근사다 (stage별 정확한 값은 _sysprof 로그).</text>
+</svg>

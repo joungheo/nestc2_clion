@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="760" viewBox="0 0 1240 760" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif">
+<title>그림 6. EVTA 4개 (multi4): thread, 명령 큐, 장치, 메모리</title>
+<defs>
+<marker id="ara" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#333333"/></marker>
+<marker id="arb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f5f98"/></marker>
+<marker id="aro" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c06a10"/></marker>
+<marker id="arg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3c8a35"/></marker>
+<marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker>
+<marker id="arp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6d4596"/></marker>
+<marker id="ary" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9a7b00"/></marker>
+<marker id="ark" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#888888"/></marker>
+</defs>
+<rect x="0.0" y="0.0" width="1240.0" height="760.0" rx="0" fill="#ffffff" stroke="none" stroke-width="1.2"/>
+<text x="24.0" y="38.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="22" text-anchor="start" font-weight="bold" fill="#222222" xml:space="preserve">그림 6. EVTA 4개 (multi4): thread, 명령 큐, 장치, 메모리</text>
+<text x="24.0" y="64.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13.5" text-anchor="start" font-weight="normal" fill="#444444" xml:space="preserve">bundle copy i 는 EVTA i 만 쓴다 (model-compiler -index-multi-evta=2^i). copy마다 pthread 하나, 서로 공유하는 것은 weight뿐.</text>
+<rect x="40.0" y="110.0" width="260.0" height="60.0" rx="6" fill="#fde5cc" stroke="#c06a10" stroke-width="1.4"/>
+<text x="170.0" y="136.1" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">pthread 0: copy 0</text>
+<text x="170.0" y="152.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">&lt;net&gt;_0(…) , vtaCmdH</text>
+<rect x="40.0" y="200.0" width="260.0" height="70.0" rx="6" fill="#dce8f5" stroke="#2f5f98" stroke-width="1.4"/>
+<text x="170.0" y="223.5" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">CommandQueue 0</text>
+<text x="170.0" y="239.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">VTATLSCommandHandle(0)</text>
+<text x="170.0" y="254.6" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">insn 4 MB + uop 4 MB (CMA)</text>
+<rect x="40.0" y="300.0" width="260.0" height="60.0" rx="6" fill="#dce8f5" stroke="#2f5f98" stroke-width="1.4"/>
+<text x="170.0" y="326.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">VTADevice 0</text>
+<text x="170.0" y="341.8" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">regs 0xA0000000 (fetch/load/compute/store)</text>
+<rect x="40.0" y="400.0" width="260.0" height="60.0" rx="6" fill="#ece2f4" stroke="#6d4596" stroke-width="1.4"/>
+<text x="170.0" y="426.1" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">EVTA 0</text>
+<text x="170.0" y="442.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">S_AXI_HP0_FPD → DDR</text>
+<line x1="170.0" y1="172.0" x2="170.0" y2="196.0" stroke="#2f5f98" stroke-width="1.6" marker-end="url(#arb)"/>
+<line x1="170.0" y1="272.0" x2="170.0" y2="296.0" stroke="#2f5f98" stroke-width="1.6" marker-end="url(#arb)"/>
+<line x1="170.0" y1="362.0" x2="170.0" y2="396.0" stroke="#c06a10" stroke-width="1.6" marker-end="url(#aro)"/>
+<rect x="340.0" y="110.0" width="260.0" height="60.0" rx="6" fill="#fde5cc" stroke="#c06a10" stroke-width="1.4"/>
+<text x="470.0" y="136.1" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">pthread 1: copy 1</text>
+<text x="470.0" y="152.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">&lt;net&gt;_1(…) , vtaCmdH1</text>
+<rect x="340.0" y="200.0" width="260.0" height="70.0" rx="6" fill="#dce8f5" stroke="#2f5f98" stroke-width="1.4"/>
+<text x="470.0" y="223.5" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">CommandQueue 1</text>
+<text x="470.0" y="239.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">VTATLSCommandHandle(1)</text>
+<text x="470.0" y="254.6" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">insn 4 MB + uop 4 MB (CMA)</text>
+<rect x="340.0" y="300.0" width="260.0" height="60.0" rx="6" fill="#dce8f5" stroke="#2f5f98" stroke-width="1.4"/>
+<text x="470.0" y="326.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">VTADevice 1</text>
+<text x="470.0" y="341.8" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">regs 0xA0010000 (fetch/load/compute/store)</text>
+<rect x="340.0" y="400.0" width="260.0" height="60.0" rx="6" fill="#ece2f4" stroke="#6d4596" stroke-width="1.4"/>
+<text x="470.0" y="426.1" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">EVTA 1</text>
+<text x="470.0" y="442.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">S_AXI_HP1_FPD → DDR</text>
+<line x1="470.0" y1="172.0" x2="470.0" y2="196.0" stroke="#2f5f98" stroke-width="1.6" marker-end="url(#arb)"/>
+<line x1="470.0" y1="272.0" x2="470.0" y2="296.0" stroke="#2f5f98" stroke-width="1.6" marker-end="url(#arb)"/>
+<line x1="470.0" y1="362.0" x2="470.0" y2="396.0" stroke="#c06a10" stroke-width="1.6" marker-end="url(#aro)"/>
+<rect x="640.0" y="110.0" width="260.0" height="60.0" rx="6" fill="#fde5cc" stroke="#c06a10" stroke-width="1.4"/>
+<text x="770.0" y="136.1" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">pthread 2: copy 2</text>
+<text x="770.0" y="152.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">&lt;net&gt;_2(…) , vtaCmdH2</text>
+<rect x="640.0" y="200.0" width="260.0" height="70.0" rx="6" fill="#dce8f5" stroke="#2f5f98" stroke-width="1.4"/>
+<text x="770.0" y="223.5" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">CommandQueue 2</text>
+<text x="770.0" y="239.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">VTATLSCommandHandle(2)</text>
+<text x="770.0" y="254.6" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">insn 4 MB + uop 4 MB (CMA)</text>
+<rect x="640.0" y="300.0" width="260.0" height="60.0" rx="6" fill="#dce8f5" stroke="#2f5f98" stroke-width="1.4"/>
+<text x="770.0" y="326.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">VTADevice 2</text>
+<text x="770.0" y="341.8" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">regs 0xA0020000 (fetch/load/compute/store)</text>
+<rect x="640.0" y="400.0" width="260.0" height="60.0" rx="6" fill="#ece2f4" stroke="#6d4596" stroke-width="1.4"/>
+<text x="770.0" y="426.1" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">EVTA 2</text>
+<text x="770.0" y="442.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">S_AXI_HP2_FPD → DDR</text>
+<line x1="770.0" y1="172.0" x2="770.0" y2="196.0" stroke="#2f5f98" stroke-width="1.6" marker-end="url(#arb)"/>
+<line x1="770.0" y1="272.0" x2="770.0" y2="296.0" stroke="#2f5f98" stroke-width="1.6" marker-end="url(#arb)"/>
+<line x1="770.0" y1="362.0" x2="770.0" y2="396.0" stroke="#c06a10" stroke-width="1.6" marker-end="url(#aro)"/>
+<rect x="940.0" y="110.0" width="260.0" height="60.0" rx="6" fill="#fde5cc" stroke="#c06a10" stroke-width="1.4"/>
+<text x="1070.0" y="136.1" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">pthread 3: copy 3</text>
+<text x="1070.0" y="152.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">&lt;net&gt;_3(…) , vtaCmdH3</text>
+<rect x="940.0" y="200.0" width="260.0" height="70.0" rx="6" fill="#dce8f5" stroke="#2f5f98" stroke-width="1.4"/>
+<text x="1070.0" y="223.5" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">CommandQueue 3</text>
+<text x="1070.0" y="239.0" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">VTATLSCommandHandle(3)</text>
+<text x="1070.0" y="254.6" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">insn 4 MB + uop 4 MB (CMA)</text>
+<rect x="940.0" y="300.0" width="260.0" height="60.0" rx="6" fill="#dce8f5" stroke="#2f5f98" stroke-width="1.4"/>
+<text x="1070.0" y="326.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">VTADevice 3</text>
+<text x="1070.0" y="341.8" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">regs 0xA0030000 (fetch/load/compute/store)</text>
+<rect x="940.0" y="400.0" width="260.0" height="60.0" rx="6" fill="#ece2f4" stroke="#6d4596" stroke-width="1.4"/>
+<text x="1070.0" y="426.1" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="bold" fill="#111111" xml:space="preserve">EVTA 3</text>
+<text x="1070.0" y="442.3" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12" text-anchor="middle" font-weight="normal" fill="#111111" xml:space="preserve">S_AXI_HP3_FPD → DDR</text>
+<line x1="1070.0" y1="172.0" x2="1070.0" y2="196.0" stroke="#2f5f98" stroke-width="1.6" marker-end="url(#arb)"/>
+<line x1="1070.0" y1="272.0" x2="1070.0" y2="296.0" stroke="#2f5f98" stroke-width="1.6" marker-end="url(#arb)"/>
+<line x1="1070.0" y1="362.0" x2="1070.0" y2="396.0" stroke="#c06a10" stroke-width="1.6" marker-end="url(#aro)"/>
+<rect x="40.0" y="500.0" width="1160.0" height="110.0" rx="6" fill="#efe6d6" stroke="#8a6d3b" stroke-width="1.4"/>
+<text x="48.0" y="534.1" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="13.5" text-anchor="left" font-weight="bold" fill="#111111" xml:space="preserve">CMA 128 MB</text>
+<text x="48.0" y="550.9" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="left" font-weight="normal" fill="#111111" xml:space="preserve">명령·uop 큐 4 × 8 MB = 32 MB   |   weight / bias: 같은 바이트면 copy들이 버퍼 하나를 공유 (VTAConstBufferAlloc, refcount)</text>
+<text x="48.0" y="567.8" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="left" font-weight="normal" fill="#111111" xml:space="preserve">activation: copy마다 VTABufferAlloc (크기별 pool, 기본 32 MB까지 보관)   |   replay 사본: copy마다</text>
+<text x="48.0" y="584.7" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="left" font-weight="normal" fill="#111111" xml:space="preserve">Resnet50 × 4: 공유 없이는 weight만 102 MB → 공유로 실행 중 여유 85 MB</text>
+<line x1="170.0" y1="462.0" x2="170.0" y2="496.0" stroke="#888888" stroke-width="1.6" stroke-dasharray="4,3" marker-end="url(#ark)"/>
+<line x1="470.0" y1="462.0" x2="470.0" y2="496.0" stroke="#888888" stroke-width="1.6" stroke-dasharray="4,3" marker-end="url(#ark)"/>
+<line x1="770.0" y1="462.0" x2="770.0" y2="496.0" stroke="#888888" stroke-width="1.6" stroke-dasharray="4,3" marker-end="url(#ark)"/>
+<line x1="1070.0" y1="462.0" x2="1070.0" y2="496.0" stroke="#888888" stroke-width="1.6" stroke-dasharray="4,3" marker-end="url(#ark)"/>
+<rect x="40.0" y="630.0" width="1160.0" height="100.0" rx="6" fill="#ffffff" stroke="#999999" stroke-width="1.4"/>
+<text x="48.0" y="659.1" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="left" font-weight="bold" fill="#111111" xml:space="preserve">동시 실행이 느려지는 이유 (§7.19 ⑧)</text>
+<text x="48.0" y="675.9" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="left" font-weight="normal" fill="#111111" xml:space="preserve">copy 0 혼자: multi4 bitstream의 HP register slice 때문에 single bitstream보다 +1.1 %.</text>
+<text x="48.0" y="692.8" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="left" font-weight="normal" fill="#111111" xml:space="preserve">EVTA 둘이 같이: DDR 컨트롤러 공유로 copy마다 +0.9 ms (HP1+HP2는 같은 DDR 포트라 +1.25 ms). 대역폭이 아니라 지연.</text>
+<text x="48.0" y="709.7" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif" font-size="12.5" text-anchor="left" font-weight="normal" fill="#111111" xml:space="preserve">CPU 쪽: 폴링 thread 4개가 A53 4코어를 나눔 (OMP_NUM_THREADS=1 권장).</text>
+</svg>
