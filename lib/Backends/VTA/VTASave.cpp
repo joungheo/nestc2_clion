@@ -352,6 +352,21 @@ int getExpofPowerofTwo(int x) {
   return n;
 }
 
+//#### JO added (2026-11-06): the conv's fused relu: RELU, or CLIP(0, max) (ReLU6 of MobileNetV2, VTA::supportsFusedActivation)
+//#### = a relu with an upper clip at max in the output's int8 units (convClipHi, 127 = none); the call is put between
+//#### VTASetActivationClip(hi) and VTASetActivationClip(127) (saveConvolutionInst), vtalib's convs clip to it
+static bool convRelu(const glow::ConvolutionInst *I) {
+  auto a = I->getFusedActivation();
+  return a == RELU || (a == CLIP && I->getFusedActivationArgs().size() == 2 && I->getFusedActivationArgs()[0] == 0.0f);
+}
+static int convClipHi(const glow::ConvolutionInst *I) {
+  if (I->getFusedActivation() != CLIP || I->getFusedActivationArgs().size() != 2)
+    return 127;
+  auto *T = I->getDest()->getType();
+  long hi = std::lround(I->getFusedActivationArgs()[1] / T->getScale()) + T->getOffset();
+  return hi < 127 ? (int)hi : 127;
+}
+
 void saveFloatConvolutionInst(const glow::ConvolutionInst *Inst,
                               std::string *bundle, VTASaveContext *ctx) {
   auto pad = Inst->getPads();
@@ -536,7 +551,9 @@ void saveNonVTAConvolutionInst(
   int stride_size = strides[0];
   int dilation_size = dilation[0];
 
-  bool doRelu = Inst->getFusedActivation() == RELU;
+  //#### JO changed (2026-11-06): + CLIP (convRelu)
+  // bool doRelu = Inst->getFusedActivation() == RELU;
+  bool doRelu = convRelu(Inst);
   float inScale = src->getType()->getScale();
   float filterScale = filter->getType()->getScale();
   float outScale = Inst->getDest()->getType()->getScale();
@@ -2410,7 +2427,9 @@ void generateVTAConvolutionCall(const glow::ConvolutionInst *Inst,
   int KW = filterDims[2];
   int pad_size = pad[0];
   int stride_size = strides[0];
-  bool doRelu = Inst->getFusedActivation() == RELU;
+  //#### JO changed (2026-11-06): + CLIP (convRelu)
+  // bool doRelu = Inst->getFusedActivation() == RELU;
+  bool doRelu = convRelu(Inst);
 
   bool doBias = false;
 
@@ -2707,7 +2726,9 @@ void generateFirstBNNVTAConvolutionCall(const glow::ConvolutionInst *Inst,
   if (getConv0Pack(Inst, &pack)) {
     H = pack.H2, W = pack.W2, C = pack.CO, KH = pack.KH2, KW = 1, pad_size = 0, stride_size = 1;
   }
-  bool doRelu = Inst->getFusedActivation()==RELU;
+  //#### JO changed (2026-11-06): + CLIP (convRelu)
+  // bool doRelu = Inst->getFusedActivation()==RELU;
+  bool doRelu = convRelu(Inst);
   bool doBias = false;
 
   const Tensor* tensorBias = NULL;
@@ -3452,8 +3473,13 @@ ConvPath getConvPath(const glow::ConvolutionInst *Inst) {
   float scale = matMulScale / outScale;
 
   int shift = getExpofPowerofTwo(scale);
+  //#### JO added (2026-11-06): the EVTA convs take one pad for all sides; TF SAME padding of a stride-2 conv
+  //#### (MobileNetV2: top / left 0, bottom / right 1) goes to the CPU conv, which takes the top pad and
+  //#### skips the taps past the input (out_h / out_w give the rest)
+  const auto P = Inst->getPads();
+  const bool symPad = P.size() == 4 && P[0] == P[1] && P[1] == P[2] && P[2] == P[3];
 
-  if (Inst->getGroup() == 1 && scale > 1 && srcDims[3] % 16 == 0 &&
+  if (symPad && Inst->getGroup() == 1 && scale > 1 && srcDims[3] % 16 == 0 &&
       filterDims[0] % 16 == 0 && biasScale == matMulScale && outOffset == 0 &&
       inOffset == 0 && filterOffset == 0 && biasOffset == 0 && shift >= 0) {
     return ConvPath::VTA;
@@ -3464,7 +3490,7 @@ ConvPath getConvPath(const glow::ConvolutionInst *Inst) {
   //#### JO added (2026-10-29): a quantized 3-channel conv (the image conv0 when it is not skipped from
   //#### quantization) runs on EVTA with its input and filter zero-filled to 16 channels, the path of the
   //#### first BNN conv; it is plain int8 (convolution_wo_tr), so it does not need VTA_BNN
-  } else if (Inst->getGroup() == 1 && scale > 1 && srcDims[3] == 3 &&
+  } else if (symPad && Inst->getGroup() == 1 && scale > 1 && srcDims[3] == 3 &&
              filterDims[3] == 3 && filterDims[0] % 16 == 0 &&
              biasScale == matMulScale && outOffset == 0 && inOffset == 0 &&
              filterOffset == 0 && biasOffset == 0 && shift >= 0) {
@@ -3475,6 +3501,10 @@ ConvPath getConvPath(const glow::ConvolutionInst *Inst) {
 
 void saveConvolutionInst(const glow::ConvolutionInst *Inst, std::string *bundle,
                          std::string *initConst, VTASaveContext *ctx) {
+  //#### JO added (2026-11-06): a fused Clip(0, max): the relu's upper clip for this call (convClipHi)
+  const int clipHi = convClipHi(Inst);
+  if (clipHi < 127)
+    bundle->append("  VTASetActivationClip(" + std::to_string(clipHi) + ");\n");
   switch (getConvPath(Inst)) {
   case ConvPath::Float:
     saveFloatConvolutionInst(Inst, bundle, ctx);
@@ -3497,6 +3527,8 @@ void saveConvolutionInst(const glow::ConvolutionInst *Inst, std::string *bundle,
 #endif
     break;
   }
+  if (clipHi < 127)
+    bundle->append("  VTASetActivationClip(127);\n");
 }
 
 //#### JO added (2026-10-31): activations kept in the EVTA layout N{C/16}HW16 between the layers
@@ -3926,7 +3958,7 @@ void findEvtaMaxPools(const IRFunction *IR, VTASaveContext *ctx) {
         if (auto *C = llvm::dyn_cast<ConvolutionInst>(W))
           //#### FirstBNN: the zero-filled image conv0 (also an EVTA conv, convolution_wo_tr)
           nonneg = (getConvPath(C) == ConvPath::VTA || getConvPath(C) == ConvPath::FirstBNN) &&
-                   (C->getFusedActivation() == RELU || ctx->getFusion(C));
+                   (convRelu(C) || ctx->getFusion(C));   //#### JO changed (2026-11-06): == RELU -> convRelu
         else if (llvm::isa<ReluInst>(W))
           nonneg = true;
       }
@@ -6058,7 +6090,8 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
       } else if (srcDimSize == 6) {
         saveTranspose_6dim(I2, &bundle, &ctx);
       } else {
-        llvm::errs() << "Not supported dimenstion in transpose\n"
+        //#### JO changed (2026-11-06): + the instruction
+        llvm::errs() << "Not supported dimenstion in transpose: " << I2->getName() << " " << srcDimSize << " dims\n"
                         "Please use 4 dim or 6 dim\n";
         std::exit(1);
       }

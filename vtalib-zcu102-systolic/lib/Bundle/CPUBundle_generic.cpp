@@ -148,6 +148,10 @@ int convolutionFloat(int8_t* input, int8_t *kernel, int8_t *bias, int8_t *output
 }
 
 
+//#### JO added (2026-11-06): upper clip of a fused relu (ReLU6 = Clip(0, 6) -> round(6 / output scale)), set by
+//#### VTASetActivationClip around the call (VTABundle.cpp); 127 = plain relu
+extern thread_local int gEvtaClipHi;
+
 int cpuvtaconvolution(int8_t* input, float inputScale, int32_t inputOffset, int8_t *kernel, float kernelScale, int32_t kernelOffset,
                       int8_t *bias, float biasScale, int32_t biasOffset, int8_t *output, float outputScale, int32_t outputOffset, dim_t N, dim_t H, dim_t W, dim_t C, dim_t KN, dim_t KH, dim_t KW, int pad_size,
                       int stride_size, size_t group, size_t dilation, bool doRelu, bool doBias, int out_h, int out_w) {
@@ -217,7 +221,10 @@ int cpuvtaconvolution(int8_t* input, float inputScale, int32_t inputOffset, int8
                         // Scale the result back to the expected destination scale.
                         auto out32 = sum >> shift;
                         int8_t out8;
-                        if(out32>127) out8=127;
+                        //#### JO changed (2026-11-06): the relu's upper clip (gEvtaClipHi)
+                        //if(out32>127) out8=127;
+                        const int hi = doRelu ? gEvtaClipHi : 127;
+                        if(out32>hi) out8=hi;
                         else if(out32<-128) out8=-128;
                         else out8=(int8_t)out32;
                         *(output + n*out_h*out_w*KN + ax*out_w*KN + ay*KN + d) = out8;
@@ -286,7 +293,10 @@ int cpunonvtaconvolution(int8_t* input, float inputScale, int32_t inputOffset, i
                         // Scale the result back to the expected destination scale.
                         int32_t out32 = std::round(float(sum) * (matMulScale / outputScale) + outputOffset);
                         int8_t out8;
-                        if(out32>127) out8=127;
+                        //#### JO changed (2026-11-06): the relu's upper clip (gEvtaClipHi)
+                        //if(out32>127) out8=127;
+                        const int hi = doRelu ? gEvtaClipHi : 127;
+                        if(out32>hi) out8=hi;
                         else if(out32<-128) out8=-128;
                         else out8=(int8_t)out32;
                         *(output + n*out_h*out_w*KN + ax*out_w*KN + ay*KN + d) = out8;

@@ -85,6 +85,8 @@ bool VTA::isOpSupported(const NodeInfo &NI) const {
   case Kinded::Kind::SubNodeKind:
   case Kinded::Kind::DivNodeKind:
   case Kinded::Kind::ReluNodeKind:
+  //#### JO added (2026-11-06): Clip in int8, so that the quantizer keeps it quantized and it fuses into the conv before it
+  case Kinded::Kind::ClipNodeKind:
     return NI.allInputsAndOutputsHaveSameElemKind(
         {ElemKind::FloatTy, ElemKind::Float16Ty, ElemKind::BFloat16Ty,
          ElemKind::Int8QTy, ElemKind::Int32ITy, ElemKind::Int64ITy});
@@ -268,9 +270,10 @@ bool VTA::verify(const Function &F, bool verbose) const {
     if (!checkLayoutForNode(N)) {
       return false;
     }
+    //#### JO changed (2026-11-06): + CLIP (ReLU6)
     if (!(N.getKind() == Kinded::Kind::ConvolutionNodeKind &&
-          llvm::cast<ConvolutionNode>(&N)->getFusedActivation() ==
-              FusedActivation::RELU) &&
+          (llvm::cast<ConvolutionNode>(&N)->getFusedActivation() == FusedActivation::RELU ||
+           llvm::cast<ConvolutionNode>(&N)->getFusedActivation() == FusedActivation::CLIP)) &&
         !(N.getKind() == Kinded::Kind::VTAConvolutionNodeKind &&
           llvm::cast<VTAConvolutionNode>(&N)->getFusedActivation() ==
               FusedActivation::RELU) &&
@@ -328,9 +331,10 @@ static bool checkLayoutForInstr(const Instruction &I) {
 bool VTA::verify(const IRFunction &IR) const {
   for (const auto &I : IR.getInstrs()) {
     // Only support convolution+relu fusions for now.
+    //#### JO changed (2026-11-06): + CLIP (ReLU6)
     if (!(I.getKind() == Kinded::Kind::ConvolutionInstKind &&
-          llvm::cast<ConvolutionInst>(&I)->getFusedActivation() ==
-              FusedActivation::RELU) &&
+          (llvm::cast<ConvolutionInst>(&I)->getFusedActivation() == FusedActivation::RELU ||
+           llvm::cast<ConvolutionInst>(&I)->getFusedActivation() == FusedActivation::CLIP)) &&
         !(I.getKind() == Kinded::Kind::VTAConvolutionInstKind &&
           llvm::cast<VTAConvolutionInst>(&I)->getFusedActivation() ==
               FusedActivation::RELU) &&

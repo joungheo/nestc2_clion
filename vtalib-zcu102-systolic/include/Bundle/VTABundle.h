@@ -163,6 +163,8 @@ void preprocess_conv0pack_rows(const float *input, int8_t *output, int N, int H,
 //#### JO added (2026-11-05): preprocess_conv0pack into the VTA buffer buf (a VTABufferAlloc handle), flushed for the EVTA,
 //#### for the EVTA conv that reads buf next (VTASave.cpp). vtalib-zcu102-systolic writes the packed rows while that conv
 //#### runs (VTABundle.cpp InputStream); vta/vtalib writes them at once.
+//#### JO added (2026-11-06): upper clip of the relu of the following convs (ReLU6: round(6 / output scale)), 127 = plain relu
+void VTASetActivationClip(int hi);
 void preprocess_conv0pack_stream(const float *input, void *buf, int N, int H, int W, int C, int nchw, float scale,
                                  int32_t offset, const int8_t *lut, int KH, int KW, int stride, int pad, int CO);
 #endif //VTALIB_EXAMPLE_VTABUNDLE_H
