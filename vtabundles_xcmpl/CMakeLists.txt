@@ -171,6 +171,11 @@ add_bundle_if_present(Resnet18Test vtaMxnetResnet18Bundle
   mxnet_exported_resnet18BundleMain.cpp mxnet_exported_resnet18.cpp)
 add_bundle_if_present(Resnet50Test vtaCaffe2Resnet50Bundle caffe2_resnet50Main.cpp resnet50.cpp)
 add_bundle_if_present(Vgg16Cifar10Test vtaVGG16Cifar10Bundle vgg16BundleMain.cpp vgg16_cifar10.cpp)
+#### JO added (2026-11-06): MobileNetV2 (generic main with MULTI_SINGLE, pthread; gen_mobilenetv2_bundle.sh)
+add_bundle_if_present(MobileNetV2Test vtaMobileNetV2Bundle mobilenetv2Main.cpp mobilenetv2.cpp)
+if(TARGET vtaMobileNetV2Bundle)
+  target_link_libraries(vtaMobileNetV2Bundle pthread)
+endif()
 #### JO added: multi-EVTA (x2) bundles (sources as in nest-compiler/vta/multievtax2_bundles/<dir>/CMakeLists.txt);
 #### only present in hw_multievtax2/
 add_bundle_if_present(MultiEVTAx2ConvTest multievtax2ConvTestBundle multievtax2ConvTestBundleMain.cpp
