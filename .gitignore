@@ -7,3 +7,6 @@ vta/bundles/Vgg16Cifar10Test/vgg16_cifar10.onnx
 #### JO added (2026-10-27): written by PYNQ libcma.so to the working directory of every EVTA process (run
 #### scripts and hw/script/load_bit.sh keep it in trace/)
 sds_trace_data.dat
+
+#### JO added (2026-11-06): made by tfl2onnx.py (vta/bundles/MobileNetV2Test/CMakeLists.txt)
+vta/bundles/MobileNetV2Test/*.onnx
