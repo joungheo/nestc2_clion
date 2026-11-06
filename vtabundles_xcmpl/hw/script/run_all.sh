@@ -55,6 +55,7 @@ run ElemSub vtaElemSubTestBundle vtaElemSubTestInput.bin vtaElemSubTestGolden.bi
 run FCTest vtaFCTestBundle vtaFCTestInput.bin vtaFCTestGolden.bin
 run FloatConvTest vtaFloatConvTestBundle vtaFloatConvTestInput.bin vtaFloatConvTestGolden.bin
 run MaxPool vtaMaxPoolTestBundle vtaMaxPoolTestInput.bin vtaMaxPoolTestGolden.bin
+run MobileNetV2Test vtaMobileNetV2Bundle /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler/glow/tests/images/imagenet/cat_285.png ''
 run NonVTAConvTest vtaNonVTAConvTestBundle vtaNonVTAConvTestInput.bin vtaNonVTAConvTestGolden.bin
 run Quantize vtaQuantizeTestBundle vtaQuantizeTestInput.bin vtaQuantizeTestGolden.bin
 run ReluTest vtaReluTestBundle vtaReluTestInput.bin vtaReluTestGolden.bin
