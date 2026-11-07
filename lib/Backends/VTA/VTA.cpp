@@ -27,9 +27,23 @@
 #include "glow/IR/IR.h"
 #include "glow/IR/Instrs.h"
 #include "glow/Optimizer/IROptimizer/IROptimizer.h"
+#include "llvm/Support/CommandLine.h"
+
+#include <cstring>
+#include <unordered_set>
 
 using namespace glow;
 using llvm::dyn_cast;
+
+//#### JO added (2026-11-07): widen int8 activations whose channel count is not a multiple of 16 (MobileNetV2: 24) to the
+//#### next multiple when every producer and user is a group-1 conv (constant filter and bias) or an Add of such
+//#### activations: the producing convs get zero filter rows and zero bias, the using convs zero filter columns, so the
+//#### extra channels stay 0 (offsets are 0 in the symmetric schemas) and the convs take the EVTA path (padChannelsTo16)
+static llvm::cl::opt<bool> vtaPadChannels(
+    "vta-pad-channels",
+    llvm::cl::desc("Widen conv / add activations with C % 16 != 0 to a multiple of 16 channels (zero weights) so "
+                   "that their convs run on the EVTA"),
+    llvm::cl::init(true));
 
 Expected<std::unique_ptr<CompiledFunction>>
 VTA::compile(Function *F, const BackendOptions &opts) const {
@@ -628,12 +642,109 @@ static Node *optimizeVTAConv(ConvolutionNode *CN, Function *F) {
   return reshapeOutput;
 }
 
+//#### JO added (2026-11-07): -vta-pad-channels (above)
+static bool isWidenableConv(const ConvolutionNode *CN) {
+  return CN->getGroup() == 1 && CN->getResult().getType()->getElementType() == ElemKind::Int8QTy &&
+         CN->getResult().getType()->getOffset() == 0 && llvm::isa<Constant>(CN->getFilter()) &&
+         llvm::isa<Constant>(CN->getBias()) && CN->getFilter().getType()->getOffset() == 0 &&
+         CN->getInput().getType()->getOffset() == 0;
+}
+
+static bool padChannelsTo16(Function *F) {
+  auto pad16 = [](dim_t c) { return (c + 15) / 16 * 16; };
+  std::unordered_set<Node *> S;
+  for (auto &N : F->getNodes()) {
+    if (N.getNumResults() != 1)
+      continue;
+    auto ty = N.getNthResult(0).getType();
+    if (ty->dims().size() != 4 || ty->getElementType() != ElemKind::Int8QTy || ty->getOffset() != 0 ||
+        ty->dims()[3] % 16 == 0)
+      continue;
+    if (auto *CN = dyn_cast<ConvolutionNode>(&N)) {
+      if (isWidenableConv(CN))
+        S.insert(&N);
+    } else if (llvm::isa<AddNode>(&N)) {
+      S.insert(&N);
+    }
+  }
+  for (bool changed = true; changed;) {
+    changed = false;
+    for (auto it = S.begin(); it != S.end();) {
+      Node *N = *it;
+      bool ok = true;
+      if (auto *A = dyn_cast<AddNode>(N))
+        ok = S.count(A->getLHS().getNode()) && S.count(A->getRHS().getNode());
+      for (auto &U : N->getUsers()) {
+        Node *u = U.getUser();
+        if (auto *CN = dyn_cast<ConvolutionNode>(u))
+          ok = ok && isWidenableConv(CN) && CN->getInput().getNode() == N && CN->getFilter().getNode() != N &&
+               CN->getBias().getNode() != N;
+        else
+          ok = ok && llvm::isa<AddNode>(u) && S.count(u);
+      }
+      if (!ok) {
+        it = S.erase(it);
+        changed = true;
+      } else {
+        ++it;
+      }
+    }
+  }
+  if (S.empty())
+    return false;
+
+  auto *M = F->getParent();
+  for (auto &N : F->getNodes()) {
+    auto *CN = dyn_cast<ConvolutionNode>(&N);
+    if (!CN)
+      continue;
+    const bool in = S.count(CN->getInput().getNode()), out = S.count(CN);
+    if (!in && !out)
+      continue;
+    auto *filter = llvm::cast<Constant>(CN->getFilter());
+    auto fd = filter->dims(); // [KN, KH, KW, C]
+    const dim_t KN = out ? pad16(fd[0]) : fd[0], C = in ? pad16(fd[3]) : fd[3];
+    auto *nf = M->createConstant(M->uniqueTypeWithNewShape(filter->getType(), {KN, fd[1], fd[2], C}),
+                                 filter->getName().str() + "_pad16");
+    nf->getPayloadMutable().zero();
+    auto hs = filter->getPayload().getHandle<int8_t>();
+    auto hd = nf->getPayloadMutable().getHandle<int8_t>();
+    for (dim_t k = 0; k < fd[0]; k++)
+      for (dim_t y = 0; y < fd[1]; y++)
+        for (dim_t x = 0; x < fd[2]; x++)
+          for (dim_t c = 0; c < fd[3]; c++)
+            hd.at({k, y, x, c}) = hs.at({k, y, x, c});
+    CN->setNthInput(ConvolutionNode::FilterIdx, nf);
+    if (out) {
+      auto *bias = llvm::cast<Constant>(CN->getBias());
+      auto *nb = M->createConstant(M->uniqueTypeWithNewShape(bias->getType(), {KN}), bias->getName().str() + "_pad16");
+      nb->getPayloadMutable().zero();
+      memcpy(nb->getPayloadMutable().getUnsafePtr(), bias->getPayload().getUnsafePtr(),
+             bias->getPayload().getSizeInBytes());
+      CN->setNthInput(ConvolutionNode::BiasIdx, nb);
+      auto rd = CN->getResult().dims();
+      CN->getResult().setType(M->uniqueTypeWithNewShape(CN->getResult().getType(), {rd[0], rd[1], rd[2], KN}));
+    }
+  }
+  for (auto &N : F->getNodes())
+    if (auto *A = dyn_cast<AddNode>(&N))
+      if (S.count(A)) {
+        auto rd = A->getResult().dims();
+        A->getResult().setType(
+            M->uniqueTypeWithNewShape(A->getResult().getType(), {rd[0], rd[1], rd[2], pad16(rd[3])}));
+      }
+  return true;
+}
+
 Expected<bool>
 VTA::transformPostLowering(Function *F, CompilationContext &cctx,
                            const glow::runtime::DeviceInfo *devInfo) const {
   LOG_SCOPE(F->getLogContext(), "VTA::transformPostLowering")
 
   bool changed = false;
+  //#### JO added (2026-11-07): -vta-pad-channels
+  if (vtaPadChannels)
+    changed |= padChannelsTo16(F);
   for (auto &node : F->getNodes()) {
     if (auto *channelwiseConv =
             llvm::dyn_cast<ChannelwiseQuantizedConvolutionNode>(&node)) {
