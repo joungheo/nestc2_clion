@@ -20,11 +20,22 @@
 #include "glow/Backend/Backend.h"
 #include "glow/Converter/FunctionConverter.h"
 
+#include "llvm/Support/CommandLine.h"
+
 #include <cmath>
 #include <unordered_set>
 #include <vector>
 
 using llvm::cast;
+
+//#### JO added (2026-11-07): channelwise quantization for the grouped (depthwise) convs only. With one scale per
+//#### tensor, the depthwise filters of MobileNetV2 (BN folded, channel maxima 0.3 .. 56 in one filter) keep 0 - 2 levels
+//#### in their small channels (cat_285.png 293 instead of 282); per channel (power-of-two scales too) they classify as
+//#### fp32. The other convs stay per tensor (EVTA convs). -enable-channelwise makes every conv channelwise.
+static llvm::cl::opt<bool> enableChannelwiseDepthwise(
+    "enable-channelwise-depthwise",
+    llvm::cl::desc("Channelwise quantized Convolution for the grouped (depthwise) convs only"),
+    llvm::cl::init(false));
 
 namespace {
 
@@ -771,7 +782,8 @@ public:
 
   /// Traverse all nodes to find applicable quantized nodes, and convert them
   /// to ChannelwiseQuantized versions if required inputs are Constant.
-  void enableChannelwise() {
+  //#### JO changed (2026-11-07): \p groupedOnly: only the convs with group > 1 (-enable-channelwise-depthwise)
+  void enableChannelwise(bool groupedOnly = false) {
     auto nodeIt = function_.getNodes().end();
     auto stopIt = function_.getNodes().begin();
     do {
@@ -808,6 +820,9 @@ public:
       // function will be provided with the floating-point filter and
       // bias constants and will perform channel wise quantization.
       if (auto *convNode = llvm::dyn_cast<ConvolutionNode>(Q->getInput())) {
+        if (groupedOnly && convNode->getGroup() == 1) {
+          continue;
+        }
 
         NodeValue input = convNode->getInput();
         NodeValue filter = convNode->getFilter();
@@ -1146,6 +1161,8 @@ void quantizeFunction(Function *F, const QuantizationConfiguration &quantConfig,
   // Enable channelwise quantization for Convolution node.
   if (quantConfig.enableChannelwise) {
     quantizer.enableChannelwise();
+  } else if (enableChannelwiseDepthwise) {
+    quantizer.enableChannelwise(/* groupedOnly */ true);
   }
 }
 
