@@ -1171,6 +1171,8 @@ quantized Interpreter(같은 profile, depthwise per-channel)는 282(0.935)다.
 - 이제 113×112×32 → 32, 2×1 packed conv로 EVTA에서 돈다. schedule은 기본값(1 thread, 8×8)이다.
 
 **남은 것 (OMP 1, 84.2 ms):**
+- `-vta-round-shift`의 기본값(2026-11-07 결정): 지금은 꺼 두고 MobileNetV2Test에서만 켠다. 나중에 켜고 Resnet18/50, VGG16의 정확도와 시간을 본 뒤 기본으로 켤지 정한다.
+- depthwise를 EVTA로 옮기는 일은 당분간 보류한다(2026-11-07).
 - depthwise 43.0 ms(CPU). EVTA로 옮기는 방법은 결정이 필요하다(아래).
 - EVTA conv 35개 20.0 ms(30.7 GOPS). 작은 1×1 conv가 많아 load 비중이 크고, conv0와 새 모양들은 기본 schedule이다.
 - logits 1×1 1280→1001 5.9 ms(CPU, 1001 % 16). transpose 8.6 ms(depthwise 앞뒤 NHWC ↔ EVTA layout), elemadd 5.3 ms.
