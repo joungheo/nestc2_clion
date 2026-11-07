@@ -51,6 +51,8 @@ add_custom_command(
         -quantization-schema=symmetric_with_power2_scale
         #### JO added (2026-11-07): per-channel scales for the depthwise convs (one per tensor: 293 instead of 282)
         -enable-channelwise-depthwise
+        #### JO added (2026-11-07): the EVTA convs round their output shift (2^(shift-1) in the bias) as the CPU convs
+        -vta-round-shift
         DEPENDS
         model-compiler VTA ${CMAKE_CURRENT_BINARY_DIR}/mobilenetv2_calib.yaml
 )

@@ -1035,6 +1035,24 @@ void saveBNNNonVTAConvolutionInst(const glow::BNNConvolutionInst *Inst,
 
 }
 
+//#### JO added (2026-11-07): the EVTA conv's output shift truncates (acc >> shift, ALU SHR or requantize without rounding);
+//#### the CPU convs and Glow's Interpreter round (std::round). -vta-round-shift adds 2^(shift - 1) to the bias at compile
+//#### time, so the shift rounds half up (= std::round but for negative halves). Not for the fused convs (residual / pool:
+//#### their shift comes after the add or the pool). Off by default: it changes every EVTA conv output of the other models.
+static llvm::cl::opt<bool> vtaRoundShift(
+    "vta-round-shift",
+    llvm::cl::desc("Round the output shift of the EVTA convs (2^(shift-1) added to the bias) instead of truncating"),
+    llvm::cl::init(false));
+
+static int32_t convRoundHalf(const glow::ConvolutionInst *Inst, VTASaveContext *ctx) {
+  if (!vtaRoundShift || ctx->getFusion(Inst) || ctx->getPoolFusion(Inst))
+    return 0;
+  float scale = (1 / Inst->getSrc()->getType()->getScale()) * (1 / Inst->getFilter()->getType()->getScale()) /
+                (1 / Inst->getDest()->getType()->getScale());
+  int shift = getExpofPowerofTwo(scale);
+  return shift >= 1 ? (int32_t)1 << (shift - 1) : 0;
+}
+
 void prepareVTAConvolutionInst(const glow::ConvolutionInst *Inst,
                                std::string *bundle, std::string *initConst,
                                VTASaveContext *ctx) {
@@ -1150,7 +1168,10 @@ void prepareVTAConvolutionInst(const glow::ConvolutionInst *Inst,
   }
   assert(tensorBias);
   auto handleBias = tensorBias->getHandle<int32_t>();
+  //#### JO added (2026-11-07): -vta-round-shift (convRoundHalf)
+  const int32_t roundHalf = convRoundHalf(Inst, ctx);
   {
+    doBias = roundHalf != 0;
     for (size_t i = 0, e = handleBias.size(); i < e; i++) {
       auto data = handleBias.raw(i);
       if (data != 0) {
@@ -1161,7 +1182,7 @@ void prepareVTAConvolutionInst(const glow::ConvolutionInst *Inst,
     if (doBias) {
       auto fos = ctx->getWeightFileStream();
       for (size_t i = 0, e = handleBias.size(); i < e; i++) {
-        auto data = handleBias.raw(i);
+        int32_t data = handleBias.raw(i) + roundHalf;
         fos->write((const char *)&data, 4);
       }
     }
@@ -2557,6 +2578,8 @@ void generateVTAConvolutionCall(const glow::ConvolutionInst *Inst,
     }
   }
   auto handleBias = tensorBias->getHandle<int32_t>();
+  //#### JO changed (2026-11-07): + the rounding bias of -vta-round-shift (convRoundHalf)
+  doBias = convRoundHalf(Inst, ctx) != 0;
   {
     for (size_t i = 0, e = handleBias.size(); i < e; i++) {
       auto data = handleBias.raw(i);
