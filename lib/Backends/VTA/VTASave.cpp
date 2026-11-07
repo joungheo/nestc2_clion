@@ -3643,8 +3643,13 @@ ConvPath getConvPath(const glow::ConvolutionInst *Inst) {
   return ConvPath::Other;
 }
 
+static bool saveEvtaConvAsFc(const glow::ConvolutionInst *Inst, std::string *bundle, VTASaveContext *ctx);
+
 void saveConvolutionInst(const glow::ConvolutionInst *Inst, std::string *bundle,
                          std::string *initConst, VTASaveContext *ctx) {
+  //#### JO added (2026-11-08): a 1x1 conv over a 1x1 input as the EVTA fc (saveEvtaConvAsFc)
+  if (saveEvtaConvAsFc(Inst, bundle, ctx))
+    return;
   //#### JO added (2026-11-06): a fused Clip(0, max): the relu's upper clip for this call (convClipHi)
   const int clipHi = convClipHi(Inst);
   if (clipHi < 127)
@@ -4193,18 +4198,11 @@ void saveBNNConvolutionInst(const glow::BNNConvolutionInst *Inst,
 //#### 2 NB acc entries). Returns false (nothing written) when it does not fit.
 //#### 2026-11-05: chunks of any size (was >= 8 output blocks, which only the HLS GEMM needs: vtalib fc_evta_plan checks it
 //#### there and computes the fc on the CPU from the packed weights, fc_packed_cpu); Resnet50 2048 -> 1000 runs on the EVTA.
-static bool saveEvtaFullyConnectedInst(const glow::FullyConnectedInst *Inst, std::string *bundle,
-                                       VTASaveContext *ctx) {
-  auto src = Inst->getSrc();
-  auto dest = Inst->getDest();
-  auto filter = Inst->getWeights();
-  auto bias = Inst->getBias();
-  if (src->dims().size() != 2 || dest->dims().size() != 2 || filter->dims().size() != 2 || src->dims()[0] != 1 ||
-      dest->dims()[0] != 1 || filter->getElementType() != ElemKind::Int8QTy ||
-      bias->getElementType() != ElemKind::Int32QTy)
-    return false;
-  const uint32_t IN = src->dims()[1], OUT = dest->dims()[1];
-  if (filter->dims()[0] != IN || filter->dims()[1] != OUT || IN % 16)
+//#### JO changed (2026-11-08): the body as saveEvtaFcPacked for the fc and for a 1x1 conv over a 1x1 input (convFilter:
+//#### filter [OUT][1][1][IN] instead of the fc's [IN][OUT]; MobileNetV2's logits 1280 -> 1001)
+static bool saveEvtaFcPacked(Value *src, Value *dest, Value *filter, Value *bias, uint32_t IN, uint32_t OUT,
+                             bool convFilter, std::string *bundle, VTASaveContext *ctx) {
+  if (filter->getElementType() != ElemKind::Int8QTy || bias->getElementType() != ElemKind::Int32QTy || IN % 16)
     return false;
   if (src->getType()->getOffset() || filter->getType()->getOffset() || dest->getType()->getOffset() ||
       bias->getType()->getOffset())
@@ -4239,7 +4237,8 @@ static bool saveEvtaFullyConnectedInst(const glow::FullyConnectedInst *Inst, std
   std::vector<int8_t> w((size_t)NB * CIN * 256, 0);
   for (uint32_t k = 0; k < IN; k++)
     for (uint32_t j = 0; j < OUT; j++)
-      w[((size_t)(j / 16) * CIN + k / 16) * 256 + (j % 16) * 16 + k % 16] = handle.raw((size_t)k * OUT + j);
+      w[((size_t)(j / 16) * CIN + k / 16) * 256 + (j % 16) * 16 + k % 16] =
+          handle.raw(convFilter ? (size_t)j * IN + k : (size_t)k * OUT + j);
   std::vector<int32_t> b((size_t)NB * 16, 0);
   for (uint32_t j = 0; j < OUT; j++)
     b[j] = std::round(float(handleBias.raw(j)) * biasRatio);
@@ -4278,6 +4277,34 @@ static bool saveEvtaFullyConnectedInst(const glow::FullyConnectedInst *Inst, std
   bundle->append(std::to_string(idx));
   bundle->append(");\n");
   return true;
+}
+
+static bool saveEvtaFullyConnectedInst(const glow::FullyConnectedInst *Inst, std::string *bundle,
+                                       VTASaveContext *ctx) {
+  auto src = Inst->getSrc(), dest = Inst->getDest(), filter = Inst->getWeights();
+  if (src->dims().size() != 2 || dest->dims().size() != 2 || filter->dims().size() != 2 || src->dims()[0] != 1 ||
+      dest->dims()[0] != 1)
+    return false;
+  const uint32_t IN = src->dims()[1], OUT = dest->dims()[1];
+  if (filter->dims()[0] != IN || filter->dims()[1] != OUT)
+    return false;
+  return saveEvtaFcPacked(src, dest, filter, Inst->getBias(), IN, OUT, false, bundle, ctx);
+}
+
+//#### JO added (2026-11-08): a 1x1 conv over a 1x1 input without activation (N = 1, group 1, stride / dilation
+//#### irrelevant, pads 0) is an fc: the EVTA fc path, any OUT (MobileNetV2's logits 1280 -> 1001; 1001 % 16 kept it
+//#### off the EVTA conv path). -vta-evta-fc.
+static bool isConvAsFc(const glow::ConvolutionInst *Inst) {
+  auto sd = Inst->getSrc()->dims(), fd = Inst->getFilter()->dims(), dd = Inst->getDest()->dims();
+  auto P = Inst->getPads();
+  return vtaEvtaFc && Inst->getSrc()->getType()->isQuantizedType() && sd.size() == 4 && sd[0] == 1 && sd[1] == 1 &&
+         sd[2] == 1 && fd[1] == 1 && fd[2] == 1 && dd[1] == 1 && dd[2] == 1 && Inst->getGroup() == 1 &&
+         Inst->getFusedActivation() == NONE && std::all_of(P.begin(), P.end(), [](unsigned p) { return p == 0; });
+}
+static bool saveEvtaConvAsFc(const glow::ConvolutionInst *Inst, std::string *bundle, VTASaveContext *ctx) {
+  return isConvAsFc(Inst) &&
+         saveEvtaFcPacked(Inst->getSrc(), Inst->getDest(), Inst->getFilter(), Inst->getBias(),
+                          Inst->getSrc()->dims()[3], Inst->getDest()->dims()[3], true, bundle, ctx);
 }
 
 void saveFullyConnectedInst(const glow::FullyConnectedInst *Inst,
