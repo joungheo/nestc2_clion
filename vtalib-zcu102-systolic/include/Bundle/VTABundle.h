@@ -68,9 +68,11 @@ int nonvtaconvolution(int8_t* input, float inputScale, int32_t inputOffset, int8
 //#### -enable-channelwise-depthwise): out = clip(round(float(sum + bias[d]) * mult[d]), lo, hi) per output channel d, NHWC;
 //#### kernel [KH][KW][C] for a depthwise conv (group = C = KN), else [KN][KH][KW][C/group]; pads top / left (the taps past
 //#### the bottom / right are skipped)
+//#### JO changed (2026-11-08): inPacked / outPacked: the input / output in the EVTA layout N{C/16}HW16 (depthwise, C % 16 = 0)
 int cw_convolution(const int8_t *input, const int8_t *kernel, const int32_t *bias, const float *mult, int8_t *output,
                    int N, int H, int W, int C, int KN, int KH, int KW, int padT, int padL, int strideH, int strideW,
-                   int dilH, int dilW, int group, int outH, int outW, int lo, int hi);
+                   int dilH, int dilW, int group, int outH, int outW, int lo, int hi, int inPacked = 0,
+                   int outPacked = 0);
 
 int nonvtaconvolution_f32(float* input, float inputScale, int32_t inputOffset, int8_t *kernel, float kernelScale, int32_t kernelOffset,
                       float *bias, float biasScale, int32_t biasOffset, float *output, float outputScale, int32_t outputOffset, dim_t N, dim_t H, dim_t W, dim_t C, dim_t KN, dim_t KH, dim_t KW, int pad_size,

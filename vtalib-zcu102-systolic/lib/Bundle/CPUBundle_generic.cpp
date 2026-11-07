@@ -313,6 +313,8 @@ int cpunonvtaconvolution(int8_t* input, float inputScale, int32_t inputOffset, i
 //#### JO added (2026-11-07): the channelwise quantized conv, bit-exact with Glow's Interpreter (VTABundle.h). Depthwise:
 //#### per output pixel 16 channels per NEON step (int8 products widened to int32, the float multiplier, round half away
 //#### from zero as std::round, clip, narrow); output rows split over the OpenMP threads.
+//#### JO changed (2026-11-08): the depthwise input / output NHWC or in the EVTA layout (inPacked / outPacked, VTASave
+//#### findPackedActivations: no transposes around the depthwise convs between EVTA convs)
 static inline int8_t cwOut(int32_t sum, float m, int lo, int hi) {
   int32_t v = (int32_t)std::round(float(sum) * m);
   return (int8_t)(v < lo ? lo : v > hi ? hi : v);
@@ -320,9 +322,16 @@ static inline int8_t cwOut(int32_t sum, float m, int lo, int hi) {
 
 int cw_convolution(const int8_t *input, const int8_t *kernel, const int32_t *bias, const float *mult, int8_t *output,
                    int N, int H, int W, int C, int KN, int KH, int KW, int padT, int padL, int strideH, int strideW,
-                   int dilH, int dilW, int group, int outH, int outW, int lo, int hi) {
+                   int dilH, int dilW, int group, int outH, int outW, int lo, int hi, int inPacked, int outPacked) {
   const bool dw = group == C && KN == C;
   const int CG = C / group, KG = KN / group;
+  assert((!inPacked && !outPacked) || (dw && C % 16 == 0));
+  // element (y, x, c) at y * rs + x * ps + (c / 16) * bs + c % 16: NHWC rs = W * C, ps = C, bs = 16; EVTA layout
+  // rs = W * 16, ps = 16, bs = H * W * 16
+  const size_t irs = inPacked ? (size_t)W * 16 : (size_t)W * C, ips = inPacked ? 16 : C,
+               ibs = inPacked ? (size_t)H * W * 16 : 16;
+  const size_t ors = outPacked ? (size_t)outW * 16 : (size_t)outW * KN, ops = outPacked ? 16 : KN,
+               obs = outPacked ? (size_t)outH * outW * 16 : 16;
   for (int n = 0; n < N; n++) {
     const int8_t *in = input + (size_t)n * H * W * C;
     int8_t *out = output + (size_t)n * outH * outW * KN;
@@ -330,12 +339,12 @@ int cw_convolution(const int8_t *input, const int8_t *kernel, const int32_t *bia
     for (int oy = 0; oy < outH; oy++) {
       for (int ox = 0; ox < outW; ox++) {
         const int y0 = oy * strideH - padT, x0 = ox * strideW - padL;
-        int8_t *o = out + ((size_t)oy * outW + ox) * KN;
         if (dw) {
           int c = 0;
 #if defined(__aarch64__)
           const int32x4_t vlo = vdupq_n_s32(lo), vhi = vdupq_n_s32(hi);
           for (; c + 16 <= C; c += 16) {
+            const int8_t *ib = in + (size_t)(c / 16) * ibs;
             int32x4_t a0 = vld1q_s32(bias + c), a1 = vld1q_s32(bias + c + 4);
             int32x4_t a2 = vld1q_s32(bias + c + 8), a3 = vld1q_s32(bias + c + 12);
             for (int ky = 0; ky < KH; ky++) {
@@ -346,7 +355,7 @@ int cw_convolution(const int8_t *input, const int8_t *kernel, const int32_t *bia
                 const int ix = x0 + kx * dilW;
                 if (ix < 0 || ix >= W)
                   continue;
-                const int8x16_t x = vld1q_s8(in + ((size_t)iy * W + ix) * C + c);
+                const int8x16_t x = vld1q_s8(ib + iy * irs + ix * ips);
                 const int8x16_t w = vld1q_s8(kernel + ((size_t)ky * KW + kx) * C + c);
                 const int16x8_t pl = vmull_s8(vget_low_s8(x), vget_low_s8(w));
                 const int16x8_t ph = vmull_high_s8(x, w);
@@ -363,7 +372,7 @@ int cw_convolution(const int8_t *input, const int8_t *kernel, const int32_t *bia
             }
             const int16x8_t l = vcombine_s16(vqmovn_s32(r[0]), vqmovn_s32(r[1]));
             const int16x8_t h = vcombine_s16(vqmovn_s32(r[2]), vqmovn_s32(r[3]));
-            vst1q_s8(o + c, vcombine_s8(vqmovn_s16(l), vqmovn_s16(h)));
+            vst1q_s8(out + (size_t)(c / 16) * obs + oy * ors + ox * ops, vcombine_s8(vqmovn_s16(l), vqmovn_s16(h)));
           }
 #endif
           for (; c < C; c++) {
@@ -376,13 +385,15 @@ int cw_convolution(const int8_t *input, const int8_t *kernel, const int32_t *bia
                 const int ix = x0 + kx * dilW;
                 if (ix < 0 || ix >= W)
                   continue;
-                sum += (int32_t)in[((size_t)iy * W + ix) * C + c] * kernel[((size_t)ky * KW + kx) * C + c];
+                sum += (int32_t)in[(size_t)(c / 16) * ibs + iy * irs + ix * ips + c % 16] *
+                       kernel[((size_t)ky * KW + kx) * C + c];
               }
             }
-            o[c] = cwOut(sum + bias[c], mult[c], lo, hi);
+            out[(size_t)(c / 16) * obs + oy * ors + ox * ops + c % 16] = cwOut(sum + bias[c], mult[c], lo, hi);
           }
           continue;
         }
+        int8_t *o = out + ((size_t)oy * outW + ox) * KN;
         for (int d = 0; d < KN; d++) {
           const int g = d / KG;
           int32_t sum = 0;

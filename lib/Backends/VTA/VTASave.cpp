@@ -821,8 +821,9 @@ static void saveChannelwiseConvolutionInst(const glow::ChannelwiseQuantizedConvo
   bundle->append(multSte.name);
   bundle->append("), ");
   bundle->append(destMut ? addSymbolEntry(destWeight, ctx).name : dest->getName().data());
+  //#### JO changed (2026-11-08): + the layouts of input and output (EVTA layout if kept packed, findPackedActivations)
   for (int v : {N, H, W, C, KN, KH, KW, (int)P[0], (int)P[1], (int)S[0], (int)S[1], (int)D[0], (int)D[1], group,
-                (int)dd[1], (int)dd[2], lo, hi}) {
+                (int)dd[1], (int)dd[2], lo, hi, (int)ctx->isPacked(src), (int)ctx->isPacked(dest)}) {
     bundle->append(", ");
     bundle->append(std::to_string(v));
   }
@@ -3697,6 +3698,13 @@ static bool isLayoutNeutral(const Value *v) {
   return d.size() == 4 && d[1] == 1 && d[2] == 1;
 }
 
+//#### JO added (2026-11-08): a depthwise channelwise conv whose input and output can be in the EVTA layout
+static bool isDepthwiseCW(const glow::ChannelwiseQuantizedConvolutionInst *I) {
+  auto sd = I->getSrc()->dims(), fd = I->getFilter()->dims();
+  return sd.size() == 4 && fd.size() == 4 && (dim_t)I->getGroup() == sd[3] && fd[0] == sd[3] && fd[3] == 1 &&
+         sd[3] % 16 == 0 && I->getDest()->dims()[3] == sd[3];
+}
+
 void findPackedActivations(const IRFunction *IR, VTASaveContext *ctx) {
   auto &packed = *ctx->getPacked();
   packed.clear();
@@ -3737,6 +3745,12 @@ void findPackedActivations(const IRFunction *IR, VTASaveContext *ctx) {
         }
         break;
       }
+      //#### JO added (2026-11-08): a depthwise channelwise conv (vtalib cw_convolution) reads and writes either layout,
+      //#### input and output each on its own (C % 16 = 0, isDepthwiseCW)
+      case Kinded::Kind::ChannelwiseQuantizedConvolutionInstKind:
+        if (isDepthwiseCW(llvm::cast<ChannelwiseQuantizedConvolutionInst>(&I)))
+          continue;
+        break;
       case Kinded::Kind::ElementAddInstKind:
       case Kinded::Kind::ReluInstKind:
       case Kinded::Kind::MaxPoolInstKind:
@@ -6323,7 +6337,9 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
     }
     //#### JO added (2026-10-31): a CPU op that wrote an activation kept in the EVTA layout flushes it
     //#### for the EVTA (non-coherent; the EVTA conv invalidates its output for the CPU)
+    //#### JO changed (2026-11-08): + the depthwise channelwise conv (cw_convolution)
     if ((I.getKind() == Kinded::Kind::ElementAddInstKind ||
+         I.getKind() == Kinded::Kind::ChannelwiseQuantizedConvolutionInstKind ||
          I.getKind() == Kinded::Kind::ReluInstKind ||
          I.getKind() == Kinded::Kind::MaxPoolInstKind ||
          I.getKind() == Kinded::Kind::AvgPoolInstKind) &&
