@@ -3085,7 +3085,7 @@ struct InputStream {
   float scale;
   int32_t offset;
   const int8_t *lut;
-  int KH, KW, stride, pad, CO;
+  int KH, KW, stride, pad, CO, padEnd;
 };
 static thread_local InputStream gInputStream = {nullptr};
 
@@ -3095,7 +3095,8 @@ static void inputStreamTo(InputStream *s, int rows) {
   if (rows <= s->done)
     return;
   preprocess_conv0pack_rows(s->input, (int8_t *)VTABufferGetVirtAddr(s->buf), s->N, s->H, s->W, s->C, s->nchw,
-                            s->scale, s->offset, s->lut, s->KH, s->KW, s->stride, s->pad, s->CO, s->done, rows);
+                            s->scale, s->offset, s->lut, s->KH, s->KW, s->stride, s->pad, s->CO, s->done, rows,
+                            s->padEnd);
   const size_t rowBytes = (size_t)s->W2 * 16;
   for (int b = 0; b < s->N * s->CB; b++)
     VTABufferFlush(s->buf, ((size_t)b * s->rows + s->done) * rowBytes, (size_t)(rows - s->done) * rowBytes);
@@ -3107,8 +3108,10 @@ static void inputStreamEnd(InputStream *s) {
   s->buf = nullptr;
 }
 
+//#### JO changed (2026-11-07): + padEnd (VTABundle.h)
 void preprocess_conv0pack_stream(const float *input, void *buf, int N, int H, int W, int C, int nchw, float scale,
-                                 int32_t offset, const int8_t *lut, int KH, int KW, int stride, int pad, int CO) {
+                                 int32_t offset, const int8_t *lut, int KH, int KW, int stride, int pad, int CO,
+                                 int padEnd) {
   if (gInputStream.buf)
     inputStreamEnd(&gInputStream);  // one that no conv read
   static int on = -1;
@@ -3116,9 +3119,9 @@ void preprocess_conv0pack_stream(const float *input, void *buf, int N, int H, in
     const char *e = getenv("EVTA_INPUT_STREAM");
     on = !e || atoi(e) != 0;
   }
-  const int KH2 = (KH + stride - 1) / stride;
-  gInputStream = {buf, (H + 2 * pad - KH) / stride + KH2, 0, (W + 2 * pad - KW) / stride + 1, CO / 16,
-                  input, N, H, W, C, nchw, scale, offset, lut, KH, KW, stride, pad, CO};
+  const int KH2 = (KH + stride - 1) / stride, pe = padEnd < 0 ? pad : padEnd;
+  gInputStream = {buf, (H + pad + pe - KH) / stride + KH2, 0, (W + pad + pe - KW) / stride + 1, CO / 16,
+                  input, N, H, W, C, nchw, scale, offset, lut, KH, KW, stride, pad, CO, padEnd};
   if (!on || N != 1)
     inputStreamEnd(&gInputStream);
 }

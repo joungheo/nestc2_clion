@@ -1379,6 +1379,9 @@ struct Conv0Pack {
 static bool getConv0Pack(const glow::ConvolutionInst *Inst, Conv0Pack *p) {
   if (!vtaConv0Pack)
     return false;
+  Conv0Pack tmp;
+  if (!p)
+    p = &tmp;
   auto srcDims = Inst->getSrc()->dims();
   auto filterDims = Inst->getFilter()->dims();
   auto destDims = Inst->getDest()->dims();
@@ -1386,11 +1389,13 @@ static bool getConv0Pack(const glow::ConvolutionInst *Inst, Conv0Pack *p) {
   auto strides = Inst->getStrides();
   int N = srcDims[0], H = srcDims[1], W = srcDims[2], C = srcDims[3];
   int KN = filterDims[0], KH = filterDims[1], KW = filterDims[2];
-  int s = strides[0], pad = pads[0];
-  if (strides[1] != s || pads[1] != pad || pads[2] != pad || pads[3] != pad || s < 1 || KN % 16)
+  //#### JO changed (2026-11-07): pads top = left and bottom = right (TF SAME of a stride-2 conv, MobileNetV2: 0 and 1;
+  //#### vtalib takes the bottom / right one as padEnd), were all equal
+  int s = strides[0], pad = pads[0], padEnd = pads[2];
+  if (strides[1] != s || pads[1] != pad || pads[3] != padEnd || s < 1 || KN % 16)
     return false;
   int outH = destDims[1], outW = destDims[2];
-  if ((H + 2 * pad - KH) / s + 1 != outH || (W + 2 * pad - KW) / s + 1 != outW)
+  if ((H + pad + padEnd - KH) / s + 1 != outH || (W + pad + padEnd - KW) / s + 1 != outW)
     return false;
   p->KH2 = (KH + s - 1) / s;
   p->CO = (s * KW * C + 15) / 16 * 16;
@@ -2201,6 +2206,9 @@ void generateFirstBNNInputTranspose(const glow::ConvolutionInst *Inst,
         bundle->append(", ");
         bundle->append(std::to_string(v));
       }
+      //#### JO added (2026-11-07): the bottom / right pad when it is not the top / left one (padEnd, getConv0Pack)
+      if (Inst->getPads()[2] != Inst->getPads()[0])
+        bundle->append(", " + std::to_string(Inst->getPads()[2]));
     };
 
   #ifdef VTA_PROFILE
@@ -3624,7 +3632,8 @@ ConvPath getConvPath(const glow::ConvolutionInst *Inst) {
   //#### JO added (2026-10-29): a quantized 3-channel conv (the image conv0 when it is not skipped from
   //#### quantization) runs on EVTA with its input and filter zero-filled to 16 channels, the path of the
   //#### first BNN conv; it is plain int8 (convolution_wo_tr), so it does not need VTA_BNN
-  } else if (symPad && Inst->getGroup() == 1 && scale > 1 && srcDims[3] == 3 &&
+  //#### JO changed (2026-11-07): + asymmetric pads when the packed conv0 takes them (getConv0Pack)
+  } else if ((symPad || getConv0Pack(Inst, nullptr)) && Inst->getGroup() == 1 && scale > 1 && srcDims[3] == 3 &&
              filterDims[3] == 3 && filterDims[0] % 16 == 0 &&
              biasScale == matMulScale && outOffset == 0 && inOffset == 0 &&
              filterOffset == 0 && biasOffset == 0 && shift >= 0) {

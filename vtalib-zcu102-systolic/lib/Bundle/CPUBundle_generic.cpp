@@ -1836,13 +1836,15 @@ void preprocess_nhwc2vtaio_zerofill(const float *input, int8_t *output, int N, i
 //#### CO = s * KW * C rounded up to 16 (Resnet18 conv0 7x7/2 over 3 channels: 4x1 over 48 instead of 7x7 over 16 zero
 //#### filled). Packed pixel (q, x), channel (dh * KW + j) * C + c = padded input (s * q + dh, s * x + j, c); the rest 0.
 //#### Its size: H2 = out_h + ceil(KH/s) - 1 rows, W2 = out_w columns, EVTA layout N{CO/16}H2W2 16.
+//#### JO changed (2026-11-07): padEnd = the bottom / right pad (-1: pad; TF SAME of a stride-2 conv: pad 0, padEnd 1)
 struct Conv0PackDims {
   int s, KH2, H2, W2, PW, CB;
-  Conv0PackDims(int H, int W, int KH, int KW, int stride, int pad, int CO) {
+  Conv0PackDims(int H, int W, int KH, int KW, int stride, int pad, int CO, int padEnd = -1) {
+    const int pe = padEnd < 0 ? pad : padEnd;
     s = stride;
     KH2 = (KH + s - 1) / s;
-    H2 = (H + 2 * pad - KH) / s + 1 + KH2 - 1;
-    W2 = (W + 2 * pad - KW) / s + 1;
+    H2 = (H + pad + pe - KH) / s + 1 + KH2 - 1;
+    W2 = (W + pad + pe - KW) / s + 1;
     PW = s * (W2 - 1) + KW;   // columns of the padded input that the packed pixels read
     CB = CO / 16;
   }
@@ -1917,8 +1919,8 @@ static void conv0packRows(int8_t *output, int n, int H, int pad, const Conv0Pack
   }
 }
 void conv0pack_nhwc2vtaio(const int8_t *input, int8_t *output, int N, int H, int W, int C, int KH, int KW, int stride,
-                          int pad, int CO) {
-  const Conv0PackDims d(H, W, KH, KW, stride, pad, CO);
+                          int pad, int CO, int padEnd) {
+  const Conv0PackDims d(H, W, KH, KW, stride, pad, CO, padEnd);
   assert(CO <= 256 && CO % 16 == 0 && stride * KW * C <= CO);
   const int w1 = std::min(W, d.PW - pad);
   for (int n = 0; n < N; n++)
@@ -1928,14 +1930,14 @@ void conv0pack_nhwc2vtaio(const int8_t *input, int8_t *output, int N, int H, int
 }
 // with the quantize / table of preprocess_nhwc2vtaio_zerofill (findInputPreprocess) written into the padded rows
 void preprocess_conv0pack(const float *input, int8_t *output, int N, int H, int W, int C, int nchw, float scale,
-                          int32_t offset, const int8_t *lut, int KH, int KW, int stride, int pad, int CO) {
-  preprocess_conv0pack_rows(input, output, N, H, W, C, nchw, scale, offset, lut, KH, KW, stride, pad, CO, 0, -1);
+                          int32_t offset, const int8_t *lut, int KH, int KW, int stride, int pad, int CO, int padEnd) {
+  preprocess_conv0pack_rows(input, output, N, H, W, C, nchw, scale, offset, lut, KH, KW, stride, pad, CO, 0, -1, padEnd);
 }
 // packed rows q0 .. q1 - 1 (-1 = all) of every image
 void preprocess_conv0pack_rows(const float *input, int8_t *output, int N, int H, int W, int C, int nchw, float scale,
                                int32_t offset, const int8_t *lut, int KH, int KW, int stride, int pad, int CO, int q0,
-                               int q1) {
-  const Conv0PackDims d(H, W, KH, KW, stride, pad, CO);
+                               int q1, int padEnd) {
+  const Conv0PackDims d(H, W, KH, KW, stride, pad, CO, padEnd);
   assert(CO <= 256 && CO % 16 == 0 && stride * KW * C <= CO);
 #if defined(__aarch64__)
   int fe;
