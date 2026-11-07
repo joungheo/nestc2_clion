@@ -332,19 +332,82 @@ int cw_convolution(const int8_t *input, const int8_t *kernel, const int32_t *bia
                ibs = inPacked ? (size_t)H * W * 16 : 16;
   const size_t ors = outPacked ? (size_t)outW * 16 : (size_t)outW * KN, ops = outPacked ? 16 : KN,
                obs = outPacked ? (size_t)outH * outW * 16 : 16;
+  const int CB16 = dw ? C / 16 : 0;
+#if defined(__aarch64__)
+  const int doneC = CB16 * 16;  // channels of the NEON loop
+#else
+  const int doneC = 0;
+#endif
   for (int n = 0; n < N; n++) {
     const int8_t *in = input + (size_t)n * H * W * C;
     int8_t *out = output + (size_t)n * outH * outW * KN;
-#pragma omp parallel for schedule(static)
-    for (int oy = 0; oy < outH; oy++) {
-      for (int ox = 0; ox < outW; ox++) {
-        const int y0 = oy * strideH - padT, x0 = ox * strideW - padL;
-        if (dw) {
-          int c = 0;
 #if defined(__aarch64__)
-          const int32x4_t vlo = vdupq_n_s32(lo), vhi = vdupq_n_s32(hi);
-          for (; c + 16 <= C; c += 16) {
-            const int8_t *ib = in + (size_t)(c / 16) * ibs;
+    // depthwise, 16 channels per NEON step: 16-channel block outermost (a plane of the EVTA layout, read in order)
+    if (dw && CB16) {
+      const int32x4_t vlo = vdupq_n_s32(lo), vhi = vdupq_n_s32(hi);
+#pragma omp parallel for collapse(2) schedule(static)
+      for (int cb = 0; cb < CB16; cb++)
+        for (int oy = 0; oy < outH; oy++) {
+          const int c = cb * 16;
+          const int8_t *ib = in + (size_t)cb * ibs;
+          int8_t *ob = out + (size_t)cb * obs + oy * ors;
+          // 3x3 with all rows inside: the 9 weights in registers and two output pixels at a time over the columns
+          // whose taps are inside (8 independent accumulators); same sums and rounding as the general loop below,
+          // which does the other columns
+          int fastLo = 0, fastHi = 0;  // output columns [fastLo, fastHi) done here
+          const int yi = oy * strideH - padT;
+          if (KH == 3 && KW == 3 && yi >= 0 && yi + 2 * dilH < H) {
+            fastLo = (padL + strideW - 1) / strideW;
+            fastHi = outW;
+            while (fastHi > fastLo && (fastHi - 1) * strideW - padL + 2 * dilW >= W)
+              fastHi--;
+            fastHi = fastLo + (fastHi - fastLo) / 2 * 2;
+            int8x16_t wk[9];
+            for (int t = 0; t < 9; t++)
+              wk[t] = vld1q_s8(kernel + (size_t)t * C + c);
+            const int32x4_t b0 = vld1q_s32(bias + c), b1 = vld1q_s32(bias + c + 4);
+            const int32x4_t b2 = vld1q_s32(bias + c + 8), b3 = vld1q_s32(bias + c + 12);
+            const float32x4_t m0 = vld1q_f32(mult + c), m1 = vld1q_f32(mult + c + 4);
+            const float32x4_t m2 = vld1q_f32(mult + c + 8), m3 = vld1q_f32(mult + c + 12);
+            auto store = [&](int32x4_t r0, int32x4_t r1, int32x4_t r2, int32x4_t r3, int8_t *dst) {
+              r0 = vminq_s32(vmaxq_s32(vcvtaq_s32_f32(vmulq_f32(vcvtq_f32_s32(r0), m0)), vlo), vhi);
+              r1 = vminq_s32(vmaxq_s32(vcvtaq_s32_f32(vmulq_f32(vcvtq_f32_s32(r1), m1)), vlo), vhi);
+              r2 = vminq_s32(vmaxq_s32(vcvtaq_s32_f32(vmulq_f32(vcvtq_f32_s32(r2), m2)), vlo), vhi);
+              r3 = vminq_s32(vmaxq_s32(vcvtaq_s32_f32(vmulq_f32(vcvtq_f32_s32(r3), m3)), vlo), vhi);
+              const int16x8_t l = vcombine_s16(vqmovn_s32(r0), vqmovn_s32(r1));
+              const int16x8_t h = vcombine_s16(vqmovn_s32(r2), vqmovn_s32(r3));
+              vst1q_s8(dst, vcombine_s8(vqmovn_s16(l), vqmovn_s16(h)));
+            };
+            for (int px = fastLo; px < fastHi; px += 2) {
+              const int8_t *p0 = ib + yi * irs + (size_t)(px * strideW - padL) * ips;
+              const int8_t *p1 = p0 + (size_t)strideW * ips;
+              int32x4_t a0 = b0, a1 = b1, a2 = b2, a3 = b3, e0 = b0, e1 = b1, e2 = b2, e3 = b3;
+              for (int ky = 0; ky < 3; ky++)
+                for (int kx = 0; kx < 3; kx++) {
+                  const size_t off = (size_t)ky * dilH * irs + (size_t)kx * dilW * ips;
+                  const int8x16_t w = wk[ky * 3 + kx];
+                  const int8x16_t x = vld1q_s8(p0 + off), y = vld1q_s8(p1 + off);
+                  const int16x8_t pl = vmull_s8(vget_low_s8(x), vget_low_s8(w)), ph = vmull_high_s8(x, w);
+                  const int16x8_t ql = vmull_s8(vget_low_s8(y), vget_low_s8(w)), qh = vmull_high_s8(y, w);
+                  a0 = vaddw_s16(a0, vget_low_s16(pl));
+                  e0 = vaddw_s16(e0, vget_low_s16(ql));
+                  a1 = vaddw_high_s16(a1, pl);
+                  e1 = vaddw_high_s16(e1, ql);
+                  a2 = vaddw_s16(a2, vget_low_s16(ph));
+                  e2 = vaddw_s16(e2, vget_low_s16(qh));
+                  a3 = vaddw_high_s16(a3, ph);
+                  e3 = vaddw_high_s16(e3, qh);
+                }
+              store(a0, a1, a2, a3, ob + (size_t)px * ops);
+              store(e0, e1, e2, e3, ob + (size_t)(px + 1) * ops);
+            }
+          }
+          for (int ox = 0; ox < outW; ox++) {
+            if (ox == fastLo && fastHi > fastLo) {
+              ox = fastHi - 1;
+              continue;
+            }
+            const int y0 = oy * strideH - padT, x0 = ox * strideW - padL;
             int32x4_t a0 = vld1q_s32(bias + c), a1 = vld1q_s32(bias + c + 4);
             int32x4_t a2 = vld1q_s32(bias + c + 8), a3 = vld1q_s32(bias + c + 12);
             for (int ky = 0; ky < KH; ky++) {
@@ -372,9 +435,19 @@ int cw_convolution(const int8_t *input, const int8_t *kernel, const int32_t *bia
             }
             const int16x8_t l = vcombine_s16(vqmovn_s32(r[0]), vqmovn_s32(r[1]));
             const int16x8_t h = vcombine_s16(vqmovn_s32(r[2]), vqmovn_s32(r[3]));
-            vst1q_s8(out + (size_t)(c / 16) * obs + oy * ors + ox * ops, vcombine_s8(vqmovn_s16(l), vqmovn_s16(h)));
+            vst1q_s8(ob + ox * ops, vcombine_s8(vqmovn_s16(l), vqmovn_s16(h)));
           }
+        }
+    }
 #endif
+    if (dw && doneC == C)
+      continue;
+#pragma omp parallel for schedule(static)
+    for (int oy = 0; oy < outH; oy++) {
+      for (int ox = 0; ox < outW; ox++) {
+        const int y0 = oy * strideH - padT, x0 = ox * strideW - padL;
+        if (dw) {
+          int c = doneC;
           for (; c < C; c++) {
             int32_t sum = 0;
             for (int ky = 0; ky < KH; ky++) {
