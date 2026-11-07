@@ -113,6 +113,9 @@ cd ~/JO/npuprg/nestc2_clion/nest-compiler/Debug2_remote
 | `-vta-fuse-preprocess` | 입력 quantize, 채널별 상수 elemsub/elemdiv, NCHW→NHWC를 conv0 입력 복사 하나로 | §7.9 |
 | `-vta-conv0-pack` | 채널이 적은 첫 conv를 packed 입력의 ceil(KH/s)×1 conv로(Resnet18: 7×7/2 → 4×1, 48채널) | §7.12 |
 | `-vta-fuse-pool` | packed conv0 뒤의 EVTA max pool 3×3/2/1을 conv0 호출 안에서(`convolution_wo_tr_pool`) | §7.13 |
+| `-vta-pad-channels` | 채널 수가 16의 배수가 아닌 conv / add activation을 0 채널로 넓혀 그 conv들을 EVTA로(MobileNetV2 24채널) | §7.20 |
+| `-vta-round-shift` (기본 **꺼짐**) | EVTA conv의 출력 shift를 반올림(bias에 2^(shift−1)); 켜면 모든 EVTA conv 출력이 바뀐다. MobileNetV2Test만 켬 | §7.20 |
+| `-enable-channelwise-depthwise` (기본 꺼짐, quantizer) | depthwise(group > 1) conv만 채널별 scale로 양자화, vtalib `cw_convolution`(CPU)으로 | §7.20 |
 | `-index-multi-evta=<mask>` | bundle을 EVTA 하나에 고정(1, 2, 4, 8 → EVTA 0..3) | README |
 
 조건이 맞지 않는 층(채널 수, offset, scale 비, 모양)은 옵션이 켜져 있어도 이전 경로(CPU 함수나 따로 부르는 EVTA 호출)로 간다.

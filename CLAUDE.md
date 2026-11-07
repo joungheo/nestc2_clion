@@ -280,6 +280,14 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   are shared by the copies (`VTAConstBufferAlloc`; Resnet50 x 4 does not fit the 128 MB CMA otherwise; `EVTA_CONST_SHARE=0`).
   vtalib-systolic `conv_kernel` leaves bias room when the last thread's bias would lie past the physical acc (multi buffers 2048 entries).
   copy 0 dumps = single EVTA; per copy with 4 at once, stream off -> on: Resnet18 25.9 -> 24.6 ms, Resnet50 87.1 -> 86.0 ms, VGG16 8.3 ms.
+- MobileNetV2 (2026-11-07, `docs/evta_runtime_compare.md` §7.20; `vta/bundles/MobileNetV2Test`, TFLite QAT model as float ONNX,
+  `vtabundles_xcmpl/gen_mobilenetv2_bundle.sh`): depthwise filters need per-channel scales (`-enable-channelwise-depthwise` in NEST-C
+  `lib/Quantization/Quantization.cpp`; per tensor cat_285.png is 293 instead of 282), run as vtalib `cw_convolution` (NEON CPU, bit-exact
+  with the Interpreter's rounding); `VTA.cpp` `-vta-pad-channels` (default on) widens 24-channel conv / add activations to 32 with zero
+  weights so their convs run on the EVTA; `VTASave.cpp` `-vta-round-shift` (default **off**, on for MobileNetV2Test) rounds the EVTA conv
+  shift (2^(shift-1) in the bias; truncating cost 0.906 -> 0.840 confidence); conv0 pack takes TF SAME asymmetric pads (vtalib `padEnd`).
+  Single rq OMP 1 1048 -> 84.2 ms (`-t 4` 44.4 ms); left: depthwise 43 ms on the CPU, EVTA 20 ms. The NEST-C `lib/Quantization/Base/Base.cpp`
+  (int8 exponent floor -7) is only built with `NESTC_WITH_NMP`; this board uses Glow's.
 - The lab board's PL has a defective configuration row (tile row SLICE Y219, cells stuck at 0; `log/BOARD_TODO.md`
   2026-10-23/24). `vivado.tcl` on zcu102 fences the design below it by default (`VTA_BRAM_FENCE=y219|upper|none`).
   multi2 fits below it and works (2026-10-24); multi4 needs more BRAM than the rows below, so it crosses the row with

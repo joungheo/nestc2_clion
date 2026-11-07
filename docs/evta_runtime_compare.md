@@ -1118,6 +1118,67 @@ VGG16 추론은 오늘 15.5 → 7.3 ms(−53 %)다. 최소 1에서 schedule을 �
 - multi4 하드웨어: ⑧의 register slice, HP1/HP2 port 공유.
   multi-EVTA bundle에도 같은 표가 쓰인다(buffer는 vtalib이 2048 / 1024 entry로 가정).
 
+### 7.20 MobileNetV2 (2026-11-07, `vta/bundles/MobileNetV2Test`, `vtabundles_xcmpl/gen_mobilenetv2_bundle.sh`)
+
+모델은 TFLite의 QAT `mobilenet_v2_1.0_224_quant`를 float ONNX로 바꾼 것(`tfl2onnx.py`, 1001 class, cat_285.png 정답 282)이다.
+ONNX zoo의 MXNet `mobilenetv2-7`도 시험했다. power-of-two per-tensor로는 617이 나왔고 channelwise여야 281이 맞았다.
+측정은 single EVTA, systolic rq bitstream(`_systimed`, `chrt`), OMP 1, 25 × 4회의 중앙값이다.
+
+| 단계 | 추론 1회 | 분류 (확률) | 바뀐 것 |
+|---|---|---|---|
+| 처음 | 1048.0 ms | **293** (0.25) | CPU conv 1018.9 ms: depthwise 17개 603.6, 24채널 1×1 conv 4개 260.5, conv0 149.2, logits 5.5. EVTA conv 30개 13.4 ms |
+| ① depthwise per-channel + `cw_convolution` | 488.4 ms | 282 (0.906) | depthwise 603.6 → 43.2 ms |
+| ② 24채널 → 32채널 (`-vta-pad-channels`) | 234.2 ms | 282 (0.840) | 24채널 conv 4개가 EVTA로(260.5 ms → EVTA +3.8 ms) |
+| ③ EVTA shift 반올림 (`-vta-round-shift`) | 234.0 ms | 282 (0.939) | 시간은 같고 정확도만 바뀜 |
+| ④ conv0 비대칭 pad를 pack으로 | **84.2 ms** | 282 (0.944) | conv0 149.9 ms → EVTA 약 2.8 ms |
+| (④에 `-t 4`) | 44.4 ms | 282 (0.944) | depthwise 43.0 → 11.7 ms |
+
+quantized Interpreter(같은 profile, depthwise per-channel)는 282(0.935)다.
+
+**① 정확도: depthwise weight의 per-tensor scale** (`lib/Quantization/Quantization.cpp` `-enable-channelwise-depthwise`):
+- 보드와 quantized Interpreter가 똑같이 293이었다. bundle은 quantizer가 만든 그대로 돌고 있었다.
+- onnxruntime에서 Glow 규칙(symmetric, scale은 2의 거듭제곱으로 올림)으로 fake-quantize해서 원인을 갈랐다.
+  - depthwise weight만 양자화해도 293이 나왔다. pointwise만, 또는 activation만 양자화하면 282였다.
+  - depthwise weight는 BN을 접은 뒤 한 filter 안에서 채널 최대값이 0.3~56으로 퍼진다. scale이 0.5 하나이면 작은 채널은 0~2단계밖에 남지 않는다.
+  - depthwise만 채널별 scale로 두면(각 채널 scale도 2의 거듭제곱) 282(0.925)가 된다.
+- 이 옵션은 group > 1 conv만 `ChannelwiseQuantizedConvolution`으로 바꾼다. EVTA로 가는 1×1 conv는 per-tensor 그대로다.
+- VTASave `saveChannelwiseConvolutionInst`와 vtalib `cw_convolution`(CPU)이 이를 처리한다.
+  - VTASave가 compile time에 채널별 bias(acc scale)와 출력 배율 `matMulScale / outScale`을 계산한다.
+  - 반올림은 Interpreter와 같이 `std::round(float(sum) * m)`이다.
+  - depthwise 경로는 NEON으로 한 번에 16채널씩 처리한다.
+- `cw_convolution`의 시간은 C와 상관없이 16채널당 약 290 ns(A53 약 350 cycle)다. benchmark로 재현했고 g++로는 237 ns다.
+  A53의 NEON은 128-bit 연산을 반 속도로 하고 int8 dot product가 없다(ARMv8.0). 탭 9개 × 8개에 마무리까지 연산이 약 100개다.
+- 한때 "int8 지수 하한 −7"(`lib/Quantization/Base/Base.cpp`)을 의심했지만 원인이 아니다. 그 파일은 `NESTC_WITH_NMP`일 때만 빌드되고, 이 보드는
+  Glow의 `Base.cpp`를 쓴다(하한 없음; `cmake/glow/lib/Quantization/Base/CMakeLists.txt`).
+
+**② 24채널** (`VTA.cpp` `padChannelsTo16`, `-vta-pad-channels`, 기본 켜짐):
+- 채널 수가 16의 배수가 아닌 int8 activation을 16의 배수로 넓힌다. 조건은 만드는 쪽과 쓰는 쪽이 모두 group 1 conv(상수 filter, bias)이거나
+  그런 activation끼리의 Add인 것이다. MobileNetV2에서는 24채널 bottleneck이 해당된다.
+- 만드는 conv의 filter 행과 bias는 0으로, 쓰는 conv의 filter 열도 0으로 채운다. 그래서 늘어난 채널은 항상 0이고 Pad / Slice 노드가 없다.
+- 결과 확인: 옮긴 conv(expanded_conv_2 expand, 32→144)의 출력을 numpy로 다시 계산했다. 잘라내는 shift로 계산하면 451584개 중 0개가 다르고,
+  늘어난 lane은 모두 0이다.
+- 확률이 0.906 → 0.840으로 내려간 이유는 반올림이다. EVTA conv는 `acc >> shift`로 잘라내고, CPU conv와 Interpreter는 `std::round`로 반올림한다.
+  project conv 출력은 scale이 1/4, 1/2로 거칠어서 −0.5 LSB 편향이 뒤 층으로 퍼진다.
+
+**③ 반올림** (`VTASave.cpp` `convRoundHalf`, `-vta-round-shift`, 기본 꺼짐):
+- compile time에 bias에 2^(shift−1)을 더해 shift가 반올림하게 한다. 실행 비용은 없다.
+- fuse된 conv(residual, pool)는 shift가 add나 pool 뒤에 있어서 제외한다.
+- 켜면 다른 모델의 EVTA conv 출력도 모두 바뀐다. 그래서 기본은 꺼 두고 MobileNetV2Test만 켰다.
+
+**④ conv0** (`getConv0Pack`, vtalib `padEnd`):
+- TF SAME stride 2의 pad는 위·왼쪽 0, 아래·오른쪽 1이다. conv0 pack은 pad된 행을 직접 만들므로 위·왼쪽 pad만큼 offset을 두고,
+  아래·오른쪽 pad를 `padEnd`로 따로 받는다(두 vtalib).
+- 이제 113×112×32 → 32, 2×1 packed conv로 EVTA에서 돈다. schedule은 기본값(1 thread, 8×8)이다.
+
+**남은 것 (OMP 1, 84.2 ms):**
+- depthwise 43.0 ms(CPU). EVTA로 옮기는 방법은 결정이 필요하다(아래).
+- EVTA conv 35개 20.0 ms(30.7 GOPS). 작은 1×1 conv가 많아 load 비중이 크고, conv0와 새 모양들은 기본 schedule이다.
+- logits 1×1 1280→1001 5.9 ms(CPU, 1001 % 16). transpose 8.6 ms(depthwise 앞뒤 NHWC ↔ EVTA layout), elemadd 5.3 ms.
+- depthwise를 EVTA에서 돌리는 방법:
+  - ISA 변경 없이: 탭마다 대각 16×16 weight block으로 GEMM을 돌린다(GEMM 효율 1/16). 채널별 shift는 ALU SHR의 acc operand(lane별 shift 값)로 한다.
+  - ISA를 바꾸면: depthwise 모드나 ALU MAC을 넣는다. `npu_stack_survey.md`의 하드웨어 방식 조사를 참고.
+  - 어느 쪽이든 depthwise 앞뒤의 transpose가 함께 없어진다.
+
 ## 8. 하드웨어도 같이 비교해야 하나
 
 해야 한다. 다만 §7의 ①~④를 가르는 것은 어레이가 아니라 다음 네 가지다.

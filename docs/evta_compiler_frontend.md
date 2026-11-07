@@ -120,12 +120,16 @@
   - bias는 int32이고 scale = s_in · s_w다.
 - **텐서 type 계산 (`lib/Quantization/Base/Base.cpp`):**
   - `s = max(|min|, |max|) / 127`, `s ← 2^ceil(log2 s)`.
-  - NEST-C는 int8이면 지수를 −7 아래로 내리지 않는다(`aux <= -8 → -7`). 범위가 0.5보다 훨씬 작은 텐서는 int8 값 일부만 쓰게 된다.
+  - NEST-C의 `lib/Quantization/Base/Base.cpp`는 int8이면 지수를 −7 아래로 내리지 않는다(`aux <= -8 → -7`). 다만 이 파일은
+    `NESTC_WITH_NMP`일 때만 빌드된다. 이 보드(`NESTC_WITH_NMP=OFF`)는 Glow의 `Base.cpp`를 쓰므로 하한이 없다
+    (`cmake/glow/lib/Quantization/Base/CMakeLists.txt`, 2026-11-07 확인).
 - **노드 단위 예외:**
   - `-keep-original-precision-for-nodes=SoftMax`: 종류 단위로 float 유지.
   - `./VTASkipQuantizeNodes.txt`: 노드 이름 단위. `FunctionConverter`가 작업 디렉터리에서 읽는다.
   - float로 남은 노드는 Dequantize/Quantize와 CPU float 함수로 간다.
-- **channelwise:** Glow `-enable-channelwise`는 conv weight를 출력 채널별 scale로 양자화한다(`ChannelwiseQuantizedConvolution`). VTASave는 이 명령을 아직 처리하지 않는다.
+- **channelwise:** Glow `-enable-channelwise`는 conv weight를 출력 채널별 scale로 양자화한다(`ChannelwiseQuantizedConvolution`).
+  NEST-C `-enable-channelwise-depthwise`(2026-11-07)는 group > 1 conv만 그렇게 바꾼다. VTASave는 이를 vtalib `cw_convolution`(CPU)으로 내보낸다.
+  MobileNetV2 depthwise처럼 채널마다 weight 범위가 크게 다를 때 필요하다(`evta_runtime_compare.md` §7.20).
 - **측정된 한계 (MobileNetV2, 2026-11-06):**
   - power-of-two per-tensor로는 depthwise weight(BatchNorm이 접힌, 채널마다 범위가 다른 3×3)에서 무너진다. 고양이 사진이 282 대신 293(cheetah)으로 나온다.
   - depthwise weight만 per-channel이면 cat/dog/zebra가 모두 맞는다.
