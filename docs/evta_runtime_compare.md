@@ -1132,6 +1132,10 @@ ONNX zoo의 MXNet `mobilenetv2-7`도 시험했다. power-of-two per-tensor로는
 | ③ EVTA shift 반올림 (`-vta-round-shift`) | 234.0 ms | 282 (0.939) | 시간은 같고 정확도만 바뀜 |
 | ④ conv0 비대칭 pad를 pack으로 | **84.2 ms** | 282 (0.944) | conv0 149.9 ms → EVTA 약 2.8 ms |
 | (④에 `-t 4`) | 44.4 ms | 282 (0.944) | depthwise 43.0 → 11.7 ms |
+| ⑤ depthwise가 EVTA layout을 직접 읽고 씀 + kernel 개선 | 55.5 ms | 282 (0.944) | transpose 34개(8.6 ms) 없어짐, depthwise 43.0 → 22.8 ms |
+| ⑥ logits를 EVTA fc로 | 49.8 ms | 282 (0.944) | 5.9 → 0.29 ms |
+| ⑦ EVTA conv schedule | **43.2 ms** | 282 (0.944) | EVTA conv 20.0 → 13.4 ms(45.8 GOPS) |
+| (⑦에 `-t 4`) | **22.5 ms** | 282 (0.944) | depthwise 6.0 ms |
 
 quantized Interpreter(같은 profile, depthwise per-channel)는 282(0.935)다.
 
@@ -1170,12 +1174,31 @@ quantized Interpreter(같은 profile, depthwise per-channel)는 282(0.935)다.
   아래·오른쪽 pad를 `padEnd`로 따로 받는다(두 vtalib).
 - 이제 113×112×32 → 32, 2×1 packed conv로 EVTA에서 돈다. schedule은 기본값(1 thread, 8×8)이다.
 
-**남은 것 (OMP 1, 84.2 ms):**
+**⑤ depthwise 앞뒤 transpose (2026-11-08):**
+- `findPackedActivations`가 depthwise conv(C % 16 = 0)의 입력과 출력을 EVTA layout N{C/16}HW16으로 둘 수 있게 했다. 입력과 출력은 따로 정해지고,
+  `cw_convolution`이 두 layout을 모두 받는다(`inPacked`, `outPacked`). CPU가 쓴 packed 출력은 EVTA용으로 flush한다.
+  transpose 34개가 모두 없어졌다.
+- 처음에는 depthwise가 43.0 → 50.3 ms로 오히려 느려졌다. pixel마다 16채널 block의 평면을 건너다녔기 때문이다.
+  - 16채널 block을 바깥 루프로 옮겨 한 평면을 순서대로 읽게 했다.
+  - 3×3이고 행이 모두 안쪽일 때는 weight 9개를 register에 두고 안쪽 열을 두 pixel씩 처리한다(누산기 8개가 독립).
+  - 보드 benchmark에서 스칼라 식과 bit-exact(NHWC와 packed, stride 1 / 2, pad 0 / 1, 7×7 ~ 112×112)이고, packed 56×56×144가 280 → 136 ns / 16채널이다.
+- EVTA conv dump 35개가 바꾸기 전과 같다.
+
+**⑥ logits (`VTASave.cpp` `saveEvtaConvAsFc`, `-vta-evta-fc`):** 1×1 입력 위의 1×1 conv(활성 없음, pad 0)를 EVTA fc(`fullyconnected_evta_packed`)로
+보낸다. fc 저장 함수의 본체를 `saveEvtaFcPacked`로 나눠 conv filter 순서 `[OUT][1][1][IN]`도 받게 했다. `EVTA_RES_CHECK=1`로는 1001개 중 0개가 다르다.
+
+**⑦ schedule (`include/Backends/VTA/VTASchedules.h`):**
+- 모양 20개(packed conv0 포함)의 schedule을 §7.19 ②와 같은 방법으로 찾았다. 후보를 `EVTA_SCHED`로 바꿔 끼우고, conv별 시간은 `_systimed`로 쟀다.
+- 출력 채널 block 수가 홀수인 모양(16, 144채널)은 virtual thread 2가 **실행되지 않는다**(시간 0.01 ms). 그 둘은 virtual thread 1의 큰 tile을 쓴다.
+- 기본 schedule과 비교한 dump 35개가 같다. 가장 크게 준 것: conv0 2.76 → 1.55 ms, 56×56 1×1 project 0.75~1.06 → 0.29~0.42 ms.
+
+**남은 것 (OMP 1, 43.2 ms; 당시 84.2 ms에서 정리한 목록에 결과를 붙임):**
 - `-vta-round-shift`의 기본값(2026-11-07 결정): 지금은 꺼 두고 MobileNetV2Test에서만 켠다. 나중에 켜고 Resnet18/50, VGG16의 정확도와 시간을 본 뒤 기본으로 켤지 정한다.
 - depthwise를 EVTA로 옮기는 일은 당분간 보류한다(2026-11-07).
 - depthwise 43.0 ms(CPU). EVTA로 옮기는 방법은 결정이 필요하다(아래).
-- EVTA conv 35개 20.0 ms(30.7 GOPS). 작은 1×1 conv가 많아 load 비중이 크고, conv0와 새 모양들은 기본 schedule이다.
-- logits 1×1 1280→1001 5.9 ms(CPU, 1001 % 16). transpose 8.6 ms(depthwise 앞뒤 NHWC ↔ EVTA layout), elemadd 5.3 ms.
+- EVTA conv 35개 20.0 ms → ⑦에서 13.4 ms.
+- logits 5.9 ms → ⑥에서 0.29 ms. transpose 8.6 ms → ⑤에서 0. elemadd 5.3 ms(CPU, residual add 10개; conv에 relu가 없어 residual fusion이 안 됨)는 남음.
+- depthwise 22.8 ms(CPU, ⑤ 다음).
 - depthwise를 EVTA에서 돌리는 방법:
   - ISA 변경 없이: 탭마다 대각 16×16 weight block으로 GEMM을 돌린다(GEMM 효율 1/16). 채널별 shift는 ALU SHR의 acc operand(lane별 shift 값)로 한다.
   - ISA를 바꾸면: depthwise 모드나 ALU MAC을 넣는다. `npu_stack_survey.md`의 하드웨어 방식 조사를 참고.

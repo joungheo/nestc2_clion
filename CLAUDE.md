@@ -286,7 +286,10 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   with the Interpreter's rounding); `VTA.cpp` `-vta-pad-channels` (default on) widens 24-channel conv / add activations to 32 with zero
   weights so their convs run on the EVTA; `VTASave.cpp` `-vta-round-shift` (default **off**, on for MobileNetV2Test) rounds the EVTA conv
   shift (2^(shift-1) in the bias; truncating cost 0.906 -> 0.840 confidence); conv0 pack takes TF SAME asymmetric pads (vtalib `padEnd`).
-  Single rq OMP 1 1048 -> 84.2 ms (`-t 4` 44.4 ms); left: depthwise 43 ms on the CPU, EVTA 20 ms. The NEST-C `lib/Quantization/Base/Base.cpp`
+  Single rq OMP 1 1048 -> 84.2 ms (`-t 4` 44.4 ms). 2026-11-08: depthwise reads / writes the EVTA layout (`findPackedActivations`,
+  `cw_convolution` inPacked / outPacked; no transposes), a 1x1 conv over a 1x1 input as the EVTA fc (`saveEvtaConvAsFc`, logits),
+  MobileNetV2 schedules in `VTASchedules.h` (vt 2 does not run with an odd number of output channel blocks): 43.2 ms (`-t 4` 22.5 ms);
+  left: depthwise 22.8 ms on the CPU, EVTA 13.4 ms, elemadd 5.3 ms. The NEST-C `lib/Quantization/Base/Base.cpp`
   (int8 exponent floor -7) is only built with `NESTC_WITH_NMP`; this board uses Glow's.
 - The lab board's PL has a defective configuration row (tile row SLICE Y219, cells stuck at 0; `log/BOARD_TODO.md`
   2026-10-23/24). `vivado.tcl` on zcu102 fences the design below it by default (`VTA_BRAM_FENCE=y219|upper|none`).
