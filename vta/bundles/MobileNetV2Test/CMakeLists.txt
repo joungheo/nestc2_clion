@@ -49,6 +49,8 @@ add_custom_command(
         -model-input=input,float,[1,3,224,224]
         -load-profile=${CMAKE_CURRENT_BINARY_DIR}/mobilenetv2_calib.yaml
         -quantization-schema=symmetric_with_power2_scale
+        #### JO added (2026-11-07): per-channel scales for the depthwise convs (one per tensor: 293 instead of 282)
+        -enable-channelwise-depthwise
         DEPENDS
         model-compiler VTA ${CMAKE_CURRENT_BINARY_DIR}/mobilenetv2_calib.yaml
 )

@@ -133,6 +133,15 @@ bool VTA::isOpSupported(const NodeInfo &NI) const {
     return NI.allInputsAndOutputsHaveSameElemKind(
         {ElemKind::FloatTy, ElemKind::Int8QTy});
 
+  //#### JO added (2026-11-07): int8 with per-channel filter scales (the depthwise convs with -enable-channelwise-depthwise;
+  //#### VTASave saveChannelwiseConvolutionInst, vtalib cw_convolution on the CPU)
+  case Kinded::Kind::ChannelwiseQuantizedConvolutionNodeKind:
+    return NI.getInElemTy(ChannelwiseQuantizedConvolutionNode::InputIdx) == ElemKind::Int8QTy &&
+           NI.getInElemTy(ChannelwiseQuantizedConvolutionNode::FilterIdx) == ElemKind::Int8QTy &&
+           NI.getOutElemTy(ChannelwiseQuantizedConvolutionNode::ResultIdx) == ElemKind::Int8QTy &&
+           (NI.getInElemTy(ChannelwiseQuantizedConvolutionNode::BiasIdx) == ElemKind::Int32QTy ||
+            NI.getInElemTy(ChannelwiseQuantizedConvolutionNode::BiasIdx) == ElemKind::FloatTy);
+
   case Kinded::Kind::ConvolutionNodeKind:
   case Kinded::Kind::VTAConvolutionNodeKind:
     if (!NI.getInTy(ConvolutionNode::InputIdx)->isQuantizedType()) {
@@ -271,9 +280,13 @@ bool VTA::verify(const Function &F, bool verbose) const {
       return false;
     }
     //#### JO changed (2026-11-06): + CLIP (ReLU6)
+    //#### JO changed (2026-11-07): + the channelwise quantized conv with RELU / CLIP
     if (!(N.getKind() == Kinded::Kind::ConvolutionNodeKind &&
           (llvm::cast<ConvolutionNode>(&N)->getFusedActivation() == FusedActivation::RELU ||
            llvm::cast<ConvolutionNode>(&N)->getFusedActivation() == FusedActivation::CLIP)) &&
+        !(N.getKind() == Kinded::Kind::ChannelwiseQuantizedConvolutionNodeKind &&
+          (llvm::cast<ChannelwiseQuantizedConvolutionNode>(&N)->getFusedActivation() == FusedActivation::RELU ||
+           llvm::cast<ChannelwiseQuantizedConvolutionNode>(&N)->getFusedActivation() == FusedActivation::CLIP)) &&
         !(N.getKind() == Kinded::Kind::VTAConvolutionNodeKind &&
           llvm::cast<VTAConvolutionNode>(&N)->getFusedActivation() ==
               FusedActivation::RELU) &&
@@ -332,9 +345,13 @@ bool VTA::verify(const IRFunction &IR) const {
   for (const auto &I : IR.getInstrs()) {
     // Only support convolution+relu fusions for now.
     //#### JO changed (2026-11-06): + CLIP (ReLU6)
+    //#### JO changed (2026-11-07): + the channelwise quantized conv with RELU / CLIP
     if (!(I.getKind() == Kinded::Kind::ConvolutionInstKind &&
           (llvm::cast<ConvolutionInst>(&I)->getFusedActivation() == FusedActivation::RELU ||
            llvm::cast<ConvolutionInst>(&I)->getFusedActivation() == FusedActivation::CLIP)) &&
+        !(I.getKind() == Kinded::Kind::ChannelwiseQuantizedConvolutionInstKind &&
+          (llvm::cast<ChannelwiseQuantizedConvolutionInst>(&I)->getFusedActivation() == FusedActivation::RELU ||
+           llvm::cast<ChannelwiseQuantizedConvolutionInst>(&I)->getFusedActivation() == FusedActivation::CLIP)) &&
         !(I.getKind() == Kinded::Kind::VTAConvolutionInstKind &&
           llvm::cast<VTAConvolutionInst>(&I)->getFusedActivation() ==
               FusedActivation::RELU) &&

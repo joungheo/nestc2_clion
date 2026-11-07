@@ -718,6 +718,117 @@ void saveNonVTAConvolutionInst(
   bundle->append(" );\n");
 }
 
+//#### JO added (2026-11-07): the channelwise quantized conv (the depthwise convs with -enable-channelwise-depthwise) on the
+//#### CPU, vtalib cw_convolution, bit-exact with Glow's Interpreter (fwdChannelwiseQuantizedConv2DInstImpl): per output
+//#### channel d the bias in the accumulator scale, B[d] = round(float(bias[d]) * (biasScale[d] / matMulScale[d])), and the
+//#### output multiplier M[d] = matMulScale[d] / outScale (matMulScale[d] = inScale * filterScale[d]), all computed here;
+//#### out = clip(round(float(sum + B[d]) * M[d]), lo, hi) with the fused RELU / CLIP as lo / hi. A depthwise filter
+//#### (group = C = KN) is written as [KH][KW][C] (16 channels per NEON vector), any other as Glow's [KN][KH][KW][C/group].
+//#### Offsets must be 0 (symmetric schemas).
+static void saveChannelwiseConvolutionInst(const glow::ChannelwiseQuantizedConvolutionInst *Inst, std::string *bundle,
+                                           VTASaveContext *ctx) {
+  auto src = Inst->getSrc();
+  auto dest = Inst->getDest();
+  auto filter = Inst->getFilter();
+  auto bias = Inst->getBias();
+  auto sd = src->dims(), fd = filter->dims(), dd = dest->dims();
+  const int N = sd[0], H = sd[1], W = sd[2], C = sd[3], KN = fd[0], KH = fd[1], KW = fd[2], CG = fd[3];
+  const int group = Inst->getGroup();
+  auto P = Inst->getPads();
+  auto S = Inst->getStrides();
+  auto D = Inst->getDilation();
+
+  auto payload = [&](Value *v) -> const Tensor * {
+    auto vMap = ctx->getVariableMap();
+    for (auto it = vMap->begin(); it != vMap->end(); it++)
+      if (it->second == v && it->first->getKind() == glow::Kinded::Kind::ConstantKind)
+        return &(llvm::cast<Constant>(it->first)->getPayload());
+    return nullptr;
+  };
+  const Tensor *tF = payload(filter), *tB = payload(bias), *tFS = payload(Inst->getFilterScales()),
+               *tFO = payload(Inst->getFilterOffsets()), *tBS = payload(Inst->getBiasScales()),
+               *tBO = payload(Inst->getBiasOffsets());
+  if (!tF || !tB || !tFS || !tFO || !tBS || !tBO || bias->getElementType() != ElemKind::Int32QTy ||
+      src->getType()->getOffset() || dest->getType()->getOffset() || (int)dd[3] != KN || C != CG * group) {
+    llvm::errs() << "ChannelwiseQuantizedConvolution " << Inst->getName()
+                 << ": needs constant int8 filter, int32 bias, scales and offsets, offsets 0\n";
+    std::exit(1);
+  }
+  auto hF = tF->getHandle<int8_t>();
+  auto hB = tB->getHandle<int32_t>();
+  auto hFS = tFS->getHandle<float>(), hBS = tBS->getHandle<float>();
+  auto hFO = tFO->getHandle<int32_t>(), hBO = tBO->getHandle<int32_t>();
+  const float inScale = src->getType()->getScale(), outScale = dest->getType()->getScale();
+  std::vector<int32_t> b(KN);
+  std::vector<float> m(KN);
+  for (int d = 0; d < KN; d++) {
+    if (hFO.raw(d) || hBO.raw(d)) {
+      llvm::errs() << "ChannelwiseQuantizedConvolution " << Inst->getName() << ": filter / bias offset not 0\n";
+      std::exit(1);
+    }
+    const float matMulScale = inScale * hFS.raw(d);
+    b[d] = std::round(float(hB.raw(d)) * (hBS.raw(d) / matMulScale));
+    m[d] = matMulScale / outScale;
+  }
+  const bool dw = group == C && KN == C && CG == 1;
+  std::vector<int8_t> w(hF.size());
+  for (int d = 0; d < KN; d++)
+    for (int y = 0; y < KH; y++)
+      for (int x = 0; x < KW; x++)
+        for (int c = 0; c < CG; c++) {
+          size_t from = (((size_t)d * KH + y) * KW + x) * CG + c;
+          w[dw ? ((size_t)y * KW + x) * C + d : from] = hF.raw(from);
+        }
+
+  // the fused activation as the clip of the int8 output
+  int lo = -128, hi = 127;
+  auto act = Inst->getFusedActivation();
+  auto args = Inst->getFusedActivationArgs();
+  if (act == RELU) {
+    lo = 0;
+  } else if (act == CLIP && args.size() == 2) {
+    lo = std::max<long>(-128, std::lround(args[0] / outScale));
+    hi = std::min<long>(127, std::lround(args[1] / outScale));
+  } else if (act != NONE) {
+    llvm::errs() << "ChannelwiseQuantizedConvolution " << Inst->getName() << ": fused activation not supported\n";
+    std::exit(1);
+  }
+
+  auto fos = ctx->getWeightFileStream();
+  fos->write((const char *)w.data(), w.size());
+  auto filterSte = addConstantSymbolEntrySized(filter, w.size(), ctx);
+  fos->write((const char *)b.data(), b.size() * 4);
+  auto biasSte = addConstantSymbolEntrySized(bias, b.size() * 4, ctx);
+  fos->write((const char *)m.data(), m.size() * 4);
+  auto multSte = addConstantSymbolEntryNamed(std::string(Inst->getName()) + "_mult", m.size() * 4, ctx);
+
+  auto srcWeight = static_cast<WeightVar *>(src);
+  auto destWeight = static_cast<WeightVar *>(dest);
+  bool srcMut = srcWeight->getMutability() == glow::WeightVar::MutabilityKind::Mutable;
+  bool destMut = destWeight->getMutability() == glow::WeightVar::MutabilityKind::Mutable;
+  if (srcMut)
+    addSymbolEntryGenBundle(srcWeight, bundle, ctx);
+  if (destMut)
+    addSymbolEntryGenBundle(destWeight, bundle, ctx);
+
+  bundle->append("  cw_convolution(");
+  bundle->append(srcMut ? addSymbolEntry(srcWeight, ctx).name : src->getName().data());
+  bundle->append(", (int8_t *)VTABufferGetVirtAddr(");
+  bundle->append(filterSte.name);
+  bundle->append("), (int32_t *)VTABufferGetVirtAddr(");
+  bundle->append(biasSte.name);
+  bundle->append("), (float *)VTABufferGetVirtAddr(");
+  bundle->append(multSte.name);
+  bundle->append("), ");
+  bundle->append(destMut ? addSymbolEntry(destWeight, ctx).name : dest->getName().data());
+  for (int v : {N, H, W, C, KN, KH, KW, (int)P[0], (int)P[1], (int)S[0], (int)S[1], (int)D[0], (int)D[1], group,
+                (int)dd[1], (int)dd[2], lo, hi}) {
+    bundle->append(", ");
+    bundle->append(std::to_string(v));
+  }
+  bundle->append(");\n");
+}
+
 void saveBNNNonVTAConvolutionInst(const glow::BNNConvolutionInst *Inst,
                                   std::string *bundle,
                                   std::string *initConst,
@@ -6026,6 +6137,11 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
     case Kinded::Kind::BNNConvolutionInstKind: {
       auto I2 = llvm::cast<BNNConvolutionInst>(&I);
       saveBNNConvolutionInst(I2, &bundle, &initConst, &ctx, BNNWithScale);
+      break;
+    }
+    //#### JO added (2026-11-07): -enable-channelwise-depthwise (vtalib cw_convolution on the CPU)
+    case Kinded::Kind::ChannelwiseQuantizedConvolutionInstKind: {
+      saveChannelwiseConvolutionInst(llvm::cast<ChannelwiseQuantizedConvolutionInst>(&I), &bundle, &ctx);
       break;
     }
     case Kinded::Kind::VTAConvolutionInstKind: {

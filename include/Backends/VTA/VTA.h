@@ -103,7 +103,9 @@ public:
     //#### JO changed (2026-11-06): + Clip(0, max) (ReLU6 of MobileNetV2): a relu with an upper clip (VTASave: VTASetActivationClip)
     // bool V = parent->getKind() == Kinded::Kind::ConvolutionNodeKind &&
     //          activation->getKind() == Kinded::Kind::ReluNodeKind;
-    bool V = parent->getKind() == Kinded::Kind::ConvolutionNodeKind &&
+    //#### JO changed (2026-11-07): + the channelwise quantized conv (depthwise, -enable-channelwise-depthwise; VTASave: CPU)
+    bool V = (parent->getKind() == Kinded::Kind::ConvolutionNodeKind ||
+              parent->getKind() == Kinded::Kind::ChannelwiseQuantizedConvolutionNodeKind) &&
              (activation->getKind() == Kinded::Kind::ReluNodeKind ||
               (activation->getKind() == Kinded::Kind::ClipNodeKind &&
                llvm::cast<ClipNode>(activation)->getMin() == 0.0f &&
