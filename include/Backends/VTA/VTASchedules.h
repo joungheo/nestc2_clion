@@ -118,3 +118,27 @@ convTune.ConvolutionTune_.push_back({1, 8, 8, 256, 256, 3, 3, 256, 1, 1, 2, 8, 8
 convTune.ConvolutionTune_.push_back({1, 4, 4, 256, 512, 3, 3, 256, 1, 1, 2, 4, 4});
 convTune.ConvolutionTune_.push_back({1, 4, 4, 512, 512, 3, 3, 512, 1, 1, 2, 4, 4});
 convTune.ConvolutionTune_.push_back({1, 2, 2, 512, 512, 3, 3, 512, 1, 1, 2, 2, 2});
+//#### JO added (2026-11-07): MobileNetV2 (TFLite QAT) shapes, found as the Resnet50 ones above (EVTA_SCHED candidates, per-conv
+//#### time of _systimed; nVirtualThread 2 only with an even number of output channel blocks, an odd one does not run);
+//#### layer dumps byte-identical to the default schedule; EVTA convs 20.0 -> 13.4 ms (docs/evta_runtime_compare.md 7.20).
+//#### The first is conv0 over its packed input (3x3 / 2 as 2 x 1 / 1 over 113 x 112 x 32; input tile 17 x 28 x 2 = 952).
+convTune.ConvolutionTune_.push_back({1, 113, 112, 32, 32, 2, 1, 32, 1, 0, 2, 16, 28});
+convTune.ConvolutionTune_.push_back({1, 112, 112, 32, 16, 1, 1, 32, 1, 0, 1, 16, 56});
+convTune.ConvolutionTune_.push_back({1, 112, 112, 16, 96, 1, 1, 16, 1, 0, 2, 16, 28});
+convTune.ConvolutionTune_.push_back({1, 56, 56, 96, 32, 1, 1, 96, 1, 0, 2, 8, 56});
+convTune.ConvolutionTune_.push_back({1, 56, 56, 32, 144, 1, 1, 32, 1, 0, 1, 8, 56});
+convTune.ConvolutionTune_.push_back({1, 56, 56, 144, 32, 1, 1, 144, 1, 0, 2, 8, 56});
+convTune.ConvolutionTune_.push_back({1, 28, 28, 144, 32, 1, 1, 144, 1, 0, 2, 14, 28});
+convTune.ConvolutionTune_.push_back({1, 28, 28, 32, 192, 1, 1, 32, 1, 0, 2, 7, 28});
+convTune.ConvolutionTune_.push_back({1, 28, 28, 192, 32, 1, 1, 192, 1, 0, 2, 14, 28});
+convTune.ConvolutionTune_.push_back({1, 14, 14, 192, 64, 1, 1, 192, 1, 0, 2, 14, 14});
+convTune.ConvolutionTune_.push_back({1, 14, 14, 64, 384, 1, 1, 64, 1, 0, 2, 14, 14});
+convTune.ConvolutionTune_.push_back({1, 14, 14, 384, 64, 1, 1, 384, 1, 0, 2, 14, 14});
+convTune.ConvolutionTune_.push_back({1, 14, 14, 384, 96, 1, 1, 384, 1, 0, 2, 14, 14});
+convTune.ConvolutionTune_.push_back({1, 14, 14, 96, 576, 1, 1, 96, 1, 0, 2, 7, 14});
+convTune.ConvolutionTune_.push_back({1, 14, 14, 576, 96, 1, 1, 576, 1, 0, 2, 14, 14});
+convTune.ConvolutionTune_.push_back({1, 7, 7, 576, 160, 1, 1, 576, 1, 0, 2, 7, 7});
+convTune.ConvolutionTune_.push_back({1, 7, 7, 160, 960, 1, 1, 160, 1, 0, 2, 7, 7});
+convTune.ConvolutionTune_.push_back({1, 7, 7, 960, 160, 1, 1, 960, 1, 0, 2, 7, 7});
+convTune.ConvolutionTune_.push_back({1, 7, 7, 960, 320, 1, 1, 960, 1, 0, 2, 7, 7});
+convTune.ConvolutionTune_.push_back({1, 7, 7, 320, 1280, 1, 1, 320, 1, 0, 2, 7, 7});
