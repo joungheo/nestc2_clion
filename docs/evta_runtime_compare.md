@@ -1194,7 +1194,7 @@ quantized Interpreter(같은 profile, depthwise per-channel)는 282(0.935)다.
 
 **남은 것 (OMP 1, 43.2 ms; 당시 84.2 ms에서 정리한 목록에 결과를 붙임):**
 - `-vta-round-shift`의 기본값(2026-11-07 결정): 지금은 꺼 두고 MobileNetV2Test에서만 켠다. 나중에 켜고 Resnet18/50, VGG16의 정확도와 시간을 본 뒤 기본으로 켤지 정한다.
-- depthwise를 EVTA로 옮기는 일은 당분간 보류한다(2026-11-07).
+- depthwise를 EVTA로 옮기는 일은 당분간 보류한다(2026-11-07). → 2026-11-08 옮김(§7.21).
 - depthwise 43.0 ms(CPU). EVTA로 옮기는 방법은 결정이 필요하다(아래).
 - EVTA conv 35개 20.0 ms → ⑦에서 13.4 ms.
 - logits 5.9 ms → ⑥에서 0.29 ms. transpose 8.6 ms → ⑤에서 0. elemadd 5.3 ms(CPU, residual add 10개; conv에 relu가 없어 residual fusion이 안 됨)는 남음.
@@ -1203,6 +1203,37 @@ quantized Interpreter(같은 profile, depthwise per-channel)는 282(0.935)다.
   - ISA 변경 없이: 탭마다 대각 16×16 weight block으로 GEMM을 돌린다(GEMM 효율 1/16). 채널별 shift는 ALU SHR의 acc operand(lane별 shift 값)로 한다.
   - ISA를 바꾸면: depthwise 모드나 ALU MAC을 넣는다. `npu_stack_survey.md`의 하드웨어 방식 조사를 참고.
   - 어느 쪽이든 depthwise 앞뒤의 transpose가 함께 없어진다.
+
+### 7.21 depthwise conv를 EVTA로 (2026-11-08, `-vta-evta-depthwise`, 기본 꺼짐, MobileNetV2Test만 켬)
+
+**방법 (ISA·bitstream 변경 없음):**
+- EVTA layout N{C/16}HW16에서 16채널 block 하나는 H×W×16 평면이다. 그래서 depthwise는 block마다 16 → 16 conv이고,
+  weight는 tap마다 대각 행렬 diag(w[c][ky][kx])다(wgt entry 1개, block당 KH×KW개; VTASave가 컴파일 때 씀).
+- vtalib-systolic `conv_kernel`에 depthwise 모드(`ConvDw`)를 넣었다. 입력 block 루프 대신 출력 block마다 자기 입력 block의 타일을
+  thread의 inp 절반에 LOAD하고(`gemmop_mxn` `in_kernel_factor_`), tap 9개를 GEMM이 acc에 누적한다. 타일링, replay, dump는 일반 conv와 같다.
+- 채널별 scale(모두 2의 거듭제곱, shift 1–10)은 채널별 shift다. shift(int32, block당 acc entry 1개)를 bias entry 뒤에 LOAD하고
+  ALU SHR을 vector operand로 한다(dst = 타일, src = block의 shift entry; II = 2). relu6 clip은 그 SHR의 requantize(rq shift 0)나 ALU MAX/MIN.
+- 반올림은 round half up(bias에 2^(shift−1)). `cw_convolution`(std::round)과는 음수 .5에서만 다르다.
+- 조건: 입력·출력이 EVTA layout, N = 1, pad 위 = 왼쪽(아래·오른쪽은 출력 크기로 정해짐; TF SAME stride 2 됨), dilation 1, 모든 M[d]가 2^−k. 아니면 `cw_convolution`.
+- vta/vtalib(HLS GEMM)에는 depthwise 모드가 없어서, 같은 이름의 함수가 같은 산술을 CPU로 한다(link 호환).
+- schedule: `VTASchedules.h`에 filterN 0으로 넣고, `EVTA_SCHED`도 KN 0으로 받는다. 블록 수가 홀수면 virtual thread 1.
+
+**확인:** `EVTA_RES_CHECK=1`이 같은 산술의 CPU 루프와 비교한다. depthwise 17개 모두 0개 다름, cat_285.png는 282(0.944157)로 그대로다.
+schedule을 바꾼 뒤에도 dump가 기본 schedule과 같다.
+
+**시간 (single rq, `_systimed`):**
+
+| | OMP 1 | OMP 4 |
+|---|---|---|
+| CPU depthwise(§7.20 ⑦) | 43.2 ms (depthwise 22.8) | 22.5 ms |
+| EVTA depthwise, 기본 schedule 1 / 8×8 | 39.8 ms (depthwise 19.6) | |
+| EVTA depthwise, schedule 탐색 후 | **28.6 ms** (depthwise 8.4) | 24.7 ms |
+
+- OMP 1에서 34% 줄었다. 남은 시간: EVTA conv 13.3, depthwise 8.4(EVTA), elemadd 5.3, avgpool 0.6 ms.
+- OMP 4에서는 4코어 NEON depthwise(약 6 ms)보다 느리다. 4코어를 쓰는 경우에는 `-vta-evta-depthwise=0`이 낫다.
+- depthwise의 EVTA 효율은 약 2.4 GOPS다. GEMM만 보면(1/16 활용) 14.4만 pixel-block × 9 cycle ≈ 3.2 ms인데,
+  block마다 행 하나가 112–896 B인 작은 DMA(입력 행, 출력 행, bias, shift)가 많아서다. 7×7×960은 block 60개 × 7행씩이다.
+  - 줄일 수 있는 것: 여러 block의 입력을 한 2D LOAD로(평면이 연속이라 pad만 해결하면 됨), 출력 store도 같이; 7×7 layer는 타일 = 이미지.
 
 ## 8. 하드웨어도 같이 비교해야 하나
 
