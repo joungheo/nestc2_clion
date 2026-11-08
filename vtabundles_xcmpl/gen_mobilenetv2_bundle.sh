@@ -8,7 +8,8 @@
 #### 2026-11-07: -enable-channelwise-depthwise (per-channel power-of-two scales for the depthwise filters; with one scale per
 #### tensor cat_285.png is 293 instead of 282), the depthwise convs as vtalib cw_convolution (NEON) on the CPU.
 #### -vta-round-shift: the EVTA convs round their output shift as the CPU convs (truncated: confidence 0.84 instead of 0.91).
-#### 2026-11-08: -vta-evta-depthwise: the depthwise convs on the EVTA (dw_convolution_evta; -vta-evta-depthwise=0: cw_convolution).
+#### 2026-11-08: -vta-evta-depthwise: the depthwise convs on the EVTA (dw_convolution_evta; -vta-evta-depthwise=0: cw_convolution);
+#### the default since 2026-11-08, kept here (and in the CMakeLists.txt) so the command says it.
 #### usage (on the board): vtabundles_xcmpl/gen_mobilenetv2_bundle.sh [model-compiler options, e.g. -vta-conv0-pack=0]
 set -u
 B=$(cd "$(dirname "$0")/../Debug2_remote" && pwd)

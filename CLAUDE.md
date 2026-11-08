@@ -290,7 +290,7 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   `cw_convolution` inPacked / outPacked; no transposes), a 1x1 conv over a 1x1 input as the EVTA fc (`saveEvtaConvAsFc`, logits),
   MobileNetV2 schedules in `VTASchedules.h` (vt 2 does not run with an odd number of output channel blocks): 43.2 ms (`-t 4` 22.5 ms);
   left: depthwise 22.8 ms on the CPU, EVTA 13.4 ms, elemadd 5.3 ms.
-  Depthwise on the EVTA (2026-11-08, §7.21, `VTASave.cpp` `-vta-evta-depthwise`, default off, on for MobileNetV2Test; vtalib-systolic
+  Depthwise on the EVTA (2026-11-08, §7.21, `VTASave.cpp` `-vta-evta-depthwise`, default on (it only touches channelwise depthwise convs); vtalib-systolic
   `dw_convolution_evta`, `conv_kernel` `ConvDw`): diagonal 16 x 16 weights per tap, one input tile per block, per-channel shift by an ALU SHR
   with a vector operand, round half up; vta/vtalib does the same arithmetic on the CPU. `EVTA_RES_CHECK=1` 0 differ, 282 (0.944157);
   schedules under filterN 0 in `VTASchedules.h` (`EVTA_SCHED` key KN 0): OMP 1 43.2 -> 28.6 ms, but `-t 4` 22.5 -> 24.7 ms (small DMAs). The generated bundle `.cpp` starts with the values of the code-changing options (`-vta-*`, `-enable-channelwise[-depthwise]`, defaults

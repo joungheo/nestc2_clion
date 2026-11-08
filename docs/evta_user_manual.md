@@ -127,7 +127,7 @@ bundle을 어떤 옵션으로 만들었는지는 그것으로 확인한다. 예:
 | `-vta-fuse-pool` | packed conv0 뒤의 EVTA max pool 3×3/2/1을 conv0 호출 안에서(`convolution_wo_tr_pool`) | §7.13 |
 | `-vta-pad-channels` | 채널 수가 16의 배수가 아닌 conv / add activation을 0 채널로 넓혀 그 conv들을 EVTA로(MobileNetV2 24채널) | §7.20 |
 | `-vta-round-shift` (기본 **꺼짐**) | EVTA conv의 출력 shift를 반올림(bias에 2^(shift−1)); 켜면 모든 EVTA conv 출력이 바뀐다. MobileNetV2Test만 켬 | §7.20 |
-| `-vta-evta-depthwise` (기본 **꺼짐**) | depthwise channelwise conv(EVTA layout, 2의 거듭제곱 scale)를 EVTA에서(`dw_convolution_evta`, 대각 weight, 채널별 shift, round half up). MobileNetV2Test만 켬. HLS용 vta/vtalib에서는 같은 산술을 CPU로 | §7.21 |
+| `-vta-evta-depthwise` | depthwise channelwise conv(EVTA layout, 2의 거듭제곱 scale)를 EVTA에서(`dw_convolution_evta`, 대각 weight, 채널별 shift, round half up). 채널별 scale depthwise(`-enable-channelwise-depthwise`)에만 걸리므로 2026-11-08부터 기본 켜짐; 4코어 CPU 쪽이 조금 빠를 때는 `=0`. HLS용 vta/vtalib에서는 같은 산술을 CPU로 | §7.21 |
 | `-enable-channelwise-depthwise` (기본 꺼짐, quantizer) | depthwise(group > 1) conv만 채널별 scale로 양자화, vtalib `cw_convolution`(CPU)으로 | §7.20 |
 | `-index-multi-evta=<mask>` | bundle을 EVTA 하나에 고정(1, 2, 4, 8 → EVTA 0..3) | README |
 

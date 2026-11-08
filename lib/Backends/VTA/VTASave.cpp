@@ -97,12 +97,14 @@ static llvm::cl::opt<bool> vtaFusePool(
 
 //#### JO added (2026-11-08): a depthwise channelwise conv whose input and output are kept in the EVTA layout on the EVTA
 //#### (vtalib dw_convolution_evta: diagonal weights per tap, per-channel power-of-two scales as a per-channel shift, the
-//#### shift rounding half up; saveEvtaDepthwise) instead of vtalib cw_convolution on the CPU. Off by default (on for
-//#### MobileNetV2Test): it rounds half up where cw_convolution rounds as std::round (negative halves differ)
+//#### shift rounding half up; saveEvtaDepthwise) instead of vtalib cw_convolution on the CPU. It rounds half up where
+//#### cw_convolution rounds as std::round (negative halves differ). On by default since 2026-11-08: it only touches the
+//#### channelwise depthwise convs (-enable-channelwise-depthwise), the layers that do not fit stay on the CPU, and with
+//#### 4 cores (OMP 4) it is only a little slower than cw_convolution (MobileNetV2 24.7 vs 22.5 ms; OMP 1 28.6 vs 43.2)
 static llvm::cl::opt<bool> vtaEvtaDepthwise(
     "vta-evta-depthwise",
     llvm::cl::desc("Run depthwise channelwise convs (power-of-two scales, EVTA layout) on the EVTA (dw_convolution_evta)"),
-    llvm::cl::init(false));
+    llvm::cl::init(true));
 
 namespace vta_save{
 

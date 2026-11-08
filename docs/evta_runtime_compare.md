@@ -1204,7 +1204,7 @@ quantized Interpreter(같은 profile, depthwise per-channel)는 282(0.935)다.
   - ISA를 바꾸면: depthwise 모드나 ALU MAC을 넣는다. `npu_stack_survey.md`의 하드웨어 방식 조사를 참고.
   - 어느 쪽이든 depthwise 앞뒤의 transpose가 함께 없어진다.
 
-### 7.21 depthwise conv를 EVTA로 (2026-11-08, `-vta-evta-depthwise`, 기본 꺼짐, MobileNetV2Test만 켬)
+### 7.21 depthwise conv를 EVTA로 (2026-11-08, `-vta-evta-depthwise`, 처음에는 기본 꺼짐, 같은 날 기본 켜짐)
 
 **방법 (ISA·bitstream 변경 없음):**
 - EVTA layout N{C/16}HW16에서 16채널 block 하나는 H×W×16 평면이다. 그래서 depthwise는 block마다 16 → 16 conv이고,
@@ -1231,6 +1231,7 @@ schedule을 바꾼 뒤에도 dump가 기본 schedule과 같다.
 
 - OMP 1에서 34% 줄었다. 남은 시간: EVTA conv 13.3, depthwise 8.4(EVTA), elemadd 5.3, avgpool 0.6 ms.
 - OMP 4에서는 4코어 NEON depthwise(약 6 ms)보다 느리다. 4코어를 쓰는 경우에는 `-vta-evta-depthwise=0`이 낫다.
+- 기본값(2026-11-08 결정): 켬. 채널별 scale depthwise conv에만 걸리고(Resnet18/50, VGG16 bundle은 byte 단위로 같음), OMP 4에서 손해(22.5 → 24.7 ms)가 OMP 1의 이득(43.2 → 28.6 ms)보다 작다.
 - depthwise의 EVTA 효율은 약 2.4 GOPS다. GEMM만 보면(1/16 활용) 14.4만 pixel-block × 9 cycle ≈ 3.2 ms인데,
   block마다 행 하나가 112–896 B인 작은 DMA(입력 행, 출력 행, bias, shift)가 많아서다. 7×7×960은 block 60개 × 7행씩이다.
   - 줄일 수 있는 것: 여러 block의 입력을 한 2D LOAD로(평면이 연속이라 pad만 해결하면 됨), 출력 store도 같이; 7×7 layer는 타일 = 이미지.
