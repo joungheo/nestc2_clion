@@ -142,3 +142,16 @@ convTune.ConvolutionTune_.push_back({1, 7, 7, 160, 960, 1, 1, 160, 1, 0, 2, 7, 7
 convTune.ConvolutionTune_.push_back({1, 7, 7, 960, 160, 1, 1, 960, 1, 0, 2, 7, 7});
 convTune.ConvolutionTune_.push_back({1, 7, 7, 960, 320, 1, 1, 960, 1, 0, 2, 7, 7});
 convTune.ConvolutionTune_.push_back({1, 7, 7, 320, 1280, 1, 1, 320, 1, 0, 2, 7, 7});
+//#### JO added (2026-11-08): MobileNetV2's depthwise convs on the EVTA (dw_convolution_evta, -vta-evta-depthwise): filterN 0,
+//#### found with EVTA_SCHED (key KN 0; nVirtualThread 2 only with an even number of 16-channel blocks); dumps identical to
+//#### the default 1, 8, 8; depthwise 19.6 -> 8.4 ms (docs/evta_runtime_compare.md 7.21)
+convTune.ConvolutionTune_.push_back({1, 112, 112, 32, 0, 3, 3, 32, 1, 1, 2, 14, 56});
+convTune.ConvolutionTune_.push_back({1, 112, 112, 96, 0, 3, 3, 96, 2, 0, 2, 4, 56});
+convTune.ConvolutionTune_.push_back({1, 56, 56, 144, 0, 3, 3, 144, 1, 1, 1, 28, 56});
+convTune.ConvolutionTune_.push_back({1, 56, 56, 144, 0, 3, 3, 144, 2, 0, 1, 14, 28});
+convTune.ConvolutionTune_.push_back({1, 28, 28, 192, 0, 3, 3, 192, 1, 1, 2, 28, 28});
+convTune.ConvolutionTune_.push_back({1, 28, 28, 192, 0, 3, 3, 192, 2, 0, 2, 14, 14});
+convTune.ConvolutionTune_.push_back({1, 14, 14, 384, 0, 3, 3, 384, 1, 1, 2, 14, 14});
+convTune.ConvolutionTune_.push_back({1, 14, 14, 576, 0, 3, 3, 576, 1, 1, 2, 14, 14});
+convTune.ConvolutionTune_.push_back({1, 14, 14, 576, 0, 3, 3, 576, 2, 0, 2, 7, 7});
+convTune.ConvolutionTune_.push_back({1, 7, 7, 960, 0, 3, 3, 960, 1, 1, 2, 7, 7});

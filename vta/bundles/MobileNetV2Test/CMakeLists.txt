@@ -53,6 +53,8 @@ add_custom_command(
         -enable-channelwise-depthwise
         #### JO added (2026-11-07): the EVTA convs round their output shift (2^(shift-1) in the bias) as the CPU convs
         -vta-round-shift
+        #### JO added (2026-11-08): the depthwise convs on the EVTA (dw_convolution_evta) instead of cw_convolution on the CPU
+        -vta-evta-depthwise
         DEPENDS
         model-compiler VTA ${CMAKE_CURRENT_BINARY_DIR}/mobilenetv2_calib.yaml
 )
