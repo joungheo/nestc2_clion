@@ -162,8 +162,12 @@ struct gemmop_mxn {
   uint32_t input_base_addr_;
   uint32_t weight_base_addr_;
   uint32_t output_base_addr_;
+  //#### JO added (2026-11-08, depthwise): inp entries between the input tiles of consecutive kernels (0: one input tile
+  //#### for all n_kernel_ kernels, a dense conv; the depthwise conv has one input tile per 16-channel block)
+  uint32_t in_kernel_factor_ = 0;
   bool operator==(gemmop_mxn &op){
     if(tile_size_h_==op.tile_size_h_ &&
+       in_kernel_factor_ == op.in_kernel_factor_ &&
        tile_size_w_ == op.tile_size_w_ &&
        in_tile_size_h_ == op.in_tile_size_h_ &&
        in_tile_size_w_ == op.in_tile_size_w_ &&
@@ -211,7 +215,8 @@ static int gemmop_mxn_old(struct gemmop_mxn *ctx, VTACommandHandle cmdh) {
       for (int inTileHIdx = 0; inTileHIdx < ctx->tile_size_h_; inTileHIdx++) {
         auto outTileHIdx = inTileHIdx + (kernelIdx * ctx->tile_size_h_);
         VTAUopPush(cmdh, 0, 0, ctx->output_base_addr_ + outTileHIdx * ctx->tile_size_w_,
-                   ctx->input_base_addr_ + (inTileHIdx * ctx->stride_h_ + dx) * (ctx->in_tile_size_w_),
+                   ctx->input_base_addr_ + kernelIdx * ctx->in_kernel_factor_ +
+                       (inTileHIdx * ctx->stride_h_ + dx) * (ctx->in_tile_size_w_),
                    ctx->weight_base_addr_ + dx * ctx->kernel_w_ + kernelIdx * (ctx->kernel_w_ * ctx->kernel_h_), 0, 0,
                    0);
       }
@@ -229,7 +234,7 @@ int gemmop_mxn(void *param,VTACommandHandle cmdh ) {
   struct gemmop_mxn *ctx = (struct gemmop_mxn *) (param);
   if (ctx->kernel_h_ * ctx->tile_size_h_ * ctx->tile_size_w_ > GEMM_UOP_BUFF_DEPTH / 4)
     return gemmop_mxn_old(ctx, cmdh);
-  VTAUopLoopBegin(cmdh, ctx->n_kernel_, ctx->tile_size_h_ * ctx->tile_size_w_, 0,
+  VTAUopLoopBegin(cmdh, ctx->n_kernel_, ctx->tile_size_h_ * ctx->tile_size_w_, ctx->in_kernel_factor_,
                   ctx->kernel_w_ * ctx->kernel_h_);
   VTAUopLoopBegin(cmdh, ctx->kernel_w_, 0, 1, 1);
 
@@ -729,6 +734,53 @@ static void pushBiasReset(VTACommandHandle &cmdh, uint32_t idEVTA, uint32_t base
   VTAPushGEMMOp(cmdh, h, &bias_reset_acc, &ctx, 0);
 }
 
+//#### JO added (2026-11-08, docs/evta_runtime_compare.md 7.21): depthwise conv on the EVTA (dw_convolution_evta). One
+//#### 16-channel block of the EVTA layout N{C/16}HW16 is a plane of H x W x 16, so the depthwise conv is a 16 -> 16 conv
+//#### per block whose weights are diagonal (diag(w[c][ky][kx]), one wgt entry per tap, written by VTASave): conv_kernel
+//#### with one input tile per output block (LOADed per block into the thread's inp half, gemmop_mxn in_kernel_factor_)
+//#### and no loop over input blocks. The per-channel power-of-two scales are a per-channel shift: the shifts (int32, one
+//#### acc entry of 16 per block, after the bias entries) are LOADed into acc and an ALU SHR with that vector operand
+//#### (dst = the tile, src = the block's shift entry) shifts the sum; the round half up is 2^(shift - 1) in the bias
+//#### (VTASave). The clip to [lo, hi] (relu6) by the requantize of that SHR (rq shift 0) or ALU MAX / MIN.
+//#### 1/16 of the GEMM's MACs are used, but the A53's NEON (no int8 dot product) is slower still.
+struct ConvDw {
+  void *shift;   // int32 per channel, VTA buffer
+  int lo, hi;
+};
+// acc[base + f * T + i] >>= acc[src + f], i < T, f < nF
+struct DwShrContext {
+  uint32_t base_, src_, T_, nF_;
+  bool operator==(DwShrContext &op) { return base_ == op.base_ && src_ == op.src_ && T_ == op.T_ && nF_ == op.nF_; }
+};
+int alu_dw_shr(void *param, VTACommandHandle cmdh) {
+  DwShrContext *p = (DwShrContext *)(param);
+  VTAUopLoopBegin(cmdh, p->nF_, p->T_, 1, 0);
+  VTAUopLoopBegin(cmdh, p->T_, 1, 0, 0);
+  VTAUopPush(cmdh, 1, 0, p->base_, p->src_, 0, 3, 0, 0);
+  VTAUopLoopEnd(cmdh);
+  VTAUopLoopEnd(cmdh);
+  return 0;
+}
+struct DwShrUopHandle {
+  DwShrContext ctx;
+  void *uopHandle[2];
+  DwShrUopHandle() { uopHandle[0] = nullptr; }
+};
+std::vector<DwShrUopHandle *> vDwShrUopHandle[4];
+static void pushDwShr(VTACommandHandle &cmdh, uint32_t idEVTA, uint32_t base, uint32_t src, uint32_t T, uint32_t nF) {
+  DwShrContext ctx = {base, src, T, nF};
+  void **h = nullptr;
+  for (auto u : vDwShrUopHandle[idEVTA])
+    if (u->ctx == ctx) { h = u->uopHandle; break; }
+  if (!h) {
+    auto u = new DwShrUopHandle();
+    u->ctx = ctx;
+    h = u->uopHandle;
+    vDwShrUopHandle[idEVTA].push_back(u);
+  }
+  VTAPushALUOp(cmdh, h, &alu_dw_shr, &ctx, 0);
+}
+
 void conv_kernel(uint32_t sizeOutTileH,
                  uint32_t sizeOutTileW,
                  uint32_t pad_size,
@@ -760,7 +812,8 @@ void conv_kernel(uint32_t sizeOutTileH,
                  uint32_t idEVTA = 0,
                  uint32_t nVirtualThread = 1,
                  const ConvResidual *res = nullptr,  //#### JO added (2026-10-31): res
-                 const ConvPool *pool = nullptr) {   //#### JO added (2026-11-02): pool
+                 const ConvPool *pool = nullptr,     //#### JO added (2026-11-02): pool
+                 const ConvDw *dw = nullptr) {       //#### JO added (2026-11-08): depthwise
 
   uint32_t resizedOutTileH = (sizeInTileH-KH) / stride_size + 1;
   uint32_t resizedOutTileW = (sizeInTileW-KW) / stride_size + 1;
@@ -791,6 +844,20 @@ void conv_kernel(uint32_t sizeOutTileH,
   if (bias && !biasRows &&
       (nVirtualThread - 1) * (ACC_MEM_ENTRY / nVirtualThread) + padT * nFilterinLoop + nFilterinLoop > ACC_BUFF_DEPTH)
     nFilterinLoop = pickNF(biasRows = 1);
+  //#### JO added (2026-11-08, depthwise): per thread nF blocks: acc nF x (tile + bias + shift entry), inp nF input tiles,
+  //#### wgt nF x KH x KW entries (dw_convolution_evta checked that one block fits)
+  const uint32_t cBlocks = dw ? 1 : numInputChannel / 16;
+  if (dw) {
+    const uint32_t minH0 = evtaMinTile(MIN_H_SIZE), minW0 = evtaMinTile(MIN_W_SIZE);
+    const uint32_t inTile0 = ((max(resizedOutTileH, minH0) - 1) * stride_size + KH) *
+                             ((max(resizedOutTileW, minW0) - 1) * stride_size + KW);
+    uint32_t n = min(KN / nVirtualThread / 16, ACC_MEM_ENTRY / nVirtualThread / (padT + 2));
+    n = min(n, INP_MEM_ENTRY / nVirtualThread / inTile0);
+    n = min(n, WGT_MEM_ENTRY / nVirtualThread / (KH * KW));
+    for (; n > 0; n--)
+      if ((KN / 16) % (n * nVirtualThread) == 0) break;
+    nFilterinLoop = n;
+  }
 #ifdef NESTC_EVTA_PROFILE_AUTOTUNE
   f7 = nFilterinLoop;
   f8 = KN / nFilterinLoop / nVirtualThread / 16;
@@ -837,7 +904,7 @@ void conv_kernel(uint32_t sizeOutTileH,
     //#### rqPool: the column MAX passes of the fused pool write it (pool on the raw acc: max and requantize commute, the
     //#### pooled area starts at 0 = relu); rqRes: the residual GEMM writes it (round + sumShr + clip after the residual add)
     const bool rqOn = evtaRequant();
-    const bool rqConv = rqOn && !res && !pool, rqPool = rqOn && pool && relu, rqRes = rqOn && res && !res->reluShl;
+    const bool rqConv = rqOn && !res && !pool && !dw, rqPool = rqOn && pool && relu, rqRes = rqOn && res && !res->reluShl;
     //#### JO changed (2026-11-06): the relu's upper clip (gEvtaClipHi)
     // if (rqConv) VTARequant(vtaCmdH, 1, 0, shift, relu ? 0 : -128, 127);
     if (rqConv) VTARequant(vtaCmdH, 1, 0, shift, relu ? 0 : -128, relu ? gEvtaClipHi : 127);
@@ -888,7 +955,7 @@ void conv_kernel(uint32_t sizeOutTileH,
                             : outputHOffset * stride_size - pad_size;
 
     // Push operations for loading input and weight then gemming
-    for (uint32_t channelIdx = 0; channelIdx < numInputChannel / 16;
+    for (uint32_t channelIdx = 0; channelIdx < cBlocks;
          channelIdx++) {
       uint32_t src_offset = channelIdx * inputHStride * inputWStride +
                             inputHOffset * inputWStride + inputWOffset;
@@ -911,13 +978,25 @@ void conv_kernel(uint32_t sizeOutTileH,
 
       for (uint32_t threadIdx = 0; threadIdx < nVirtualThread; threadIdx++) {
         uint32_t filter_offset =
-            filterIdx * nVirtualThread * nFilterinLoop * (numInputChannel / 16) * KH * KW +
-            threadIdx * nFilterinLoop * (numInputChannel / 16) * KH * KW +
+            filterIdx * nVirtualThread * nFilterinLoop * cBlocks * KH * KW +
+            threadIdx * nFilterinLoop * cBlocks * KH * KW +
             channelIdx * KH * KW;
 
         uint32_t weightSramBaseAddr =
             threadIdx * (WGT_MEM_ENTRY / nVirtualThread);
         VTADepPop(vtaCmdH, 2, 1);
+        //#### JO added (2026-11-08, depthwise): each output block's own input block, into the thread's inp half
+        if (dw) {
+          const uint32_t inTile = resizedInTileH * resizedInTileW;
+          for (uint32_t fIdx = 0; fIdx < nFilterinLoop; fIdx++) {
+            const uint32_t blk = (filterIdx * nVirtualThread + threadIdx) * nFilterinLoop + fIdx;
+            VTALoadBuffer2D(vtaCmdH, vta_input_buf,
+                            blk * inputHStride * inputWStride + inputHOffset * inputWStride + inputWOffset, x_size,
+                            y_size, inputWStride, x_pad_before, y_pad_before, resizedInTileW - x_pad_before - x_size,
+                            resizedInTileH - y_pad_before - y_size,
+                            threadIdx * (INP_MEM_ENTRY / nVirtualThread) + fIdx * inTile, 2);
+          }
+        } else
         if(threadIdx==0) {
 #ifdef NESTC_EVTA_PROFILE_AUTOTUNE
           f15 ++;
@@ -930,7 +1009,7 @@ void conv_kernel(uint32_t sizeOutTileH,
                           2);                // type
         }
         VTALoadBuffer2D(vtaCmdH, vta_filter_buf, filter_offset, KH * KW,
-                        nFilterinLoop, KH * KW * numInputChannel / 16, 0, 0, 0,
+                        nFilterinLoop, KH * KW * cBlocks, 0, 0, 0,
                         0, weightSramBaseAddr, 1);
         VTADepPush(vtaCmdH, 1, 2);
       }
@@ -955,6 +1034,10 @@ void conv_kernel(uint32_t sizeOutTileH,
         gemm_ctx.input_base_addr_ = inputSramBaseAddr;
         gemm_ctx.output_base_addr_ = outputSramBaseAddr;
         gemm_ctx.weight_base_addr_ = weightSramBaseAddr;
+        if (dw) {   //#### JO added (2026-11-08)
+          gemm_ctx.input_base_addr_ = threadIdx * (INP_MEM_ENTRY / nVirtualThread);
+          gemm_ctx.in_kernel_factor_ = resizedInTileH * resizedInTileW;
+        }
 
         void **uopHandle_gemm;
 
@@ -1069,6 +1152,22 @@ void conv_kernel(uint32_t sizeOutTileH,
       shift_ctx.size_ = resizedOutTileH * resizedOutTileW * nFilterinLoop;
       shift_ctx.shift_ = shift;
 
+      //#### JO added (2026-11-08, depthwise): the per-channel shift (ALU SHR by the shift entries), clip to [lo, hi]
+      if (dw) {
+        const uint32_t T = resizedOutTileH * resizedOutTileW;
+        const uint32_t shiftSram = outputSramBaseAddr + T * nFilterinLoop + nFilterinLoop;
+        VTALoadBuffer2D(vtaCmdH, dw->shift, filterIdx * nVirtualThread * nFilterinLoop + threadIdx * nFilterinLoop,
+                        nFilterinLoop, 1, 16 * nFilterinLoop, 0, 0, 0, 0, shiftSram, 3);
+        if (evtaRequant()) {
+          VTARequant(vtaCmdH, 1, 0, 0, dw->lo, dw->hi);
+          pushDwShr(vtaCmdH, idEVTA, outputSramBaseAddr, shiftSram, T, nFilterinLoop);
+          VTARequant(vtaCmdH, 0, 0, 0, 0, 0);
+        } else {
+          pushDwShr(vtaCmdH, idEVTA, outputSramBaseAddr, shiftSram, T, nFilterinLoop);
+          pushAlu(vtaCmdH, idEVTA, outputSramBaseAddr, outputSramBaseAddr, T * nFilterinLoop, RES_ALU_MAX, 1, dw->lo);
+          pushAlu(vtaCmdH, idEVTA, outputSramBaseAddr, outputSramBaseAddr, T * nFilterinLoop, RES_ALU_MIN, 1, dw->hi);
+        }
+      } else
       //#### JO added (2026-11-04, requantize): no SHR / MAX / MIN when the out write requantizes
       if (!rqConv && !rqPool) {
       {
@@ -3194,7 +3293,9 @@ static void schedOverride(int H, int W, int C, int KN, int KH, int stride, int &
 
 static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *output, int N, int H, int W, int C, int KN, int KH, int KW, int pad_size,
                       int stride_size, bool doRelu, bool doBias, uint8_t shift, int out_h, int out_w, void* vtaCmdH, int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA,
-                      const ConvResidual *res, const ConvPool *pool = nullptr) {
+                      const ConvResidual *res, const ConvPool *pool = nullptr, const ConvDw *dw = nullptr) {
+  //#### JO changed (2026-11-08): a depthwise conv's schedule under KN 0 (dw_convolution_evta checks it after the override)
+  if (!dw)
   schedOverride(H, W, C, KN, KH, stride_size, nVirtualThread, tileHSize, tileWSize);  //#### JO added (2026-11-05)
   //#### JO added (2026-11-05): input written while this call runs (InputStream): one run per tile row
   InputStream *ins = gInputStream.buf && gInputStream.buf == (void *)input && N == 1 ? &gInputStream : nullptr;
@@ -3221,14 +3322,16 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
                          nVirtualThread, tileHSize, tileWSize, (int32_t)idEVTA, res != nullptr,
                          res ? (int32_t)res->resShl : 0, res ? (int32_t)res->convShl : 0,
                          res ? (int32_t)res->sumShr : 0, res ? (int32_t)res->relu + 2 * (int32_t)res->reluShl : 0, res ? res->buf == output : 0,
-                         pool != nullptr, stream, gEvtaClipHi};   //#### JO: + gEvtaClipHi (2026-11-06)
+                         pool != nullptr, stream, gEvtaClipHi,   //#### JO: + gEvtaClipHi (2026-11-06)
+                         dw != nullptr, dw ? dw->lo : 0, dw ? dw->hi : 0};   //#### JO: + depthwise (2026-11-08)
   //#### JO changed (2026-11-02): a fused max pool writes its output, not the conv's
-  void *replayBufs[] = {input, kernel, doBias ? bias : nullptr, pool ? pool->out : (void *)output, res ? res->buf : nullptr};
+  void *replayBufs[] = {input, kernel, doBias ? bias : nullptr, pool ? pool->out : (void *)output, res ? res->buf : nullptr,
+                        dw ? dw->shift : nullptr};
   void *dumpBuf = pool ? pool->out : (void *)output;
   const size_t dumpBytes = pool ? (size_t)KN * pool->PH * pool->PW : (size_t)N * KN * out_h * out_w;
   if (stream)
     VTASetSegmentHook(vtaCmdH, inputStreamHook, ins);
-  const int replayed = VTAReplayBegin(vtaCmdH, replayKey, sizeof(replayKey), replayBufs, 5);
+  const int replayed = VTAReplayBegin(vtaCmdH, replayKey, sizeof(replayKey), replayBufs, 6);
   if (stream) {
     VTASetSegmentHook(vtaCmdH, nullptr, nullptr);
     inputStreamEnd(ins);  // the rows a replay wrote; all of them before a recording
@@ -3385,7 +3488,7 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
                     outputWOffset, outputHOffset, resizedInTileH, sizeInTileW,
                     C, H, W, vta_input_buf, KN, KH, KW, vta_filter_buf, out_h,
                     out_w, vta_output_buf, doRelu, shift, doBias, vta_bias_buf,
-                    vtaCmdH, idEVTA, nVirtualThread, res);
+                    vtaCmdH, idEVTA, nVirtualThread, res, nullptr, dw);
       } else {
         uint32_t sizeOutTileBoundaryW = out_w - tileWIdx * sizeOutTileW;
 #ifdef NESTC_EVTA_PROFILE_AUTOTUNE
@@ -3399,7 +3502,7 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
                     y_pad_after, outputWOffset, outputHOffset, resizedInTileH,
                     sizeInTileBoundaryW, C, H, W, vta_input_buf, KN, KH, KW,
                     vta_filter_buf, out_h, out_w, vta_output_buf, doRelu, shift,
-                    doBias, vta_bias_buf, vtaCmdH, idEVTA, nVirtualThread, res);
+                    doBias, vta_bias_buf, vtaCmdH, idEVTA, nVirtualThread, res, nullptr, dw);
       }
     }
     if (stream)
@@ -3637,6 +3740,79 @@ int convolution_wo_tr_res(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *
   return rc;
 }
 
+
+//#### JO added (2026-11-08, docs/evta_runtime_compare.md 7.21): depthwise conv (group = C = KN) on the EVTA, see ConvDw.
+//#### input / output VTA buffers in the EVTA layout (C % 16 == 0), N = 1, square pads: pad = top = left, the bottom / right
+//#### pad follows from out_h / out_w (TF SAME stride 2: pad 0, one row / column at the end), dilation 1. kernel: per
+//#### 16-channel block KH x KW wgt entries diag(w[c][ky][kx]); bias int32 per channel with the rounding 2^(shift - 1);
+//#### shift int32 per channel (0..31); out = clip((bias + sum) >> shift, lo, hi). The schedule (nVirtualThread, tiles)
+//#### is shrunk until a block fits (an odd number of blocks: nVirtualThread 1); EVTA_SCHED takes it with KN 0.
+//#### EVTA_RES_CHECK=1 compares with a CPU loop of the same arithmetic.
+int dw_convolution_evta(int8_t *input, void *kernel, void *bias, void *shift, int8_t *output, int N, int H, int W, int C,
+                        int KH, int KW, int pad, int stride, int out_h, int out_w, int lo, int hi, void *vtaCmdH,
+                        int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA) {
+  if (N != 1 || C % 16 || pad < 0 || pad >= KH || pad >= KW || (out_h - 1) * stride + KH > H + pad + KH - 1 ||
+      (out_w - 1) * stride + KW > W + pad + KW - 1) {
+    printf("dw_convolution_evta: unsupported shape N %d C %d pad %d out %dx%d\n", N, C, pad, out_h, out_w);
+    return -1;
+  }
+  schedOverride(H, W, C, 0, KH, stride, nVirtualThread, tileHSize, tileWSize);
+  if (nVirtualThread < 1 || (C / 16) % nVirtualThread) nVirtualThread = 1;
+  tileHSize = std::max(1, std::min(tileHSize, out_h));
+  tileWSize = std::max(1, std::min(tileWSize, out_w));
+  // one block per thread: acc tile + 2 entries, inp input tile (minimum tile as conv_kernel pads to it)
+  for (;;) {
+    uint32_t th = std::max<uint32_t>(tileHSize, evtaMinTile(MIN_H_SIZE)), tw = std::max<uint32_t>(tileWSize, evtaMinTile(MIN_W_SIZE));
+    uint32_t inT = ((th - 1) * stride + KH) * ((tw - 1) * stride + KW);
+    if (th * tw + 2 <= 2048u / nVirtualThread && inT <= 2048u / nVirtualThread) break;
+    if (tileWSize >= tileHSize && tileWSize > 1) tileWSize = (tileWSize + 1) / 2;
+    else if (tileHSize > 1) tileHSize = (tileHSize + 1) / 2;
+    else if (nVirtualThread > 1) nVirtualThread = 1;
+    else { printf("dw_convolution_evta: no schedule\n"); return -1; }
+  }
+  ConvDw d = {shift, lo, hi};
+  int rc = convolution_wo_tr_impl(input, (int8_t *)kernel, (int32_t *)bias, output, N, H, W, C, C, KH, KW, pad, stride,
+                                  false, true, 0, out_h, out_w, vtaCmdH, nVirtualThread, tileHSize, tileWSize, idEVTA,
+                                  nullptr, nullptr, &d);
+  static int check = -1;
+  if (check < 0) {
+    const char *e = getenv("EVTA_RES_CHECK");
+    check = e && atoi(e) > 0;
+  }
+  if (!check)
+    return rc;
+  const size_t ni = (size_t)C * H * W, no = (size_t)C * out_h * out_w, KK = KH * KW;
+  VTABufferInvalidate(input, 0, ni);
+  VTABufferInvalidate(output, 0, no);
+  const int8_t *in = (const int8_t *)VTABufferGetVirtAddr(input), *o = (const int8_t *)VTABufferGetVirtAddr(output);
+  const int8_t *k = (const int8_t *)VTABufferGetVirtAddr(kernel);
+  const int32_t *b = (const int32_t *)VTABufferGetVirtAddr(bias), *sh = (const int32_t *)VTABufferGetVirtAddr(shift);
+  size_t bad = 0, first = no;
+  int got = 0, want = 0;
+  for (int c = 0; c < C; c++)
+    for (int y = 0; y < out_h; y++)
+      for (int x = 0; x < out_w; x++) {
+        int32_t acc = b[c];
+        for (int ky = 0; ky < KH; ky++)
+          for (int kx = 0; kx < KW; kx++) {
+            int iy = y * stride - pad + ky, ix = x * stride - pad + kx;
+            if (iy < 0 || iy >= H || ix < 0 || ix >= W) continue;
+            int8_t w = k[((size_t)(c / 16) * KK + ky * KW + kx) * 256 + (c % 16) * 17];
+            acc += (int32_t)w * in[(((size_t)(c / 16) * H + iy) * W + ix) * 16 + c % 16];
+          }
+        int32_t v = acc >> sh[c];
+        v = v < lo ? lo : v > hi ? hi : v;
+        size_t i = (((size_t)(c / 16) * out_h + y) * out_w + x) * 16 + c % 16;
+        if (o[i] != (int8_t)v) {
+          if (!bad) { first = i; got = o[i]; want = v; }
+          bad++;
+        }
+      }
+  printf("EVTA_RES_CHECK depthwise %dx%dx%d k%d s%d p%d: %zu of %zu differ", H, W, C, KH, stride, pad, bad, no);
+  if (bad) printf(" (first at %zu: evta %d, cpu %d)", first, got, want);
+  printf("\n");
+  return rc;
+}
 
 //#### JO added (2026-10-31): max pool on the EVTA (maxpool_evta), for an input >= 0 (the output of a conv with relu).
 //#### Input and output in the EVTA layout N{C/16}HW16 (VTA buffers). The output is cut into tiles of oh x ow pixels of

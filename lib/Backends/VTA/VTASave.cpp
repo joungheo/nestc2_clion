@@ -95,6 +95,15 @@ static llvm::cl::opt<bool> vtaFusePool(
     llvm::cl::desc("Do the EVTA max pool after the packed first conv in that conv's call (convolution_wo_tr_pool)"),
     llvm::cl::init(true));
 
+//#### JO added (2026-11-08): a depthwise channelwise conv whose input and output are kept in the EVTA layout on the EVTA
+//#### (vtalib dw_convolution_evta: diagonal weights per tap, per-channel power-of-two scales as a per-channel shift, the
+//#### shift rounding half up; saveEvtaDepthwise) instead of vtalib cw_convolution on the CPU. Off by default (on for
+//#### MobileNetV2Test): it rounds half up where cw_convolution rounds as std::round (negative halves differ)
+static llvm::cl::opt<bool> vtaEvtaDepthwise(
+    "vta-evta-depthwise",
+    llvm::cl::desc("Run depthwise channelwise convs (power-of-two scales, EVTA layout) on the EVTA (dw_convolution_evta)"),
+    llvm::cl::init(false));
+
 namespace vta_save{
 
 //#### JO added (2026-10-31): an EVTA conv that also does the elementadd and the relu after it
@@ -153,6 +162,8 @@ public:
   std::set<const Value *> *getHoisted() { return &hoisted; }
   std::set<const Instruction *> *getEvtaMaxPools() { return &evtaMaxPools; }
   bool isEvtaMaxPool(const Instruction *I) const { return evtaMaxPools.count(I) != 0; }
+  std::set<const Instruction *> *getEvtaDepthwise() { return &evtaDepthwise; }
+  bool isEvtaDepthwise(const Instruction *I) const { return evtaDepthwise.count(I) != 0; }
   //#### JO added (2026-11-02): findInputPreprocess
   std::map<const Instruction *, InputPreprocess> *getPreprocs() { return &preprocs; }
   const InputPreprocess *getPreproc(const Instruction *I) const {
@@ -187,6 +198,7 @@ private:
   std::set<const Instruction *> fusedAway;
   std::set<const Value *> hoisted; // allocations already emitted before a fused conv
   std::set<const Instruction *> evtaMaxPools; // max pools run by maxpool_evta
+  std::set<const Instruction *> evtaDepthwise; //#### JO added (2026-11-08): depthwise convs run by dw_convolution_evta
   std::map<const Instruction *, InputPreprocess> preprocs; // by the first conv
   std::set<const Instruction *> preFused; // quantize / elemsub / elemdiv / transpose done by a first conv's input copy
   std::map<const Instruction *, PoolFusion> poolFusions; // by the first conv
@@ -725,6 +737,8 @@ void saveNonVTAConvolutionInst(
 //#### out = clip(round(float(sum + B[d]) * M[d]), lo, hi) with the fused RELU / CLIP as lo / hi. A depthwise filter
 //#### (group = C = KN) is written as [KH][KW][C] (16 channels per NEON vector), any other as Glow's [KN][KH][KW][C/group].
 //#### Offsets must be 0 (symmetric schemas).
+static void getConvSchedule(int N, int H, int W, int C, int KN, int KH, int KW, int stride, int pad, int *vt,
+                            int *th, int *tw);
 static void saveChannelwiseConvolutionInst(const glow::ChannelwiseQuantizedConvolutionInst *Inst, std::string *bundle,
                                            VTASaveContext *ctx) {
   auto src = Inst->getSrc();
@@ -792,6 +806,73 @@ static void saveChannelwiseConvolutionInst(const glow::ChannelwiseQuantizedConvo
   } else if (act != NONE) {
     llvm::errs() << "ChannelwiseQuantizedConvolution " << Inst->getName() << ": fused activation not supported\n";
     std::exit(1);
+  }
+
+  //#### JO added (2026-11-08): -vta-evta-depthwise: on the EVTA (dw_convolution_evta) when the input and output are kept
+  //#### in the EVTA layout, N = 1, pads top = left (the bottom / right follow from the output size), no dilation and every
+  //#### M[d] is 2^-shift[d]. Weights: per 16-channel block KH x KW wgt entries of 16 x 16 with w[c][y][x] on the
+  //#### diagonal; bias B[d] + 2^(shift[d] - 1) (round half up); the shifts int32 per channel.
+  std::vector<int32_t> sh(KN, -1);
+  for (int d = 0; d < KN; d++)
+    for (int k = 0; k <= 31; k++)
+      if (m[d] == std::ldexp(1.0f, -k))
+        sh[d] = k;
+  if (vtaEvtaDepthwise && dw && C % 16 == 0 && N == 1 && ctx->isPacked(src) && ctx->isPacked(dest) && P[0] == P[1] &&
+      (int)P[0] < KH && (int)P[1] < KW && D[0] == 1 && D[1] == 1 && S[0] == S[1] &&
+      ((int)dd[1] - 1) * (int)S[0] + KH <= H + 2 * (KH - 1) && ((int)dd[2] - 1) * (int)S[1] + KW <= W + 2 * (KW - 1) &&
+      std::all_of(sh.begin(), sh.end(), [](int32_t k) { return k >= 0; })) {
+    const int CB = C / 16, KK = KH * KW;
+    std::vector<int8_t> dwW((size_t)CB * KK * 256, 0);
+    for (int d = 0; d < C; d++)
+      for (int t = 0; t < KK; t++)
+        dwW[((size_t)(d / 16) * KK + t) * 256 + (d % 16) * 17] = hF.raw((size_t)d * KK + t);
+    std::vector<int32_t> dwB(KN);
+    for (int d = 0; d < KN; d++)
+      dwB[d] = b[d] + (sh[d] ? (int32_t)1 << (sh[d] - 1) : 0);
+    auto fos = ctx->getWeightFileStream();
+    fos->write((const char *)dwW.data(), dwW.size());
+    auto filterSte = addConstantSymbolEntrySized(filter, dwW.size(), ctx);
+    fos->write((const char *)dwB.data(), dwB.size() * 4);
+    auto biasSte = addConstantSymbolEntrySized(bias, dwB.size() * 4, ctx);
+    fos->write((const char *)sh.data(), sh.size() * 4);
+    auto shiftSte = addConstantSymbolEntryNamed(std::string(Inst->getName()) + "_shift", sh.size() * 4, ctx);
+    auto srcWeight = static_cast<WeightVar *>(src);
+    auto destWeight = static_cast<WeightVar *>(dest);
+    if (destWeight->getMutability() == glow::WeightVar::MutabilityKind::Mutable)
+      addSymbolEntryGenBundle(destWeight, bundle, ctx);
+    (void)srcWeight;
+    int vt = 1, th = 8, tw = 8;
+    getConvSchedule(N, H, W, C, 0, KH, KW, S[0], P[0], &vt, &th, &tw);
+    uint32_t idx = ctx->getIdxMultiEVTA();
+    bundle->append("  dw_convolution_evta(");
+    bundle->append(src->getName().data());
+    bundle->append("_vbuf, ");
+    bundle->append(filterSte.name);
+    bundle->append(", ");
+    bundle->append(biasSte.name);
+    bundle->append(", ");
+    bundle->append(shiftSte.name);
+    bundle->append(", ");
+    bundle->append(dest->getName().data());
+    bundle->append("_vbuf");
+    for (int v : {N, H, W, C, KH, KW, (int)P[0], (int)S[0], (int)dd[1], (int)dd[2], lo, hi}) {
+      bundle->append(", ");
+      bundle->append(std::to_string(v));
+    }
+    bundle->append(", vtaCmdH");
+    if (idx)
+      bundle->append(std::to_string(idx));
+    for (int v : {vt, th, tw, (int)idx}) {
+      bundle->append(", ");
+      bundle->append(std::to_string(v));
+    }
+    bundle->append(");\n  VTABufferInvalidate(");
+    bundle->append(dest->getName().data());
+    bundle->append("_vbuf, 0, ");
+    bundle->append(std::to_string(dest->getSizeInBytes()));
+    bundle->append(");\n");
+    ctx->getEvtaDepthwise()->insert(Inst);
+    return;
   }
 
   auto fos = ctx->getWeightFileStream();
@@ -6370,7 +6451,7 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
          I.getKind() == Kinded::Kind::ReluInstKind ||
          I.getKind() == Kinded::Kind::MaxPoolInstKind ||
          I.getKind() == Kinded::Kind::AvgPoolInstKind) &&
-        !ctx.isEvtaMaxPool(&I)) {
+        !ctx.isEvtaMaxPool(&I) && !ctx.isEvtaDepthwise(&I)) {
       for (const auto &op : I.getOperands()) {
         if (op.second != OperandKind::In && ctx.isPacked(op.first)) {
           bundle.append("  VTABufferFlush(");

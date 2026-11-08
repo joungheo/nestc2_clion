@@ -34,6 +34,10 @@ int fullyconnected_evta(int8_t *input, float inputScale, int32_t inputOffset, in
 //#### JO added (2026-11-02): the same with the weights and bias in the EVTA layout at compile time (VTA buffers)
 int fullyconnected_evta_packed(int8_t *input, void *wgt, void *bias, int8_t *output, int IN, int OUT, int shift,
                                void *vtaCmdH, uint32_t idEVTA = 0);
+//#### JO added (2026-11-08): depthwise conv on the EVTA (diagonal weights per tap, per-channel shift; see VTABundle.cpp)
+int dw_convolution_evta(int8_t *input, void *kernel, void *bias, void *shift, int8_t *output, int N, int H, int W, int C,
+                        int KH, int KW, int pad, int stride, int out_h, int out_w, int lo, int hi, void *vtaCmdH,
+                        int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA = 0);
 //#### JO added (2026-10-31): conv + elementadd (+ relu) in one EVTA call (power-of-two scales, see VTABundle.cpp)
 int convolution_wo_tr_res(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *output, int N, int H, int W, int C, int KN, int KH, int KW, int pad_size,
                           int stride_size, bool doRelu, bool doBias, uint8_t shift, int out_h, int out_w,

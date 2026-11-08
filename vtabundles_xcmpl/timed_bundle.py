@@ -201,6 +201,10 @@ def call_ops(stmt, name):
             # (in,s,o, ker,s,o, bias,s,o, out,s,o, N, H, W, C, KN, KH, KW, pad, stride, group, dilation, relu, bias, out_h, out_w)
             return 2 * n(12) * n(25) * n(26) * n(16) * n(17) * n(18) * n(15) // n(21)
         #### JO added (2026-11-07): channelwise quantized conv on the CPU (the depthwise convs of MobileNetV2)
+        #### JO added (2026-11-08)
+        if name == 'dw_convolution_evta':
+            # (in, ker, bias, shift, out, N, H, W, C, KH, KW, pad, stride, out_h, out_w, lo, hi, cmdh, vt, th, tw, id)
+            return 2 * n(5) * n(8) * n(13) * n(14) * n(9) * n(10)
         if name == 'cw_convolution':
             # (in, ker, bias, mult, out, N, H, W, C, KN, KH, KW, padT, padL, sh, sw, dh, dw, group, out_h, out_w, lo, hi)
             return 2 * n(5) * n(19) * n(20) * n(9) * n(10) * n(11) * n(8) // n(18)
