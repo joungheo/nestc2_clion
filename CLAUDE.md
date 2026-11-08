@@ -293,7 +293,8 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   Depthwise on the EVTA (2026-11-08, §7.21, `VTASave.cpp` `-vta-evta-depthwise`, default off, on for MobileNetV2Test; vtalib-systolic
   `dw_convolution_evta`, `conv_kernel` `ConvDw`): diagonal 16 x 16 weights per tap, one input tile per block, per-channel shift by an ALU SHR
   with a vector operand, round half up; vta/vtalib does the same arithmetic on the CPU. `EVTA_RES_CHECK=1` 0 differ, 282 (0.944157);
-  schedules under filterN 0 in `VTASchedules.h` (`EVTA_SCHED` key KN 0): OMP 1 43.2 -> 28.6 ms, but `-t 4` 22.5 -> 24.7 ms (small DMAs). The NEST-C `lib/Quantization/Base/Base.cpp`
+  schedules under filterN 0 in `VTASchedules.h` (`EVTA_SCHED` key KN 0): OMP 1 43.2 -> 28.6 ms, but `-t 4` 22.5 -> 24.7 ms (small DMAs). The generated bundle `.cpp` starts with the values of the code-changing options (`-vta-*`, `-enable-channelwise[-depthwise]`, defaults
+  included; `VTASave.cpp` `vtaOptionsComment`), so `head -14 <bundle>.cpp` shows how a bundle was made. The NEST-C `lib/Quantization/Base/Base.cpp`
   (int8 exponent floor -7) is only built with `NESTC_WITH_NMP`; this board uses Glow's.
 - The lab board's PL has a defective configuration row (tile row SLICE Y219, cells stuck at 0; `log/BOARD_TODO.md`
   2026-10-23/24). `vivado.tcl` on zcu102 fences the design below it by default (`VTA_BRAM_FENCE=y219|upper|none`).
