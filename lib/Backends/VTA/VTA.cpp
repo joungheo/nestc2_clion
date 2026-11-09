@@ -16,6 +16,8 @@
  */
 
 #include "VTA.h"
+#include <cmath>
+#include <cstring>
 #include "VTAFunction.h"
 
 #include "VTACodeGen/VTASaver.h"
@@ -52,6 +54,14 @@ static llvm::cl::opt<bool> vtaPadChannels(
 static llvm::cl::opt<bool> vtaMatMulConv(
     "vta-matmul-conv",
     llvm::cl::desc("Quantize MatMul to int8 and run a MatMul with a constant right-hand side as an EVTA 1x1 conv"),
+    llvm::cl::init(true));
+
+//#### JO added (2026-11-09): the Add of a constant bias (one row repeated) after a MatMul that becomes a conv (DeiT Linear):
+//#### folded into the conv's int32 bias when the int8 bias times its scale ratio is an integer; the conv then writes the
+//#### Add's type (one rounding instead of the conv's and the Add's)
+static llvm::cl::opt<bool> vtaFoldMatMulBias(
+    "vta-fold-matmul-bias",
+    llvm::cl::desc("Fold the constant bias Add after a MatMul run as an EVTA conv into the conv bias"),
     llvm::cl::init(true));
 
 Expected<std::unique_ptr<CompiledFunction>>
@@ -774,6 +784,35 @@ static bool matMulToConv(Function *F) {
         w = d;
     const dim_t h = rows / w;
     const std::string name = MM->getName().str();
+    // -vta-fold-matmul-bias: MatMul -> (Reshape ->) Add(constant bias with every row the same)
+    AddNode *biasAdd = nullptr;
+    std::vector<int32_t> foldedBias;
+    if (vtaFoldMatMulBias && MM->getResult().getNumUsers() == 1) {
+      NodeValue cur = MM->getResult();
+      Node *u = cur.getUsers().begin()->getUser();
+      if (auto *R = dyn_cast<ReshapeNode>(u)) {
+        cur = R->getResult();
+        u = cur.getNumUsers() == 1 ? cur.getUsers().begin()->getUser() : nullptr;
+      }
+      auto *A = u ? dyn_cast<AddNode>(u) : nullptr;
+      if (A && (A->getLHS() == cur || A->getRHS() == cur)) {
+        auto *Cb = dyn_cast<Constant>((A->getLHS() == cur ? A->getRHS() : A->getLHS()).getNode());
+        auto aTy = A->getResult().getType();
+        if (Cb && Cb->getElementType() == ElemKind::Int8QTy && !Cb->getType()->getOffset() &&
+            aTy->getElementType() == ElemKind::Int8QTy && !aTy->getOffset() && Cb->getType()->size() == rows * N) {
+          const int8_t *p = reinterpret_cast<const int8_t *>(Cb->getPayload().getUnsafePtr());
+          bool same = true;
+          for (dim_t r = 1; r < rows && same; r++)
+            same = !memcmp(p, p + r * N, N);
+          const double k = (double)Cb->getType()->getScale() / ((double)lTy->getScale() * W->getType()->getScale());
+          if (same && k >= 1 && k <= (1 << 22) && k == std::round(k)) {
+            for (dim_t n = 0; n < N; n++)
+              foldedBias.push_back((int32_t)p[n] * (int32_t)k);
+            biasAdd = A;
+          }
+        }
+      }
+    }
     auto *filter = M->createConstant(ElemKind::Int8QTy, {N, 1, 1, K}, W->getType()->getScale(), 0,
                                      W->getName().str() + "_conv1x1");
     auto hs = W->getPayload().getHandle<int8_t>();
@@ -784,11 +823,22 @@ static bool matMulToConv(Function *F) {
     auto *bias = M->createConstant(ElemKind::Int32QTy, {N}, lTy->getScale() * W->getType()->getScale(), 0,
                                    name + "_conv1x1_bias");
     bias->getPayloadMutable().zero();
+    if (biasAdd) {
+      auto hb = bias->getPayloadMutable().getHandle<int32_t>();
+      for (dim_t n = 0; n < N; n++)
+        hb.raw(n) = foldedBias[n];
+    }
     auto *in = F->createReshape(name + "_conv1x1_in", MM->getLHS(), {1, h, w, K});
-    auto convTy = M->uniqueType(ElemKind::Int8QTy, {1, h, w, N}, oTy->getScale(), 0);
+    const float outScale = biasAdd ? biasAdd->getResult().getType()->getScale() : oTy->getScale();
+    auto convTy = M->uniqueType(ElemKind::Int8QTy, {1, h, w, N}, outScale, 0);
     auto *conv = F->createConv(name + "_conv1x1", in, filter, bias, convTy, {1, 1}, {1, 1}, {0, 0, 0, 0}, 1);
-    auto *out = F->createReshape(name + "_conv1x1_out", conv, {rows, N});
-    MM->getResult().replaceAllUsesOfWith(out);
+    if (biasAdd) {
+      auto *out = F->createReshape(name + "_conv1x1_out", conv, biasAdd->getResult().dims());
+      biasAdd->getResult().replaceAllUsesOfWith(out);
+    } else {
+      auto *out = F->createReshape(name + "_conv1x1_out", conv, {rows, N});
+      MM->getResult().replaceAllUsesOfWith(out);
+    }
     changed = true;
   }
   return changed;
