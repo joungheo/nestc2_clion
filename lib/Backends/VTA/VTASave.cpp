@@ -6262,7 +6262,7 @@ static void requireFloat(const Instruction *I, std::initializer_list<const Value
 }
 
 //#### JO added (2026-11-09): the dequantize that wrote v last before I (int8, offset 0), if no other instruction writes v
-//#### (or a view of it) in between: then v holds q * scale values at I (erfQ)
+//#### (or a view of it) in between: then v holds q * scale values at I (erfQ, softmaxQ)
 static const DequantizeInst *dequantizedBefore(const Instruction &I, const Value *v) {
   const Value *ov = getOrigin(const_cast<Value *>(v));
   auto &instrs = I.getParent()->getInstrs();
@@ -6275,7 +6275,9 @@ static const DequantizeInst *dequantizedBefore(const Instruction &I, const Value
       if (op.second == OperandKind::In || getOrigin(const_cast<Value *>(op.first)) != ov)
         continue;
       auto *dq = llvm::dyn_cast<DequantizeInst>(&J);
-      if (dq && dq->getDest() == v && dq->getSrc()->getType()->getElementType() == ElemKind::Int8QTy &&
+      // v or a view of it (DeiT softmax: a reshape of the dequantized scores), written whole by the dequantize
+      if (dq && getOrigin(dq->getDest()) == ov && dq->getDest()->getType()->size() == ov->getType()->size() &&
+          dq->getSrc()->getType()->getElementType() == ElemKind::Int8QTy &&
           dq->getSrc()->getType()->getOffset() == 0)
         return dq;
       return nullptr;
