@@ -176,6 +176,11 @@ add_bundle_if_present(MobileNetV2Test vtaMobileNetV2Bundle mobilenetv2Main.cpp m
 if(TARGET vtaMobileNetV2Bundle)
   target_link_libraries(vtaMobileNetV2Bundle pthread)
 endif()
+#### JO added (2026-11-09): DeiT-tiny (same generic main, MODEL_MEAN / MODEL_STD; gen_deit_bundle.sh)
+add_bundle_if_present(DeiTTest vtaDeiTBundle deitMain.cpp deit.cpp)
+if(TARGET vtaDeiTBundle)
+  target_link_libraries(vtaDeiTBundle pthread)
+endif()
 #### JO added: multi-EVTA (x2) bundles (sources as in nest-compiler/vta/multievtax2_bundles/<dir>/CMakeLists.txt);
 #### only present in hw_multievtax2/
 add_bundle_if_present(MultiEVTAx2ConvTest multievtax2ConvTestBundle multievtax2ConvTestBundleMain.cpp
