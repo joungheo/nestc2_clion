@@ -6699,13 +6699,6 @@ static llvm::cl::opt<bool> vtaLutElementwise(
                    "constants with one value) as a 256-entry table computed once at run time by the same code"),
     llvm::cl::init(true));
 
-static const Tensor *constantPayload(const Value *v, VTASaveContext *ctx) {
-  for (auto &it : *ctx->getVariableMap())
-    if (it.second == v && it.first->getKind() == Kinded::Kind::ConstantKind)
-      return &llvm::cast<Constant>(it.first)->getPayload();
-  return nullptr;
-}
-
 // a constant whose elements all have the same bytes (a broadcast scalar)
 static bool isUniformConstant(const Value *v, VTASaveContext *ctx) {
   if (!isConstantWeight(v))
