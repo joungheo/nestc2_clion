@@ -3619,6 +3619,91 @@ int convolution_wo_tr(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *outp
                                 nullptr);
 }
 
+//#### JO added (2026-11-09): int8 C[M][N] = clip(floor((A[M][K] B[K][N] + 2^(shift-1)) / 2^shift)), both operands
+//#### written at run time (the DeiT attention products Q K^T and A V; VTASave.cpp -vta-evta-matmul): a 1x1 conv over the
+//#### M rows as an H x W image (W the largest divisor of M <= sqrt(M), as VTA.cpp matMulToConv), A as the input and B^T as
+//#### the filter, K and N zero-padded to multiples of 16, bias 2^(shift-1) (round half up, as -vta-round-shift).
+//#### The packing and unpacking are on the CPU. EVTA_MATMUL_CHECK=1 compares every output with the CPU integer result.
+int matmul_evta(const int8_t *A, const int8_t *B, int8_t *C, int M, int K, int N, int shift, void *vtaCmdH,
+                int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA) {
+  const int Kp = (K + 15) / 16 * 16, Np = (N + 15) / 16 * 16, KB = Kp / 16, NB = Np / 16;
+  int w = 1;
+  for (int d = 1; d * d <= M; d++)
+    if (M % d == 0)
+      w = d;
+  const int h = M / w;
+  void *inBuf = VTABufferAlloc((size_t)M * Kp), *wgtBuf = VTABufferAlloc((size_t)Np * Kp);
+  void *biasBuf = VTABufferAlloc((size_t)Np * 4), *outBuf = VTABufferAlloc((size_t)M * Np);
+  int8_t *in = (int8_t *)VTABufferGetVirtAddr(inBuf), *wgt = (int8_t *)VTABufferGetVirtAddr(wgtBuf);
+  int8_t *out = (int8_t *)VTABufferGetVirtAddr(outBuf);
+  int32_t *bias = (int32_t *)VTABufferGetVirtAddr(biasBuf);
+  // input N{C/16}HW16 with HW = the M rows: in[kb][m][16]
+#pragma omp parallel for schedule(static)
+  for (int kb = 0; kb < KB; kb++) {
+    const int nk = std::min(16, K - kb * 16);
+    int8_t *o = in + (size_t)kb * M * 16;
+    if (nk == 16)
+      for (int m = 0; m < M; m++)
+        memcpy(o + m * 16, A + (size_t)m * K + kb * 16, 16);
+    else
+      for (int m = 0; m < M; m++) {
+        memset(o + m * 16, 0, 16);
+        memcpy(o + m * 16, A + (size_t)m * K + kb * 16, nk);
+      }
+  }
+  // filter {N/16}{C/16}HW1616 with filter[n][k] = B[k][n]: wgt[nb][kb][n % 16][k % 16]
+#pragma omp parallel for schedule(static)
+  for (int nb = 0; nb < NB; nb++) {
+    int8_t *o = wgt + (size_t)nb * KB * 256;
+    memset(o, 0, (size_t)KB * 256);
+    const int nn = std::min(16, N - nb * 16);
+    for (int k = 0; k < K; k++) {
+      const int8_t *b = B + (size_t)k * N + nb * 16;
+      int8_t *ok = o + (k / 16) * 256 + (k % 16);
+      for (int n = 0; n < nn; n++)
+        ok[n * 16] = b[n];
+    }
+  }
+  const bool doBias = shift > 0;
+  for (int n = 0; n < Np; n++)
+    bias[n] = doBias ? 1 << (shift - 1) : 0;
+  VTABufferFlush(inBuf, 0, (size_t)M * Kp);
+  VTABufferFlush(wgtBuf, 0, (size_t)Np * Kp);
+  VTABufferFlush(biasBuf, 0, (size_t)Np * 4);
+  int rc = convolution_wo_tr((int8_t *)inBuf, (int8_t *)wgtBuf, (int32_t *)biasBuf, (int8_t *)outBuf, 1, h, w, Kp, Np, 1,
+                             1, 0, 1, false, doBias, (uint8_t)shift, h, w, vtaCmdH, nVirtualThread, tileHSize, tileWSize,
+                             idEVTA);
+  VTABufferInvalidate(outBuf, 0, (size_t)M * Np);
+  // output N{C/16}HW16 -> C[M][N]
+#pragma omp parallel for schedule(static)
+  for (int m = 0; m < M; m++)
+    for (int nb = 0; nb < NB; nb++)
+      memcpy(C + (size_t)m * N + nb * 16, out + ((size_t)nb * M + m) * 16, std::min(16, N - nb * 16));
+  static const bool check = [] {
+    const char *e = getenv("EVTA_MATMUL_CHECK");
+    return e && atoi(e) != 0;
+  }();
+  if (check) {
+    size_t bad = 0;
+    for (int m = 0; m < M; m++)
+      for (int n = 0; n < N; n++) {
+        int64_t acc = doBias ? 1 << (shift - 1) : 0;
+        for (int k = 0; k < K; k++)
+          acc += (int32_t)A[(size_t)m * K + k] * B[(size_t)k * N + n];
+        acc >>= shift;
+        const int want = (int)std::max<int64_t>(-128, std::min<int64_t>(127, acc));
+        if (C[(size_t)m * N + n] != want && bad++ < 5)
+          fprintf(stderr, "matmul_evta %dx%dx%d [%d][%d]: %d, want %d\n", M, K, N, m, n, C[(size_t)m * N + n], want);
+      }
+    fprintf(stderr, "matmul_evta %dx%dx%d shift %d: %zu differ\n", M, K, N, shift, bad);
+  }
+  VTABufferFree(inBuf);
+  VTABufferFree(wgtBuf);
+  VTABufferFree(biasBuf);
+  VTABufferFree(outBuf);
+  return rc;
+}
+
 //#### JO added (2026-10-31): conv + elementadd (+ relu) in one EVTA call, see ConvResidual. output may be residual
 //#### (in place: each tile reads its residual before it stores), not input.
 //#### JO added (2026-11-02): conv (with relu) + max pool 3x3 / stride 2 / pad 1 in one EVTA call (ConvPool). output: the
