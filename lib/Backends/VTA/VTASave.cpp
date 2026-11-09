@@ -21,6 +21,7 @@
 #include "glow/Graph/Graph.h"
 #include "glow/Graph/Nodes.h"
 #include "glow/IR/IR.h"
+#include "glow/IR/IRUtils.h"
 #include "glow/IR/Instrs.h"
 #include "glow/Optimizer/IROptimizer/IROptimizer.h"
 #include "llvm/Support/CommandLine.h"
@@ -6006,6 +6007,9 @@ static const char *const NESTC_CPU_OPS = R"~(
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#if defined(__aarch64__)
+#include <arm_neon.h>
+#endif
 namespace nestc_cpu {
 static inline void strides(const size_t *d, int r, size_t *s) {
   s[r - 1] = 1;
@@ -6094,25 +6098,43 @@ static void matmul(int8_t *c8, const int8_t *a8, const int8_t *b8, size_t M, siz
   }
 }
 // int8 MatMul (-vta-matmul-conv, the products with an activation on the right): C = clip(round(A B * scale)),
-// scale = lhs scale * rhs scale / dest scale (offsets 0), the Glow Interpreter's rounding
+// scale = lhs scale * rhs scale / dest scale (offsets 0), the Glow Interpreter's rounding; NEON: 16 columns per step,
+// int8 x int8 -> int16 products widened into int32 sums (exact, so the same result as the scalar loop)
+static inline int8_t satRound(int32_t acc, float scale) {
+  const float v = std::round((float)acc * scale);
+  return (int8_t)(v > 127.f ? 127.f : v < -128.f ? -128.f : v);
+}
 static void matmulI8(int8_t *C, const int8_t *A, const int8_t *B, size_t M, size_t K, size_t N, float scale) {
 #pragma omp parallel for schedule(static)
   for (long m = 0; m < (long)M; m++) {
-    int32_t acc[512];
     const int8_t *a = A + m * K;
-    for (size_t n0 = 0; n0 < N; n0 += 512) {
-      const size_t nn = N - n0 < 512 ? N - n0 : 512;
-      for (size_t j = 0; j < nn; j++) acc[j] = 0;
-      for (size_t k = 0; k < K; k++) {
-        const int32_t av = a[k];
-        const int8_t *b = B + k * N + n0;
-        for (size_t j = 0; j < nn; j++) acc[j] += av * b[j];
+    int8_t *c = C + m * N;
+    size_t n = 0;
+#if defined(__aarch64__)
+    for (; n + 16 <= N; n += 16) {
+      int32x4_t s0 = vdupq_n_s32(0), s1 = s0, s2 = s0, s3 = s0;
+      const int8_t *b = B + n;
+      for (size_t k = 0; k < K; k++, b += N) {
+        const int8x16_t vb = vld1q_s8(b);
+        const int8x8_t va = vdup_n_s8(a[k]);
+        const int16x8_t lo = vmull_s8(vget_low_s8(vb), va), hi = vmull_s8(vget_high_s8(vb), va);
+        s0 = vaddw_s16(s0, vget_low_s16(lo));
+        s1 = vaddw_high_s16(s1, lo);
+        s2 = vaddw_s16(s2, vget_low_s16(hi));
+        s3 = vaddw_high_s16(s3, hi);
       }
-      int8_t *c = C + m * N + n0;
-      for (size_t j = 0; j < nn; j++) {
-        float v = std::round((float)acc[j] * scale);
-        c[j] = (int8_t)(v > 127.f ? 127.f : v < -128.f ? -128.f : v);
-      }
+      int32_t acc[16];
+      vst1q_s32(acc, s0);
+      vst1q_s32(acc + 4, s1);
+      vst1q_s32(acc + 8, s2);
+      vst1q_s32(acc + 12, s3);
+      for (int j = 0; j < 16; j++) c[n + j] = satRound(acc[j], scale);
+    }
+#endif
+    for (; n < N; n++) {
+      int32_t acc = 0;
+      for (size_t k = 0; k < K; k++) acc += (int32_t)a[k] * B[k * N + n];
+      c[n] = satRound(acc, scale);
     }
   }
 }
@@ -6144,15 +6166,32 @@ static void mul(int8_t *o8, const int8_t *a8, const int8_t *b8, size_t n) {
   const float *a = (const float *)a8, *b = (const float *)b8;
   for (size_t i = 0; i < n; i++) o[i] = a[i] * b[i];
 }
+// exponents 2 and 0.5 (layer norm) as a * a and sqrt (both correctly rounded, as std::pow)
 static void pow(int8_t *o8, const int8_t *a8, const int8_t *b8, size_t n) {
   float *o = (float *)o8;
   const float *a = (const float *)a8, *b = (const float *)b8;
-  for (size_t i = 0; i < n; i++) o[i] = std::pow(a[i], b[i]);
+  for (size_t i = 0; i < n; i++) {
+    const float e = b[i];
+    o[i] = e == 2.f ? a[i] * a[i] : e == 0.5f && a[i] >= 0.f ? std::sqrt(a[i]) : std::pow(a[i], e);
+  }
 }
 static void erf(int8_t *o8, const int8_t *a8, size_t n) {
   float *o = (float *)o8;
   const float *a = (const float *)a8;
   for (size_t i = 0; i < n; i++) o[i] = std::erf(a[i]);
+}
+// erf of values dequantized from int8 at scale s (GELU): a table of the 256 std::erf values, the same result; a value
+// that is not q * s falls back to std::erf
+static void erfQ(int8_t *o8, const int8_t *a8, size_t n, float s) {
+  float *o = (float *)o8;
+  const float *a = (const float *)a8;
+  float T[256];
+  for (int q = -128; q < 128; q++) T[q + 128] = std::erf((float)q * s);
+  for (size_t i = 0; i < n; i++) {
+    const float x = a[i];
+    const long q = std::lrint(x / s);
+    o[i] = q >= -128 && q < 128 && (float)q * s == x ? T[q + 128] : std::erf(x);
+  }
 }
 static void fill(int8_t *o8, size_t n, float v) {
   float *o = (float *)o8;
@@ -6175,6 +6214,29 @@ static void requireFloat(const Instruction *I, std::initializer_list<const Value
                    << ": only float is supported on the CPU path\n";
       std::exit(1);
     }
+}
+
+//#### JO added (2026-11-09): the dequantize that wrote v last before I (int8, offset 0), if no other instruction writes v
+//#### (or a view of it) in between: then v holds q * scale values at I (erfQ)
+static const DequantizeInst *dequantizedBefore(const Instruction &I, const Value *v) {
+  const Value *ov = getOrigin(const_cast<Value *>(v));
+  auto &instrs = I.getParent()->getInstrs();
+  auto it = I.getIterator();
+  while (it != instrs.begin()) {
+    --it;
+    const Instruction &J = *it;
+    for (unsigned i = 0, e = J.getNumOperands(); i < e; i++) {
+      auto op = J.getOperand(i);
+      if (op.second == OperandKind::In || getOrigin(const_cast<Value *>(op.first)) != ov)
+        continue;
+      auto *dq = llvm::dyn_cast<DequantizeInst>(&J);
+      if (dq && dq->getDest() == v && dq->getSrc()->getType()->getElementType() == ElemKind::Int8QTy &&
+          dq->getSrc()->getType()->getOffset() == 0)
+        return dq;
+      return nullptr;
+    }
+  }
+  return nullptr;
 }
 
 static void requireRank(const Instruction *I, const Value *v) {
@@ -6290,6 +6352,13 @@ static bool saveGenericCpuInst(const Instruction &I, std::string *bundle, VTASav
     auto *C = llvm::cast<ElementErfInst>(&I);
     requireFloat(&I, {C->getDest(), C->getSrc()});
     std::string d = P(C->getDest()), s = P(C->getSrc());
+    //#### JO added (2026-11-09): erfQ when the input was dequantized from int8 (dequantizedBefore)
+    if (auto *dq = dequantizedBefore(I, C->getSrc())) {
+      char sc[32];
+      snprintf(sc, sizeof(sc), "%.9g", dq->getSrc()->getType()->getScale());
+      call = "nestc_cpu::erfQ(" + d + ", " + s + ", " + sizeStr(C->getDest()) + ", " + sc + "f);";
+      break;
+    }
     call = "nestc_cpu::erf(" + d + ", " + s + ", " + sizeStr(C->getDest()) + ");";
     break;
   }
