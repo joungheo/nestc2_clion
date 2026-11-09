@@ -26,6 +26,8 @@
 #include "glow/Optimizer/IROptimizer/IROptimizer.h"
 #include "llvm/Support/CommandLine.h"
 #include <algorithm>
+#include <cctype>
+#include <cstring>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -140,6 +142,17 @@ struct InputPreprocess {
   std::vector<int8_t> lut;      // [C][256] value after the elemsub / elemdiv chain, empty: none
 };
 
+//#### JO added (2026-11-09): a run of elementwise instructions from one int8 buffer (root) to an int8 value (out), every
+//#### other operand a constant with one value in all elements (findLutRegions, -vta-lut-elementwise): emitted as a table
+//#### of its 256 results, computed once at run time by the same code on a 256-element probe (so the same result)
+struct LutRegion {
+  std::vector<const Instruction *> instrs; // the region's instructions (in order; allocs / deallocs / views between them
+                                           // are emitted as usual)
+  const Value *root = nullptr, *out = nullptr; // origins
+  size_t n = 0;                                // elements
+  const Instruction *outAlloc = nullptr;       // the out's allocation when it lies inside the region (emitted first)
+};
+
 class VTASaveContext {
 public:
   VTASaveContext(IRFunction::VariableMap *vmap) {
@@ -191,6 +204,10 @@ public:
     return it == poolFusions.end() ? nullptr : &it->second;
   }
   bool isPreFused(const Instruction *I) const { return preFused.count(I) != 0; }
+  //#### JO added (2026-11-09): findLutRegions (by the region's first instruction; the others are in lutAway)
+  std::map<const Instruction *, LutRegion> *getLutRegions() { return &lutRegions; }
+  std::set<const Instruction *> *getLutAway() { return &lutAway; }
+  bool isLutAway(const Instruction *I) const { return lutAway.count(I) != 0; }
   // a name that lives as long as the symbol tables (constants that are not IR values)
   const char *keepName(const std::string &name) {
     names.push_back(name);
@@ -215,6 +232,8 @@ private:
   std::map<const Instruction *, InputPreprocess> preprocs; // by the first conv
   std::set<const Instruction *> preFused; // quantize / elemsub / elemdiv / transpose done by a first conv's input copy
   std::map<const Instruction *, PoolFusion> poolFusions; // by the first conv
+  std::map<const Instruction *, LutRegion> lutRegions;
+  std::set<const Instruction *> lutAway;
   std::list<std::string> names;
 };
 
@@ -6246,6 +6265,35 @@ static void erfQ(int8_t *o8, const int8_t *a8, size_t n, float s) {
     o[i] = q != -1000 ? T[q + 128] : std::erf(a[i]);
   }
 }
+// o[i] = t[a[i] + 128] (an elementwise region as a table, VTASave findLutRegions); NEON: 4 x 64-byte table lookups
+struct Lut8 {
+  int8_t v[256];
+};
+static void lut8(int8_t *o, const int8_t *a, const Lut8 &lut, size_t n) {
+  const int8_t *t = lut.v;
+  size_t i = 0;
+#if defined(__aarch64__)
+  const uint8_t *tu = (const uint8_t *)t;
+  uint8x16x4_t T[4];
+  for (int k = 0; k < 4; k++)
+    for (int j = 0; j < 4; j++)
+      T[k].val[j] = vld1q_u8(tu + 64 * k + 16 * j);
+  const uint8x16_t x80 = vdupq_n_u8(0x80), c64 = vdupq_n_u8(64);
+  for (; i + 16 <= n; i += 16) {
+    uint8x16_t idx = veorq_u8(vld1q_u8((const uint8_t *)a + i), x80);
+    uint8x16_t r = vqtbl4q_u8(T[0], idx);
+    idx = vsubq_u8(idx, c64);
+    r = vqtbx4q_u8(r, T[1], idx);
+    idx = vsubq_u8(idx, c64);
+    r = vqtbx4q_u8(r, T[2], idx);
+    idx = vsubq_u8(idx, c64);
+    r = vqtbx4q_u8(r, T[3], idx);
+    vst1q_u8((uint8_t *)o + i, r);
+  }
+#endif
+  for (; i < n; i++)
+    o[i] = t[(uint8_t)a[i] ^ 0x80];
+}
 static void fill(int8_t *o8, size_t n, float v) {
   float *o = (float *)o8;
   for (size_t i = 0; i < n; i++) o[i] = v;
@@ -6644,11 +6692,304 @@ void finalizeBundleEntrySave(struct BundleSaveCtx &bundleCtx,
 //#### top of the bundle .cpp, so a bundle shows how it was made (MobileNetV2Test: -vta-round-shift, -vta-evta-depthwise,
 //#### -enable-channelwise-depthwise; a hand-run model-compiler that misses one differs only in its numbers otherwise).
 //#### Options defined in other files (VTA.cpp, the quantizer, the loader) are looked up by name; all are cl::opt<bool>.
+//#### JO added (2026-11-09): -vta-lut-elementwise (findLutRegions / emitLutRegion; LutRegion)
+static llvm::cl::opt<bool> vtaLutElementwise(
+    "vta-lut-elementwise",
+    llvm::cl::desc("Emit runs of elementwise instructions from one int8 buffer to an int8 value (other operands "
+                   "constants with one value) as a 256-entry table computed once at run time by the same code"),
+    llvm::cl::init(true));
+
+static const Tensor *constantPayload(const Value *v, VTASaveContext *ctx) {
+  for (auto &it : *ctx->getVariableMap())
+    if (it.second == v && it.first->getKind() == Kinded::Kind::ConstantKind)
+      return &llvm::cast<Constant>(it.first)->getPayload();
+  return nullptr;
+}
+
+// a constant whose elements all have the same bytes (a broadcast scalar)
+static bool isUniformConstant(const Value *v, VTASaveContext *ctx) {
+  if (!isConstantWeight(v))
+    return false;
+  const Tensor *t = constantPayload(v, ctx);
+  if (!t || t->getSizeInBytes() != v->getSizeInBytes())
+    return false;
+  const size_t es = v->getType()->getElementSize(), n = v->size();
+  const char *p = t->getUnsafePtr();
+  for (size_t i = 1; i < n; i++)
+    if (memcmp(p, p + i * es, es))
+      return false;
+  return true;
+}
+
+// the activation under v through tensor views at offset 0, nullptr if a view has an offset or it is not an activation
+static const Value *zeroOffsetActivation(const Value *v) {
+  while (auto *tv = llvm::dyn_cast<TensorViewInst>(v)) {
+    for (auto o : tv->getOffsets())
+      if (o)
+        return nullptr;
+    v = tv->getSrc();
+  }
+  return llvm::isa<AllocActivationInst>(v) ? v : nullptr;
+}
+
+static bool lutEligibleKind(const Instruction &I) {
+  switch (I.getKind()) {
+  case Kinded::Kind::QuantizeInstKind:
+  case Kinded::Kind::DequantizeInstKind:
+  case Kinded::Kind::ElementAddInstKind:
+  case Kinded::Kind::ElementSubInstKind:
+  case Kinded::Kind::ElementMulInstKind:
+  case Kinded::Kind::ElementDivInstKind:
+  case Kinded::Kind::ElementMaxInstKind:
+  case Kinded::Kind::ElementErfInstKind:
+  case Kinded::Kind::ElementPowInstKind:
+    return true;
+  default:
+    return false;
+  }
+}
+
+static void emitElementwiseInst(const Instruction &I, std::string *b, VTASaveContext *ctx) {
+  switch (I.getKind()) {
+  case Kinded::Kind::QuantizeInstKind:
+    saveQuantizeInst(llvm::cast<QuantizeInst>(&I), b, ctx);
+    break;
+  case Kinded::Kind::DequantizeInstKind:
+    saveDequantizeInst(llvm::cast<DequantizeInst>(&I), b, ctx);
+    break;
+  case Kinded::Kind::ElementAddInstKind:
+    saveElemAddInst(llvm::cast<ElementAddInst>(&I), b, ctx);
+    break;
+  case Kinded::Kind::ElementSubInstKind:
+    saveElemSubInst(llvm::cast<ElementSubInst>(&I), b, ctx);
+    break;
+  case Kinded::Kind::ElementDivInstKind:
+    saveElemDivInst(llvm::cast<ElementDivInst>(&I), b, ctx);
+    break;
+  case Kinded::Kind::ElementMaxInstKind:
+    saveElemMaxInst(llvm::cast<ElementMaxInst>(&I), b, ctx);
+    break;
+  default:
+    saveGenericCpuInst(I, b, ctx);
+  }
+}
+
+static void findLutRegions(IRFunction *F, VTASaveContext *ctx) {
+  if (!vtaLutElementwise)
+    return;
+  std::vector<const Instruction *> L;
+  std::map<const Instruction *, size_t> pos;
+  for (const auto &I : F->getInstrs()) {
+    pos[&I] = L.size();
+    L.push_back(&I);
+  }
+  auto skippable = [](const Instruction *I) {
+    return I->getKind() == Kinded::Kind::AllocActivationInstKind ||
+           I->getKind() == Kinded::Kind::DeallocActivationInstKind ||
+           I->getKind() == Kinded::Kind::TensorViewInstKind;
+  };
+  auto touches = [](const Instruction *I, const Value *b) {
+    for (unsigned k = 0, e = I->getNumOperands(); k < e; k++)
+      if (getOrigin(const_cast<Value *>(I->getOperand(k).first)) == b)
+        return true;
+    return false;
+  };
+  for (size_t i = 0; i < L.size(); i++) {
+    const Instruction *I0 = L[i];
+    if (!lutEligibleKind(*I0) || ctx->isFusedAway(I0) || ctx->isPreFused(I0))
+      continue;
+    const size_t n = I0->getOperand(0).first->size();
+    if (n < 1024)
+      continue;
+    // the root: the one int8 activation the first instruction reads
+    const Value *root = nullptr;
+    bool ok = true;
+    for (unsigned k = 0, e = I0->getNumOperands(); k < e && ok; k++) {
+      auto op = I0->getOperand(k);
+      if (op.second != OperandKind::In || isConstantWeight(op.first))
+        continue;
+      const Value *o = zeroOffsetActivation(op.first);
+      ok = o && (!root || root == o) && op.first->getType()->getElementType() == ElemKind::Int8QTy;
+      root = o;
+    }
+    if (!ok || !root)
+      continue;
+    std::set<const Value *> written;
+    auto accepts = [&](const Instruction *J) {
+      if (!lutEligibleKind(*J) || ctx->isFusedAway(J) || ctx->isPreFused(J))
+        return false;
+      std::vector<const Value *> outs;
+      for (unsigned k = 0, e = J->getNumOperands(); k < e; k++) {
+        auto op = J->getOperand(k);
+        if (op.first->size() != n)
+          return false;
+        if (op.second == OperandKind::In && isConstantWeight(op.first)) {
+          if (!isUniformConstant(op.first, ctx))
+            return false;
+          continue;
+        }
+        const Value *o = zeroOffsetActivation(op.first);
+        if (!o || o->size() != n || ctx->isPacked(o) || ctx->isPacked(op.first))
+          return false;
+        if (op.second == OperandKind::In) {
+          if (o != root && !written.count(o))
+            return false;
+        } else if (op.second == OperandKind::Out) {
+          outs.push_back(o);
+        } else {
+          return false;
+        }
+      }
+      written.insert(outs.begin(), outs.end());
+      return true;
+    };
+    std::vector<size_t> members;
+    for (size_t j = i; j < L.size(); j++) {
+      if (j > i && skippable(L[j]))
+        continue;
+      if (!accepts(L[j]))
+        break;
+      members.push_back(j);
+    }
+    // the longest prefix that ends with an int8 value and leaves nothing else that is read later
+    for (size_t m = members.size(); m > 0; m--) {
+      const Instruction *E = L[members[m - 1]];
+      const Value *outV = E->getOperand(0).first;
+      if (E->getOperand(0).second != OperandKind::Out || outV->getType()->getElementType() != ElemKind::Int8QTy)
+        continue;
+      const Value *out = zeroOffsetActivation(outV);
+      std::set<const Value *> w;
+      for (size_t k = 0; k < m; k++)
+        for (unsigned q = 0, e = L[members[k]]->getNumOperands(); q < e; q++)
+          if (L[members[k]]->getOperand(q).second == OperandKind::Out)
+            w.insert(zeroOffsetActivation(L[members[k]]->getOperand(q).first));
+      bool live = true;
+      for (const Value *b : w) {
+        if (b == out)
+          continue;
+        for (size_t k = members[m - 1] + 1; k < L.size(); k++)
+          if (touches(L[k], b)) {
+            live = L[k]->getKind() != Kinded::Kind::DeallocActivationInstKind;
+            break;
+          }
+        if (!live)
+          break;
+      }
+      if (!live)
+        continue;
+      LutRegion r;
+      for (size_t k = 0; k < m; k++)
+        r.instrs.push_back(L[members[k]]);
+      r.root = root;
+      r.out = out;
+      r.n = n;
+      if (pos.count(llvm::cast<Instruction>(out)) && pos[llvm::cast<Instruction>(out)] > i)
+        r.outAlloc = llvm::cast<Instruction>(out);
+      for (size_t k = 1; k < m; k++)
+        ctx->getLutAway()->insert(L[members[k]]);
+      (*ctx->getLutRegions())[I0] = r;
+      i = members[m - 1];
+      break;
+    }
+  }
+}
+
+// identifiers in s renamed by ren; a number token equal to num between ',' / '(' and ',' / ')' becomes rep
+// (count: how many)
+static std::string renameTokens(const std::string &s, const std::map<std::string, std::string> &ren,
+                                const std::string &num, const std::string &rep, int *count) {
+  std::string o;
+  size_t i = 0;
+  while (i < s.size()) {
+    const char c = s[i];
+    if (std::isalpha((unsigned char)c) || c == '_') {
+      size_t j = i;
+      while (j < s.size() && (std::isalnum((unsigned char)s[j]) || s[j] == '_'))
+        j++;
+      const std::string id = s.substr(i, j - i);
+      auto it = ren.find(id);
+      o += it == ren.end() ? id : it->second;
+      i = j;
+    } else if (std::isdigit((unsigned char)c)) {
+      size_t j = i;
+      while (j < s.size() && (std::isalnum((unsigned char)s[j]) || s[j] == '.'))
+        j++;
+      const std::string tok = s.substr(i, j - i);
+      size_t a = o.find_last_not_of(' '), b = s.find_first_not_of(' ', j);
+      const bool arg = a != std::string::npos && (o[a] == ',' || o[a] == '(') && b != std::string::npos &&
+                       (s[b] == ',' || s[b] == ')');
+      if (tok == num && arg) {
+        o += rep;
+        (*count)++;
+      } else {
+        o += tok;
+      }
+      i = j;
+    } else {
+      o += c;
+      i++;
+    }
+  }
+  return o;
+}
+
+static void emitLutRegion(const LutRegion &r, std::string *bundle, VTASaveContext *ctx) {
+  static int id = 0;
+  std::map<std::string, std::string> ren;
+  std::map<const Value *, std::string> probe;
+  auto probeOf = [&](const Value *v) {
+    const Value *o = zeroOffsetActivation(v);
+    auto it = probe.find(o);
+    if (it != probe.end())
+      return it->second;
+    std::string p = "lutp" + std::to_string(probe.size());
+    probe[o] = p;
+    ren[o->getName().str()] = p;
+    return p;
+  };
+  probeOf(r.root);
+  std::string body;
+  const std::string num = std::to_string(r.n);
+  for (const Instruction *J : r.instrs) {
+    for (unsigned k = 0, e = J->getNumOperands(); k < e; k++) {
+      auto op = J->getOperand(k);
+      if (op.second == OperandKind::In && isConstantWeight(op.first))
+        continue;
+      ren[op.first->getName().str()] = probeOf(op.first);
+    }
+    std::string tmp;
+    emitElementwiseInst(*J, &tmp, ctx);
+    int cnt = 0;
+    std::string t2 = renameTokens(tmp, ren, num, "256", &cnt);
+    if (cnt != 1 || t2.find(num) != std::string::npos || t2.find(std::to_string(r.n * 4)) != std::string::npos) {
+      llvm::errs() << "VTASave: -vta-lut-elementwise: unexpected code for " << J->getName() << ": " << tmp;
+      std::exit(1);
+    }
+    body += "    " + t2;
+  }
+  ctx->usesCpuOps = true;
+  if (r.outAlloc && ctx->getHoisted()->insert(r.outAlloc).second)
+    *bundle += "  int8_t *" + r.out->getName().str() + " = (int8_t *)malloc(" +
+               std::to_string(r.out->getSizeInBytes()) + ");\n";
+  std::string decl;
+  for (auto &p : probe)
+    decl += "    alignas(16) int8_t " + p.second + "[1024];\n";
+  const std::string lut = "lut" + std::to_string(id++);
+  *bundle += "  //#### " + std::to_string(r.instrs.size()) + " elementwise instructions (" +
+             r.instrs.front()->getName().str() + " .. " + r.instrs.back()->getName().str() +
+             ") as a table of their 256 results (-vta-lut-elementwise)\n";
+  *bundle += "  static const nestc_cpu::Lut8 " + lut + " = [&]() {\n" + decl +
+             "    for (int q = 0; q < 256; q++) " + probe[r.root] + "[q] = (int8_t)(q - 128);\n" + body +
+             "    nestc_cpu::Lut8 t;\n    memcpy(t.v, " + probe[r.out] + ", 256);\n    return t;\n  }();\n";
+  *bundle += "  nestc_cpu::lut8(" + r.out->getName().str() + ", " + r.root->getName().str() + ", " + lut + ", " +
+             num + ");\n";
+}
+
 static std::string vtaOptionsComment() {
   static const char *const names[] = {
       "vta-keep-layout",   "vta-fuse-residual", "vta-evta-maxpool", "vta-evta-fc",
       "vta-fuse-preprocess", "vta-conv0-pack",  "vta-fuse-pool",    "vta-evta-depthwise",
-      "vta-round-shift",   "vta-pad-channels",  "vta-matmul-conv", "vta-evta-matmul",
+      "vta-round-shift",   "vta-pad-channels",  "vta-matmul-conv", "vta-evta-matmul", "vta-lut-elementwise",
       "enable-channelwise-depthwise", "enable-channelwise"};
   auto &opts = llvm::cl::getRegisteredOptions();
   std::string s = "// Generated by the NEST-C VTA backend with:";
@@ -6819,6 +7160,7 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
   findEvtaMaxPools(IR.get(), &ctx);
   findInputPreprocess(IR.get(), &ctx);
   findPoolFusions(IR.get(), &ctx);
+  findLutRegions(IR.get(), &ctx);
 
   for (const auto &I : IR->getInstrs()) {
 
@@ -6836,6 +7178,18 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
     bundle.append(I.getName());
     bundle.append("\n");
 
+    //#### JO added (2026-11-09): an elementwise region as a table (findLutRegions)
+    if (ctx.isLutAway(&I)) {
+      bundle.append("  // done by the table of the elementwise region before (lut8)\n");
+      continue;
+    }
+    {
+      auto it = ctx.getLutRegions()->find(&I);
+      if (it != ctx.getLutRegions()->end()) {
+        emitLutRegion(it->second, &bundle, &ctx);
+        continue;
+      }
+    }
     //#### JO added (2026-10-31): elementadd / relu done by the fused conv before them
     if (ctx.isFusedAway(&I)) {
       bundle.append("  // done by the EVTA conv before (convolution_wo_tr_res / convolution_wo_tr_pool)\n");
