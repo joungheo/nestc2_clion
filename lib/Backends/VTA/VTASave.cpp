@@ -150,6 +150,8 @@ public:
   IRFunction::VariableMap *getVariableMap() { return variable_map; }
   void setIdxMultiEVTA(uint32_t idx) { idxMultiEVTA = idx; }
   uint32_t getIdxMultiEVTA() { return idxMultiEVTA; }
+  //#### JO added (2026-11-09): the bundle calls the generic CPU ops (NESTC_CPU_OPS is written into it)
+  bool usesCpuOps = false;
   //#### JO added (2026-10-31): activations kept in the EVTA layout (findPackedActivations)
   std::set<const Value *> *getPacked() { return &packed; }
   bool isPacked(const Value *v) const { return packed.count(v) != 0; }
@@ -313,6 +315,36 @@ static bool hasConstantSymbol(Value *val, VTASaveContext *ctx) {
     if (strcmp(s.name, val->getName().data()) == 0)
       return true;
   return false;
+}
+
+//#### JO added (2026-11-09): CPU access to an IR value (the generic CPU ops of DeiT-tiny, constant operands of elemadd,
+//#### tensor views of constants): a mutable weight (input / output) is declared from mutableWeight on its first use; a
+//#### constant is written to the weights file on its first use, once (a VTA buffer, read through its virtual address);
+//#### an activation or a tensor view is its pointer. The expression is an int8_t *.
+static bool isConstantWeight(const Value *v) {
+  auto *w = llvm::dyn_cast<WeightVar>(v);
+  return w && w->getMutability() != WeightVar::MutabilityKind::Mutable;
+}
+
+static std::string cpuPtr(Value *v, std::string *bundle, VTASaveContext *ctx) {
+  if (auto *w = llvm::dyn_cast<WeightVar>(v)) {
+    if (w->getMutability() == WeightVar::MutabilityKind::Mutable)
+      return addSymbolEntryGenBundle(w, bundle, ctx).name;
+    if (!hasConstantSymbol(v, ctx)) {
+      const Tensor *t = nullptr;
+      for (auto &it : *ctx->getVariableMap())
+        if (it.second == v && it.first->getKind() == Kinded::Kind::ConstantKind)
+          t = &llvm::cast<Constant>(it.first)->getPayload();
+      if (!t || t->getSizeInBytes() != v->getSizeInBytes()) {
+        llvm::errs() << "VTASave: no payload for the constant " << v->getName() << "\n";
+        std::exit(1);
+      }
+      addConstantSymbolEntry(v, ctx);
+      ctx->getWeightFileStream()->write(t->getUnsafePtr(), t->getSizeInBytes());
+    }
+    return "(int8_t *)VTABufferGetVirtAddr(" + v->getName().str() + ")";
+  }
+  return v->getName().str();
 }
 
 SymbolTableEntry addConstantSymbolEntry_BNN(Value* val, VTASaveContext *ctx, bool first=false){
@@ -4659,6 +4691,27 @@ void saveAvgPoolInst(const glow::AvgPoolInst *Inst, std::string *bundle,
 void saveTensorViewInst(const glow::TensorViewInst *Inst, std::string *bundle,
                         VTASaveContext *ctx) {
   auto src = Inst->getSrc();
+  //#### JO added (2026-11-09): a view at non-zero offsets starts there (DeiT: the patch tokens in the concat, the attention
+  //#### heads), a view of a constant reads it through its virtual address (was: the source pointer for any offsets, the
+  //#### constant's buffer handle). Views at offset 0 of activations / mutable weights are emitted as before.
+  {
+    auto offs = Inst->getOffsets();
+    auto sd = src->dims();
+    uint64_t off = 0, stride = 1;
+    for (int i = (int)offs.size() - 1; i >= 0; i--) {
+      off += offs[i] * stride;
+      stride *= sd[i];
+    }
+    off *= src->getType()->getElementSize();
+    if (off != 0 || isConstantWeight(src)) {
+      std::string p = cpuPtr(src, bundle, ctx);
+      bundle->append("  int8_t* " + Inst->getName().str() + " = " + p);
+      if (off != 0)
+        bundle->append(" + " + std::to_string(off));
+      bundle->append(";\n");
+      return;
+    }
+  }
   auto srcWeight = static_cast<WeightVar *>(src);
   if (srcWeight->getMutability() == glow::WeightVar::MutabilityKind::Mutable) {
     addSymbolEntryGenBundle(srcWeight, bundle, ctx);
@@ -5139,7 +5192,8 @@ void saveElemAddInst(const glow::ElementAddInst *Inst, std::string *bundle,
     bundle->append(ste.name);
     bundle->append(", ");
   } else {
-    bundle->append(src0->getName());
+    //#### JO changed (2026-11-09): a constant operand through its virtual address (DeiT: biases, position embedding)
+    bundle->append(isConstantWeight(src0) ? cpuPtr(src0, bundle, ctx) : src0->getName().str());
     bundle->append(", ");
   }
 
@@ -5152,7 +5206,8 @@ void saveElemAddInst(const glow::ElementAddInst *Inst, std::string *bundle,
     bundle->append(ste.name);
     bundle->append(", ");
   } else {
-    bundle->append(src1->getName());
+    //#### JO changed (2026-11-09): a constant operand through its virtual address (DeiT: biases, position embedding)
+    bundle->append(isConstantWeight(src1) ? cpuPtr(src1, bundle, ctx) : src1->getName().str());
     bundle->append(", ");
   }
 
@@ -5203,7 +5258,9 @@ void saveElemSubInst(const glow::ElementSubInst *Inst, std::string *bundle,
       addSymbolEntryGenBundle(srcWeight1, bundle, ctx);
     }
     // TODO : yongin apply this code to other saves
-    else {
+    else if (isConstantWeight(src1) && !hasConstantSymbol(src1, ctx)) {
+      //#### JO changed (2026-11-09): only a constant, and its bytes once (DeiT: an activation divisor / subtrahend; one
+      //#### constant shared by 12 elemdivs was written 12 times, shifting every later constant)
       addConstantSymbolEntry(srcWeight1, ctx);
       {
         auto vMap = ctx->getVariableMap();
@@ -5330,7 +5387,9 @@ void saveElemSubInst(const glow::ElementSubInst *Inst, std::string *bundle,
       addSymbolEntryGenBundle(srcWeight1, bundle, ctx);
     }
     // TODO : yongin apply this code to other saves
-    else {
+    else if (isConstantWeight(src1) && !hasConstantSymbol(src1, ctx)) {
+      //#### JO changed (2026-11-09): only a constant, and its bytes once (DeiT: an activation divisor / subtrahend; one
+      //#### constant shared by 12 elemdivs was written 12 times, shifting every later constant)
       addConstantSymbolEntry(srcWeight1, ctx);
       {
         auto vMap = ctx->getVariableMap();
@@ -5450,7 +5509,9 @@ void saveElemDivInst(const glow::ElementDivInst *Inst, std::string *bundle,
     if (srcWeight1->getMutability() ==
         glow::WeightVar::MutabilityKind::Mutable) {
       addSymbolEntryGenBundle(srcWeight1, bundle, ctx);
-    } else {
+    } else if (isConstantWeight(src1) && !hasConstantSymbol(src1, ctx)) {
+      //#### JO changed (2026-11-09): only a constant, and its bytes once (DeiT: an activation divisor / subtrahend; one
+      //#### constant shared by 12 elemdivs was written 12 times, shifting every later constant)
       addConstantSymbolEntry(srcWeight1, ctx);
       {
         auto vMap = ctx->getVariableMap();
@@ -5576,7 +5637,9 @@ void saveElemDivInst(const glow::ElementDivInst *Inst, std::string *bundle,
     if (srcWeight1->getMutability() ==
         glow::WeightVar::MutabilityKind::Mutable) {
       addSymbolEntryGenBundle(srcWeight1, bundle, ctx);
-    } else {
+    } else if (isConstantWeight(src1) && !hasConstantSymbol(src1, ctx)) {
+      //#### JO changed (2026-11-09): only a constant, and its bytes once (DeiT: an activation divisor / subtrahend; one
+      //#### constant shared by 12 elemdivs was written 12 times, shifting every later constant)
       addConstantSymbolEntry(srcWeight1, ctx);
       {
         auto vMap = ctx->getVariableMap();
@@ -5912,6 +5975,284 @@ void saveReluInst(const glow::ReluInst *Inst, std::string *bundle,
   bundle->append(" );\n");
 }
 
+//#### JO added (2026-11-09): generic CPU ops for the instructions with no vtalib function (DeiT-tiny: matmul, the layer norm
+//#### and GELU pieces left in float, the concat / slice / head copies, 3-D and float transposes, softmax over rows). The
+//#### functions are written into the bundle .cpp (NESTC_CPU_OPS, only when one is used), so any vtalib builds it.
+//#### Row-major tensors of rank <= 6; int8_t * arguments as the rest of the bundle, cast in the functions.
+static const char *const NESTC_CPU_OPS = R"~(
+//#### NEST-C VTASave generic CPU ops (2026-11-09): instructions with no vtalib function, row-major tensors of rank <= 6
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+namespace nestc_cpu {
+static inline void strides(const size_t *d, int r, size_t *s) {
+  s[r - 1] = 1;
+  for (int i = r - 2; i >= 0; i--) s[i] = s[i + 1] * d[i + 1];
+}
+// copies the box `box` of src (shape sd) at so to dst (shape dd) at dof, es bytes per element
+static void copyBox(int8_t *dst, const size_t *dd, const size_t *dof, const int8_t *src, const size_t *sd,
+                    const size_t *so, const size_t *box, int r, size_t es) {
+  size_t ss[6], ds[6], idx[6] = {0};
+  strides(sd, r, ss);
+  strides(dd, r, ds);
+  size_t rows = 1;
+  for (int i = 0; i < r - 1; i++) rows *= box[i];
+  const size_t run = box[r - 1] * es;
+  for (size_t t = 0; t < rows; t++) {
+    size_t s = so[r - 1], d = dof[r - 1];
+    for (int i = 0; i < r - 1; i++) {
+      s += (so[i] + idx[i]) * ss[i];
+      d += (dof[i] + idx[i]) * ds[i];
+    }
+    memmove(dst + d * es, src + s * es, run);
+    for (int i = r - 2; i >= 0; i--) {
+      if (++idx[i] < box[i]) break;
+      idx[i] = 0;
+    }
+  }
+}
+// Glow InsertTensor: src at off in dst, count copies along axis
+static void insert(int8_t *dst, const size_t *dd, const int8_t *src, const size_t *sd, const size_t *off,
+                   size_t count, int axis, int r, size_t es) {
+  size_t o[6], z[6] = {0};
+  for (int i = 0; i < r; i++) o[i] = off[i];
+  for (size_t c = 0; c < count; c++, o[axis] += sd[axis]) copyBox(dst, dd, o, src, sd, z, sd, r, es);
+}
+// Glow ExtractTensor: the dst-shaped box of src at off
+static void extract(int8_t *dst, const size_t *dd, const int8_t *src, const size_t *sd, const size_t *off, int r,
+                    size_t es) {
+  size_t z[6] = {0};
+  copyBox(dst, dd, z, src, sd, off, dd, r, es);
+}
+// Glow Transpose: dst dim i is src dim sh[i]
+static void transpose(int8_t *dst, const int8_t *src, const size_t *sd, const unsigned *sh, int r, size_t es) {
+  size_t ss[6], od[6], os[6], idx[6] = {0};
+  strides(sd, r, ss);
+  for (int i = 0; i < r; i++) {
+    od[i] = sd[sh[i]];
+    os[i] = ss[sh[i]];
+  }
+  size_t rows = 1;
+  for (int i = 0; i < r - 1; i++) rows *= od[i];
+  const size_t n = od[r - 1], st = os[r - 1];
+  for (size_t t = 0; t < rows; t++) {
+    size_t s = 0;
+    for (int i = 0; i < r - 1; i++) s += idx[i] * os[i];
+    int8_t *d = dst + t * n * es;
+    if (es == 4) {
+      const uint32_t *p = (const uint32_t *)src + s;
+      uint32_t *q = (uint32_t *)d;
+      for (size_t j = 0; j < n; j++) q[j] = p[j * st];
+    } else if (es == 1) {
+      const int8_t *p = src + s;
+      for (size_t j = 0; j < n; j++) d[j] = p[j * st];
+    } else {
+      for (size_t j = 0; j < n; j++) memcpy(d + j * es, src + (s + j * st) * es, es);
+    }
+    for (int i = r - 2; i >= 0; i--) {
+      if (++idx[i] < od[i]) break;
+      idx[i] = 0;
+    }
+  }
+}
+// C[M][N] = A[M][K] B[K][N], float
+static void matmul(int8_t *c8, const int8_t *a8, const int8_t *b8, size_t M, size_t K, size_t N) {
+  float *C = (float *)c8;
+  const float *A = (const float *)a8, *B = (const float *)b8;
+#pragma omp parallel for schedule(static)
+  for (long m = 0; m < (long)M; m++) {
+    float *c = C + m * N;
+    const float *a = A + m * K;
+    for (size_t n = 0; n < N; n++) c[n] = 0.f;
+    for (size_t k = 0; k < K; k++) {
+      const float av = a[k];
+      const float *b = B + k * N;
+      for (size_t n = 0; n < N; n++) c[n] += av * b[n];
+    }
+  }
+}
+// Glow BatchedReduceAdd over the middle dimension of [outer][len][inner], float
+static void reduceAdd(int8_t *o8, const int8_t *i8, size_t outer, size_t len, size_t inner) {
+  float *out = (float *)o8;
+  const float *in = (const float *)i8;
+  for (size_t o = 0; o < outer; o++)
+    for (size_t i = 0; i < inner; i++) {
+      float s = 0.f;
+      for (size_t l = 0; l < len; l++) s += in[(o * len + l) * inner + i];
+      out[o * inner + i] = s;
+    }
+}
+// softmax of each row of [rows][cols], float
+static void softmax(int8_t *o8, const int8_t *i8, size_t rows, size_t cols) {
+  float *out = (float *)o8;
+  const float *in = (const float *)i8;
+  for (size_t r = 0; r < rows; r++) {
+    const float *x = in + r * cols;
+    float *y = out + r * cols, m = x[0], sum = 0.f;
+    for (size_t i = 1; i < cols; i++) m = x[i] > m ? x[i] : m;
+    for (size_t i = 0; i < cols; i++) sum += (y[i] = std::exp(x[i] - m));
+    for (size_t i = 0; i < cols; i++) y[i] /= sum;
+  }
+}
+static void mul(int8_t *o8, const int8_t *a8, const int8_t *b8, size_t n) {
+  float *o = (float *)o8;
+  const float *a = (const float *)a8, *b = (const float *)b8;
+  for (size_t i = 0; i < n; i++) o[i] = a[i] * b[i];
+}
+static void pow(int8_t *o8, const int8_t *a8, const int8_t *b8, size_t n) {
+  float *o = (float *)o8;
+  const float *a = (const float *)a8, *b = (const float *)b8;
+  for (size_t i = 0; i < n; i++) o[i] = std::pow(a[i], b[i]);
+}
+static void erf(int8_t *o8, const int8_t *a8, size_t n) {
+  float *o = (float *)o8;
+  const float *a = (const float *)a8;
+  for (size_t i = 0; i < n; i++) o[i] = std::erf(a[i]);
+}
+static void fill(int8_t *o8, size_t n, float v) {
+  float *o = (float *)o8;
+  for (size_t i = 0; i < n; i++) o[i] = v;
+}
+} // namespace nestc_cpu
+)~";
+
+static std::string dimsList(llvm::ArrayRef<dim_t> d) {
+  std::string s = "{";
+  for (size_t i = 0; i < d.size(); i++)
+    s += (i ? ", " : "") + std::to_string(d[i]);
+  return s + "}";
+}
+
+static void requireFloat(const Instruction *I, std::initializer_list<const Value *> vs) {
+  for (const Value *v : vs)
+    if (v->getType()->getElementType() != ElemKind::FloatTy) {
+      llvm::errs() << "VTASave: " << I->getKindName() << " " << I->getName()
+                   << ": only float is supported on the CPU path\n";
+      std::exit(1);
+    }
+}
+
+static void requireRank(const Instruction *I, const Value *v) {
+  if (v->dims().size() < 1 || v->dims().size() > 6) {
+    llvm::errs() << "VTASave: " << I->getKindName() << " " << I->getName() << ": rank " << v->dims().size()
+                 << " (1-6 supported)\n";
+    std::exit(1);
+  }
+}
+
+static std::string sizeStr(const Value *v) { return std::to_string(v->getType()->size()); }
+static std::string esStr(const Value *v) { return std::to_string(v->getType()->getElementSize()); }
+
+// one generic CPU op; returns false for an instruction it does not handle
+static bool saveGenericCpuInst(const Instruction &I, std::string *bundle, VTASaveContext *ctx) {
+  auto P = [&](Value *v) { return cpuPtr(v, bundle, ctx); };
+  std::string call;
+  switch (I.getKind()) {
+  case Kinded::Kind::TouchInstKind:
+    bundle->append("  // touch: no data\n");
+    return true;
+  case Kinded::Kind::CopyInstKind: {
+    auto *C = llvm::cast<CopyInst>(&I);
+    std::string d = P(C->getDest()), s = P(C->getSrc());
+    call = "memmove(" + d + ", " + s + ", " + std::to_string(C->getDest()->getSizeInBytes()) + ");";
+    break;
+  }
+  case Kinded::Kind::InsertTensorInstKind: {
+    auto *C = llvm::cast<InsertTensorInst>(&I);
+    requireRank(&I, C->getDest());
+    std::string d = P(C->getDest()), s = P(C->getSrc());
+    call = "{ const size_t dd[] = " + dimsList(C->getDest()->dims()) + ", sd[] = " + dimsList(C->getSrc()->dims()) +
+           ", off[] = " + dimsList(C->getOffsets()) + "; nestc_cpu::insert(" + d + ", dd, " + s + ", sd, off, " +
+           std::to_string(C->getCount()) + ", " + std::to_string(C->getAxis()) + ", " +
+           std::to_string(C->getDest()->dims().size()) + ", " + esStr(C->getDest()) + "); }";
+    break;
+  }
+  case Kinded::Kind::ExtractTensorInstKind: {
+    auto *C = llvm::cast<ExtractTensorInst>(&I);
+    requireRank(&I, C->getSrc());
+    std::string d = P(C->getDest()), s = P(C->getSrc());
+    call = "{ const size_t dd[] = " + dimsList(C->getDest()->dims()) + ", sd[] = " + dimsList(C->getSrc()->dims()) +
+           ", off[] = " + dimsList(C->getOffsets()) + "; nestc_cpu::extract(" + d + ", dd, " + s + ", sd, off, " +
+           std::to_string(C->getSrc()->dims().size()) + ", " + esStr(C->getDest()) + "); }";
+    break;
+  }
+  case Kinded::Kind::TransposeInstKind: {
+    auto *C = llvm::cast<TransposeInst>(&I);
+    requireRank(&I, C->getSrc());
+    std::string d = P(C->getDest()), s = P(C->getSrc()), sh = "{";
+    for (size_t i = 0; i < C->getShuffle().size(); i++)
+      sh += (i ? ", " : "") + std::to_string(C->getShuffle()[i]);
+    call = "{ const size_t sd[] = " + dimsList(C->getSrc()->dims()) + "; const unsigned sh[] = " + sh +
+           "}; nestc_cpu::transpose(" + d + ", " + s + ", sd, sh, " + std::to_string(C->getSrc()->dims().size()) +
+           ", " + esStr(C->getSrc()) + "); }";
+    break;
+  }
+  case Kinded::Kind::MatMulInstKind: {
+    auto *C = llvm::cast<MatMulInst>(&I);
+    requireFloat(&I, {C->getDest(), C->getLHS(), C->getRHS()});
+    auto ld = C->getLHS()->dims(), rd = C->getRHS()->dims();
+    std::string d = P(C->getDest()), a = P(C->getLHS()), b = P(C->getRHS());
+    call = "nestc_cpu::matmul(" + d + ", " + a + ", " + b + ", " + std::to_string(ld[0]) + ", " +
+           std::to_string(ld[1]) + ", " + std::to_string(rd[1]) + ");";
+    break;
+  }
+  case Kinded::Kind::BatchedReduceAddInstKind: {
+    auto *C = llvm::cast<BatchedReduceAddInst>(&I);
+    requireFloat(&I, {C->getDest(), C->getBatch()});
+    auto bd = C->getBatch()->dims();
+    size_t outer = 1, inner = 1, ax = C->getAxis();
+    for (size_t i = 0; i < ax; i++) outer *= bd[i];
+    for (size_t i = ax + 1; i < bd.size(); i++) inner *= bd[i];
+    std::string d = P(C->getDest()), s = P(C->getBatch());
+    call = "nestc_cpu::reduceAdd(" + d + ", " + s + ", " + std::to_string(outer) + ", " + std::to_string(bd[ax]) +
+           ", " + std::to_string(inner) + ");";
+    break;
+  }
+  case Kinded::Kind::SoftMaxInstKind: {
+    auto *C = llvm::cast<SoftMaxInst>(&I);
+    requireFloat(&I, {C->getDest(), C->getSrc()});
+    auto sd = C->getSrc()->dims();
+    std::string d = P(C->getDest()), s = P(C->getSrc());
+    call = "nestc_cpu::softmax(" + d + ", " + s + ", " + std::to_string(sd[0]) + ", " +
+           std::to_string(C->getSrc()->getType()->size() / sd[0]) + ");";
+    break;
+  }
+  case Kinded::Kind::ElementMulInstKind:
+  case Kinded::Kind::ElementPowInstKind: {
+    const bool isMul = I.getKind() == Kinded::Kind::ElementMulInstKind;
+    Value *dv = isMul ? llvm::cast<ElementMulInst>(&I)->getDest() : llvm::cast<ElementPowInst>(&I)->getDest();
+    Value *lv = isMul ? llvm::cast<ElementMulInst>(&I)->getLHS() : llvm::cast<ElementPowInst>(&I)->getLHS();
+    Value *rv = isMul ? llvm::cast<ElementMulInst>(&I)->getRHS() : llvm::cast<ElementPowInst>(&I)->getRHS();
+    requireFloat(&I, {dv, lv, rv});
+    std::string d = P(dv), a = P(lv), b = P(rv);
+    call = std::string("nestc_cpu::") + (isMul ? "mul(" : "pow(") + d + ", " + a + ", " + b + ", " + sizeStr(dv) + ");";
+    break;
+  }
+  case Kinded::Kind::ElementErfInstKind: {
+    auto *C = llvm::cast<ElementErfInst>(&I);
+    requireFloat(&I, {C->getDest(), C->getSrc()});
+    std::string d = P(C->getDest()), s = P(C->getSrc());
+    call = "nestc_cpu::erf(" + d + ", " + s + ", " + sizeStr(C->getDest()) + ");";
+    break;
+  }
+  case Kinded::Kind::SplatInstKind: {
+    auto *C = llvm::cast<SplatInst>(&I);
+    requireFloat(&I, {C->getDest()});
+    std::string d = P(C->getDest());
+    char v[32];
+    snprintf(v, sizeof(v), "%.9g", C->getValue());
+    call = "nestc_cpu::fill(" + d + ", " + sizeStr(C->getDest()) + ", (float)" + std::string(v) + ");";
+    break;
+  }
+  default:
+    return false;
+  }
+  ctx->usesCpuOps = true;
+  bundle->append("  " + call + "\n");
+  return true;
+}
+
 struct BundleSaveCtx {
   std::string bundle;
   std::string initConst;
@@ -6008,6 +6349,9 @@ void finalizeBundleEntrySave(struct BundleSaveCtx &bundleCtx,
   bundleConfig.append("};\n");
 
   auto &initConst = bundleCtx.initConst;
+  //#### JO added (2026-11-09): the generic CPU ops the bundle calls
+  if (ctx.usesCpuOps)
+    bundleCtx.includeHeader.append(NESTC_CPU_OPS);
   initConst.append("namespace namespace_");
   initConst.append(bundleName);
   initConst.append(" {\n");
@@ -6379,8 +6723,13 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
     case Kinded::Kind::TransposeInstKind: {
       auto I2 = llvm::cast<TransposeInst>(&I);
       auto srcDimSize = I2->getSrc()->dims().size();
+      //#### JO added (2026-11-09): vtalib transpose / transpose_6dim move int8 elements of 4 / 6 dims; others (DeiT: float,
+      //#### 3 dims) by the generic CPU transpose
+      const bool i8 = I2->getSrc()->getType()->getElementSize() == 1;
 
-      if (srcDimSize == 4) {
+      if (!i8 || (srcDimSize != 4 && srcDimSize != 6)) {
+        saveGenericCpuInst(I, &bundle, &ctx);
+      } else if (srcDimSize == 4) {
         saveTransposeInst(I2, &bundle, &ctx);
       } else if (srcDimSize == 6) {
         saveTranspose_6dim(I2, &bundle, &ctx);
@@ -6395,7 +6744,11 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
     }
     case Kinded::Kind::SplatInstKind: {
       auto I2 = llvm::cast<SplatInst>(&I);
-      saveSplatInst(I2, &bundle, &ctx);
+      //#### JO added (2026-11-09): a float splat (DeiT: the 0.5 exponent of the layer norm sqrt) fills floats
+      if (I2->getDest()->getType()->getElementType() == ElemKind::FloatTy)
+        saveGenericCpuInst(I, &bundle, &ctx);
+      else
+        saveSplatInst(I2, &bundle, &ctx);
       break;
     }
     case Kinded::Kind::ElementMaxInstKind: {
@@ -6444,7 +6797,12 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
     }
     case Kinded::Kind::SoftMaxInstKind: {
       auto I2 = llvm::cast<SoftMaxInst>(&I);
-      saveSoftMaxInst(I2, &bundle, &ctx);
+      //#### JO added (2026-11-09): vtalib softmax steps rows by inDim0 (right for the 1 x classes softmax of the CNNs only);
+      //#### more rows (DeiT attention: 594 x 198) by the generic CPU softmax
+      if (I2->getSrc()->dims()[0] > 1)
+        saveGenericCpuInst(I, &bundle, &ctx);
+      else
+        saveSoftMaxInst(I2, &bundle, &ctx);
       break;
     }
     case Kinded::Kind::ReluInstKind: {
@@ -6463,10 +6821,12 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
       break;
     }
     default:
-      std::string msg = I.getKindName();
-      msg.append(" is an unhandled instruction");
-
-      llvm_unreachable(msg.c_str());
+      //#### JO changed (2026-11-09): the generic CPU ops (matmul, copies, layer norm / GELU pieces); others stop with the
+      //#### instruction's name (llvm_unreachable was a segfault in the Release build)
+      if (!saveGenericCpuInst(I, &bundle, &ctx)) {
+        llvm::errs() << "VTASave: " << I.getKindName() << " " << I.getName() << " is an unhandled instruction\n";
+        std::exit(1);
+      }
     }
     //#### JO added (2026-10-31): a CPU op that wrote an activation kept in the EVTA layout flushes it
     //#### for the EVTA (non-coherent; the EVTA conv invalidates its output for the CPU)
