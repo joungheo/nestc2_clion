@@ -48,6 +48,7 @@ run Conv4Test vtaConv4TestBundle vtaConv4TestInput.bin vtaConv4TestGolden.bin
 run Conv5Test vtaConv5TestBundle vtaConv5TestInput.bin vtaConv5TestGolden.bin
 run ConvTest vtaConvTestBundle vtaConvTestInput.bin vtaConvTestGolden.bin
 run Conv_inception_5b_5x5_1__1 Conv_inception_5b_5x5_1__1Bundle Conv_inception_5b_5x5_1__1Input.bin Conv_inception_5b_5x5_1__1Golden.bin
+run DeiTTest vtaDeiTBundle /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler/glow/tests/images/imagenet/cat_285.png ''
 run Dequantize vtaDequantizeTestBundle vtaDequantizeTestInput.bin vtaDequantizeTestGolden.bin
 run ElemAdd vtaElemAddTestBundle vtaElemAddTestInput.bin vtaElemAddTestGolden.bin
 run ElemDiv vtaElemDivTestBundle vtaElemDivTestInput.bin vtaElemDivTestGolden.bin

@@ -1991,7 +1991,8 @@ static void conv0packRows(int8_t *output, int n, int H, int pad, const Conv0Pack
         continue;
       }
 #endif
-      int8_t v[256];
+      //#### JO changed (2026-11-09): CO up to 1024 (DeiT patch embedding 16x16 / 16 over 3 channels: 1x1 over 768), was 256
+      int8_t v[1024];
       memset(v, 0, sizeof(v));
       for (int x = 0; x < d.W2; x++) {
         for (int dh = 0; dh < d.s; dh++)
@@ -2005,7 +2006,7 @@ static void conv0packRows(int8_t *output, int n, int H, int pad, const Conv0Pack
 void conv0pack_nhwc2vtaio(const int8_t *input, int8_t *output, int N, int H, int W, int C, int KH, int KW, int stride,
                           int pad, int CO, int padEnd) {
   const Conv0PackDims d(H, W, KH, KW, stride, pad, CO, padEnd);
-  assert(CO <= 256 && CO % 16 == 0 && stride * KW * C <= CO);
+  assert(CO <= 1024 && CO % 16 == 0 && stride * KW * C <= CO);
   const int w1 = std::min(W, d.PW - pad);
   for (int n = 0; n < N; n++)
     conv0packRows(output, n, H, pad, d, KW, C, CO, [&](int h, int8_t *dst) {
@@ -2022,7 +2023,7 @@ void preprocess_conv0pack_rows(const float *input, int8_t *output, int N, int H,
                                int32_t offset, const int8_t *lut, int KH, int KW, int stride, int pad, int CO, int q0,
                                int q1, int padEnd) {
   const Conv0PackDims d(H, W, KH, KW, stride, pad, CO, padEnd);
-  assert(CO <= 256 && CO % 16 == 0 && stride * KW * C <= CO);
+  assert(CO <= 1024 && CO % 16 == 0 && stride * KW * C <= CO);
 #if defined(__aarch64__)
   int fe;
   const bool mul = std::frexp(scale, &fe) == 0.5f && std::isnormal(1 / scale);

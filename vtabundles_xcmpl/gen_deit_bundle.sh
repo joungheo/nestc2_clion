@@ -2,7 +2,8 @@
 #### JO added (2026-11-09): generate vta/bundles/DeiTTest (profile + VTA bundle) with the simulator build's image-classifier /
 #### model-compiler, as gen_mobilenetv2_bundle.sh (no cmake re-run of Debug2_remote). The model is the ONNX export of
 #### facebook/deit-tiny-distilled-patch16-224 (Xenova/deit-tiny-distilled-patch16-224, onnx/model.onnx, opset 11) with the
-#### input fixed to 1x3x224x224 and the shape computations constant-folded (fold_onnx.py; needs python3 onnx >= 1.13).
+#### input fixed to 1x3x224x224 and the shape computations constant-folded (fold_onnx.py; needs python3 onnx >= 1.13 for
+#### onnx.reference: the board has 1.11, so fold on the PC and copy deit_fold.onnx here).
 #### Most of the graph stays on the CPU (VTASave generic CPU ops: matmul, layer norm / GELU pieces, copies); the EVTA runs the
 #### patch embedding conv and the two classifiers.
 #### The Glow graph hash of the loaded model is not stable between runs (the same graph gives different hashes), so the

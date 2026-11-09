@@ -1517,7 +1517,9 @@ static bool getConv0Pack(const glow::ConvolutionInst *Inst, Conv0Pack *p) {
   p->CO = (s * KW * C + 15) / 16 * 16;
   p->H2 = outH + p->KH2 - 1;
   p->W2 = outW;
-  if (p->CO > 256)
+  //#### JO changed (2026-11-09): up to 1024 channels (DeiT patch embedding 16x16 / 16 over 3 channels: a 1x1 conv over 768;
+  //#### the zero-filled 16x16 conv's input tile does not fit the inp SRAM), was 256 (vtalib's packing buffer)
+  if (p->CO > 1024)
     return false;
   int vt, th, tw;
   getConvSchedule(N, p->H2, p->W2, p->CO, KN, p->KH2, 1, 1, 0, &vt, &th, &tw);
