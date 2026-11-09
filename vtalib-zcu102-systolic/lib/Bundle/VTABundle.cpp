@@ -1,4 +1,8 @@
 #include <atomic>
+#if defined(__aarch64__)
+#include <arm_neon.h>
+#endif
+#include <ctime>
 #include <cstdint>
 #include <cmath>
 #include <cstdlib>
@@ -3624,61 +3628,186 @@ int convolution_wo_tr(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *outp
 //#### M rows as an H x W image (W the largest divisor of M <= sqrt(M), as VTA.cpp matMulToConv), A as the input and B^T as
 //#### the filter, K and N zero-padded to multiples of 16, bias 2^(shift-1) (round half up, as -vta-round-shift).
 //#### The packing and unpacking are on the CPU. EVTA_MATMUL_CHECK=1 compares every output with the CPU integer result.
+//#### JO changed (2026-11-09): B^T by NEON 16 x 16 byte transposes, 16-byte copies for A and C, the VTA buffers kept per
+//#### thread (and the bias while N and shift stay); EVTA_MATMUL_TIME=1 prints the time of each step at exit.
+namespace {
+struct MatMulEvtaBufs {
+  void *in = nullptr, *wgt = nullptr, *bias = nullptr, *out = nullptr;
+  size_t inCap = 0, wgtCap = 0, biasCap = 0, outCap = 0;
+  int biasN = -1, biasShift = -1;
+};
+void *matmulBuf(void *&b, size_t &cap, size_t size) {
+  if (size > cap) {
+    if (b)
+      VTABufferFree(b);
+    b = VTABufferAlloc(size);
+    cap = size;
+  }
+  return b;
+}
+double matmulNowUs() {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return ts.tv_sec * 1e6 + ts.tv_nsec * 1e-3;
+}
+double gMatMulT[7];
+long gMatMulCalls;
+void matmulTimeReport() {
+  const char *names[] = {"pack A", "pack B", "bias", "flush", "conv", "invalidate", "unpack C"};
+  double s = 0;
+  for (double t : gMatMulT)
+    s += t;
+  fprintf(stderr, "matmul_evta: %ld calls, %.2f ms:", gMatMulCalls, s / 1000);
+  for (int i = 0; i < 7; i++)
+    fprintf(stderr, " %s %.2f", names[i], gMatMulT[i] / 1000);
+  fprintf(stderr, " ms\n");
+}
+#if defined(__aarch64__)
+// dst[c * 16 + r] = row r [c], r, c < 16
+inline void transpose16x16(const uint8x16_t *R, int8_t *dst) {
+  uint8x16_t P[16], Q[16], S[16];
+  for (int i = 0; i < 16; i += 2) {
+    const uint8x16x2_t t = vtrnq_u8(R[i], R[i + 1]);
+    P[i] = t.val[0];
+    P[i + 1] = t.val[1];
+  }
+  for (int i = 0; i < 16; i += 4)
+    for (int j = 0; j < 2; j++) {
+      const uint16x8x2_t t = vtrnq_u16(vreinterpretq_u16_u8(P[i + j]), vreinterpretq_u16_u8(P[i + j + 2]));
+      Q[i + j] = vreinterpretq_u8_u16(t.val[0]);
+      Q[i + j + 2] = vreinterpretq_u8_u16(t.val[1]);
+    }
+  for (int i = 0; i < 16; i += 8)
+    for (int j = 0; j < 4; j++) {
+      const uint32x4x2_t t = vtrnq_u32(vreinterpretq_u32_u8(Q[i + j]), vreinterpretq_u32_u8(Q[i + j + 4]));
+      S[i + j] = vreinterpretq_u8_u32(t.val[0]);
+      S[i + j + 4] = vreinterpretq_u8_u32(t.val[1]);
+    }
+  for (int j = 0; j < 8; j++) {
+    vst1q_u8((uint8_t *)dst + 16 * j, vcombine_u8(vget_low_u8(S[j]), vget_low_u8(S[j + 8])));
+    vst1q_u8((uint8_t *)dst + 16 * (j + 8), vcombine_u8(vget_high_u8(S[j]), vget_high_u8(S[j + 8])));
+  }
+}
+#endif
+} // namespace
+
 int matmul_evta(const int8_t *A, const int8_t *B, int8_t *C, int M, int K, int N, int shift, void *vtaCmdH,
                 int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA) {
+  static const bool timing = [] {
+    const char *e = getenv("EVTA_MATMUL_TIME");
+    const bool on = e && atoi(e) != 0;
+    if (on)
+      atexit(matmulTimeReport);
+    return on;
+  }();
+  double t0 = timing ? matmulNowUs() : 0, t1;
+  auto lap = [&](int k) {
+    if (timing) {
+      t1 = matmulNowUs();
+      gMatMulT[k] += t1 - t0;
+      t0 = t1;
+    }
+  };
   const int Kp = (K + 15) / 16 * 16, Np = (N + 15) / 16 * 16, KB = Kp / 16, NB = Np / 16;
   int w = 1;
   for (int d = 1; d * d <= M; d++)
     if (M % d == 0)
       w = d;
   const int h = M / w;
-  void *inBuf = VTABufferAlloc((size_t)M * Kp), *wgtBuf = VTABufferAlloc((size_t)Np * Kp);
-  void *biasBuf = VTABufferAlloc((size_t)Np * 4), *outBuf = VTABufferAlloc((size_t)M * Np);
+  thread_local MatMulEvtaBufs bufs;
+  void *inBuf = matmulBuf(bufs.in, bufs.inCap, (size_t)M * Kp);
+  void *wgtBuf = matmulBuf(bufs.wgt, bufs.wgtCap, (size_t)Np * Kp);
+  void *outBuf = matmulBuf(bufs.out, bufs.outCap, (size_t)M * Np);
   int8_t *in = (int8_t *)VTABufferGetVirtAddr(inBuf), *wgt = (int8_t *)VTABufferGetVirtAddr(wgtBuf);
   int8_t *out = (int8_t *)VTABufferGetVirtAddr(outBuf);
-  int32_t *bias = (int32_t *)VTABufferGetVirtAddr(biasBuf);
   // input N{C/16}HW16 with HW = the M rows: in[kb][m][16]
 #pragma omp parallel for schedule(static)
   for (int kb = 0; kb < KB; kb++) {
     const int nk = std::min(16, K - kb * 16);
     int8_t *o = in + (size_t)kb * M * 16;
-    if (nk == 16)
+    const int8_t *a = A + kb * 16;
+    if (nk == 16) {
+#if defined(__aarch64__)
       for (int m = 0; m < M; m++)
-        memcpy(o + m * 16, A + (size_t)m * K + kb * 16, 16);
-    else
+        vst1q_s8(o + m * 16, vld1q_s8(a + (size_t)m * K));
+#else
+      for (int m = 0; m < M; m++)
+        memcpy(o + m * 16, a + (size_t)m * K, 16);
+#endif
+    } else {
       for (int m = 0; m < M; m++) {
         memset(o + m * 16, 0, 16);
-        memcpy(o + m * 16, A + (size_t)m * K + kb * 16, nk);
+        memcpy(o + m * 16, a + (size_t)m * K, nk);
       }
-  }
-  // filter {N/16}{C/16}HW1616 with filter[n][k] = B[k][n]: wgt[nb][kb][n % 16][k % 16]
-#pragma omp parallel for schedule(static)
-  for (int nb = 0; nb < NB; nb++) {
-    int8_t *o = wgt + (size_t)nb * KB * 256;
-    memset(o, 0, (size_t)KB * 256);
-    const int nn = std::min(16, N - nb * 16);
-    for (int k = 0; k < K; k++) {
-      const int8_t *b = B + (size_t)k * N + nb * 16;
-      int8_t *ok = o + (k / 16) * 256 + (k % 16);
-      for (int n = 0; n < nn; n++)
-        ok[n * 16] = b[n];
     }
   }
+  lap(0);
+  // filter {N/16}{C/16}HW1616 with filter[n][k] = B[k][n]: block (nb, kb) = the transposed 16 x 16 block of B
+#pragma omp parallel for schedule(static)
+  for (int nb = 0; nb < NB; nb++) {
+    const int nn = std::min(16, N - nb * 16);
+    for (int kb = 0; kb < KB; kb++) {
+      const int nk = std::min(16, K - kb * 16);
+      int8_t *o = wgt + ((size_t)nb * KB + kb) * 256;
+#if defined(__aarch64__)
+      uint8x16_t R[16];
+      for (int k = 0; k < 16; k++) {
+        const int8_t *b = B + (size_t)(kb * 16 + k) * N + nb * 16;
+        if (k >= nk) {
+          R[k] = vdupq_n_u8(0);
+        } else if (nn == 16) {
+          R[k] = vld1q_u8((const uint8_t *)b);
+        } else {
+          uint8_t tmp[16] = {0};
+          memcpy(tmp, b, nn);
+          R[k] = vld1q_u8(tmp);
+        }
+      }
+      transpose16x16(R, o);
+#else
+      memset(o, 0, 256);
+      for (int k = 0; k < nk; k++)
+        for (int n = 0; n < nn; n++)
+          o[n * 16 + k] = B[(size_t)(kb * 16 + k) * N + nb * 16 + n];
+#endif
+    }
+  }
+  lap(1);
   const bool doBias = shift > 0;
-  for (int n = 0; n < Np; n++)
-    bias[n] = doBias ? 1 << (shift - 1) : 0;
+  void *biasBuf = matmulBuf(bufs.bias, bufs.biasCap, (size_t)Np * 4);
+  if (bufs.biasN != Np || bufs.biasShift != shift) {
+    int32_t *bias = (int32_t *)VTABufferGetVirtAddr(biasBuf);
+    for (int n = 0; n < Np; n++)
+      bias[n] = doBias ? 1 << (shift - 1) : 0;
+    VTABufferFlush(biasBuf, 0, (size_t)Np * 4);
+    bufs.biasN = Np;
+    bufs.biasShift = shift;
+  }
+  lap(2);
   VTABufferFlush(inBuf, 0, (size_t)M * Kp);
   VTABufferFlush(wgtBuf, 0, (size_t)Np * Kp);
-  VTABufferFlush(biasBuf, 0, (size_t)Np * 4);
+  lap(3);
   int rc = convolution_wo_tr((int8_t *)inBuf, (int8_t *)wgtBuf, (int32_t *)biasBuf, (int8_t *)outBuf, 1, h, w, Kp, Np, 1,
                              1, 0, 1, false, doBias, (uint8_t)shift, h, w, vtaCmdH, nVirtualThread, tileHSize, tileWSize,
                              idEVTA);
+  lap(4);
   VTABufferInvalidate(outBuf, 0, (size_t)M * Np);
+  lap(5);
   // output N{C/16}HW16 -> C[M][N]
 #pragma omp parallel for schedule(static)
-  for (int m = 0; m < M; m++)
-    for (int nb = 0; nb < NB; nb++)
-      memcpy(C + (size_t)m * N + nb * 16, out + ((size_t)nb * M + m) * 16, std::min(16, N - nb * 16));
+  for (int m = 0; m < M; m++) {
+    int8_t *c = C + (size_t)m * N;
+    int nb = 0;
+#if defined(__aarch64__)
+    for (; nb < NB && (nb + 1) * 16 <= N; nb++)
+      vst1q_s8(c + nb * 16, vld1q_s8(out + ((size_t)nb * M + m) * 16));
+#endif
+    for (; nb < NB; nb++)
+      memcpy(c + nb * 16, out + ((size_t)nb * M + m) * 16, std::min(16, N - nb * 16));
+  }
+  lap(6);
+  if (timing)
+    gMatMulCalls++;
   static const bool check = [] {
     const char *e = getenv("EVTA_MATMUL_CHECK");
     return e && atoi(e) != 0;
@@ -3697,10 +3826,6 @@ int matmul_evta(const int8_t *A, const int8_t *B, int8_t *C, int M, int K, int N
       }
     fprintf(stderr, "matmul_evta %dx%dx%d shift %d: %zu differ\n", M, K, N, shift, bad);
   }
-  VTABufferFree(inBuf);
-  VTABufferFree(wgtBuf);
-  VTABufferFree(biasBuf);
-  VTABufferFree(outBuf);
   return rc;
 }
 
