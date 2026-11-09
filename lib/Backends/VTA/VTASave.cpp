@@ -209,6 +209,10 @@ public:
   std::set<const Instruction *> *getLutAway() { return &lutAway; }
   bool isLutAway(const Instruction *I) const { return lutAway.count(I) != 0; }
   std::string lutFuncs; // the functions that make the tables (file scope, before load_module)
+  //#### JO added (2026-11-09): softmax of a dequantized int8 tensor emitted at the dequantize (findSoftmaxI8)
+  std::map<const Instruction *, const SoftMaxInst *> softmaxAtDq;
+  std::set<const Instruction *> softmaxAway;
+  std::set<const Value *> softmaxHoist; // dest allocations after the dequantize
   // a name that lives as long as the symbol tables (constants that are not IR values)
   const char *keepName(const std::string &name) {
     names.push_back(name);
@@ -6234,6 +6238,34 @@ static void softmaxQ(int8_t *o8, const int8_t *i8, size_t rows, size_t cols, flo
     for (size_t i = 0; i < cols; i++) y[i] /= sum;
   }
 }
+// softmaxQ of the dequantized int8 input read directly (VTASave findSoftmaxI8: the dequantize and the softmax in one):
+// the same table, sums in the same order and the same divisions, so the same result; row max with NEON
+static void softmaxI8(int8_t *o8, const int8_t *q8, size_t rows, size_t cols, float s) {
+  float *out = (float *)o8;
+  float T[256];
+  for (int d = 0; d < 256; d++) T[d] = std::exp(-(float)d * s);
+#pragma omp parallel for schedule(static)
+  for (long r = 0; r < (long)rows; r++) {
+    const int8_t *x = q8 + r * cols;
+    float *y = out + r * cols;
+    size_t i = 0;
+    int m = -128;
+#if defined(__aarch64__)
+    int8x16_t vm = vdupq_n_s8(-128);
+    for (; i + 16 <= cols; i += 16) vm = vmaxq_s8(vm, vld1q_s8(x + i));
+    m = vmaxvq_s8(vm);
+#endif
+    for (; i < cols; i++) m = x[i] > m ? x[i] : m;
+    float sum = 0.f;
+    for (i = 0; i < cols; i++) sum += (y[i] = T[m - x[i]]);
+    i = 0;
+#if defined(__aarch64__)
+    const float32x4_t vs = vdupq_n_f32(sum);
+    for (; i + 4 <= cols; i += 4) vst1q_f32(y + i, vdivq_f32(vld1q_f32(y + i), vs));
+#endif
+    for (; i < cols; i++) y[i] /= sum;
+  }
+}
 static void mul(int8_t *o8, const int8_t *a8, const int8_t *b8, size_t n) {
   float *o = (float *)o8;
   const float *a = (const float *)a8, *b = (const float *)b8;
@@ -6986,6 +7018,72 @@ static void emitLutRegion(const LutRegion &r, std::string *bundle, VTASaveContex
              num + ");\n";
 }
 
+//#### JO added (2026-11-09): a softmax over rows of a tensor dequantized from int8 (softmaxQ) whose dequantized copy is
+//#### read by nothing else: nestc_cpu::softmaxI8 reads the int8 tensor at the dequantize (it may be freed before the
+//#### softmax, DeiT attention); the softmax's dest allocation is moved there
+static void findSoftmaxI8(IRFunction *F, VTASaveContext *ctx) {
+  std::vector<const Instruction *> L;
+  std::map<const Instruction *, size_t> pos;
+  for (const auto &I : F->getInstrs()) {
+    pos[&I] = L.size();
+    L.push_back(&I);
+  }
+  for (size_t i = 0; i < L.size(); i++) {
+    auto *S = llvm::dyn_cast<SoftMaxInst>(L[i]);
+    if (!S || S->getSrc()->dims().size() != 2 || S->getSrc()->dims()[0] <= 1 ||
+        S->getDest()->getType()->getElementType() != ElemKind::FloatTy)
+      continue;
+    const DequantizeInst *dq = dequantizedBefore(*S, S->getSrc());
+    if (!dq || !pos.count(dq) || ctx->isLutAway(dq) || ctx->getLutRegions()->count(dq))
+      continue;
+    const Value *Fv = zeroOffsetActivation(dq->getDest()), *D = zeroOffsetActivation(S->getDest());
+    if (!Fv || !D || zeroOffsetActivation(S->getSrc()) != Fv || S->getSrc()->size() != Fv->size() ||
+        D->size() != S->getDest()->size())
+      continue;
+    bool ok = true;
+    // the dequantized copy: only views, the softmax and its deallocation after the dequantize
+    for (size_t k = pos[dq] + 1; k < L.size() && ok; k++) {
+      const Instruction *J = L[k];
+      bool t = false;
+      for (unsigned q = 0, e = J->getNumOperands(); q < e; q++)
+        t |= getOrigin(const_cast<Value *>(J->getOperand(q).first)) == Fv;
+      if (!t || J == S || J->getKind() == Kinded::Kind::TensorViewInstKind)
+        continue;
+      if (J->getKind() == Kinded::Kind::DeallocActivationInstKind)
+        break;
+      ok = false;
+    }
+    // the dest: nothing but its allocation and views between the dequantize and the softmax
+    for (size_t k = pos[dq] + 1; k < i && ok; k++) {
+      const Instruction *J = L[k];
+      if (J == D || J->getKind() == Kinded::Kind::TensorViewInstKind)
+        continue;
+      for (unsigned q = 0, e = J->getNumOperands(); q < e; q++)
+        ok &= getOrigin(const_cast<Value *>(J->getOperand(q).first)) != D;
+    }
+    if (!ok)
+      continue;
+    ctx->softmaxAtDq[dq] = S;
+    ctx->softmaxAway.insert(S);
+    auto *DI = llvm::cast<Instruction>(D);
+    if (pos.count(DI) && pos[DI] > pos[dq])
+      ctx->softmaxHoist.insert(D);
+  }
+}
+
+static void emitSoftmaxI8(const DequantizeInst *dq, const SoftMaxInst *S, std::string *bundle, VTASaveContext *ctx) {
+  const Value *D = zeroOffsetActivation(S->getDest());
+  if (ctx->softmaxHoist.count(D) && ctx->getHoisted()->insert(D).second)
+    *bundle += "  int8_t *" + D->getName().str() + " = (int8_t *)malloc(" + std::to_string(D->getSizeInBytes()) + ");\n";
+  char sc[32];
+  snprintf(sc, sizeof(sc), "%.9g", dq->getSrc()->getType()->getScale());
+  ctx->usesCpuOps = true;
+  *bundle += "  // the dequantize and the softmax " + S->getName().str() + " in one (softmaxI8)\n";
+  *bundle += "  nestc_cpu::softmaxI8(" + D->getName().str() + ", " + cpuPtr(dq->getSrc(), bundle, ctx) + ", " +
+             std::to_string(S->getSrc()->dims()[0]) + ", " + std::to_string(S->getSrc()->dims()[1]) + ", " + sc +
+             "f);\n";
+}
+
 static std::string vtaOptionsComment() {
   static const char *const names[] = {
       "vta-keep-layout",   "vta-fuse-residual", "vta-evta-maxpool", "vta-evta-fc",
@@ -7162,6 +7260,7 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
   findInputPreprocess(IR.get(), &ctx);
   findPoolFusions(IR.get(), &ctx);
   findLutRegions(IR.get(), &ctx);
+  findSoftmaxI8(IR.get(), &ctx);
 
   for (const auto &I : IR->getInstrs()) {
 
@@ -7179,6 +7278,15 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
     bundle.append(I.getName());
     bundle.append("\n");
 
+    //#### JO added (2026-11-09): findSoftmaxI8
+    if (ctx.softmaxAway.count(&I)) {
+      bundle.append("  // done at the dequantize before (softmaxI8)\n");
+      continue;
+    }
+    if (ctx.softmaxAtDq.count(&I)) {
+      emitSoftmaxI8(llvm::cast<DequantizeInst>(&I), ctx.softmaxAtDq[&I], &bundle, &ctx);
+      continue;
+    }
     //#### JO added (2026-11-09): an elementwise region as a table (findLutRegions)
     if (ctx.isLutAway(&I)) {
       bundle.append("  // done by the table of the elementwise region before (lut8)\n");
