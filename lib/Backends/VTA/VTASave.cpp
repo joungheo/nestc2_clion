@@ -7025,6 +7025,10 @@ static void emitLutRegion(const LutRegion &r, std::string *bundle, VTASaveContex
       if (op.second == OperandKind::In && isConstantWeight(op.first))
         continue;
       ren[op.first->getName().str()] = probeOf(op.first);
+      // an activation (or a view defined later inside the region) known as one before the emitters look it up: else
+      // addConstantSymbolEntry makes it a constant (VTABufferGetVirtAddr, and the weights offsets after it shift)
+      if (!hasConstantSymbol(op.first, ctx))
+        ctx->getConstantSymbols()->push_back({op.first->getName().data(), 0, op.first->getSizeInBytes(), '1'});
     }
     std::string tmp;
     emitElementwiseInst(*J, &tmp, ctx);
