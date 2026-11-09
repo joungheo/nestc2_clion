@@ -1440,6 +1440,29 @@ int elemsign(int8_t *input, int8_t *output, unsigned_t size) {
 
 int elemsub(int8_t *input0, float input0Scale, int32_t input0Offset, int8_t *input1, float input1Scale, int32_t input1Offset,
             int8_t *output, float destScale, int32_t destOffset, unsigned_t size) {
+#if defined(__aarch64__)
+  //#### JO added (2026-11-09): NEON for zero offsets, the scalar expression below (l = k0 * L, r = k1 * R, round(l - r))
+  if (input0Offset == 0 && input1Offset == 0 && destOffset == 0) {
+    const float k0 = input0Scale / destScale, k1 = input1Scale / destScale;
+    const float32x4_t v0 = vdupq_n_f32(k0), v1 = vdupq_n_f32(k1);
+    dim_t i = 0;
+    for (; i + 16 <= size; i += 16) {
+      int32x4_t L[4], R[4], S[4];
+      widen16(vld1q_s8(input0 + i), L);
+      widen16(vld1q_s8(input1 + i), R);
+      for (int j = 0; j < 4; j++)
+        S[j] = vcvtaq_s32_f32(vsubq_f32(vmulq_f32(v0, vcvtq_f32_s32(L[j])), vmulq_f32(v1, vcvtq_f32_s32(R[j]))));
+      vst1q_s8(output + i, narrow16(S[0], S[1], S[2], S[3]));
+    }
+    for (; i < size; i++) {
+      const float l = k0 * float(input0[i]);
+      const float r = k1 * float(input1[i]);
+      int32_t sum32 = std::round(l - r);
+      output[i] = (int8_t)(sum32 > 127 ? 127 : (sum32 < -128 ? -128 : sum32));
+    }
+    return 0;
+  }
+#endif
   for (dim_t i = 0, e = size; i < e; i++) {
     int32_t L = input0[i];
     int32_t R = input1[i];

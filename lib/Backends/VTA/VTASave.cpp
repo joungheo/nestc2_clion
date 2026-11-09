@@ -6193,7 +6193,24 @@ static void matmulI8(int8_t *C, const int8_t *A, const int8_t *B, size_t M, size
 static void reduceAdd(int8_t *o8, const int8_t *i8, size_t outer, size_t len, size_t inner) {
   float *out = (float *)o8;
   const float *in = (const float *)i8;
-  for (size_t o = 0; o < outer; o++)
+  size_t o0 = 0;
+  // inner 1 (rows, the layer norm means): four rows at a time, each summed in order (independent chains)
+  if (inner == 1)
+    for (; o0 + 4 <= outer; o0 += 4) {
+      const float *a = in + o0 * len, *b = a + len, *c = b + len, *d = c + len;
+      float sa = 0.f, sb = 0.f, sc = 0.f, sd = 0.f;
+      for (size_t l = 0; l < len; l++) {
+        sa += a[l];
+        sb += b[l];
+        sc += c[l];
+        sd += d[l];
+      }
+      out[o0] = sa;
+      out[o0 + 1] = sb;
+      out[o0 + 2] = sc;
+      out[o0 + 3] = sd;
+    }
+  for (size_t o = o0; o < outer; o++)
     for (size_t i = 0; i < inner; i++) {
       float s = 0.f;
       for (size_t l = 0; l < len; l++) s += in[(o * len + l) * inner + i];
@@ -6279,6 +6296,19 @@ static void pow(int8_t *o8, const int8_t *a8, const int8_t *b8, size_t n) {
     const float e = b[i];
     o[i] = e == 2.f ? a[i] * a[i] : e == 0.5f && a[i] >= 0.f ? std::sqrt(a[i]) : std::pow(a[i], e);
   }
+}
+// a * a (pow with the constant exponent 2: the layer norm variance)
+static void square(int8_t *o8, const int8_t *a8, size_t n) {
+  float *o = (float *)o8;
+  const float *a = (const float *)a8;
+  size_t i = 0;
+#if defined(__aarch64__)
+  for (; i + 4 <= n; i += 4) {
+    const float32x4_t x = vld1q_f32(a + i);
+    vst1q_f32(o + i, vmulq_f32(x, x));
+  }
+#endif
+  for (; i < n; i++) o[i] = a[i] * a[i];
 }
 static void erf(int8_t *o8, const int8_t *a8, size_t n) {
   float *o = (float *)o8;
@@ -6387,6 +6417,7 @@ static std::string sizeStr(const Value *v) { return std::to_string(v->getType()-
 static std::string esStr(const Value *v) { return std::to_string(v->getType()->getElementSize()); }
 
 // one generic CPU op; returns false for an instruction it does not handle
+static bool isUniformConstant(const Value *v, VTASaveContext *ctx);
 static bool saveGenericCpuInst(const Instruction &I, std::string *bundle, VTASaveContext *ctx) {
   auto P = [&](Value *v) { return cpuPtr(v, bundle, ctx); };
   std::string call;
@@ -6503,6 +6534,15 @@ static bool saveGenericCpuInst(const Instruction &I, std::string *bundle, VTASav
     Value *rv = isMul ? llvm::cast<ElementMulInst>(&I)->getRHS() : llvm::cast<ElementPowInst>(&I)->getRHS();
     requireFloat(&I, {dv, lv, rv});
     std::string d = P(dv), a = P(lv), b = P(rv);
+    //#### JO added (2026-11-09): pow by a constant 2 in every element as a * a (nestc_cpu::square)
+    if (!isMul && isUniformConstant(rv, ctx)) {
+      float e;
+      memcpy(&e, constantPayload(rv, ctx)->getUnsafePtr(), 4);
+      if (e == 2.f) {
+        call = "nestc_cpu::square(" + d + ", " + a + ", " + sizeStr(dv) + ");";
+        break;
+      }
+    }
     call = std::string("nestc_cpu::") + (isMul ? "mul(" : "pow(") + d + ", " + a + ", " + b + ", " + sizeStr(dv) + ");";
     break;
   }
