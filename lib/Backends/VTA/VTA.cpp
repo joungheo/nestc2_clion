@@ -789,10 +789,10 @@ static bool matMulToConv(Function *F) {
     std::vector<int32_t> foldedBias;
     if (vtaFoldMatMulBias && MM->getResult().getNumUsers() == 1) {
       NodeValue cur = MM->getResult();
-      Node *u = cur.getUsers().begin()->getUser();
+      Node *u = (*cur.getUsers().begin()).getUser();
       if (auto *R = dyn_cast<ReshapeNode>(u)) {
         cur = R->getResult();
-        u = cur.getNumUsers() == 1 ? cur.getUsers().begin()->getUser() : nullptr;
+        u = cur.getNumUsers() == 1 ? (*cur.getUsers().begin()).getUser() : nullptr;
       }
       auto *A = u ? dyn_cast<AddNode>(u) : nullptr;
       if (A && (A->getLHS() == cur || A->getRHS() == cur)) {
