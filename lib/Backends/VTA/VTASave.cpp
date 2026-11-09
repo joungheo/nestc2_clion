@@ -145,6 +145,13 @@ struct InputPreprocess {
 //#### JO added (2026-11-09): a run of elementwise instructions from one int8 buffer (root) to an int8 value (out), every
 //#### other operand a constant with one value in all elements (findLutRegions, -vta-lut-elementwise): emitted as a table
 //#### of its 256 results, computed once at run time by the same code on a 256-element probe (so the same result)
+//#### JO added (2026-11-10): findLayerNorms
+struct LayerNormFusion {
+  const Value *x, *out, *p1, *p2, *eps, *e, *w, *b;
+  size_t rows, cols;
+  std::vector<std::string> scales; // the scale arguments as the replaced calls wrote them
+};
+
 struct LutRegion {
   std::vector<const Instruction *> instrs; // the region's instructions (in order; allocs / deallocs / views between them
                                            // are emitted as usual)
@@ -213,6 +220,8 @@ public:
   std::map<const Instruction *, const SoftMaxInst *> softmaxAtDq;
   std::set<const Instruction *> softmaxAway;
   std::set<const Value *> softmaxHoist; // dest allocations after the dequantize
+  std::map<const Instruction *, LayerNormFusion> layerNorms; // by the last instruction
+  std::set<const Instruction *> layerNormAway;
   // a name that lives as long as the symbol tables (constants that are not IR values)
   const char *keepName(const std::string &name) {
     names.push_back(name);
@@ -6357,6 +6366,129 @@ static void lut8(int8_t *o, const int8_t *a, const Lut8 &lut, size_t n) {
   for (; i < n; i++)
     o[i] = t[(uint8_t)a[i] ^ 0x80];
 }
+// the DeiT layer norm as VTASave findLayerNorms matched it (21 instructions), in one pass over each row with the same
+// arithmetic as the vtalib / nestc_cpu functions it replaces (dequantize, reduceAdd, quantize, elemdiv, elemsub, square,
+// elemadd, pow, mul), so the same result. x: [rows][cols] int8; p1 / p2: the int8 divisors of the two means (per row),
+// eps: int8 per row, e: the float exponent per row (0.5), w: float weight [rows][cols], b: int8 bias [rows][cols].
+static inline int8_t lnClip(float v) {
+  const int32_t q = (int32_t)std::round(v);
+  return (int8_t)(q > 127 ? 127 : q < -128 ? -128 : q);
+}
+static inline int8_t lnDiv(int8_t l, int8_t r, float s0, float s1, float sd) {
+  const float c1 = s1 * sd;
+  const float num = s0 * float(l), den = c1 * float(r);
+  return lnClip(num / den);
+}
+static inline int8_t lnAdd(int8_t l, int8_t r, float s0, float s1, float sd) {
+  const float large = float(1) / (1 << 15);
+  const float k0 = s0 / large, k1 = s1 / large, kd = large / sd;
+  const int32_t L32 = (int32_t)std::round(float(l) * k0), R32 = (int32_t)std::round(float(r) * k1);
+  return lnClip(float(L32 + R32) * kd);
+}
+static void layerNormI8(int8_t *out, const int8_t *x, size_t rows, size_t cols, const int8_t *p1, const int8_t *p2,
+                        const int8_t *eps, const int8_t *e8, const int8_t *w8, const int8_t *b, float sD0, float sQ1,
+                        float v1a, float v1b, float v1d, float e1a, float e1b, float e1d, float sD2, float sQ2, float v2a,
+                        float v2b, float v2d, float a1a, float a1b, float a1d, float sD3, float sQ3, float v3a, float v3b,
+                        float v3d, float sD4, float sQ4, float a2a, float a2b, float a2d) {
+  const float *e = (const float *)e8, *w = (const float *)w8;
+  const float large = float(1) / (1 << 15);
+  const float ek0 = e1a / e1d, ek1 = e1b / e1d;
+  const float c3 = v3b * v3d;
+  const float ak0 = a2a / large, ak1 = a2b / large, akd = large / a2d;
+#pragma omp parallel for schedule(static)
+  for (long r = 0; r < (long)rows; r++) {
+    const int8_t *xr = x + r * cols;
+    int8_t *o = out + r * cols;
+    int8_t d[1024];
+    // mean: sum of the dequantized row in order, quantize, elemdiv
+    float s1 = 0.f;
+    for (size_t l = 0; l < cols; l++) {
+      const float f = float(xr[l]) * sD0;
+      s1 += f;
+    }
+    const int8_t m = lnDiv(lnClip(s1 / sQ1), p1[r], v1a, v1b, v1d);
+    // d = elemsub(x, m)
+    size_t l = 0;
+#if defined(__aarch64__)
+    {
+      const float32x4_t k0 = vdupq_n_f32(ek0), rm = vdupq_n_f32(ek1 * float(m));
+      for (; l + 16 <= cols; l += 16) {
+        const int8x16_t v = vld1q_s8(xr + l);
+        const int16x8_t lo = vmovl_s8(vget_low_s8(v)), hi = vmovl_s8(vget_high_s8(v));
+        int32x4_t L[4] = {vmovl_s16(vget_low_s16(lo)), vmovl_s16(vget_high_s16(lo)), vmovl_s16(vget_low_s16(hi)),
+                          vmovl_s16(vget_high_s16(hi))};
+        int32x4_t S[4];
+        for (int j = 0; j < 4; j++)
+          S[j] = vcvtaq_s32_f32(vsubq_f32(vmulq_f32(k0, vcvtq_f32_s32(L[j])), rm));
+        const int16x8_t n0 = vcombine_s16(vqmovn_s32(S[0]), vqmovn_s32(S[1]));
+        const int16x8_t n1 = vcombine_s16(vqmovn_s32(S[2]), vqmovn_s32(S[3]));
+        vst1q_s8(d + l, vcombine_s8(vqmovn_s16(n0), vqmovn_s16(n1)));
+      }
+    }
+#endif
+    for (; l < cols; l++) {
+      const float a = ek0 * float(xr[l]);
+      const float bb = ek1 * float(m);
+      d[l] = lnClip(a - bb);
+    }
+    // variance: sum of the squares of the dequantized d in order, quantize, elemdiv, + eps; sqrt (pow), quantize
+    float s2 = 0.f;
+    for (l = 0; l < cols; l++) {
+      const float f = float(d[l]) * sD2;
+      const float f2 = f * f;
+      s2 += f2;
+    }
+    const int8_t v = lnAdd(lnDiv(lnClip(s2 / sQ2), p2[r], v2a, v2b, v2d), eps[r], a1a, a1b, a1d);
+    const float f3 = float(v) * sD3, ex = e[r];
+    const float pw = ex == 2.f ? f3 * f3 : ex == 0.5f && f3 >= 0.f ? std::sqrt(f3) : std::pow(f3, ex);
+    const int8_t sd = lnClip(pw / sQ3);
+    // out = elemadd(quantize(dequantize(elemdiv(d, sd)) * w), b)
+    const float den = c3 * float(sd);
+    const float *wr = w + r * cols;
+    const int8_t *br = b + r * cols;
+    l = 0;
+#if defined(__aarch64__)
+    {
+      const float32x4_t va = vdupq_n_f32(v3a), vden = vdupq_n_f32(den), vd4 = vdupq_n_f32(sD4),
+                        vq4 = vdupq_n_f32(sQ4), vk0 = vdupq_n_f32(ak0), vk1 = vdupq_n_f32(ak1),
+                        vkd = vdupq_n_f32(akd);
+      for (; l + 16 <= cols; l += 16) {
+        const int8x16_t dv = vld1q_s8(d + l), bv = vld1q_s8(br + l);
+        const int16x8_t dlo = vmovl_s8(vget_low_s8(dv)), dhi = vmovl_s8(vget_high_s8(dv));
+        const int16x8_t blo = vmovl_s8(vget_low_s8(bv)), bhi = vmovl_s8(vget_high_s8(bv));
+        const int32x4_t D[4] = {vmovl_s16(vget_low_s16(dlo)), vmovl_s16(vget_high_s16(dlo)),
+                                vmovl_s16(vget_low_s16(dhi)), vmovl_s16(vget_high_s16(dhi))};
+        const int32x4_t Bv[4] = {vmovl_s16(vget_low_s16(blo)), vmovl_s16(vget_high_s16(blo)),
+                                 vmovl_s16(vget_low_s16(bhi)), vmovl_s16(vget_high_s16(bhi))};
+        int32x4_t S[4];
+        for (int j = 0; j < 4; j++) {
+          // n = elemdiv(d, sd), clipped to int8
+          int32x4_t n = vcvtaq_s32_f32(vdivq_f32(vmulq_f32(va, vcvtq_f32_s32(D[j])), vden));
+          n = vmaxq_s32(vminq_s32(n, vdupq_n_s32(127)), vdupq_n_s32(-128));
+          // q4 = quantize(dequantize(n) * w)
+          const float32x4_t f4 = vmulq_f32(vmulq_f32(vcvtq_f32_s32(n), vd4), vld1q_f32(wr + l + 4 * j));
+          int32x4_t q4 = vcvtaq_s32_f32(vdivq_f32(f4, vq4));
+          q4 = vmaxq_s32(vminq_s32(q4, vdupq_n_s32(127)), vdupq_n_s32(-128));
+          // elemadd(q4, b)
+          const int32x4_t L32 = vcvtaq_s32_f32(vmulq_f32(vcvtq_f32_s32(q4), vk0));
+          const int32x4_t R32 = vcvtaq_s32_f32(vmulq_f32(vcvtq_f32_s32(Bv[j]), vk1));
+          S[j] = vcvtaq_s32_f32(vmulq_f32(vcvtq_f32_s32(vaddq_s32(L32, R32)), vkd));
+        }
+        const int16x8_t n0 = vcombine_s16(vqmovn_s32(S[0]), vqmovn_s32(S[1]));
+        const int16x8_t n1 = vcombine_s16(vqmovn_s32(S[2]), vqmovn_s32(S[3]));
+        vst1q_s8(o + l, vcombine_s8(vqmovn_s16(n0), vqmovn_s16(n1)));
+      }
+    }
+#endif
+    for (; l < cols; l++) {
+      const float num = v3a * float(d[l]);
+      const int8_t n = lnClip(num / den);
+      const float f4 = float(n) * sD4;
+      const float f4w = f4 * wr[l];
+      o[l] = lnAdd(lnClip(f4w / sQ4), br[l], a2a, a2b, a2d);
+    }
+  }
+}
 static void fill(int8_t *o8, size_t n, float v) {
   float *o = (float *)o8;
   for (size_t i = 0; i < n; i++) o[i] = v;
@@ -7128,11 +7260,222 @@ static void emitSoftmaxI8(const DequantizeInst *dq, const SoftMaxInst *S, std::s
              "f);\n";
 }
 
+//#### JO added (2026-11-10): the DeiT layer norm (21 instructions from an int8 x: dequantize, reduceAdd, quantize, elemdiv,
+//#### broadcast, elemsub, dequantize, pow 2, reduceAdd, quantize, elemdiv, elemadd eps, dequantize, pow, quantize, broadcast,
+//#### elemdiv, dequantize, mul weight, quantize, elemadd bias) as one nestc_cpu::layerNormI8 call at the last instruction,
+//#### with the same arithmetic (-vta-fuse-layernorm, findLayerNorms)
+static llvm::cl::opt<bool> vtaFuseLayerNorm(
+    "vta-fuse-layernorm",
+    llvm::cl::desc("Run the int8 layer norm chain (DeiT) as one CPU function (nestc_cpu::layerNormI8)"),
+    llvm::cl::init(true));
+
+static void findLayerNorms(IRFunction *F, VTASaveContext *ctx) {
+  if (!vtaFuseLayerNorm)
+    return;
+  std::vector<const Instruction *> L;
+  for (const auto &I : F->getInstrs())
+    L.push_back(&I);
+  auto org = [](const Value *v) { return getOrigin(const_cast<Value *>(v)); };
+  auto interleaved = [](const Instruction *I) {
+    switch (I->getKind()) {
+    case Kinded::Kind::AllocActivationInstKind:
+    case Kinded::Kind::DeallocActivationInstKind:
+    case Kinded::Kind::TensorViewInstKind:
+    case Kinded::Kind::TouchInstKind:
+    case Kinded::Kind::SplatInstKind:
+      return true;
+    default:
+      return false;
+    }
+  };
+  auto sc = [](const Value *v) { return v->getType()->getScale(); };
+  for (size_t i0 = 0; i0 < L.size(); i0++) {
+    auto *D0 = llvm::dyn_cast<DequantizeInst>(L[i0]);
+    if (!D0 || D0->getSrc()->getType()->getElementType() != ElemKind::Int8QTy || ctx->isLutAway(D0) ||
+        ctx->getLutRegions()->count(D0) || ctx->softmaxAtDq.count(D0))
+      continue;
+    size_t c = i0;
+    std::vector<const Instruction *> mem{D0};
+    std::vector<const Instruction *> inter;
+    // the next member: the next instruction that is not interleaved, if it has kind K
+    auto next = [&](Kinded::Kind K) -> const Instruction * {
+      for (c++; c < L.size(); c++) {
+        if (interleaved(L[c])) {
+          inter.push_back(L[c]);
+          continue;
+        }
+        if (L[c]->getKind() != K)
+          return nullptr;
+        mem.push_back(L[c]);
+        return L[c];
+      }
+      return nullptr;
+    };
+    const Value *x = D0->getSrc();
+    auto *R1 = llvm::dyn_cast_or_null<BatchedReduceAddInst>(next(Kinded::Kind::BatchedReduceAddInstKind));
+    if (!R1 || org(R1->getBatch()) != org(D0->getDest()))
+      continue;
+    auto bd = R1->getBatch()->dims();
+    if (R1->getAxis() != bd.size() - 1)
+      continue;
+    const size_t cols = bd.back(), rows = R1->getBatch()->size() / cols;
+    if (cols > 1024 || x->size() != rows * cols)
+      continue;
+    auto *Q1 = llvm::dyn_cast_or_null<QuantizeInst>(next(Kinded::Kind::QuantizeInstKind));
+    if (!Q1 || org(Q1->getSrc()) != org(R1->getDest()))
+      continue;
+    auto *V1 = llvm::dyn_cast_or_null<ElementDivInst>(next(Kinded::Kind::ElementDivInstKind));
+    if (!V1 || org(V1->getLHS()) != org(Q1->getDest()) || V1->getRHS()->size() != rows || isConstantWeight(V1->getRHS()))
+      continue;
+    auto *I1 = llvm::dyn_cast_or_null<InsertTensorInst>(next(Kinded::Kind::InsertTensorInstKind));
+    if (!I1 || org(I1->getSrc()) != org(V1->getDest()) || I1->getCount() != cols)
+      continue;
+    auto *E1 = llvm::dyn_cast_or_null<ElementSubInst>(next(Kinded::Kind::ElementSubInstKind));
+    if (!E1 || org(E1->getLHS()) != org(x) || org(E1->getRHS()) != org(I1->getDest()))
+      continue;
+    auto *D2 = llvm::dyn_cast_or_null<DequantizeInst>(next(Kinded::Kind::DequantizeInstKind));
+    if (!D2 || org(D2->getSrc()) != org(E1->getDest()))
+      continue;
+    auto *P2 = llvm::dyn_cast_or_null<ElementPowInst>(next(Kinded::Kind::ElementPowInstKind));
+    if (!P2 || org(P2->getLHS()) != org(D2->getDest()) || !isUniformConstant(P2->getRHS(), ctx))
+      continue;
+    {
+      float e;
+      memcpy(&e, constantPayload(P2->getRHS(), ctx)->getUnsafePtr(), 4);
+      if (e != 2.f)
+        continue;
+    }
+    auto *R2 = llvm::dyn_cast_or_null<BatchedReduceAddInst>(next(Kinded::Kind::BatchedReduceAddInstKind));
+    if (!R2 || org(R2->getBatch()) != org(P2->getDest()) || R2->getAxis() != bd.size() - 1)
+      continue;
+    auto *Q2 = llvm::dyn_cast_or_null<QuantizeInst>(next(Kinded::Kind::QuantizeInstKind));
+    if (!Q2 || org(Q2->getSrc()) != org(R2->getDest()))
+      continue;
+    auto *V2 = llvm::dyn_cast_or_null<ElementDivInst>(next(Kinded::Kind::ElementDivInstKind));
+    if (!V2 || org(V2->getLHS()) != org(Q2->getDest()) || V2->getRHS()->size() != rows || isConstantWeight(V2->getRHS()))
+      continue;
+    auto *A1 = llvm::dyn_cast_or_null<ElementAddInst>(next(Kinded::Kind::ElementAddInstKind));
+    if (!A1)
+      continue;
+    const bool a1swap = org(A1->getRHS()) == org(V2->getDest());
+    const Value *vA1 = a1swap ? A1->getRHS() : A1->getLHS(), *eps = a1swap ? A1->getLHS() : A1->getRHS();
+    if (org(vA1) != org(V2->getDest()) || !isConstantWeight(eps) || eps->size() != rows)
+      continue;
+    auto *D3 = llvm::dyn_cast_or_null<DequantizeInst>(next(Kinded::Kind::DequantizeInstKind));
+    if (!D3 || org(D3->getSrc()) != org(A1->getDest()))
+      continue;
+    auto *PW = llvm::dyn_cast_or_null<ElementPowInst>(next(Kinded::Kind::ElementPowInstKind));
+    if (!PW || org(PW->getLHS()) != org(D3->getDest()) || isConstantWeight(PW->getRHS()) ||
+        PW->getRHS()->size() != rows || PW->getRHS()->getType()->getElementType() != ElemKind::FloatTy)
+      continue;
+    auto *Q3 = llvm::dyn_cast_or_null<QuantizeInst>(next(Kinded::Kind::QuantizeInstKind));
+    if (!Q3 || org(Q3->getSrc()) != org(PW->getDest()))
+      continue;
+    auto *I2 = llvm::dyn_cast_or_null<InsertTensorInst>(next(Kinded::Kind::InsertTensorInstKind));
+    if (!I2 || org(I2->getSrc()) != org(Q3->getDest()) || I2->getCount() != cols)
+      continue;
+    auto *V3 = llvm::dyn_cast_or_null<ElementDivInst>(next(Kinded::Kind::ElementDivInstKind));
+    if (!V3 || org(V3->getLHS()) != org(E1->getDest()) || org(V3->getRHS()) != org(I2->getDest()))
+      continue;
+    auto *D4 = llvm::dyn_cast_or_null<DequantizeInst>(next(Kinded::Kind::DequantizeInstKind));
+    if (!D4 || org(D4->getSrc()) != org(V3->getDest()))
+      continue;
+    auto *MU = llvm::dyn_cast_or_null<ElementMulInst>(next(Kinded::Kind::ElementMulInstKind));
+    if (!MU)
+      continue;
+    const bool muswap = org(MU->getRHS()) == org(D4->getDest());
+    const Value *W = muswap ? MU->getLHS() : MU->getRHS();
+    if (org(muswap ? MU->getRHS() : MU->getLHS()) != org(D4->getDest()) || !isConstantWeight(W) ||
+        W->size() != rows * cols || W->getType()->getElementType() != ElemKind::FloatTy)
+      continue;
+    auto *Q4 = llvm::dyn_cast_or_null<QuantizeInst>(next(Kinded::Kind::QuantizeInstKind));
+    if (!Q4 || org(Q4->getSrc()) != org(MU->getDest()))
+      continue;
+    auto *A2 = llvm::dyn_cast_or_null<ElementAddInst>(next(Kinded::Kind::ElementAddInstKind));
+    if (!A2)
+      continue;
+    const bool a2swap = org(A2->getRHS()) == org(Q4->getDest());
+    const Value *qA2 = a2swap ? A2->getRHS() : A2->getLHS(), *B = a2swap ? A2->getLHS() : A2->getRHS();
+    if (org(qA2) != org(Q4->getDest()) || !isConstantWeight(B) || B->size() != rows * cols ||
+        A2->getDest()->size() != rows * cols)
+      continue;
+    // x and the divisors / exponent stay valid up to A2: no interleaved deallocation or splat of them
+    const Value *ox = org(x);
+    bool ok = true;
+    for (const Instruction *J : inter)
+      for (unsigned q = 0, e = J->getNumOperands(); q < e; q++) {
+        const Value *o = org(J->getOperand(q).first);
+        if (J->getKind() == Kinded::Kind::DeallocActivationInstKind &&
+            (o == ox || o == org(V1->getRHS()) || o == org(V2->getRHS()) || o == org(PW->getRHS())))
+          ok = false;
+        if (J->getKind() == Kinded::Kind::SplatInstKind && o == ox)
+          ok = false;
+      }
+    // the chain's own buffers: freed (or not used) after A2, except the output
+    std::set<const Value *> w;
+    for (const Instruction *J : mem)
+      for (unsigned q = 0, e = J->getNumOperands(); q < e; q++)
+        if (J->getOperand(q).second != OperandKind::In)
+          w.insert(org(J->getOperand(q).first));
+    w.erase(org(A2->getDest()));
+    w.erase(ox);
+    for (const Value *b : w) {
+      for (size_t k = c + 1; k < L.size() && ok; k++) {
+        bool t = false;
+        for (unsigned q = 0, e = L[k]->getNumOperands(); q < e; q++)
+          t |= org(L[k]->getOperand(q).first) == b;
+        if (t) {
+          ok = L[k]->getKind() == Kinded::Kind::DeallocActivationInstKind;
+          break;
+        }
+      }
+    }
+    if (!ok)
+      continue;
+    LayerNormFusion f;
+    f.x = x;
+    f.out = A2->getDest();
+    f.p1 = V1->getRHS();
+    f.p2 = V2->getRHS();
+    f.eps = eps;
+    f.e = PW->getRHS();
+    f.w = W;
+    f.b = B;
+    f.rows = rows;
+    f.cols = cols;
+    auto q = [](float s) { return "1/" + std::to_string(1 / s); };
+    auto el = [](float s) { return "1.0/" + std::to_string(1 / s); };
+    f.scales = {q(sc(D0->getSrc())), q(sc(Q1->getDest())),  el(sc(V1->getLHS())), el(sc(V1->getRHS())),
+                el(sc(V1->getDest())), el(sc(E1->getLHS())), el(sc(E1->getRHS())), el(sc(E1->getDest())),
+                q(sc(D2->getSrc())),  q(sc(Q2->getDest())),  el(sc(V2->getLHS())), el(sc(V2->getRHS())),
+                el(sc(V2->getDest())), el(sc(vA1)),           el(sc(eps)),          el(sc(A1->getDest())),
+                q(sc(D3->getSrc())),  q(sc(Q3->getDest())),  el(sc(V3->getLHS())), el(sc(V3->getRHS())),
+                el(sc(V3->getDest())), q(sc(D4->getSrc())),  q(sc(Q4->getDest())),  el(sc(qA2)),
+                el(sc(B)),            el(sc(A2->getDest()))};
+    ctx->layerNorms[A2] = f;
+    for (const Instruction *J : mem)
+      if (J != A2)
+        ctx->layerNormAway.insert(J);
+    i0 = c;
+  }
+}
+
+static void emitLayerNormI8(const LayerNormFusion &f, std::string *bundle, VTASaveContext *ctx) {
+  ctx->usesCpuOps = true;
+  auto ptr = [&](const Value *v) { return cpuPtr(const_cast<Value *>(v), bundle, ctx); };
+  std::string call = "  nestc_cpu::layerNormI8(" + ptr(f.out) + ", " + ptr(f.x) + ", " + std::to_string(f.rows) +
+                     ", " + std::to_string(f.cols) + ", " + ptr(f.p1) + ", " + ptr(f.p2) + ", " + ptr(f.eps) + ", " +
+                     ptr(f.e) + ", " + ptr(f.w) + ", " + ptr(f.b);
+  for (const auto &s : f.scales)
+    call += ", " + s;
+  *bundle += "  // the layer norm in one (layerNormI8, -vta-fuse-layernorm)\n" + call + ");\n";
+}
+
 static std::string vtaOptionsComment() {
   static const char *const names[] = {
       "vta-keep-layout",   "vta-fuse-residual", "vta-evta-maxpool", "vta-evta-fc",
       "vta-fuse-preprocess", "vta-conv0-pack",  "vta-fuse-pool",    "vta-evta-depthwise",
-      "vta-round-shift",   "vta-pad-channels",  "vta-matmul-conv", "vta-fold-matmul-bias", "vta-evta-matmul", "vta-lut-elementwise",
+      "vta-round-shift",   "vta-pad-channels",  "vta-matmul-conv", "vta-fold-matmul-bias", "vta-evta-matmul", "vta-lut-elementwise", "vta-fuse-layernorm",
       "enable-channelwise-depthwise", "enable-channelwise"};
   auto &opts = llvm::cl::getRegisteredOptions();
   std::string s = "// Generated by the NEST-C VTA backend with:";
@@ -7305,6 +7648,7 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
   findPoolFusions(IR.get(), &ctx);
   findLutRegions(IR.get(), &ctx);
   findSoftmaxI8(IR.get(), &ctx);
+  findLayerNorms(IR.get(), &ctx);
 
   for (const auto &I : IR->getInstrs()) {
 
@@ -7322,6 +7666,15 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
     bundle.append(I.getName());
     bundle.append("\n");
 
+    //#### JO added (2026-11-10): findLayerNorms
+    if (ctx.layerNormAway.count(&I)) {
+      bundle.append("  // done by the layer norm call below (layerNormI8)\n");
+      continue;
+    }
+    if (ctx.layerNorms.count(&I)) {
+      emitLayerNormI8(ctx.layerNorms[&I], &bundle, &ctx);
+      continue;
+    }
     //#### JO added (2026-11-09): findSoftmaxI8
     if (ctx.softmaxAway.count(&I)) {
       bundle.append("  // done at the dequantize before (softmaxI8)\n");
