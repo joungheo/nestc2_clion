@@ -317,6 +317,16 @@ static bool hasConstantSymbol(Value *val, VTASaveContext *ctx) {
   return false;
 }
 
+//#### JO added (2026-11-09): the bias symbol of an EVTA conv: <conv>_rbias when prepareVTAConvolutionInst gave it its own
+//#### copy (a shared bias with the -vta-round-shift term), else the bias
+static std::string convBiasSymbol(const Instruction *I, Value *bias, VTASaveContext *ctx) {
+  const std::string own = I->getName().str() + "_rbias";
+  for (auto s : *ctx->getConstantSymbols())
+    if (own == s.name)
+      return own;
+  return addConstantSymbolEntry(bias, ctx).name;
+}
+
 //#### JO added (2026-11-09): CPU access to an IR value (the generic CPU ops of DeiT-tiny, constant operands of elemadd,
 //#### tensor views of constants): a mutable weight (input / output) is declared from mutableWeight on its first use; a
 //#### constant is written to the weights file on its first use, once (a VTA buffer, read through its virtual address);
@@ -1245,7 +1255,9 @@ void prepareVTAConvolutionInst(const glow::ConvolutionInst *Inst,
   auto transposeHandle = filterTransposeTensor.getHandle<int8_t>();
 
   assert(handle.size() % 2 == 0);
-  {
+  //#### JO changed (2026-11-09): a filter shared by several convs is written once (its symbol is found by name, so a
+  //#### second copy shifted every later constant; was: written for every conv)
+  if (!hasConstantSymbol(filter, ctx)) {
     auto fos = ctx->getWeightFileStream();
     int16_t data16 = 0;
     for (size_t i = 0, e = transposeHandle.size(); i < e; i++) {
@@ -1295,13 +1307,20 @@ void prepareVTAConvolutionInst(const glow::ConvolutionInst *Inst,
         break;
       }
     }
-    if (doBias) {
+    //#### JO changed (2026-11-09): the bias is written whenever its symbol is new, zero or not (the symbol takes its size
+    //#### in the weights file either way; was: only when doBias, so a zero bias shifted the later constants), and a bias
+    //#### shared by several convs (DeiT: the zero bias of the -vta-matmul-conv convs) once; with a rounding term each
+    //#### later conv gets its own copy <conv>_rbias (convBiasSymbol), as the shift differs per conv
+    const bool shared = hasConstantSymbol(bias, ctx);
+    if (!shared || roundHalf != 0) {
       auto fos = ctx->getWeightFileStream();
       for (size_t i = 0, e = handleBias.size(); i < e; i++) {
         int32_t data = handleBias.raw(i) + roundHalf;
         fos->write((const char *)&data, 4);
       }
     }
+    if (shared && roundHalf != 0)
+      addConstantSymbolEntryNamed(Inst->getName().str() + "_rbias", bias->getSizeInBytes(), ctx);
   }
   if (doBias) {
     assert(!doBias || (1 / (bias->getType()->getScale()) == matMulScale));
@@ -2737,8 +2756,8 @@ void generateVTAConvolutionCall(const glow::ConvolutionInst *Inst,
   bundle->append(", ");
 
   bundle->append("(int32_t *)");
-  auto biasSte = addConstantSymbolEntry(bias, ctx);
-  bundle->append(biasSte.name);
+  //#### JO changed (2026-11-09): convBiasSymbol (was: the bias symbol)
+  bundle->append(convBiasSymbol(Inst, bias, ctx));
   bundle->append(", ");
 
   bundle->append(Inst->getName());
