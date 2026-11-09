@@ -158,6 +158,7 @@ struct MatMulGroup {
   int shift = 0;
   bool qk = false;
   const Value *qbuf = nullptr, *kbuf = nullptr; // the conv outputs kept in the EVTA layout (qk)
+  std::vector<const Value *> freeAfter;            // their deallocations (before the matmul in the IR) moved after it
 };
 
 struct LutRegion {
@@ -7755,6 +7756,17 @@ static void findAttnKeepLayout(IRFunction *F, VTASaveContext *ctx) {
     g.qk = true;
     g.qbuf = oq;
     g.kbuf = ok2;
+    // the conv outputs were last read by the transposes: their deallocations come before the matmul
+    bool before = true;
+    for (const Instruction *I : L) {
+      if (I == g.mm[0])
+        before = false;
+      if (auto *d = llvm::dyn_cast<DeallocActivationInst>(I))
+        if (before && (d->getSrc() == oq || d->getSrc() == ok2)) {
+          ctx->getMatMulAway()->insert(d);
+          g.freeAfter.push_back(d->getSrc());
+        }
+    }
     ctx->getPacked()->insert(oq);
     ctx->getPacked()->insert(cq->getDest());
     ctx->getPacked()->insert(ok2);
@@ -7785,6 +7797,8 @@ static void emitMatMulGroup(const MatMulGroup &g, std::string *bundle, VTASaveCo
     *bundle += "  matmul_evta_qk(" + g.qbuf->getName().str() + "_vbuf, " + g.kbuf->getName().str() + "_vbuf, mmC" + n +
                ", " + H + ", " + std::to_string(M0->getLHS()->dims()[0]) + ", " +
                std::to_string(M0->getLHS()->dims()[1]) + ", " + std::to_string(g.shift) + ", vtaCmdH);\n";
+    for (const Value *v : g.freeAfter)
+      *bundle += "  VTABufferFree(" + v->getName().str() + "_vbuf);\n";
     return;
   }
   std::string a = "  const int8_t *mmA" + n + "[] = {", b = "  const int8_t *mmB" + n + "[] = {";
