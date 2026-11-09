@@ -1486,6 +1486,47 @@ Resnet18 / 50, VGG16, MobileNetV2는 다시 생성해도 bundle `.cpp`(옵션 �
 - Q/K를 EVTA 배치로 유지한다(Linear conv 출력을 그대로 입력 / weight로 씀).
 - `-t 4`(4코어)로 잰다.
 
+### 7.27 DeiT-tiny: Q/K를 EVTA 배치 그대로, 3 head를 EVTA 호출 한 번으로, softmax / LayerNorm 역수 곱 (2026-11-10)
+
+systolic 400 MHz `_rq`, OMP 1, `_systimed` 중앙값:
+
+| 단계 | 1장 (ms) | cat / dog / zebra |
+|---|---|---|
+| §7.26 | 137.2 | 0.755 / 0.950 / 0.963 |
+| ① Q/K EVTA 배치 유지 + ② head 묶음 | 130.7 | 같음 |
+| ③ softmax / LayerNorm 역수 곱 (`-vta-cpu-approx`) | **123.5** | 같음 |
+
+① **`-vta-attn-keep-layout`** (`VTASave.cpp` `findAttnKeepLayout`, vtalib `matmul_evta_qk`).
+- **찾는 패턴:** Q·Kᵀ의 head 묶음에서, 각 head의 lhs / rhs가 "EVTA conv → 전치 {0,2,1,3} / {0,2,3,1} → head slice 복사"로 만들어진 경우다.
+- **conv 출력:** 두 conv의 출력을 기존 packed 경로(`isPacked`, `<origin>_vbuf`)로 EVTA 배치 [채널/16][토큰][16] 그대로 남긴다. 전치와 복사는 내보내지 않는다.
+- **Q:** head h는 채널 블록 h·dh/16부터의 연속 구간이고, 그것이 곧 1×1 conv의 입력 배치다. 새 런타임 API `VTABufferView(buf, offset)`(같은 메모리를 가리키는 header만 새로 만듦, `VTABufferViewFree`)로 복사 없이 넘긴다. 두 vtalib의 zcu102와 simulator 런타임에 모두 넣었다.
+- **K:** EVTA 출력의 256 byte 블록이 이미 weight 블록 [토큰%16][채널%16]이다. 블록 순서만 [kb][nb] → [nb][kb]로 memcpy한다(전치 없음).
+- **결함 하나를 고쳤다.** 원래 IR에서 두 conv 출력의 dealloc은 전치 바로 뒤, 즉 matmul보다 앞에 있다. 그래서 VTA 버퍼가 pool로 돌아가 V conv의 입력 버퍼로 다시 쓰였다(같은 크기). matmul 검사는 통과했지만 분류가 틀렸다(599). 이제 dealloc을 matmul 뒤로 옮긴다.
+
+② **`-vta-matmul-heads`** (`findMatMulGroups`, vtalib `matmul_evta_n`, conv batch).
+- **찾는 패턴:** 같은 모양과 shift의 int8 matmul이 연달아 나오면 묶는다(사이에는 alloc / dealloc / view / touch만 있어야 한다).
+- **실행:** vtalib `convolution_wo_tr_impl`은 `gConvBatch`가 설정돼 있으면 묶음 각각의 타일을 같은 큐에 쌓는다. Synchronize는 한 번, replay key도 한 번이고, key에는 모든 버퍼가 들어간다. 각 run 끝의 의존성은 다음 run의 LOAD를 막지 않으므로, 기록된 run을 그냥 이어 붙이지 않고 명령어 생성 단계에서 합쳤다.
+- **결과:** attention matmul 72회 → 24회 호출, 19.2 → 15.3 ms(A·V 7.8, Q·Kᵀ 7.5).
+- `EVTA_MATMUL_CHECK=1`로 3장 × 288 head가 0 differ이고, logit은 §7.26과 bit 단위로 같다.
+
+③ **`-vta-cpu-approx`** (기본 켜짐; 끄면 §7.26과 같은 계산).
+- **softmaxI8:** 4행 번갈아 계산(값 동일)에 더해 원소마다 ÷sum 대신 ×(1/sum)이다. 18.7 → 12.5 ms.
+- **layerNormI8:** ÷표준편차 대신 ×(1/den)이다. 21.0 → 19.9 ms. 병목은 나눗셈이 아니라 원소별 float 계산 전체다.
+- 세 장의 logit은 바뀌지 않았다. 따로 잰 softmax(무작위 입력)도 1/64 양자화 뒤에는 117,612개가 모두 같았다. 정확도는 ImageNet 검증 이미지로 재야 한다.
+
+Resnet18 / 50, VGG16, MobileNetV2는 다시 생성해도 bundle `.cpp`(옵션 주석 제외)와 weights가 byte 단위로 같다.
+
+**남은 것**(ms):
+
+| 항목 | 시간 |
+|---|---|
+| EVTA conv | 46.2 |
+| layerNormI8 | 19.9 |
+| softmaxI8 | 12.5 |
+| matmul_evta_n / _qk | 7.8 / 7.5 |
+| lut8 | 5.2 |
+| elemadd | 3.8 |
+
 ## 8. 하드웨어도 같이 비교해야 하나
 
 해야 한다. 다만 §7의 ①~④를 가르는 것은 어레이가 아니라 다음 네 가지다.
