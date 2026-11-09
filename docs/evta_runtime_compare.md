@@ -1427,6 +1427,65 @@ Resnet18 / 50, VGG16, MobileNetV2는 다시 생성해도 bundle `.cpp`(옵션 �
 - attention의 dequantize → float 전치 → quantize를 int8 전치로 바꾼다.
 - LayerNorm을 한 함수로 합친다.
 
+### 7.26 DeiT-tiny: matmul_evta 배치, bias 접기, int8 attention 전치, LayerNorm 한 함수 (2026-11-10)
+
+이제부터 DeiT는 **systolic 400 MHz `_rq`**(`run_prof.sh -s _systimed`, `vtalib-zcu102-systolic`, OMP 1)에서 잰다.
+- §7.22~7.25는 실행 스크립트의 기본값인 HLS 380 MHz를 그대로 썼다.
+- 같은 번들에서 HLS 198.9 ms일 때 systolic은 184.4 ms였다(EVTA conv 55.7 → 46.2 ms). logit은 두 구성에서 같다.
+- `build_systimed`는 DeiTTest보다 먼저 만들어진 디렉터리라 `cmake .`를 다시 돌려야 했다.
+
+| 단계 | 1장 (ms) | cat / dog / zebra 확률 |
+|---|---|---|
+| §7.25 (systolic에서 다시 잼) | 184.4 | 0.738 / 0.900 / 0.953 |
+| ① matmul_evta 배치 개선 (포함) | 184.4 | 같음 |
+| ② Linear bias를 conv bias에 접음 | 167.7 | 0.695 / 0.873 / 0.981 |
+| ③ attention head의 slice / concat / 전치를 int8로 | 152.3 | 0.755 / 0.950 / 0.963 |
+| ④ LayerNorm 한 함수 | **137.2** | 같음 |
+
+① **matmul_evta** (두 vtalib).
+- B를 NEON 16 × 16 byte 전치(`vtrn` 4단)로 배치한다. A와 C는 16 byte 단위로 복사한다.
+- VTA 버퍼는 스레드별로 재사용하고, bias는 (N, shift)가 같으면 다시 쓰지 않는다.
+- 출력은 순서대로 읽는다. invalidate 직후라 DRAM에서 오는데, 블록을 건너뛰며 읽으면 prefetch가 안 걸렸다.
+- `EVTA_MATMUL_TIME=1`이면 단계별 시간을 출력한다. 72개 기준 30.3 → 19.2 ms이고, 그중 conv(EVTA 호출)가 약 15 ms다.
+- `EVTA_MATMUL_CHECK=1`로 288개 호출이 0 differ였다.
+
+② **`VTA.cpp` `-vta-fold-matmul-bias`** (기본 켜짐).
+- MatMul → (Reshape →) Add(모든 행이 같은 상수 bias)에서 bias × (bias scale / (입력 × weight scale))가 정수이면, 그 값을 conv의 int32 bias로 옮긴다. conv 출력 type은 Add의 type이 된다.
+- 반올림이 두 번(conv, Add)에서 한 번이 된다. 72개를 접었고 elemadd는 160 → 88개가 됐다.
+- **결함 하나를 고쳤다.** `emitLutRegion`은 probe 코드를 구간 시작 자리에서 만든다. 그런데 구간 안에서 정의되는 tensor view가 있으면 `elemdiv` emitter가 그 이름을 상수로 새로 등록했다(`VTABufferGetVirtAddr`, weights offset 진행). 그래서 bias를 접은 번들이 segfault를 냈다. 이제 구간 피연산자를 먼저 activation으로 등록한다.
+
+③ **`VTA.cpp` `isOpSupported`에 Slice / Concat을 int8로 추가.**
+- 지금까지는 head를 나누는 slice 때문에 Q/K/V → dequantize → float 전치 → quantize였다. 이제 int8 전치와 복사로 바로 간다.
+- 중간 양자화가 줄어 확률이 올랐다.
+- int8 4차원 전치는 vtalib `transpose`(원소마다 인덱스 계산)로 가서 30 ms였다. 두 vtalib의 `transpose`에 빠른 경로를 넣었다: 가장 안쪽 축이 그대로면 연속 구간 복사, 아니면 NEON 16 × 16 2차원 전치. 30.3 → 2.5 ms다.
+
+④ **`VTASave.cpp` `-vta-fuse-layernorm`** (기본 켜짐, `findLayerNorms`, `nestc_cpu::layerNormI8`).
+- LayerNorm 21개 명령을 찾아 마지막 명령 자리에서 한 함수로 부른다: dequantize → reduceAdd → quantize → elemdiv → broadcast → elemsub → … → ×weight → quantize → +bias.
+- 단계마다 vtalib 식을 그대로 쓰므로 logit이 같다.
+- 행 합은 NEON lane 하나를 행 하나에 맡긴다(각 행 안의 순서는 그대로). 처음 버전은 누적값이 메모리를 거쳐 1.85 ms였고, 지금은 0.80 ms다.
+- 남은 것은 원소별 float 계산(÷표준편차, ×weight, quantize, +bias)이다. LayerNorm은 23.5 → 20.7 ms이지만, 사이의 broadcast / malloc / 작은 연산이 함께 없어져 전체로는 15 ms가 줄었다.
+
+Resnet18 / 50, VGG16, MobileNetV2는 다시 생성해도 bundle `.cpp`(옵션 주석 제외)와 weights가 byte 단위로 같다.
+
+**남은 것**(ms):
+
+| 항목 | 시간 |
+|---|---|
+| EVTA conv 73개 | 46.2 |
+| layerNormI8 | 20.7 |
+| matmul_evta | 19.2 |
+| softmaxI8 | 18.6 |
+| lut8 | 5.1 |
+| elemadd | 3.9 |
+| quantize | 2.7 |
+| transpose | 2.6 |
+
+**다음 후보.**
+- softmax의 합 / 나눗셈. bit 단위로 같지 않아도 되면 역수 곱셈으로 바꿀 수 있다.
+- matmul_evta를 conv 호출 한 번으로 합친다(3 head를 한 번에).
+- Q/K를 EVTA 배치로 유지한다(Linear conv 출력을 그대로 입력 / weight로 씀).
+- `-t 4`(4코어)로 잰다.
+
 ## 8. 하드웨어도 같이 비교해야 하나
 
 해야 한다. 다만 §7의 ①~④를 가르는 것은 어레이가 아니라 다음 네 가지다.

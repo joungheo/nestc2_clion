@@ -312,6 +312,10 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   value with one-valued constants become a 256-entry table made at the first run by the same code on a probe (`-vta-lut-elementwise`,
   `findLutRegions`, `nestc_cpu::lut8`), softmax of a dequantized int8 tensor reads the int8 (`findSoftmaxI8`), pow 2 = `square`,
   NEON vtalib `elemsub`: 359 -> 206 ms.
+  2026-11-10 (§7.26, measured on systolic 400 MHz `_rq` from now on, `run_prof.sh -s _systimed`; `build_systimed` needed `cmake .`):
+  matmul_evta NEON packing / kept buffers (`EVTA_MATMUL_TIME=1`), `VTA.cpp` `-vta-fold-matmul-bias` (Linear bias in the conv bias),
+  Slice / Concat int8 in `isOpSupported` (attention transposes int8; vtalib `transpose` fast paths), `-vta-fuse-layernorm`
+  (`findLayerNorms`, `nestc_cpu::layerNormI8`, bit-identical): 184.4 -> 137.2 ms.
 - The lab board's PL has a defective configuration row (tile row SLICE Y219, cells stuck at 0; `log/BOARD_TODO.md`
   2026-10-23/24). `vivado.tcl` on zcu102 fences the design below it by default (`VTA_BRAM_FENCE=y219|upper|none`).
   multi2 fits below it and works (2026-10-24); multi4 needs more BRAM than the rows below, so it crosses the row with
