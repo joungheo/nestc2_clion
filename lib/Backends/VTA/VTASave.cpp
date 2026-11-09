@@ -6856,19 +6856,20 @@ static void findLutRegions(IRFunction *F, VTASaveContext *ctx) {
         for (unsigned q = 0, e = L[members[k]]->getNumOperands(); q < e; q++)
           if (L[members[k]]->getOperand(q).second == OperandKind::Out)
             w.insert(zeroOffsetActivation(L[members[k]]->getOperand(q).first));
-      bool live = true;
+      // every other buffer the region writes is freed (or not used) before anything reads it
+      bool dead = true;
       for (const Value *b : w) {
         if (b == out)
           continue;
         for (size_t k = members[m - 1] + 1; k < L.size(); k++)
           if (touches(L[k], b)) {
-            live = L[k]->getKind() != Kinded::Kind::DeallocActivationInstKind;
+            dead = L[k]->getKind() == Kinded::Kind::DeallocActivationInstKind;
             break;
           }
-        if (!live)
+        if (!dead)
           break;
       }
-      if (!live)
+      if (!dead)
         continue;
       LutRegion r;
       for (size_t k = 0; k < m; k++)
