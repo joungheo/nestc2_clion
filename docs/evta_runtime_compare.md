@@ -1330,6 +1330,55 @@ GELU의 erf, softmax도 float, add / sub / div는 int8이다. EVTA로 가는 것
 - Linear bias 덧셈을 conv bias에 접는다.
 - ImageNet 검증 이미지로 정확도를 잰다.
 
+### 7.24 DeiT-tiny attention matmul을 EVTA로 (2026-11-09, VTASave `-vta-evta-matmul`, 기본 켜짐)
+
+**방법.** 오른쪽 입력이 activation인 int8 MatMul(층마다 Q·Kᵀ 3개, A·V 3개, 모두 72개)을 vtalib `matmul_evta`로 보낸다. 새 하드웨어는 없다. §7.23의 Linear와 같은 1×1 conv(`convolution_wo_tr`)이고, 다른 점은 두 입력을 실행 중에 CPU가 EVTA 배치로 옮긴다는 것이다.
+- A [M][K] → 입력 N{C/16}HW16. M행을 H × W(198 = 18 × 11)로 편다.
+- B [K][N] → filter {N/16}{C/16}1616. filter[n][k] = B[k][n]이다.
+- K, N은 16의 배수로 0을 채운다(198 → 208).
+- bias는 2^(shift−1)이다(0.5에서 올림, `-vta-round-shift`와 같음).
+- 스케일 비가 2^−shift(1 ≤ shift ≤ 15)가 아니거나 W < 7이면 CPU `matmulI8`로 계산한다.
+
+두 vtalib 모두에 넣었다. `EVTA_MATMUL_CHECK=1`로 실행하면 모든 출력을 CPU 정수 결과(같은 반올림)와 비교한다.
+
+**검증.** cat_285.png 4회 × 72개, 288개 호출 모두 0 differ였다.
+- CPU `matmulI8`의 `std::round`(0.5에서 0과 먼 쪽)와는 음수의 정확한 .5만 다르다.
+- 그래서 확률이 조금 바뀌었다. cat 0.695 → 0.738, dog 0.905 → 0.900, zebra 0.983 → 0.953.
+- 분류는 281 / 207 / 340 그대로다.
+
+**결과** (HLS 380 MHz, OMP 1, `_timed` 중앙값): 475 → **359 ms**.
+- attention matmul: 146 → 30.2 ms. Q·Kᵀ는 호출당 0.47 ms, A·V는 0.37 ms다.
+- EVTA 계산은 호출당 약 0.13 ms(5 MOP, 약 38 GOPS)이다. 나머지는 CPU 배치 변환, flush / invalidate, 버퍼 할당이다.
+- B의 배치 변환은 byte 단위 scatter다. Q·Kᵀ의 B(Kᵀ)는 바로 앞의 CPU transpose(`{0, 2, 3, 1}`)가 만든 것이라, 두 전치를 합치면 없앨 수 있다.
+- 남은 CPU 시간(ms):
+
+  | 항목 | 시간 |
+  |---|---|
+  | softmaxQ | 53.5 |
+  | erfQ | 51.3 |
+  | elemadd | 31.8 |
+  | elemdiv | 19.2 |
+  | mul | 18.7 |
+  | quantize | 14.5 |
+  | dequantize | 13.2 |
+  | pow | 10.4 |
+  | transpose_nhwc2vtaio / vtaio2nhwc | 9.4 / 8.4 |
+  | transpose | 7.4 |
+
+  EVTA conv 73개는 55.9 ms다.
+
+**다른 NPU와 비교.** TPU(MXU), GPU(Tensor Core), Gemmini, Apple ANE 모두 attention의 두 곱을 Linear와 같은 행렬 연산기로 계산한다. 따로 붙이는 것은 다음 두 가지다.
+- **전치 / 배치 변환 경로:** Gemmini transposer, TPU의 전치 장치
+- **softmax / LayerNorm용 벡터 / 특수함수 장치:** TPU VPU, Hexagon HVX, Gemmini 정규화 장치
+
+EVTA에서 다음 하드웨어 후보도 matmul이 아니라 이 둘이다(§8 1., 2.).
+
+**다음 후보.**
+- LayerNorm / GELU / softmax를 int8 입출력의 묶음 함수로 만든다. 남은 CPU 시간의 대부분이다.
+- Q·Kᵀ의 transpose와 B 배치 변환을 합친다.
+- Linear bias 덧셈을 conv bias에 접는다.
+- ImageNet 검증 이미지로 정확도를 잰다.
+
 ## 8. 하드웨어도 같이 비교해야 하나
 
 해야 한다. 다만 §7의 ①~④를 가르는 것은 어레이가 아니라 다음 네 가지다.

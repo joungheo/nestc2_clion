@@ -305,7 +305,9 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   default on): MatMul quantized to int8, a constant-rhs MatMul becomes a 1x1 conv over its rows as an H x W image (`matMulToConv`), the
   attention products an int8 NEON CPU matmul; VTASave writes a shared conv filter / bias once (a second copy shifted every later constant);
   erf / softmax of dequantized int8 by tables, vtalib quantize / dequantize / elemadd / elemdiv NEON (all bit-identical): 3.77 s -> 475 ms
-  (OMP 1; EVTA 56 ms).
+  (OMP 1; EVTA 56 ms). Attention Q K^T / A V on the EVTA too (2026-11-09, §7.24, VTASave `-vta-evta-matmul`, default on; vtalib
+  `matmul_evta`: the same 1x1 conv with both operands packed at run time, bias 2^(shift-1); `EVTA_MATMUL_CHECK=1` compares with the CPU):
+  0 differ, 281 / 207 / 340, 146 -> 30 ms, 475 -> 359 ms (OMP 1).
 - The lab board's PL has a defective configuration row (tile row SLICE Y219, cells stuck at 0; `log/BOARD_TODO.md`
   2026-10-23/24). `vivado.tcl` on zcu102 fences the design below it by default (`VTA_BRAM_FENCE=y219|upper|none`).
   multi2 fits below it and works (2026-10-24); multi4 needs more BRAM than the rows below, so it crosses the row with
