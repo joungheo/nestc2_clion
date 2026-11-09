@@ -316,6 +316,9 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   matmul_evta NEON packing / kept buffers (`EVTA_MATMUL_TIME=1`), `VTA.cpp` `-vta-fold-matmul-bias` (Linear bias in the conv bias),
   Slice / Concat int8 in `isOpSupported` (attention transposes int8; vtalib `transpose` fast paths), `-vta-fuse-layernorm`
   (`findLayerNorms`, `nestc_cpu::layerNormI8`, bit-identical): 184.4 -> 137.2 ms.
+  §7.27: `-vta-attn-keep-layout` (Q K^T from the query / key conv outputs kept in the EVTA layout: vtalib `matmul_evta_qk`,
+  `VTABufferView`), `-vta-matmul-heads` (heads in one EVTA call: `matmul_evta_n`, conv batch `gConvBatch`), `-vta-cpu-approx`
+  (softmax / layer norm reciprocal multiplies, off = bit-identical): 137.2 -> 123.5 ms.
 - The lab board's PL has a defective configuration row (tile row SLICE Y219, cells stuck at 0; `log/BOARD_TODO.md`
   2026-10-23/24). `vivado.tcl` on zcu102 fences the design below it by default (`VTA_BRAM_FENCE=y219|upper|none`).
   multi2 fits below it and works (2026-10-24); multi4 needs more BRAM than the rows below, so it crosses the row with
