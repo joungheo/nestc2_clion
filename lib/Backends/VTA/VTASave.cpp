@@ -6392,6 +6392,48 @@ static inline int8_t lnAdd(int8_t l, int8_t r, float s0, float s1, float sd) {
   const int32_t L32 = (int32_t)std::round(float(l) * k0), R32 = (int32_t)std::round(float(r) * k1);
   return lnClip(float(L32 + R32) * kd);
 }
+// sums over each of four int8 rows of float(v) * s (squared when sq), each in column order: NEON lane k = row k
+static inline void lnSum4(const int8_t *ra, const int8_t *rb, const int8_t *rc, const int8_t *rd, size_t cols, float s,
+                          bool sq, float out[4]) {
+  size_t l = 0;
+  float acc[4] = {0.f, 0.f, 0.f, 0.f};
+#if defined(__aarch64__)
+  float32x4_t S = vdupq_n_f32(0.f);
+  const float32x4_t vs = vdupq_n_f32(s);
+  for (; l + 16 <= cols; l += 16) {
+    const int8x16_t a = vld1q_s8(ra + l), b = vld1q_s8(rb + l), c = vld1q_s8(rc + l), d = vld1q_s8(rd + l);
+    const int8x16_t ab0 = vzip1q_s8(a, b), ab1 = vzip2q_s8(a, b), cd0 = vzip1q_s8(c, d), cd1 = vzip2q_s8(c, d);
+    // column l + i of the four rows = bytes 4i..4i+3 of q[i / 4]
+    const int8x16_t q[4] = {
+        vreinterpretq_s8_s16(vzip1q_s16(vreinterpretq_s16_s8(ab0), vreinterpretq_s16_s8(cd0))),
+        vreinterpretq_s8_s16(vzip2q_s16(vreinterpretq_s16_s8(ab0), vreinterpretq_s16_s8(cd0))),
+        vreinterpretq_s8_s16(vzip1q_s16(vreinterpretq_s16_s8(ab1), vreinterpretq_s16_s8(cd1))),
+        vreinterpretq_s8_s16(vzip2q_s16(vreinterpretq_s16_s8(ab1), vreinterpretq_s16_s8(cd1)))};
+    for (int g = 0; g < 4; g++) {
+      const int16x8_t lo = vmovl_s8(vget_low_s8(q[g])), hi = vmovl_s8(vget_high_s8(q[g]));
+      const int32x4_t col[4] = {vmovl_s16(vget_low_s16(lo)), vmovl_s16(vget_high_s16(lo)), vmovl_s16(vget_low_s16(hi)),
+                                vmovl_s16(vget_high_s16(hi))};
+      for (int i = 0; i < 4; i++) {
+        float32x4_t f = vmulq_f32(vcvtq_f32_s32(col[i]), vs);
+        if (sq)
+          f = vmulq_f32(f, f);
+        S = vaddq_f32(S, f);
+      }
+    }
+  }
+  vst1q_f32(acc, S);
+#endif
+  const int8_t *rows[4] = {ra, rb, rc, rd};
+  for (int k = 0; k < 4; k++) {
+    float a = acc[k];
+    for (size_t j = l; j < cols; j++) {
+      const float f = float(rows[k][j]) * s;
+      const float f2 = sq ? f * f : f;
+      a += f2;
+    }
+    out[k] = a;
+  }
+}
 static void layerNormI8(int8_t *out, const int8_t *x, size_t rows, size_t cols, const int8_t *p1, const int8_t *p2,
                         const int8_t *eps, const int8_t *e8, const int8_t *w8, const int8_t *b, float sD0, float sQ1,
                         float v1a, float v1b, float v1d, float e1a, float e1b, float e1d, float sD2, float sQ2, float v2a,
@@ -6411,11 +6453,18 @@ static void layerNormI8(int8_t *out, const int8_t *x, size_t rows, size_t cols, 
     int8_t d[4][1024];
     // means: sums of the dequantized rows in order (four chains), quantize, elemdiv
     float s1[4] = {0.f, 0.f, 0.f, 0.f};
-    for (size_t l = 0; l < cols; l++)
+    if (nr == 4) {
+      lnSum4(x + r0 * cols, x + (r0 + 1) * cols, x + (r0 + 2) * cols, x + (r0 + 3) * cols, cols, sD0, false, s1);
+    } else {
       for (size_t k = 0; k < nr; k++) {
-        const float f = float(x[(r0 + k) * cols + l]) * sD0;
-        s1[k] += f;
+        float s = 0.f;
+        for (size_t l = 0; l < cols; l++) {
+          const float f = float(x[(r0 + k) * cols + l]) * sD0;
+          s += f;
+        }
+        s1[k] = s;
       }
+    }
     for (size_t k = 0; k < nr; k++) {
       const size_t r = r0 + k;
       const int8_t *xr = x + r * cols;
@@ -6445,12 +6494,19 @@ static void layerNormI8(int8_t *out, const int8_t *x, size_t rows, size_t cols, 
     }
     // variances: sums of the squares of the dequantized d in order (four chains)
     float s2[4] = {0.f, 0.f, 0.f, 0.f};
-    for (size_t l = 0; l < cols; l++)
+    if (nr == 4) {
+      lnSum4(d[0], d[1], d[2], d[3], cols, sD2, true, s2);
+    } else {
       for (size_t k = 0; k < nr; k++) {
-        const float f = float(d[k][l]) * sD2;
-        const float f2 = f * f;
-        s2[k] += f2;
+        float s = 0.f;
+        for (size_t l = 0; l < cols; l++) {
+          const float f = float(d[k][l]) * sD2;
+          const float f2 = f * f;
+          s += f2;
+        }
+        s2[k] = s;
       }
+    }
     for (size_t k = 0; k < nr; k++) {
       const size_t r = r0 + k;
       const int8_t v = lnAdd(lnDiv(lnClip(lnQuant(s2[k], sQ2)), p2[r], v2a, v2b, v2d), eps[r], a1a, a1b, a1d);
