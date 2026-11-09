@@ -296,6 +296,12 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   schedules under filterN 0 in `VTASchedules.h` (`EVTA_SCHED` key KN 0): OMP 1 43.2 -> 28.6 ms, but `-t 4` 22.5 -> 24.7 ms (small DMAs). The generated bundle `.cpp` starts with the values of the code-changing options (`-vta-*`, `-enable-channelwise[-depthwise]`, defaults
   included; `VTASave.cpp` `vtaOptionsComment`), so `head -14 <bundle>.cpp` shows how a bundle was made. The NEST-C `lib/Quantization/Base/Base.cpp`
   (int8 exponent floor -7) is only built with `NESTC_WITH_NMP`; this board uses Glow's.
+- DeiT-tiny (2026-11-09, `docs/evta_runtime_compare.md` §7.22; `vta/bundles/DeiTTest`, `vtabundles_xcmpl/gen_deit_bundle.sh`, ONNX shapes folded
+  by `vtabundles_xcmpl/fold_onnx.py` on the PC): VTASave generic CPU ops written into the bundle (`NESTC_CPU_OPS`: float matmul, copies, insert /
+  extract, any transpose, layer norm / GELU pieces, softmax over rows; vtalib `softmax` is right for one row only), tensor views at their
+  offsets, constants written once; an unhandled instruction stops with its name. The patch embedding runs as conv0 pack (1x1 over 768 channels;
+  the limit is 1024 now). Board: 281 / 207 / 340 right, 3.77 s (OMP 1); the matmuls are still float on the CPU. The Glow graph hash of this
+  model is unstable (the script patches the profile's hash and retries).
 - The lab board's PL has a defective configuration row (tile row SLICE Y219, cells stuck at 0; `log/BOARD_TODO.md`
   2026-10-23/24). `vivado.tcl` on zcu102 fences the design below it by default (`VTA_BRAM_FENCE=y219|upper|none`).
   multi2 fits below it and works (2026-10-24); multi4 needs more BRAM than the rows below, so it crosses the row with

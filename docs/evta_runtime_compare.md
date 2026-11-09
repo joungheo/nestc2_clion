@@ -1236,6 +1236,53 @@ schedule을 바꾼 뒤에도 dump가 기본 schedule과 같다.
   block마다 행 하나가 112–896 B인 작은 DMA(입력 행, 출력 행, bias, shift)가 많아서다. 7×7×960은 block 60개 × 7행씩이다.
   - 줄일 수 있는 것: 여러 block의 입력을 한 2D LOAD로(평면이 연속이라 pad만 해결하면 됨), 출력 store도 같이; 7×7 layer는 타일 = 이미지.
 
+### 7.22 DeiT-tiny를 보드에서 끝까지 (2026-11-09, `vta/bundles/DeiTTest`, `vtabundles_xcmpl/gen_deit_bundle.sh`)
+
+첫 Transformer다. 목표는 (a) 지금의 양자화 그래프 그대로 bundle을 만들어 보드에서 정답이 나오게 하는 것이다. EVTA로 많이 보내는 일((b): Linear를
+1×1 conv로, LayerNorm / softmax / GELU를 int8 CPU 함수로, attention matmul)은 다음 단계다.
+
+**모델:** HF `facebook/deit-tiny-distilled-patch16-224`의 ONNX(Xenova, opset 11). Glow importer는 동적 shape 계산(Shape / Gather / Where
+약 300개)을 받지 못한다. 그래서 입력을 1×3×224×224로 고정하고 상수로 접었다(`vtabundles_xcmpl/fold_onnx.py`, 1261 → 608 node,
+원본과 출력 같음; onnx ≥ 1.13이 필요해 PC에서 돌림). profile은 VTAInterpreter로 3장, `-minibatch=1`(3장을 한 batch로 하면 graph hash가 다름).
+
+**양자화 그래프(VTA backend):** VTA `isOpSupported`에 MatMul이 없어서 matmul 120개(Linear 48개(QKV, proj, MLP 2개 × 12층),
+attention 72개(head 3개 × 2 × 12층))가 float로 남는다. 그 앞뒤로 quantize 200개, dequantize 211개가 붙는다. LayerNorm 조각(reduce, pow, mul)과
+GELU의 erf, softmax도 float, add / sub / div는 int8이다. EVTA로 가는 것은 patch embedding conv 1개와 classifier fc 2개뿐이다.
+
+**VTASave에 넣은 것 (`VTASave.cpp`):**
+- generic CPU 연산: MatMul, BatchedReduceAdd, ElementMul / Pow / Erf(float), Copy, Touch, InsertTensor, ExtractTensor, int8 4 / 6차원이 아닌
+  transpose(float, 3차원), float splat, 행이 2개 이상인 softmax. 함수 본문은 쓰일 때만 bundle `.cpp`에 들어간다(`NESTC_CPU_OPS`). 그래서
+  두 vtalib 모두 그대로 링크된다.
+- tensor view: offset이 0이 아니면 그 위치에서 시작한다(concat 안의 patch token, attention head). 원래는 offset을 무시했다.
+  상수의 view는 virtual address로 읽는다.
+- 상수 피연산자: elemadd가 상수(bias, position embedding)를 virtual address로 읽는다. elemsub / elemdiv는 두 번째 피연산자가 **상수일 때만,
+  그리고 한 번만** weights 파일에 쓴다. 원래는 activation이어도 상수로 간주해 payload를 찾았고(없으면 null), 여러 instruction이 같이 쓰는
+  상수(elemdiv 12개)는 매번 다시 써서 뒤의 상수 offset이 모두 밀렸다.
+- 처리 못 하는 instruction은 이름을 출력하고 멈춘다. 원래는 `llvm_unreachable`이라 Release 빌드에서 segfault였다.
+- vtalib의 `softmax`는 행 간격을 `inDim0`으로 잡는다. CNN의 1×classes softmax에서만 맞고, 594×198 attention softmax는 틀린다. 그래서 행이
+  여러 개면 generic softmax를 쓴다.
+
+**첫 실행은 611(오답):** layer별 dump(float dequantize 출력)를 ONNX ReferenceEvaluator와 비교하니 patch embedding conv부터 틀렸다.
+16×16 / stride 16 conv를 zero-fill 경로가 기본 schedule 1 / 8×8로 돌렸는데, 그 입력 타일(128×128×16 = 16384 entry)이 inp SRAM(4096 entry)을
+넘는다. conv0 pack(§7.12)으로 바꾸면 겹치지 않는 16×16 patch라서 14×14×768 위의 1×1 conv가 된다. 그런데 packed 채널이 256까지만 허용됐다
+(vtalib 패킹 버퍼 `v[256]`). 두 vtalib과 VTASave에서 상한을 1024로 넓히고, schedule을 1 / 7×2로 넣었다(입력 타일 672 entry; HLS GEMM은
+7×7로 채워 2352 entry, single EVTA SRAM에 들어감). 이렇게 고친 뒤 결과는 아래와 같다.
+
+| 그림 | bundle (보드, HLS 380 MHz) top-1 logit | ONNX float | Glow Interpreter int8 (matmul까지 int8, 다른 그래프) |
+|---|---|---|---|
+| cat_285.png | **281** 10.13 (0.547) | 281 11.55 | 281 14.13 |
+| dog_207.png | **207** 10.88 (0.918) | 207 | 207 12.13 |
+| zebra_340.png | **340** 12.63 (0.980) | 340 | 340 15.88 |
+
+- ONNX float 대비 상대 오차(L2): embedding 0.09, layer 0 LayerNorm 0.09, layer 0 attention 뒤 0.14, MLP 뒤 0.21, layer 1 0.26, layer 5 0.71,
+  마지막 LayerNorm 0.76. 층마다 조금씩 늘고, 한 연산에서 갑자기 뛰는 곳은 없다(LayerNorm은 입력 0.090 → 출력 0.091). power-of-2 per-tensor
+  양자화의 오차로 보인다. 예를 들어 LayerNorm 분산이 scale 32([−4096, 4064])로 양자화된다. 정확도는 ImageNet 검증 이미지로 따로 재야 한다.
+- VTAInterpreter로는 이 그래프를 돌리지 못한다(`touch` instruction을 Invalid로 멈춤). 그래서 bundle과 같은 그래프의 Interpreter 기준값이 없다.
+
+**기존 모델:** Resnet18 / Resnet50 / VGG16 / MobileNetV2를 다시 생성하면 bundle `.cpp`(옵션 주석 제외)와 weights가 byte 단위로 같다.
+
+**시간:** 1장 3.77 s(OMP 1), 1.52 s(OMP 4). 거의 전부 float naive matmul(약 1.2 GMAC)과 float↔int8 변환이다. (b)의 목표는 수십 ms다.
+
 ## 8. 하드웨어도 같이 비교해야 하나
 
 해야 한다. 다만 §7의 ①~④를 가르는 것은 어레이가 아니라 다음 네 가지다.

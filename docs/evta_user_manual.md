@@ -99,6 +99,10 @@ cd ~/JO/npuprg/nestc2_clion/nest-compiler/Debug2_remote
   만들어야 한다. 플래그는 `vta/multievta_bundles/MultiEVTAResnet18Test/CMakeLists.txt`에 있고, copy i는
   `-index-multi-evta=$((1<<i))`, `-network-name=mxnet_exported_resnet18_<i>`다. 결과를
   `Debug2_remote/vta/multievta_bundles/MultiEVTAResnet18Test/`에 둔다(`vtabundles_xcmpl/README.md` "Multi-EVTA bundle sets").
+- **MobileNetV2 / DeiT-tiny**는 각각 `vtabundles_xcmpl/gen_mobilenetv2_bundle.sh`, `vtabundles_xcmpl/gen_deit_bundle.sh`로 만든다(cmake를 다시 돌리지 않음).
+  DeiT는 `Debug2_remote/vta/bundles/DeiTTest/`에 `deit_fold.onnx`(PC에서 `fold_onnx.py model.onnx deit_fold.onnx 1,3,224,224`; 보드의 onnx 1.11에는
+  `onnx.reference`가 없음)가 있어야 한다. Glow graph hash가 실행마다 달라지므로, 스크립트가 profile 사본의 hash를 고쳐 가며 model-compiler를 4번까지 돌린다.
+  그다음 `collect_hw_bundles.py DeiTTest`, `build/`에서 `make vtaDeiTBundle`(처음이면 `cmake .`)을 한다(`docs/evta_runtime_compare.md` §7.22).
 
 ### 2.2 VTA backend 옵션 (`model-compiler`, `VTASave.cpp`)
 
