@@ -1005,9 +1005,52 @@ int avgpool(int8_t* input, float inputScale, int32_t inputOffset, int8_t *output
 //  }
 //  return 0;
 //}
+//#### JO added (2026-11-09): NEON paths of quantize / dequantize / elemadd / elemdiv for offsets 0 (the symmetric schemas),
+//#### the same operations in the same order as the scalar loops: vcvtaq_s32_f32 rounds half away from zero as std::round
+//#### and saturates, vqmovn clamps as the scalar clip, an int -> float conversion rounds to nearest in both, and with a
+//#### zero offset an add or a fused multiply-add of the scalar code is the plain product. Results are bit-identical
+//#### (DeiT-tiny: 16 / 20 / 21 / 7 ns -> about 1-2 ns per element).
+#if defined(__aarch64__)
+static inline bool isPow2f(float x) {
+  int e;
+  return x > 0.f && std::frexp(x, &e) == 0.5f;
+}
+static inline int8x16_t narrow16(int32x4_t a, int32x4_t b, int32x4_t c, int32x4_t d) {
+  return vcombine_s8(vqmovn_s16(vcombine_s16(vqmovn_s32(a), vqmovn_s32(b))),
+                     vqmovn_s16(vcombine_s16(vqmovn_s32(c), vqmovn_s32(d))));
+}
+static inline void widen16(int8x16_t v, int32x4_t *o) {
+  const int16x8_t lo = vmovl_s8(vget_low_s8(v)), hi = vmovl_high_s8(v);
+  o[0] = vmovl_s16(vget_low_s16(lo));
+  o[1] = vmovl_high_s16(lo);
+  o[2] = vmovl_s16(vget_low_s16(hi));
+  o[3] = vmovl_high_s16(hi);
+}
+#endif
 int quantize(int8_t *input, int8_t *output, dim_t size, float scale, int32_t offset){
   float *inputF = (float *)input;
   const ssize_t n = size, CH = 4096;
+#if defined(__aarch64__)
+  //#### JO added (2026-11-09): NEON (above); in / scale is in * (1 / scale) when 1 / scale is a power of two
+  if (offset == 0) {
+    const bool mul = isPow2f(1.f / scale) && 1.f / scale * scale == 1.f;
+    const float32x4_t vs = vdupq_n_f32(mul ? 1.f / scale : scale);
+    ssize_t i = 0;
+    for (; i + 16 <= n; i += 16) {
+      int32x4_t r[4];
+      for (int j = 0; j < 4; j++) {
+        const float32x4_t x = vld1q_f32(inputF + i + 4 * j);
+        r[j] = vcvtaq_s32_f32(mul ? vmulq_f32(x, vs) : vdivq_f32(x, vs));
+      }
+      vst1q_s8(output + i, narrow16(r[0], r[1], r[2], r[3]));
+    }
+    for (; i < n; i++) {
+      int32_t out32 = std::round(inputF[i] / scale);
+      output[i] = (int8_t)(out32 > 127 ? 127 : (out32 < -128 ? -128 : out32));
+    }
+    return 0;
+  }
+#endif
 //#### JO changed: small sizes run inline without any OpenMP call (elemmax calls quantize per element:
 //#### 1.6M parallel regions -> 15-100 s; an if() clause still enters the OpenMP runtime)
 //#pragma omp parallel for schedule(static)
@@ -1029,6 +1072,20 @@ int quantize(int8_t *input, int8_t *output, dim_t size, float scale, int32_t off
 
 int dequantize(int8_t *input, int8_t *output, dim_t size, float scale, int32_t offset){
   float* outputF = (float*)output;
+#if defined(__aarch64__)
+  //#### JO added (2026-11-09): NEON (above quantize)
+  if (offset == 0) {
+    const float32x4_t vs = vdupq_n_f32(scale);
+    dim_t i = 0;
+    for (; i + 16 <= size; i += 16) {
+      int32x4_t v[4];
+      widen16(vld1q_s8(input + i), v);
+      for (int j = 0; j < 4; j++) vst1q_f32(outputF + i + 4 * j, vmulq_f32(vcvtq_f32_s32(v[j]), vs));
+    }
+    for (; i < size; i++) outputF[i] = (float)input[i] * scale;
+    return 0;
+  }
+#endif
     for(int i = 0; i < size; i++){
         float in = (float)*(input + i);
         float out = in*scale + offset;
@@ -1301,6 +1358,32 @@ int elemadd(int8_t *input0, float input0Scale, int32_t input0Offset, int8_t *inp
   // We increase the size of the integer up to 16 bits to prevent overflow.
   const float largeScale = float(1) / (1 << 15);
   const float k0 = input0Scale / largeScale, k1 = input1Scale / largeScale, kd = largeScale / destScale;
+#if defined(__aarch64__)
+  //#### JO added (2026-11-09): NEON (above quantize)
+  if (input0Offset == 0 && input1Offset == 0 && destOffset == 0) {
+    const float32x4_t v0 = vdupq_n_f32(k0), v1 = vdupq_n_f32(k1), vd = vdupq_n_f32(kd);
+    const ssize_t n = size;
+    ssize_t i = 0;
+    for (; i + 16 <= n; i += 16) {
+      int32x4_t L[4], R[4], S[4];
+      widen16(vld1q_s8(input0 + i), L);
+      widen16(vld1q_s8(input1 + i), R);
+      for (int j = 0; j < 4; j++) {
+        const int32x4_t l32 = vcvtaq_s32_f32(vmulq_f32(vcvtq_f32_s32(L[j]), v0));
+        const int32x4_t r32 = vcvtaq_s32_f32(vmulq_f32(vcvtq_f32_s32(R[j]), v1));
+        S[j] = vcvtaq_s32_f32(vmulq_f32(vcvtq_f32_s32(vaddq_s32(l32, r32)), vd));
+      }
+      vst1q_s8(output + i, narrow16(S[0], S[1], S[2], S[3]));
+    }
+    for (; i < n; i++) {
+      int32_t L32 = std::round(float(input0[i]) * k0);
+      int32_t R32 = std::round(float(input1[i]) * k1);
+      int32_t sum32 = std::round(float(L32 + R32) * kd);
+      output[i] = (int8_t)(sum32 > 127 ? 127 : (sum32 < -128 ? -128 : sum32));
+    }
+    return 0;
+  }
+#endif
   // chunks over the threads; simd: element-wise, so safe when output aliases an input (the bundles call it in place)
   const ssize_t n = size, CH = 4096;
 //#### JO changed: small sizes run inline without any OpenMP call (elemmax calls quantize per element:
@@ -1408,6 +1491,27 @@ int elemsub_f32(int8_t *input0, float input0Scale, int32_t input0Offset, int8_t 
 
 int elemdiv(int8_t *input0, float input0Scale, int32_t input0Offset, int8_t *input1, float input1Scale, int32_t input1Offset,
             int8_t *output, float destScale, int32_t destOffset, unsigned_t size) {
+#if defined(__aarch64__)
+  //#### JO added (2026-11-09): NEON (above quantize); r = (input1Scale * destScale) * R as the scalar expression
+  if (input0Offset == 0 && input1Offset == 0 && destOffset == 0) {
+    const float c1 = input1Scale * destScale;
+    const float32x4_t v0 = vdupq_n_f32(input0Scale), v1 = vdupq_n_f32(c1);
+    dim_t i = 0;
+    for (; i + 16 <= size; i += 16) {
+      int32x4_t L[4], R[4], S[4];
+      widen16(vld1q_s8(input0 + i), L);
+      widen16(vld1q_s8(input1 + i), R);
+      for (int j = 0; j < 4; j++)
+        S[j] = vcvtaq_s32_f32(vdivq_f32(vmulq_f32(v0, vcvtq_f32_s32(L[j])), vmulq_f32(v1, vcvtq_f32_s32(R[j]))));
+      vst1q_s8(output + i, narrow16(S[0], S[1], S[2], S[3]));
+    }
+    for (; i < size; i++) {
+      int32_t sum32 = std::round((input0Scale * float(input0[i])) / (c1 * float(input1[i])));
+      output[i] = (int8_t)(sum32 > 127 ? 127 : (sum32 < -128 ? -128 : sum32));
+    }
+    return 0;
+  }
+#endif
   for (dim_t i = 0, e = size; i < e; i++) {
     int32_t L = input0[i];
     int32_t R = input1[i];
