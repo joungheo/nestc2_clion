@@ -1283,6 +1283,53 @@ GELU의 erf, softmax도 float, add / sub / div는 int8이다. EVTA로 가는 것
 
 **시간:** 1장 3.77 s(OMP 1), 1.52 s(OMP 4). 거의 전부 float naive matmul(약 1.2 GMAC)과 float↔int8 변환이다. (b)의 목표는 수십 ms다.
 
+### 7.23 DeiT-tiny의 Linear를 EVTA로 (2026-11-09, `-vta-matmul-conv`, 기본 켜짐)
+
+**방법.** `VTA.cpp`에서 MatMul을 int8로 양자화한다(`isOpSupported`). 오른쪽 입력이 상수(K × N, K·N이 16의 배수)인 MatMul은 `transformPostLowering`의 `matMulToConv`가 1×1 conv로 바꾼다. M행을 H × W 이미지로 펴고(W는 √M 이하의 가장 큰 약수, DeiT는 198 = 18 × 11), filter는 Wᵀ, bias는 0(scale = 입력 × weight)이다. 그러면 기존 EVTA conv 경로(`convolution_wo_tr`, 기본 schedule 1 / 14 × 14)로 간다. 1×1 conv는 입력을 16채널씩 올리므로 768채널도 inp 버퍼에 들어간다. 상수가 아닌 곱(attention Q·Kᵀ, A·V, 층마다 6개)은 CPU int8 matmul(`nestc_cpu::matmulI8`, NEON)로 계산한다. Linear 72개가 EVTA로 가고, weights는 32 → 16 MB가 됐다. `-vta-round-shift`로 생성했다.
+
+**고친 기존 결함.** `prepareVTAConvolutionInst`는 conv마다 filter와 bias를 weights 파일에 쓰는데, 심볼은 이름으로 한 번만 등록했다.
+- 공유 상수(여기서는 0 bias 9종을 72개 conv가 공유)를 두 번째로 쓸 때부터 뒤의 상수 위치가 모두 밀렸다.
+- 0 bias는 쓰지 않으면서 심볼 크기만큼 offset을 진행했다.
+
+이제 처음 한 번만 쓰고, round 항이 있는 공유 bias는 conv마다 `<conv>_rbias`로 따로 쓴다. Resnet18 / 50, VGG16, MobileNetV2는 다시 생성해도 번들 코드(header 제외)와 weights가 byte 단위로 같다.
+
+**CPU 쪽 정리.** 모두 결과가 bit 단위로 같다.
+- **int8 matmul:** NEON, 두 행씩 계산
+- **erf, softmax:** 입력이 int8을 dequantize한 값이면(`dequantizedBefore`) 256개 `std::erf` / `std::exp` 값의 표를 쓴다. softmax는 x − max = −d·s로 정확히 계산된다.
+- **pow:** 지수 2 / 0.5는 곱셈 / sqrt로 계산한다.
+- **vtalib:** `quantize` / `dequantize` / `elemadd` / `elemdiv`의 offset 0 NEON 경로를 넣었다(두 vtalib 모두). `vcvtaq`는 `std::round`와 같다. 원소당 7–21 ns가 약 1–2 ns로 줄었다.
+
+**결과** (HLS 380 MHz, OMP 1, `_timed` 중앙값):
+
+| 단계 | 1장 (ms) | cat 확률 |
+|---|---|---|
+| §7.22 float 번들 | 3770 | 0.547 |
+| Linear EVTA + int8 attention (스칼라) | 1754 | 0.695 |
+| + NEON matmul, erf 표, pow | 944 | 0.695 |
+| + vtalib NEON elementwise | 539 | 0.695 |
+| + matmul 두 행, softmax 표 | **475** | 0.695 |
+
+- 분류는 281 / 207 / 340 그대로이고, 2단계 이후 logit은 모두 같다.
+- 475 ms의 구성(ms):
+
+  | 항목 | 시간 |
+  |---|---|
+  | int8 attention matmul | 146 |
+  | EVTA conv 73개(38.6 GOPS) | 56 |
+  | softmax | 53 |
+  | erf | 51 |
+  | elemadd | 32 |
+  | mul | 19 |
+  | elemdiv | 19 |
+  | quantize | 15 |
+  | dequantize | 13 |
+
+**다음 후보.**
+- attention matmul을 EVTA로 보낸다. 실행 중에 K / V를 weight 배치로 바꿔야 한다.
+- LayerNorm / GELU / softmax를 int8 입출력의 묶음 CPU 함수로 만든다.
+- Linear bias 덧셈을 conv bias에 접는다.
+- ImageNet 검증 이미지로 정확도를 잰다.
+
 ## 8. 하드웨어도 같이 비교해야 하나
 
 해야 한다. 다만 §7의 ①~④를 가르는 것은 어레이가 아니라 다음 네 가지다.

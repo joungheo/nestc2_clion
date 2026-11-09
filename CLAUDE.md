@@ -301,7 +301,11 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   extract, any transpose, layer norm / GELU pieces, softmax over rows; vtalib `softmax` is right for one row only), tensor views at their
   offsets, constants written once; an unhandled instruction stops with its name. The patch embedding runs as conv0 pack (1x1 over 768 channels;
   the limit is 1024 now). Board: 281 / 207 / 340 right, 3.77 s (OMP 1); the matmuls are still float on the CPU. The Glow graph hash of this
-  model is unstable (the script patches the profile's hash and retries).
+  model is unstable (the script patches the profile's hash and retries). Linear on the EVTA (2026-11-09, §7.23, `VTA.cpp` `-vta-matmul-conv`,
+  default on): MatMul quantized to int8, a constant-rhs MatMul becomes a 1x1 conv over its rows as an H x W image (`matMulToConv`), the
+  attention products an int8 NEON CPU matmul; VTASave writes a shared conv filter / bias once (a second copy shifted every later constant);
+  erf / softmax of dequantized int8 by tables, vtalib quantize / dequantize / elemadd / elemdiv NEON (all bit-identical): 3.77 s -> 475 ms
+  (OMP 1; EVTA 56 ms).
 - The lab board's PL has a defective configuration row (tile row SLICE Y219, cells stuck at 0; `log/BOARD_TODO.md`
   2026-10-23/24). `vivado.tcl` on zcu102 fences the design below it by default (`VTA_BRAM_FENCE=y219|upper|none`).
   multi2 fits below it and works (2026-10-24); multi4 needs more BRAM than the rows below, so it crosses the row with
