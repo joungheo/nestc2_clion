@@ -208,6 +208,7 @@ public:
   std::map<const Instruction *, LutRegion> *getLutRegions() { return &lutRegions; }
   std::set<const Instruction *> *getLutAway() { return &lutAway; }
   bool isLutAway(const Instruction *I) const { return lutAway.count(I) != 0; }
+  std::string lutFuncs; // the functions that make the tables (file scope, before load_module)
   // a name that lives as long as the symbol tables (constants that are not IR values)
   const char *keepName(const std::string &name) {
     names.push_back(name);
@@ -6634,6 +6635,8 @@ void finalizeBundleEntrySave(struct BundleSaveCtx &bundleCtx,
     initConst.append(std::to_string(ctx.getIdxMultiEVTA()));
   }
   initConst.append(";\n");
+  //#### JO added (2026-11-09): -vta-lut-elementwise
+  initConst.append(ctx.lutFuncs);
 
   initConst.append("\nvoid ");
   initConst.append(mainEntryName);
@@ -6972,9 +6975,13 @@ static void emitLutRegion(const LutRegion &r, std::string *bundle, VTASaveContex
   *bundle += "  //#### " + std::to_string(r.instrs.size()) + " elementwise instructions (" +
              r.instrs.front()->getName().str() + " .. " + r.instrs.back()->getName().str() +
              ") as a table of their 256 results (-vta-lut-elementwise)\n";
-  *bundle += "  static const nestc_cpu::Lut8 " + lut + " = [&]() {\n" + decl +
-             "    for (int q = 0; q < 256; q++) " + probe[r.root] + "[q] = (int8_t)(q - 128);\n" + body +
-             "    nestc_cpu::Lut8 t;\n    memcpy(t.v, " + probe[r.out] + ", 256);\n    return t;\n  }();\n";
+  // the probe in a function of its own at file scope: one statement in the inference function (timed_bundle.py)
+  ctx->lutFuncs += "\n// " + std::to_string(r.instrs.size()) + " elementwise instructions from " +
+                   r.instrs.front()->getName().str() + " (-vta-lut-elementwise)\nstatic nestc_cpu::Lut8 " + lut +
+                   "_make() {\n" + decl + "    for (int q = 0; q < 256; q++) " + probe[r.root] +
+                   "[q] = (int8_t)(q - 128);\n" + body + "    nestc_cpu::Lut8 t;\n    memcpy(t.v, " + probe[r.out] +
+                   ", 256);\n    return t;\n}\n";
+  *bundle += "  static const nestc_cpu::Lut8 " + lut + " = " + lut + "_make();\n";
   *bundle += "  nestc_cpu::lut8(" + r.out->getName().str() + ", " + r.root->getName().str() + ", " + lut + ", " +
              num + ");\n";
 }
