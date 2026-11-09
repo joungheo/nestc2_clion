@@ -159,6 +159,10 @@ bool VTA::isOpSupported(const NodeInfo &NI) const {
                {}, {MaxPoolNode::ArgmaxIdx}) &&
            (NI.getOutElemTy(MaxPoolNode::ArgmaxIdx) == ElemKind::Int64ITy);
 
+  //#### JO added (2026-11-10): Slice / Concat in int8 too (data movement: the DeiT attention heads), so that the quantizer
+  //#### keeps the transposes between the Linear convs and the attention matmuls in int8 (VTASave: generic extract / insert)
+  case Kinded::Kind::SliceNodeKind:
+  case Kinded::Kind::ConcatNodeKind:
   case Kinded::Kind::SplatNodeKind:
   case Kinded::Kind::InsertTensorNodeKind:
     return NI.allInputsAndOutputsHaveSameElemKind(
