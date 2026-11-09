@@ -45,6 +45,15 @@ static llvm::cl::opt<bool> vtaPadChannels(
                    "that their convs run on the EVTA"),
     llvm::cl::init(true));
 
+//#### JO added (2026-11-09): MatMul in int8 (DeiT: the linear layers and the attention products); a MatMul with a
+//#### constant right-hand side K x N and K, N multiples of 16 becomes a 1 x 1 conv (matMulToConv) over its M rows laid
+//#### out as an H x W image (H * W = M, W the largest divisor <= sqrt(M)), so it runs on the EVTA; the others run on
+//#### the CPU in int8 (VTASave nestc_cpu::matmulI8)
+static llvm::cl::opt<bool> vtaMatMulConv(
+    "vta-matmul-conv",
+    llvm::cl::desc("Quantize MatMul to int8 and run a MatMul with a constant right-hand side as an EVTA 1x1 conv"),
+    llvm::cl::init(true));
+
 Expected<std::unique_ptr<CompiledFunction>>
 VTA::compile(Function *F, const BackendOptions &opts) const {
   TraceInfo traceInfo = buildManualTraceInfo(F);
@@ -104,6 +113,10 @@ bool VTA::isOpSupported(const NodeInfo &NI) const {
     return NI.allInputsAndOutputsHaveSameElemKind(
         {ElemKind::FloatTy, ElemKind::Float16Ty, ElemKind::BFloat16Ty,
          ElemKind::Int8QTy, ElemKind::Int32ITy, ElemKind::Int64ITy});
+
+  //#### JO added (2026-11-09): -vta-matmul-conv (float MatMul stays unsupported as before: it has no lowering)
+  case Kinded::Kind::MatMulNodeKind:
+    return vtaMatMulConv && NI.allInputsAndOutputsHaveSameElemKind({ElemKind::Int8QTy});
 
   case Kinded::Kind::AvgPoolNodeKind:
     return NI.allInputsAndOutputsHaveSameElemKind(
@@ -736,6 +749,51 @@ static bool padChannelsTo16(Function *F) {
   return true;
 }
 
+//#### JO added (2026-11-09): -vta-matmul-conv (above). The conv has a zero int32 bias at the scale lhs * rhs and the
+//#### MatMul's output type, so getConvPath (VTASave) takes the EVTA path; the reshapes are tensor views in the IR.
+static bool matMulToConv(Function *F) {
+  auto *M = F->getParent();
+  std::vector<MatMulNode *> mms;
+  for (auto &N : F->getNodes())
+    if (auto *MM = dyn_cast<MatMulNode>(&N))
+      mms.push_back(MM);
+  bool changed = false;
+  for (auto *MM : mms) {
+    auto *W = dyn_cast<Constant>(MM->getRHS().getNode());
+    auto lTy = MM->getLHS().getType(), oTy = MM->getResult().getType();
+    if (!W || W->getElementType() != ElemKind::Int8QTy || lTy->getElementType() != ElemKind::Int8QTy ||
+        oTy->getElementType() != ElemKind::Int8QTy || lTy->getOffset() || W->getType()->getOffset() ||
+        oTy->getOffset())
+      continue;
+    const dim_t rows = lTy->dims()[0], K = lTy->dims()[1], N = W->dims()[1];
+    if (K % 16 || N % 16)
+      continue;
+    dim_t w = 1;
+    for (dim_t d = 1; d * d <= rows; d++)
+      if (rows % d == 0)
+        w = d;
+    const dim_t h = rows / w;
+    const std::string name = MM->getName().str();
+    auto *filter = M->createConstant(ElemKind::Int8QTy, {N, 1, 1, K}, W->getType()->getScale(), 0,
+                                     W->getName().str() + "_conv1x1");
+    auto hs = W->getPayload().getHandle<int8_t>();
+    auto hd = filter->getPayloadMutable().getHandle<int8_t>();
+    for (dim_t n = 0; n < N; n++)
+      for (dim_t k = 0; k < K; k++)
+        hd.at({n, 0, 0, k}) = hs.at({k, n});
+    auto *bias = M->createConstant(ElemKind::Int32QTy, {N}, lTy->getScale() * W->getType()->getScale(), 0,
+                                   name + "_conv1x1_bias");
+    bias->getPayloadMutable().zero();
+    auto *in = F->createReshape(name + "_conv1x1_in", MM->getLHS(), {1, h, w, K});
+    auto convTy = M->uniqueType(ElemKind::Int8QTy, {1, h, w, N}, oTy->getScale(), 0);
+    auto *conv = F->createConv(name + "_conv1x1", in, filter, bias, convTy, {1, 1}, {1, 1}, {0, 0, 0, 0}, 1);
+    auto *out = F->createReshape(name + "_conv1x1_out", conv, {rows, N});
+    MM->getResult().replaceAllUsesOfWith(out);
+    changed = true;
+  }
+  return changed;
+}
+
 Expected<bool>
 VTA::transformPostLowering(Function *F, CompilationContext &cctx,
                            const glow::runtime::DeviceInfo *devInfo) const {
@@ -745,6 +803,9 @@ VTA::transformPostLowering(Function *F, CompilationContext &cctx,
   //#### JO added (2026-11-07): -vta-pad-channels
   if (vtaPadChannels)
     changed |= padChannelsTo16(F);
+  //#### JO added (2026-11-09): -vta-matmul-conv
+  if (vtaMatMulConv)
+    changed |= matMulToConv(F);
   for (auto &node : F->getNodes()) {
     if (auto *channelwiseConv =
             llvm::dyn_cast<ChannelwiseQuantizedConvolutionNode>(&node)) {
