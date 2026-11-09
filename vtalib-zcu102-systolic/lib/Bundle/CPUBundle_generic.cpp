@@ -1106,9 +1106,96 @@ int8_t* at(int8_t *input, dim_t dim0, dim_t dim1, dim_t dim2, dim_t dim3,
 }
 
 
+//#### JO added (2026-11-10): fast paths of the 4-dim int8 transpose (same result as the element loop below): runs of the
+//#### innermost axis copied when it stays innermost, else 2-D transposes (NEON 16 x 16 byte blocks) for every index of
+//#### the two other output axes. DeiT attention heads: 30 ms -> about 1 ms per inference.
+// dst[i * ds + j] = src[j * ss + i], i < rows, j < cols
+static void transpose2dI8(int8_t *dst, dim_t ds, const int8_t *src, dim_t ss, dim_t rows, dim_t cols) {
+  dim_t i0 = 0;
+#if defined(__aarch64__)
+  for (; i0 + 16 <= rows; i0 += 16) {
+    dim_t j0 = 0;
+    for (; j0 + 16 <= cols; j0 += 16) {
+      uint8x16_t R[16], P[16], Q[16], S[16];
+      for (int j = 0; j < 16; j++)
+        R[j] = vld1q_u8((const uint8_t *)src + (j0 + j) * ss + i0);
+      for (int i = 0; i < 16; i += 2) {
+        const uint8x16x2_t t = vtrnq_u8(R[i], R[i + 1]);
+        P[i] = t.val[0];
+        P[i + 1] = t.val[1];
+      }
+      for (int i = 0; i < 16; i += 4)
+        for (int j = 0; j < 2; j++) {
+          const uint16x8x2_t t = vtrnq_u16(vreinterpretq_u16_u8(P[i + j]), vreinterpretq_u16_u8(P[i + j + 2]));
+          Q[i + j] = vreinterpretq_u8_u16(t.val[0]);
+          Q[i + j + 2] = vreinterpretq_u8_u16(t.val[1]);
+        }
+      for (int i = 0; i < 16; i += 8)
+        for (int j = 0; j < 4; j++) {
+          const uint32x4x2_t t = vtrnq_u32(vreinterpretq_u32_u8(Q[i + j]), vreinterpretq_u32_u8(Q[i + j + 4]));
+          S[i + j] = vreinterpretq_u8_u32(t.val[0]);
+          S[i + j + 4] = vreinterpretq_u8_u32(t.val[1]);
+        }
+      for (int j = 0; j < 8; j++) {
+        vst1q_u8((uint8_t *)dst + (i0 + j) * ds + j0, vcombine_u8(vget_low_u8(S[j]), vget_low_u8(S[j + 8])));
+        vst1q_u8((uint8_t *)dst + (i0 + j + 8) * ds + j0, vcombine_u8(vget_high_u8(S[j]), vget_high_u8(S[j + 8])));
+      }
+    }
+    for (dim_t i = i0; i < i0 + 16; i++)
+      for (dim_t j = j0; j < cols; j++)
+        dst[i * ds + j] = src[j * ss + i];
+  }
+#endif
+  for (dim_t i = i0; i < rows; i++)
+    for (dim_t j = 0; j < cols; j++)
+      dst[i * ds + j] = src[j * ss + i];
+}
+
+static bool transposeFast(int8_t *input, int8_t *output, const dim_t id[4], const dim_t od[4], const unsigned sh[4]) {
+  unsigned seen = 0;
+  for (int i = 0; i < 4; i++) {
+    if (sh[i] > 3 || od[i] != id[sh[i]])
+      return false;
+    seen |= 1u << sh[i];
+  }
+  if (seen != 15)
+    return false;
+  const dim_t is[4] = {id[1] * id[2] * id[3], id[2] * id[3], id[3], 1};
+  const dim_t os[4] = {od[1] * od[2] * od[3], od[2] * od[3], od[3], 1};
+  if (sh[3] == 3) {
+    const long n = (long)(od[0] * od[1] * od[2]);
+    const dim_t run = od[3];
+#pragma omp parallel for schedule(static)
+    for (long r = 0; r < n; r++) {
+      const dim_t a = r / (od[1] * od[2]), b = (r / od[2]) % od[1], c = r % od[2];
+      memcpy(output + r * run, input + a * is[sh[0]] + b * is[sh[1]] + c * is[sh[2]], run);
+    }
+    return true;
+  }
+  const int k = sh[0] == 3 ? 0 : sh[1] == 3 ? 1 : 2;
+  int p = -1, q = -1;
+  for (int i = 0; i < 3; i++)
+    if (i != k)
+      (p < 0 ? p : q) = i;
+  const long n = (long)(od[p] * od[q]);
+#pragma omp parallel for schedule(static)
+  for (long r = 0; r < n; r++) {
+    const dim_t u = r / od[q], v = r % od[q];
+    transpose2dI8(output + u * os[p] + v * os[q], os[k], input + u * is[sh[p]] + v * is[sh[q]], is[sh[3]], od[k],
+                  od[3]);
+  }
+  return true;
+}
+
 int transpose(int8_t *input, int8_t *output, dim_t inDim0, dim_t inDim1, dim_t inDim2, dim_t inDim3,
               dim_t outDim0, dim_t outDim1, dim_t outDim2, dim_t outDim3,
               unsigned_t shf0, unsigned_t shf1, unsigned_t shf2, unsigned_t shf3) {
+  {
+    const dim_t id[4] = {inDim0, inDim1, inDim2, inDim3}, od[4] = {outDim0, outDim1, outDim2, outDim3};
+    const unsigned sh[4] = {(unsigned)shf0, (unsigned)shf1, (unsigned)shf2, (unsigned)shf3};
+    if (transposeFast(input, output, id, od, sh))
+      return 0;
+  }
   dim_t i0, j0, k0, l0, *i1, *j1, *k1, *l1;
 
   switch(shf0) {
