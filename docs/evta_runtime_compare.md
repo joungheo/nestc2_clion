@@ -1379,6 +1379,54 @@ EVTA에서 다음 하드웨어 후보도 matmul이 아니라 이 둘이다(§8 1
 - Linear bias 덧셈을 conv bias에 접는다.
 - ImageNet 검증 이미지로 정확도를 잰다.
 
+### 7.25 DeiT-tiny GELU / softmax / LayerNorm을 CPU에서 빠르게 (2026-11-09, 모두 bit 단위로 같음)
+
+§7.24 뒤에 남은 시간은 대부분 GELU, softmax, LayerNorm의 CPU 연산이었다. 세 가지를 바꿨고, 세 장의 logit과 확률은 §7.24와 같다(cat 0.738127, dog 0.899937, zebra 0.952652).
+
+1. **원소별 구간을 256칸 표로** (`VTASave.cpp` `-vta-lut-elementwise`, 기본 켜짐, `findLutRegions` / `emitLutRegion`, `nestc_cpu::lut8`).
+   - **대상:** int8 버퍼 하나에서 시작해 int8 값 하나로 끝나는 원소별 명령의 연속이다(quantize, dequantize, elemadd / sub / mul / div / max, erf, pow). 다른 입력은 모든 원소가 같은 값인 상수여야 하고, 구간이 쓴 다른 버퍼는 읽히기 전에 해제돼야 한다.
+   - **방법:** 처음 실행할 때 파일 범위 함수(`lutN_make`)가 원래 생성 코드를 그대로 256원소 probe(−128..127)에 돌려 표를 만든다. 이름과 크기만 바꿔서 쓴다. 그 다음부터는 NEON `vqtbl4q` 표 찾기 한 번이다.
+   - 같은 함수로 계산하므로 결과가 같다는 것이 구조적으로 보장된다.
+   - DeiT에서는 GELU 10개 명령(dequantize → /√2 → erf → +1 → ×x → ×0.5 → quantize)과 attention의 /8이 표가 됐다. 층당 약 8.6 ms가 약 0.4 ms가 됐다.
+2. **softmax** (`findSoftmaxI8`, `nestc_cpu::softmaxI8`).
+   - int8 → dequantize → softmaxQ를 dequantize 자리에서 int8을 직접 읽는 한 함수로 합쳤다. softmax 출력 할당은 그 자리로 앞당긴다.
+   - 표, 합을 더하는 순서, 나눗셈은 softmaxQ와 같다. 행 max는 NEON, 나눗셈은 `vdivq_f32`(IEEE라 같은 값)이다.
+   - 54.1 → 18.5 ms. 남은 시간은 순서를 지켜야 하는 합과 나눗셈이다.
+3. **LayerNorm 조각.**
+   - 지수가 상수 2인 pow를 `nestc_cpu::square`(NEON)로 바꿨다: 10.3 → 1.8 ms.
+   - reduceAdd를 행 4개씩 번갈아 더한다(각 행 안의 순서는 그대로): 6.6 → 3.8 ms.
+   - vtalib `elemsub`에 NEON 경로를 넣었다(offset 0, 두 vtalib 모두): 4.6 → 3.0 ms.
+   - LayerNorm 전체는 약 38 → 23.7 ms다. 평균 / 분산 / 표준편차가 단계마다 int8로 양자화돼서, 한 함수로 합치려면 vtalib 식을 단계별로 그대로 옮겨야 한다. 이번에는 하지 않았다.
+
+Resnet18 / 50, VGG16, MobileNetV2는 다시 생성해도 bundle `.cpp`(옵션 주석 제외)와 weights가 byte 단위로 같다. 이 모델들에는 위 조건에 맞는 구간이 없다.
+
+**결과** (HLS 380 MHz, OMP 1, `_timed` 중앙값):
+
+| 단계 | 1장 (ms) |
+|---|---|
+| §7.24 | 359 |
+| + GELU / attention /8 표 | 257 |
+| + softmaxI8 | 219 |
+| + LayerNorm 조각 | **206** |
+
+남은 것(ms):
+
+| 항목 | 시간 | 비고 |
+|---|---|---|
+| EVTA conv 73개 | 55.7 | |
+| matmul_evta | 30.3 | EVTA 계산은 약 9 ms, 나머지는 CPU 배치 변환 |
+| elemadd | 23.9 | 대부분 Linear bias 덧셈 |
+| softmaxI8 | 18.5 | |
+| transpose | 7.4 | attention의 float 전치 |
+| quantize / dequantize | 7.0 / 5.2 | |
+| lut8 | 5.1 | |
+
+**다음 후보.**
+- `matmul_evta` 배치 변환을 NEON 16 × 16 전치로 바꾸고 버퍼를 재사용한다.
+- Linear bias를 conv bias에 접는다(약 16 ms, 결과가 조금 바뀐다).
+- attention의 dequantize → float 전치 → quantize를 int8 전치로 바꾼다.
+- LayerNorm을 한 함수로 합친다.
+
 ## 8. 하드웨어도 같이 비교해야 하나
 
 해야 한다. 다만 §7의 ①~④를 가르는 것은 어레이가 아니라 다음 네 가지다.

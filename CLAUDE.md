@@ -308,6 +308,10 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   (OMP 1; EVTA 56 ms). Attention Q K^T / A V on the EVTA too (2026-11-09, §7.24, VTASave `-vta-evta-matmul`, default on; vtalib
   `matmul_evta`: the same 1x1 conv with both operands packed at run time, bias 2^(shift-1); `EVTA_MATMUL_CHECK=1` compares with the CPU):
   0 differ, 281 / 207 / 340, 146 -> 30 ms, 475 -> 359 ms (OMP 1).
+  GELU / softmax / layer norm on the CPU (§7.25, bit-identical): runs of elementwise instructions from one int8 buffer to an int8
+  value with one-valued constants become a 256-entry table made at the first run by the same code on a probe (`-vta-lut-elementwise`,
+  `findLutRegions`, `nestc_cpu::lut8`), softmax of a dequantized int8 tensor reads the int8 (`findSoftmaxI8`), pow 2 = `square`,
+  NEON vtalib `elemsub`: 359 -> 206 ms.
 - The lab board's PL has a defective configuration row (tile row SLICE Y219, cells stuck at 0; `log/BOARD_TODO.md`
   2026-10-23/24). `vivado.tcl` on zcu102 fences the design below it by default (`VTA_BRAM_FENCE=y219|upper|none`).
   multi2 fits below it and works (2026-10-24); multi4 needs more BRAM than the rows below, so it crosses the row with
