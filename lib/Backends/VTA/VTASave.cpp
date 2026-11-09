@@ -81,6 +81,13 @@ static llvm::cl::opt<bool> vtaEvtaMatMul(
     llvm::cl::desc("Run int8 MatMuls with an activation on the right on the EVTA (matmul_evta)"),
     llvm::cl::init(true));
 
+//#### JO added (2026-11-10): faster CPU arithmetic that may change values (softmaxI8 / layerNormI8: times a reciprocal
+//#### instead of a division per element); off = the same result as the replaced instructions
+static llvm::cl::opt<bool> vtaCpuApprox(
+    "vta-cpu-approx",
+    llvm::cl::desc("softmax / layer norm on the CPU with reciprocal multiplies instead of divisions (values may change)"),
+    llvm::cl::init(true));
+
 //#### JO added (2026-11-02): the input preprocessing (quantize of the float input, then elemsub / elemdiv by per-channel
 //#### constants and an NCHW -> NHWC transpose) done by the input copy of the zero-filled first conv
 //#### (preprocess_nhwc2vtaio_zerofill; findInputPreprocess)
@@ -6279,31 +6286,76 @@ static void softmaxQ(int8_t *o8, const int8_t *i8, size_t rows, size_t cols, flo
   }
 }
 // softmaxQ of the dequantized int8 input read directly (VTASave findSoftmaxI8: the dequantize and the softmax in one):
-// the same table, sums in the same order and the same divisions, so the same result; row max with NEON
-static void softmaxI8(int8_t *o8, const int8_t *q8, size_t rows, size_t cols, float s) {
+// the same table and sums in the same order (four rows at a time, interleaved); approx 0: the same divisions, so the
+// same result as softmaxQ; approx 1 (-vta-cpu-approx): times 1 / sum instead (values may differ in the last bit)
+static void softmaxI8(int8_t *o8, const int8_t *q8, size_t rows, size_t cols, float s, int approx) {
   float *out = (float *)o8;
   float T[256];
   for (int d = 0; d < 256; d++) T[d] = std::exp(-(float)d * s);
+  const long groups = (long)((rows + 3) / 4);
 #pragma omp parallel for schedule(static)
-  for (long r = 0; r < (long)rows; r++) {
-    const int8_t *x = q8 + r * cols;
-    float *y = out + r * cols;
-    size_t i = 0;
-    int m = -128;
+  for (long g = 0; g < groups; g++) {
+    const size_t r0 = g * 4, nr = std::min<size_t>(4, rows - r0);
+    int m[4] = {-128, -128, -128, -128};
+    for (size_t k = 0; k < nr; k++) {
+      const int8_t *x = q8 + (r0 + k) * cols;
+      size_t i = 0;
+      int mm = -128;
 #if defined(__aarch64__)
-    int8x16_t vm = vdupq_n_s8(-128);
-    for (; i + 16 <= cols; i += 16) vm = vmaxq_s8(vm, vld1q_s8(x + i));
-    m = vmaxvq_s8(vm);
+      int8x16_t vm = vdupq_n_s8(-128);
+      for (; i + 16 <= cols; i += 16) vm = vmaxq_s8(vm, vld1q_s8(x + i));
+      mm = vmaxvq_s8(vm);
 #endif
-    for (; i < cols; i++) m = x[i] > m ? x[i] : m;
-    float sum = 0.f;
-    for (i = 0; i < cols; i++) sum += (y[i] = T[m - x[i]]);
-    i = 0;
+      for (; i < cols; i++) mm = x[i] > mm ? x[i] : mm;
+      m[k] = mm;
+    }
+    float sum[4] = {0.f, 0.f, 0.f, 0.f};
+    if (nr == 4) {
+      const int8_t *xa = q8 + r0 * cols, *xb = xa + cols, *xc = xb + cols, *xd = xc + cols;
+      float *ya = out + r0 * cols, *yb = ya + cols, *yc = yb + cols, *yd = yc + cols;
+      const float *Ta = T + m[0], *Tb = T + m[1], *Tc = T + m[2], *Td = T + m[3];
+      float sa = 0.f, sb = 0.f, sc = 0.f, sd = 0.f;
+      for (size_t i = 0; i < cols; i++) {
+        const float ea = Ta[-xa[i]], eb = Tb[-xb[i]], ec = Tc[-xc[i]], ed = Td[-xd[i]];
+        ya[i] = ea;
+        yb[i] = eb;
+        yc[i] = ec;
+        yd[i] = ed;
+        sa += ea;
+        sb += eb;
+        sc += ec;
+        sd += ed;
+      }
+      sum[0] = sa;
+      sum[1] = sb;
+      sum[2] = sc;
+      sum[3] = sd;
+    } else {
+      for (size_t k = 0; k < nr; k++) {
+        const int8_t *x = q8 + (r0 + k) * cols;
+        float *y = out + (r0 + k) * cols, ss = 0.f;
+        for (size_t i = 0; i < cols; i++) ss += (y[i] = T[m[k] - x[i]]);
+        sum[k] = ss;
+      }
+    }
+    for (size_t k = 0; k < nr; k++) {
+      float *y = out + (r0 + k) * cols;
+      size_t i = 0;
+      if (approx) {
+        const float inv = 1.f / sum[k];
 #if defined(__aarch64__)
-    const float32x4_t vs = vdupq_n_f32(sum);
-    for (; i + 4 <= cols; i += 4) vst1q_f32(y + i, vdivq_f32(vld1q_f32(y + i), vs));
+        const float32x4_t vi = vdupq_n_f32(inv);
+        for (; i + 4 <= cols; i += 4) vst1q_f32(y + i, vmulq_f32(vld1q_f32(y + i), vi));
 #endif
-    for (; i < cols; i++) y[i] /= sum;
+        for (; i < cols; i++) y[i] *= inv;
+      } else {
+#if defined(__aarch64__)
+        const float32x4_t vs = vdupq_n_f32(sum[k]);
+        for (; i + 4 <= cols; i += 4) vst1q_f32(y + i, vdivq_f32(vld1q_f32(y + i), vs));
+#endif
+        for (; i < cols; i++) y[i] /= sum[k];
+      }
+    }
   }
 }
 static void mul(int8_t *o8, const int8_t *a8, const int8_t *b8, size_t n) {
@@ -6452,7 +6504,7 @@ static void layerNormI8(int8_t *out, const int8_t *x, size_t rows, size_t cols, 
                         const int8_t *eps, const int8_t *e8, const int8_t *w8, const int8_t *b, float sD0, float sQ1,
                         float v1a, float v1b, float v1d, float e1a, float e1b, float e1d, float sD2, float sQ2, float v2a,
                         float v2b, float v2d, float a1a, float a1b, float a1d, float sD3, float sQ3, float v3a, float v3b,
-                        float v3d, float sD4, float sQ4, float a2a, float a2b, float a2d) {
+                        float v3d, float sD4, float sQ4, float a2a, float a2b, float a2d, int approx) {
   const float *e = (const float *)e8, *w = (const float *)w8;
   const float large = float(1) / (1 << 15);
   const float ek0 = e1a / e1d, ek1 = e1b / e1d;
@@ -6534,7 +6586,7 @@ static void layerNormI8(int8_t *out, const int8_t *x, size_t rows, size_t cols, 
       int8_t *o = out + r * cols;
       size_t l = 0;
 #if defined(__aarch64__)
-      const float32x4_t va = vdupq_n_f32(v3a), vden = vdupq_n_f32(den), vd4 = vdupq_n_f32(sD4),
+      const float32x4_t vrden = vdupq_n_f32(1.f / den), va = vdupq_n_f32(v3a), vden = vdupq_n_f32(den), vd4 = vdupq_n_f32(sD4),
                         vq4 = vdupq_n_f32(q4k), vk0 = vdupq_n_f32(ak0), vk1 = vdupq_n_f32(ak1),
                         vkd = vdupq_n_f32(akd);
       const int32x4_t hi127 = vdupq_n_s32(127), lo128 = vdupq_n_s32(-128);
@@ -6548,7 +6600,9 @@ static void layerNormI8(int8_t *out, const int8_t *x, size_t rows, size_t cols, 
                                  vmovl_s16(vget_low_s16(bhi)), vmovl_s16(vget_high_s16(bhi))};
         int32x4_t S[4];
         for (int j = 0; j < 4; j++) {
-          int32x4_t n = vcvtaq_s32_f32(vdivq_f32(vmulq_f32(va, vcvtq_f32_s32(D[j])), vden));
+          // approx (-vta-cpu-approx): times 1 / den instead of the division of elemdiv
+          const float32x4_t num = vmulq_f32(va, vcvtq_f32_s32(D[j]));
+          int32x4_t n = vcvtaq_s32_f32(approx ? vmulq_f32(num, vrden) : vdivq_f32(num, vden));
           n = vmaxq_s32(vminq_s32(n, hi127), lo128);
           const float32x4_t f4 = vmulq_f32(vmulq_f32(vcvtq_f32_s32(n), vd4), vld1q_f32(wr + l + 4 * j));
           int32x4_t q4 = vcvtaq_s32_f32(q4mul ? vmulq_f32(f4, vq4) : vdivq_f32(f4, vq4));
@@ -6564,7 +6618,7 @@ static void layerNormI8(int8_t *out, const int8_t *x, size_t rows, size_t cols, 
 #endif
       for (; l < cols; l++) {
         const float num = v3a * float(d[k][l]);
-        const int8_t n = lnClip(num / den);
+        const int8_t n = lnClip(approx ? num * (1.f / den) : num / den);
         const float f4 = float(n) * sD4;
         const float f4w = f4 * wr[l];
         o[l] = lnAdd(lnClip(lnQuant(f4w, sQ4)), br[l], a2a, a2b, a2d);
@@ -7340,7 +7394,7 @@ static void emitSoftmaxI8(const DequantizeInst *dq, const SoftMaxInst *S, std::s
   *bundle += "  // the dequantize and the softmax " + S->getName().str() + " in one (softmaxI8)\n";
   *bundle += "  nestc_cpu::softmaxI8(" + D->getName().str() + ", " + cpuPtr(dq->getSrc(), bundle, ctx) + ", " +
              std::to_string(S->getSrc()->dims()[0]) + ", " + std::to_string(S->getSrc()->dims()[1]) + ", " + sc +
-             "f);\n";
+             (vtaCpuApprox ? "f, 1);\n" : "f, 0);\n");
 }
 
 //#### JO added (2026-11-10): the DeiT layer norm (21 instructions from an int8 x: dequantize, reduceAdd, quantize, elemdiv,
@@ -7551,6 +7605,7 @@ static void emitLayerNormI8(const LayerNormFusion &f, std::string *bundle, VTASa
                      ptr(f.e) + ", " + ptr(f.w) + ", " + ptr(f.b);
   for (const auto &s : f.scales)
     call += ", " + s;
+  call += vtaCpuApprox ? ", 1" : ", 0";
   *bundle += "  // the layer norm in one (layerNormI8, -vta-fuse-layernorm)\n" + call + ");\n";
 }
 
@@ -7818,7 +7873,7 @@ static std::string vtaOptionsComment() {
       "vta-keep-layout",   "vta-fuse-residual", "vta-evta-maxpool", "vta-evta-fc",
       "vta-fuse-preprocess", "vta-conv0-pack",  "vta-fuse-pool",    "vta-evta-depthwise",
       "vta-round-shift",   "vta-pad-channels",  "vta-matmul-conv", "vta-fold-matmul-bias", "vta-evta-matmul", "vta-lut-elementwise", "vta-fuse-layernorm",
-      "vta-matmul-heads", "vta-attn-keep-layout",
+      "vta-matmul-heads", "vta-attn-keep-layout", "vta-cpu-approx",
       "enable-channelwise-depthwise", "enable-channelwise"};
   auto &opts = llvm::cl::getRegisteredOptions();
   std::string s = "// Generated by the NEST-C VTA backend with:";
