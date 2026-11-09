@@ -6366,14 +6366,21 @@ static void lut8(int8_t *o, const int8_t *a, const Lut8 &lut, size_t n) {
   for (; i < n; i++)
     o[i] = t[(uint8_t)a[i] ^ 0x80];
 }
-// the DeiT layer norm as VTASave findLayerNorms matched it (21 instructions), in one pass over each row with the same
-// arithmetic as the vtalib / nestc_cpu functions it replaces (dequantize, reduceAdd, quantize, elemdiv, elemsub, square,
-// elemadd, pow, mul), so the same result. x: [rows][cols] int8; p1 / p2: the int8 divisors of the two means (per row),
-// eps: int8 per row, e: the float exponent per row (0.5), w: float weight [rows][cols], b: int8 bias [rows][cols].
+// the DeiT layer norm as VTASave findLayerNorms matched it (21 instructions), with the same arithmetic as the vtalib /
+// nestc_cpu functions it replaces (dequantize, reduceAdd, quantize, elemdiv, elemsub, square, elemadd, pow, mul), so the
+// same result. x: [rows][cols] int8; p1 / p2: the int8 divisors of the two means (per row), eps: int8 per row, e: the
+// float exponent per row (0.5), w: float weight [rows][cols], b: int8 bias [rows][cols]. Four rows at a time (the row
+// sums are chains in order, interleaved); quantize by x * (1 / scale) when that is exact, as vtalib quantize.
 static inline int8_t lnClip(float v) {
   const int32_t q = (int32_t)std::round(v);
   return (int8_t)(q > 127 ? 127 : q < -128 ? -128 : q);
 }
+static inline bool lnPow2Inv(float s) {
+  int e;
+  const float inv = 1.f / s;
+  return std::frexp(inv, &e) == 0.5f && inv * s == 1.f;
+}
+static inline float lnQuant(float x, float s) { return lnPow2Inv(s) ? x * (1.f / s) : x / s; }
 static inline int8_t lnDiv(int8_t l, int8_t r, float s0, float s1, float sd) {
   const float c1 = s1 * sd;
   const float num = s0 * float(l), den = c1 * float(r);
@@ -6395,65 +6402,74 @@ static void layerNormI8(int8_t *out, const int8_t *x, size_t rows, size_t cols, 
   const float ek0 = e1a / e1d, ek1 = e1b / e1d;
   const float c3 = v3b * v3d;
   const float ak0 = a2a / large, ak1 = a2b / large, akd = large / a2d;
+  const bool q4mul = lnPow2Inv(sQ4);
+  const float q4k = q4mul ? 1.f / sQ4 : sQ4;
+  const long groups = (long)((rows + 3) / 4);
 #pragma omp parallel for schedule(static)
-  for (long r = 0; r < (long)rows; r++) {
-    const int8_t *xr = x + r * cols;
-    int8_t *o = out + r * cols;
-    int8_t d[1024];
-    // mean: sum of the dequantized row in order, quantize, elemdiv
-    float s1 = 0.f;
-    for (size_t l = 0; l < cols; l++) {
-      const float f = float(xr[l]) * sD0;
-      s1 += f;
-    }
-    const int8_t m = lnDiv(lnClip(s1 / sQ1), p1[r], v1a, v1b, v1d);
-    // d = elemsub(x, m)
-    size_t l = 0;
+  for (long g = 0; g < groups; g++) {
+    const size_t r0 = g * 4, nr = std::min<size_t>(4, rows - r0);
+    int8_t d[4][1024];
+    // means: sums of the dequantized rows in order (four chains), quantize, elemdiv
+    float s1[4] = {0.f, 0.f, 0.f, 0.f};
+    for (size_t l = 0; l < cols; l++)
+      for (size_t k = 0; k < nr; k++) {
+        const float f = float(x[(r0 + k) * cols + l]) * sD0;
+        s1[k] += f;
+      }
+    for (size_t k = 0; k < nr; k++) {
+      const size_t r = r0 + k;
+      const int8_t *xr = x + r * cols;
+      const int8_t m = lnDiv(lnClip(lnQuant(s1[k], sQ1)), p1[r], v1a, v1b, v1d);
+      // d = elemsub(x, m)
+      size_t l = 0;
 #if defined(__aarch64__)
-    {
       const float32x4_t k0 = vdupq_n_f32(ek0), rm = vdupq_n_f32(ek1 * float(m));
       for (; l + 16 <= cols; l += 16) {
         const int8x16_t v = vld1q_s8(xr + l);
         const int16x8_t lo = vmovl_s8(vget_low_s8(v)), hi = vmovl_s8(vget_high_s8(v));
-        int32x4_t L[4] = {vmovl_s16(vget_low_s16(lo)), vmovl_s16(vget_high_s16(lo)), vmovl_s16(vget_low_s16(hi)),
-                          vmovl_s16(vget_high_s16(hi))};
+        const int32x4_t L[4] = {vmovl_s16(vget_low_s16(lo)), vmovl_s16(vget_high_s16(lo)),
+                                vmovl_s16(vget_low_s16(hi)), vmovl_s16(vget_high_s16(hi))};
         int32x4_t S[4];
         for (int j = 0; j < 4; j++)
           S[j] = vcvtaq_s32_f32(vsubq_f32(vmulq_f32(k0, vcvtq_f32_s32(L[j])), rm));
         const int16x8_t n0 = vcombine_s16(vqmovn_s32(S[0]), vqmovn_s32(S[1]));
         const int16x8_t n1 = vcombine_s16(vqmovn_s32(S[2]), vqmovn_s32(S[3]));
-        vst1q_s8(d + l, vcombine_s8(vqmovn_s16(n0), vqmovn_s16(n1)));
+        vst1q_s8(d[k] + l, vcombine_s8(vqmovn_s16(n0), vqmovn_s16(n1)));
+      }
+#endif
+      for (; l < cols; l++) {
+        const float a = ek0 * float(xr[l]);
+        const float bb = ek1 * float(m);
+        d[k][l] = lnClip(a - bb);
       }
     }
-#endif
-    for (; l < cols; l++) {
-      const float a = ek0 * float(xr[l]);
-      const float bb = ek1 * float(m);
-      d[l] = lnClip(a - bb);
-    }
-    // variance: sum of the squares of the dequantized d in order, quantize, elemdiv, + eps; sqrt (pow), quantize
-    float s2 = 0.f;
-    for (l = 0; l < cols; l++) {
-      const float f = float(d[l]) * sD2;
-      const float f2 = f * f;
-      s2 += f2;
-    }
-    const int8_t v = lnAdd(lnDiv(lnClip(s2 / sQ2), p2[r], v2a, v2b, v2d), eps[r], a1a, a1b, a1d);
-    const float f3 = float(v) * sD3, ex = e[r];
-    const float pw = ex == 2.f ? f3 * f3 : ex == 0.5f && f3 >= 0.f ? std::sqrt(f3) : std::pow(f3, ex);
-    const int8_t sd = lnClip(pw / sQ3);
-    // out = elemadd(quantize(dequantize(elemdiv(d, sd)) * w), b)
-    const float den = c3 * float(sd);
-    const float *wr = w + r * cols;
-    const int8_t *br = b + r * cols;
-    l = 0;
+    // variances: sums of the squares of the dequantized d in order (four chains)
+    float s2[4] = {0.f, 0.f, 0.f, 0.f};
+    for (size_t l = 0; l < cols; l++)
+      for (size_t k = 0; k < nr; k++) {
+        const float f = float(d[k][l]) * sD2;
+        const float f2 = f * f;
+        s2[k] += f2;
+      }
+    for (size_t k = 0; k < nr; k++) {
+      const size_t r = r0 + k;
+      const int8_t v = lnAdd(lnDiv(lnClip(lnQuant(s2[k], sQ2)), p2[r], v2a, v2b, v2d), eps[r], a1a, a1b, a1d);
+      const float f3 = float(v) * sD3, ex = e[r];
+      const float pw = ex == 2.f ? f3 * f3 : ex == 0.5f && f3 >= 0.f ? std::sqrt(f3) : std::pow(f3, ex);
+      const int8_t sd = lnClip(lnQuant(pw, sQ3));
+      // out = elemadd(quantize(dequantize(elemdiv(d, sd)) * w), b)
+      const float den = c3 * float(sd);
+      const float *wr = w + r * cols;
+      const int8_t *br = b + r * cols;
+      int8_t *o = out + r * cols;
+      size_t l = 0;
 #if defined(__aarch64__)
-    {
       const float32x4_t va = vdupq_n_f32(v3a), vden = vdupq_n_f32(den), vd4 = vdupq_n_f32(sD4),
-                        vq4 = vdupq_n_f32(sQ4), vk0 = vdupq_n_f32(ak0), vk1 = vdupq_n_f32(ak1),
+                        vq4 = vdupq_n_f32(q4k), vk0 = vdupq_n_f32(ak0), vk1 = vdupq_n_f32(ak1),
                         vkd = vdupq_n_f32(akd);
+      const int32x4_t hi127 = vdupq_n_s32(127), lo128 = vdupq_n_s32(-128);
       for (; l + 16 <= cols; l += 16) {
-        const int8x16_t dv = vld1q_s8(d + l), bv = vld1q_s8(br + l);
+        const int8x16_t dv = vld1q_s8(d[k] + l), bv = vld1q_s8(br + l);
         const int16x8_t dlo = vmovl_s8(vget_low_s8(dv)), dhi = vmovl_s8(vget_high_s8(dv));
         const int16x8_t blo = vmovl_s8(vget_low_s8(bv)), bhi = vmovl_s8(vget_high_s8(bv));
         const int32x4_t D[4] = {vmovl_s16(vget_low_s16(dlo)), vmovl_s16(vget_high_s16(dlo)),
@@ -6462,14 +6478,11 @@ static void layerNormI8(int8_t *out, const int8_t *x, size_t rows, size_t cols, 
                                  vmovl_s16(vget_low_s16(bhi)), vmovl_s16(vget_high_s16(bhi))};
         int32x4_t S[4];
         for (int j = 0; j < 4; j++) {
-          // n = elemdiv(d, sd), clipped to int8
           int32x4_t n = vcvtaq_s32_f32(vdivq_f32(vmulq_f32(va, vcvtq_f32_s32(D[j])), vden));
-          n = vmaxq_s32(vminq_s32(n, vdupq_n_s32(127)), vdupq_n_s32(-128));
-          // q4 = quantize(dequantize(n) * w)
+          n = vmaxq_s32(vminq_s32(n, hi127), lo128);
           const float32x4_t f4 = vmulq_f32(vmulq_f32(vcvtq_f32_s32(n), vd4), vld1q_f32(wr + l + 4 * j));
-          int32x4_t q4 = vcvtaq_s32_f32(vdivq_f32(f4, vq4));
-          q4 = vmaxq_s32(vminq_s32(q4, vdupq_n_s32(127)), vdupq_n_s32(-128));
-          // elemadd(q4, b)
+          int32x4_t q4 = vcvtaq_s32_f32(q4mul ? vmulq_f32(f4, vq4) : vdivq_f32(f4, vq4));
+          q4 = vmaxq_s32(vminq_s32(q4, hi127), lo128);
           const int32x4_t L32 = vcvtaq_s32_f32(vmulq_f32(vcvtq_f32_s32(q4), vk0));
           const int32x4_t R32 = vcvtaq_s32_f32(vmulq_f32(vcvtq_f32_s32(Bv[j]), vk1));
           S[j] = vcvtaq_s32_f32(vmulq_f32(vcvtq_f32_s32(vaddq_s32(L32, R32)), vkd));
@@ -6478,14 +6491,14 @@ static void layerNormI8(int8_t *out, const int8_t *x, size_t rows, size_t cols, 
         const int16x8_t n1 = vcombine_s16(vqmovn_s32(S[2]), vqmovn_s32(S[3]));
         vst1q_s8(o + l, vcombine_s8(vqmovn_s16(n0), vqmovn_s16(n1)));
       }
-    }
 #endif
-    for (; l < cols; l++) {
-      const float num = v3a * float(d[l]);
-      const int8_t n = lnClip(num / den);
-      const float f4 = float(n) * sD4;
-      const float f4w = f4 * wr[l];
-      o[l] = lnAdd(lnClip(f4w / sQ4), br[l], a2a, a2b, a2d);
+      for (; l < cols; l++) {
+        const float num = v3a * float(d[k][l]);
+        const int8_t n = lnClip(num / den);
+        const float f4 = float(n) * sD4;
+        const float f4w = f4 * wr[l];
+        o[l] = lnAdd(lnClip(lnQuant(f4w, sQ4)), br[l], a2a, a2b, a2d);
+      }
     }
   }
 }
