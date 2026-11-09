@@ -3793,17 +3793,24 @@ int matmul_evta(const int8_t *A, const int8_t *B, int8_t *C, int M, int K, int N
   lap(4);
   VTABufferInvalidate(outBuf, 0, (size_t)M * Np);
   lap(5);
-  // output N{C/16}HW16 -> C[M][N]
+  // output N{C/16}HW16 -> C[M][N], the EVTA output read in order (just invalidated: from DRAM, prefetched)
 #pragma omp parallel for schedule(static)
-  for (int m = 0; m < M; m++) {
-    int8_t *c = C + (size_t)m * N;
-    int nb = 0;
+  for (int nb = 0; nb < NB; nb++) {
+    const int nn = std::min(16, N - nb * 16);
+    const int8_t *o = out + (size_t)nb * M * 16;
+    int8_t *c = C + nb * 16;
+    if (nn == 16) {
 #if defined(__aarch64__)
-    for (; nb < NB && (nb + 1) * 16 <= N; nb++)
-      vst1q_s8(c + nb * 16, vld1q_s8(out + ((size_t)nb * M + m) * 16));
+      for (int m = 0; m < M; m++)
+        vst1q_s8(c + (size_t)m * N, vld1q_s8(o + m * 16));
+#else
+      for (int m = 0; m < M; m++)
+        memcpy(c + (size_t)m * N, o + m * 16, 16);
 #endif
-    for (; nb < NB; nb++)
-      memcpy(c + nb * 16, out + ((size_t)nb * M + m) * 16, std::min(16, N - nb * 16));
+    } else {
+      for (int m = 0; m < M; m++)
+        memcpy(c + (size_t)m * N, o + m * 16, nn);
+    }
   }
   lap(6);
   if (timing)
