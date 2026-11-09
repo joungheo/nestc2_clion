@@ -152,6 +152,14 @@ struct LayerNormFusion {
   std::vector<std::string> scales; // the scale arguments as the replaced calls wrote them
 };
 
+//#### JO added (2026-11-10): findMatMulGroups / findAttnKeepLayout
+struct MatMulGroup {
+  std::vector<const MatMulInst *> mm;
+  int shift = 0;
+  bool qk = false;
+  const Value *qbuf = nullptr, *kbuf = nullptr; // the conv outputs kept in the EVTA layout (qk)
+};
+
 struct LutRegion {
   std::vector<const Instruction *> instrs; // the region's instructions (in order; allocs / deallocs / views between them
                                            // are emitted as usual)
@@ -222,6 +230,10 @@ public:
   std::set<const Value *> softmaxHoist; // dest allocations after the dequantize
   std::map<const Instruction *, LayerNormFusion> layerNorms; // by the last instruction
   std::set<const Instruction *> layerNormAway;
+  std::map<const Instruction *, MatMulGroup> matMulGroups; // by the first matmul
+  std::set<const Instruction *> matMulAway;
+  std::map<const Instruction *, MatMulGroup> *getMatMulGroups() { return &matMulGroups; }
+  std::set<const Instruction *> *getMatMulAway() { return &matMulAway; }
   // a name that lives as long as the symbol tables (constants that are not IR values)
   const char *keepName(const std::string &name) {
     names.push_back(name);
@@ -2673,7 +2685,8 @@ void declareOutputTranspose(const glow::ConvolutionInst *Inst,
     bundle->append("  int8_t* ");
     bundle->append(Inst->getName());
     bundle->append("_output_bef_transpose = ");
-    bundle->append(fu ? fu->out->getName() : dest->getName());
+    //#### JO changed (2026-11-10): the activation under a view (the DeiT query / key convs, -vta-attn-keep-layout)
+    bundle->append(fu ? fu->out->getName() : getOrigin(dest)->getName());
     bundle->append("_vbuf;\n");
     return;
   }
@@ -7540,11 +7553,258 @@ static void emitLayerNormI8(const LayerNormFusion &f, std::string *bundle, VTASa
   *bundle += "  // the layer norm in one (layerNormI8, -vta-fuse-layernorm)\n" + call + ");\n";
 }
 
+//#### JO added (2026-11-10): the int8 matmuls of the attention heads in one EVTA call (-vta-matmul-heads: matmul_evta_n),
+//#### and Q K^T straight from the EVTA outputs of the query / key convs (-vta-attn-keep-layout: matmul_evta_qk; the convs
+//#### write their outputs kept in the EVTA layout, the head transposes / slice copies are not emitted)
+static llvm::cl::opt<bool> vtaMatMulHeads(
+    "vta-matmul-heads", llvm::cl::desc("Run consecutive int8 matmuls of one shape (attention heads) in one EVTA call"),
+    llvm::cl::init(true));
+static llvm::cl::opt<bool> vtaAttnKeepLayout(
+    "vta-attn-keep-layout",
+    llvm::cl::desc("Q K^T from the EVTA outputs of the query / key convs (no transposes or copies of the heads)"),
+    llvm::cl::init(true));
+
+// the shift of an int8 MatMul that -vta-evta-matmul runs on the EVTA, else -1 (the conditions of saveGenericCpuInst)
+static int evtaMatMulShift(const MatMulInst *C) {
+  if (!vtaEvtaMatMul)
+    return -1;
+  for (const Value *v : {(const Value *)C->getDest(), (const Value *)C->getLHS(), (const Value *)C->getRHS()})
+    if (v->getType()->getElementType() != ElemKind::Int8QTy || v->getType()->getOffset())
+      return -1;
+  const float ratio =
+      C->getLHS()->getType()->getScale() * C->getRHS()->getType()->getScale() / C->getDest()->getType()->getScale();
+  int e2 = 0;
+  const float mant = std::frexp(ratio, &e2);
+  const int shift = 1 - e2;
+  const dim_t M = C->getLHS()->dims()[0];
+  dim_t w = 1;
+  for (dim_t q = 1; q * q <= M; q++)
+    if (M % q == 0)
+      w = q;
+  return mant == 0.5f && shift >= 1 && shift <= 15 && w >= 7 ? shift : -1;
+}
+
+// v as its origin + an element offset through tensor views (contiguous views)
+static std::pair<const Value *, size_t> viewOrigin(const Value *v) {
+  size_t off = 0;
+  while (auto *tv = llvm::dyn_cast<TensorViewInst>(v)) {
+    auto sd = tv->getSrc()->dims();
+    auto o = tv->getOffsets();
+    size_t stride = 1;
+    for (size_t i = sd.size(); i-- > 0;) {
+      off += (i < o.size() ? o[i] : 0) * stride;
+      stride *= sd[i];
+    }
+    v = tv->getSrc();
+  }
+  return {v, off};
+}
+
+static void findMatMulGroups(IRFunction *F, VTASaveContext *ctx) {
+  if (!vtaMatMulHeads)
+    return;
+  std::vector<const Instruction *> L;
+  std::map<const Value *, size_t> pos;
+  for (const auto &I : F->getInstrs()) {
+    pos[&I] = L.size();
+    L.push_back(&I);
+  }
+  auto skippable = [](const Instruction *I) {
+    return I->getKind() == Kinded::Kind::AllocActivationInstKind ||
+           I->getKind() == Kinded::Kind::DeallocActivationInstKind ||
+           I->getKind() == Kinded::Kind::TensorViewInstKind || I->getKind() == Kinded::Kind::TouchInstKind;
+  };
+  for (size_t i = 0; i < L.size(); i++) {
+    auto *M0 = llvm::dyn_cast<MatMulInst>(L[i]);
+    if (!M0)
+      continue;
+    const int shift = evtaMatMulShift(M0);
+    if (shift < 0)
+      continue;
+    MatMulGroup g;
+    g.mm.push_back(M0);
+    g.shift = shift;
+    std::set<const Value *> outs{viewOrigin(M0->getDest()).first};
+    size_t j = i + 1;
+    for (; j < L.size() && g.mm.size() < 8; j++) {
+      if (skippable(L[j]))
+        continue;
+      auto *Mj = llvm::dyn_cast<MatMulInst>(L[j]);
+      if (!Mj || evtaMatMulShift(Mj) != shift || Mj->getLHS()->dims() != M0->getLHS()->dims() ||
+          Mj->getRHS()->dims() != M0->getRHS()->dims() || outs.count(viewOrigin(Mj->getLHS()).first) ||
+          outs.count(viewOrigin(Mj->getRHS()).first))
+        break;
+      g.mm.push_back(Mj);
+      outs.insert(viewOrigin(Mj->getDest()).first);
+    }
+    // every operand's buffer exists at the first matmul
+    bool ok = g.mm.size() > 1;
+    for (auto *Mm : g.mm)
+      for (const Value *v : {(const Value *)Mm->getDest(), (const Value *)Mm->getLHS(), (const Value *)Mm->getRHS()}) {
+        const Value *o = viewOrigin(v).first;
+        ok &= llvm::isa<AllocActivationInst>(o) && pos.count(o) && pos[o] < i && !ctx->isPacked(o);
+      }
+    if (!ok)
+      continue;
+    (*ctx->getMatMulGroups())[M0] = g;
+    for (size_t k = 1; k < g.mm.size(); k++)
+      ctx->getMatMulAway()->insert(g.mm[k]);
+    i = pos[g.mm.back()];
+  }
+}
+
+// a group whose lhs / rhs are head slices of transposes of two EVTA convs: Q K^T from their outputs
+static void findAttnKeepLayout(IRFunction *F, VTASaveContext *ctx) {
+  if (!vtaAttnKeepLayout)
+    return;
+  std::vector<const Instruction *> L;
+  for (const auto &I : F->getInstrs())
+    L.push_back(&I);
+  auto users = [&](const Value *o) {
+    std::vector<const Instruction *> u;
+    for (const Instruction *I : L) {
+      if (I->getKind() == Kinded::Kind::TensorViewInstKind || I->getKind() == Kinded::Kind::DeallocActivationInstKind ||
+          I == o)
+        continue;
+      for (unsigned q = 0, e = I->getNumOperands(); q < e; q++)
+        if (getOrigin(const_cast<Value *>(I->getOperand(q).first)) == o) {
+          u.push_back(I);
+          break;
+        }
+    }
+    return u;
+  };
+  // the head slice: origin s written only by a copy from (transpose dest + head * size); its transpose and conv
+  struct Head {
+    const CopyInst *copy = nullptr;
+    const TransposeInst *tr = nullptr;
+    const ConvolutionInst *conv = nullptr;
+    size_t head = 0;
+  };
+  auto trace = [&](const Value *operand, const std::vector<unsigned> &shuffle, Head &h) {
+    const Value *s = viewOrigin(operand).first;
+    for (const Instruction *I : users(s))
+      if (auto *c = llvm::dyn_cast<CopyInst>(I))
+        if (viewOrigin(c->getDest()).first == s && viewOrigin(c->getDest()).second == 0)
+          h.copy = c;
+    if (!h.copy || operand->size() != h.copy->getDest()->size())
+      return false;
+    auto src = viewOrigin(h.copy->getSrc());
+    for (const Instruction *I : users(src.first))
+      if (auto *t = llvm::dyn_cast<TransposeInst>(I))
+        if (getOrigin(t->getDest()) == src.first)
+          h.tr = t;
+    if (!h.tr || h.tr->getShuffle().vec() != shuffle || src.second % operand->size())
+      return false;
+    h.head = src.second / operand->size();
+    const Value *co = viewOrigin(h.tr->getSrc()).first;
+    if (viewOrigin(h.tr->getSrc()).second)
+      return false;
+    for (const Instruction *I : users(co))
+      if (auto *cv = llvm::dyn_cast<ConvolutionInst>(I))
+        if (getOrigin(cv->getDest()) == co)
+          h.conv = cv;
+    return h.conv != nullptr;
+  };
+  for (auto &it : *ctx->getMatMulGroups()) {
+    MatMulGroup &g = it.second;
+    const size_t H = g.mm.size(), M = g.mm[0]->getLHS()->dims()[0], dh = g.mm[0]->getLHS()->dims()[1];
+    if (g.mm[0]->getRHS()->dims()[1] != M || dh % 16)
+      continue;
+    std::vector<Head> q(H), k(H);
+    bool ok = true;
+    for (size_t i = 0; i < H && ok; i++)
+      ok = trace(g.mm[i]->getLHS(), {0, 2, 1, 3}, q[i]) && trace(g.mm[i]->getRHS(), {0, 2, 3, 1}, k[i]) &&
+           q[i].head == i && k[i].head == i && q[i].conv == q[0].conv && k[i].conv == k[0].conv &&
+           q[i].tr == q[0].tr && k[i].tr == k[0].tr;
+    if (!ok)
+      continue;
+    const ConvolutionInst *cq = q[0].conv, *ck = k[0].conv;
+    auto cd = cq->getDest()->dims();
+    if (cd.size() != 4 || cd[0] != 1 || cd[1] * cd[2] != M || cd[3] != H * dh || ck->getDest()->dims() != cd ||
+        cq->getDest()->getType()->getScale() != g.mm[0]->getLHS()->getType()->getScale() ||
+        ck->getDest()->getType()->getScale() != g.mm[0]->getRHS()->getType()->getScale())
+      continue;
+    // the conv outputs, the transposes and the slices: used by nothing else
+    const Value *oq = getOrigin(cq->getDest()), *ok2 = getOrigin(ck->getDest());
+    auto only = [&](const Value *o, std::set<const Instruction *> allowed) {
+      for (const Instruction *I : users(o))
+        if (!allowed.count(I))
+          return false;
+      return true;
+    };
+    std::set<const Instruction *> qc, kc;
+    for (size_t i = 0; i < H; i++) {
+      qc.insert(q[i].copy);
+      kc.insert(k[i].copy);
+    }
+    ok = only(oq, {cq, q[0].tr}) && only(ok2, {ck, k[0].tr}) && only(getOrigin(q[0].tr->getDest()), [&] {
+           auto s = qc;
+           s.insert(q[0].tr);
+           return s;
+         }()) && only(getOrigin(k[0].tr->getDest()), [&] {
+           auto s = kc;
+           s.insert(k[0].tr);
+           return s;
+         }());
+    for (size_t i = 0; i < H && ok; i++)
+      ok = only(viewOrigin(g.mm[i]->getLHS()).first, {q[i].copy, g.mm[i]}) &&
+           only(viewOrigin(g.mm[i]->getRHS()).first, {k[i].copy, g.mm[i]});
+    if (!ok)
+      continue;
+    g.qk = true;
+    g.qbuf = oq;
+    g.kbuf = ok2;
+    ctx->getPacked()->insert(oq);
+    ctx->getPacked()->insert(cq->getDest());
+    ctx->getPacked()->insert(ok2);
+    ctx->getPacked()->insert(ck->getDest());
+    ctx->getMatMulAway()->insert(q[0].tr);
+    ctx->getMatMulAway()->insert(k[0].tr);
+    for (size_t i = 0; i < H; i++) {
+      ctx->getMatMulAway()->insert(q[i].copy);
+      ctx->getMatMulAway()->insert(k[i].copy);
+    }
+  }
+}
+
+static void emitMatMulGroup(const MatMulGroup &g, std::string *bundle, VTASaveContext *ctx) {
+  static int id = 0;
+  const std::string n = std::to_string(id++), H = std::to_string(g.mm.size());
+  auto ptr = [](const Value *v) {
+    auto o = viewOrigin(v);
+    return o.second ? "(" + o.first->getName().str() + " + " + std::to_string(o.second) + ")" : o.first->getName().str();
+  };
+  std::string c = "  int8_t *mmC" + n + "[] = {";
+  for (size_t i = 0; i < g.mm.size(); i++)
+    c += (i ? ", " : "") + ptr(g.mm[i]->getDest());
+  *bundle += c + "};\n";
+  const auto *M0 = g.mm[0];
+  if (g.qk) {
+    *bundle += "  // Q K^T of " + H + " heads from the EVTA outputs of the query / key convs (-vta-attn-keep-layout)\n";
+    *bundle += "  matmul_evta_qk(" + g.qbuf->getName().str() + "_vbuf, " + g.kbuf->getName().str() + "_vbuf, mmC" + n +
+               ", " + H + ", " + std::to_string(M0->getLHS()->dims()[0]) + ", " +
+               std::to_string(M0->getLHS()->dims()[1]) + ", " + std::to_string(g.shift) + ", vtaCmdH);\n";
+    return;
+  }
+  std::string a = "  const int8_t *mmA" + n + "[] = {", b = "  const int8_t *mmB" + n + "[] = {";
+  for (size_t i = 0; i < g.mm.size(); i++) {
+    a += (i ? ", " : "") + ptr(g.mm[i]->getLHS());
+    b += (i ? ", " : "") + ptr(g.mm[i]->getRHS());
+  }
+  *bundle += a + "};\n" + b + "};\n";
+  *bundle += "  // " + H + " heads in one EVTA call (-vta-matmul-heads)\n";
+  *bundle += "  matmul_evta_n(" + H + ", mmA" + n + ", mmB" + n + ", mmC" + n + ", " +
+             std::to_string(M0->getLHS()->dims()[0]) + ", " + std::to_string(M0->getLHS()->dims()[1]) + ", " +
+             std::to_string(M0->getRHS()->dims()[1]) + ", " + std::to_string(g.shift) + ", vtaCmdH);\n";
+}
+
 static std::string vtaOptionsComment() {
   static const char *const names[] = {
       "vta-keep-layout",   "vta-fuse-residual", "vta-evta-maxpool", "vta-evta-fc",
       "vta-fuse-preprocess", "vta-conv0-pack",  "vta-fuse-pool",    "vta-evta-depthwise",
       "vta-round-shift",   "vta-pad-channels",  "vta-matmul-conv", "vta-fold-matmul-bias", "vta-evta-matmul", "vta-lut-elementwise", "vta-fuse-layernorm",
+      "vta-matmul-heads", "vta-attn-keep-layout",
       "enable-channelwise-depthwise", "enable-channelwise"};
   auto &opts = llvm::cl::getRegisteredOptions();
   std::string s = "// Generated by the NEST-C VTA backend with:";
@@ -7718,6 +7978,8 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
   findLutRegions(IR.get(), &ctx);
   findSoftmaxI8(IR.get(), &ctx);
   findLayerNorms(IR.get(), &ctx);
+  findMatMulGroups(IR.get(), &ctx);
+  findAttnKeepLayout(IR.get(), &ctx);
 
   for (const auto &I : IR->getInstrs()) {
 
@@ -7735,6 +7997,15 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
     bundle.append(I.getName());
     bundle.append("\n");
 
+    //#### JO added (2026-11-10): findMatMulGroups
+    if (ctx.matMulAway.count(&I)) {
+      bundle.append("  // done by the matmul of the heads (matmul_evta_n / matmul_evta_qk)\n");
+      continue;
+    }
+    if (ctx.matMulGroups.count(&I)) {
+      emitMatMulGroup(ctx.matMulGroups[&I], &bundle, &ctx);
+      continue;
+    }
     //#### JO added (2026-11-10): findLayerNorms
     if (ctx.layerNormAway.count(&I)) {
       bundle.append("  // done by the layer norm call below (layerNormI8)\n");

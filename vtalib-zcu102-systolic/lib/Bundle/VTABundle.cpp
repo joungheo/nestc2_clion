@@ -3295,6 +3295,15 @@ static void schedOverride(int H, int W, int C, int KN, int KH, int stride, int &
   }
 }
 
+//#### JO added (2026-11-10): several convs with the same shape and schedule in one EVTA call (matmul_evta_n / _qk,
+//#### the DeiT attention heads): with gConvBatch set, convolution_wo_tr_impl makes the tiles of every member into the same
+//#### queue (one Synchronize, one replay key with all the buffers) instead of those of its arguments
+struct ConvBatch {
+  int n = 0;
+  void *in[8], *wgt[8], *bias[8], *out[8];
+};
+thread_local const ConvBatch *gConvBatch = nullptr;
+
 static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *output, int N, int H, int W, int C, int KN, int KH, int KW, int pad_size,
                       int stride_size, bool doRelu, bool doBias, uint8_t shift, int out_h, int out_w, void* vtaCmdH, int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA,
                       const ConvResidual *res, const ConvPool *pool = nullptr, const ConvDw *dw = nullptr) {
@@ -3335,13 +3344,30 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
   const size_t dumpBytes = pool ? (size_t)KN * pool->PH * pool->PW : (size_t)N * KN * out_h * out_w;
   if (stream)
     VTASetSegmentHook(vtaCmdH, inputStreamHook, ins);
-  const int replayed = VTAReplayBegin(vtaCmdH, replayKey, sizeof(replayKey), replayBufs, 6);
+  const ConvBatch *batch = gConvBatch && !pool && !res && !dw && !stream ? gConvBatch : nullptr;
+  std::vector<int32_t> batchKey;
+  std::vector<void *> batchBufs;
+  if (batch) {
+    batchKey.assign(replayKey, replayKey + sizeof(replayKey) / sizeof(int32_t));
+    batchKey.push_back(-7);
+    batchKey.push_back(batch->n);
+    for (int b = 0; b < batch->n; b++) {
+      batchBufs.push_back(batch->in[b]);
+      batchBufs.push_back(batch->wgt[b]);
+      batchBufs.push_back(doBias ? batch->bias[b] : nullptr);
+      batchBufs.push_back(batch->out[b]);
+    }
+  }
+  const int replayed = batch ? VTAReplayBegin(vtaCmdH, batchKey.data(), (int)(batchKey.size() * sizeof(int32_t)),
+                                              batchBufs.data(), (int)batchBufs.size())
+                             : VTAReplayBegin(vtaCmdH, replayKey, sizeof(replayKey), replayBufs, 6);
   if (stream) {
     VTASetSegmentHook(vtaCmdH, nullptr, nullptr);
     inputStreamEnd(ins);  // the rows a replay wrote; all of them before a recording
   }
   if (replayed) {
-    dumpConvOutput(dumpBuf, dumpBytes);
+    if (!batch)
+      dumpConvOutput(dumpBuf, dumpBytes);
     return 0;
   }
 
@@ -3465,6 +3491,13 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
     if (stream)
       VTASynchronize(vtaCmdH, 1 << 31);
   }
+  for (int bi = 0; bi < (batch ? batch->n : 1); bi++) {
+  if (batch) {
+    vta_input_buf = batch->in[bi];
+    vta_filter_buf = batch->wgt[bi];
+    vta_bias_buf = batch->bias[bi];
+    vta_output_buf = batch->out[bi];
+  }
   for (int tileHIdx = 0; !pool && tileHIdx < nTileH; tileHIdx++) {
     if (stream)
       VTASetSegmentTag(vtaCmdH, streamRows(tileHIdx, sizeOutTileH));
@@ -3512,6 +3545,7 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
     if (stream)
       VTASynchronize(vtaCmdH, 1 << 31);
   }
+  }  // bi (gConvBatch)
 
 #ifdef VTA_DEBUG_MODE
   clock_t conv_stage2_end = clock();
@@ -3627,13 +3661,17 @@ int convolution_wo_tr(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *outp
 //#### written at run time (the DeiT attention products Q K^T and A V; VTASave.cpp -vta-evta-matmul): a 1x1 conv over the
 //#### M rows as an H x W image (W the largest divisor of M <= sqrt(M), as VTA.cpp matMulToConv), A as the input and B^T as
 //#### the filter, K and N zero-padded to multiples of 16, bias 2^(shift-1) (round half up, as -vta-round-shift).
-//#### The packing and unpacking are on the CPU. EVTA_MATMUL_CHECK=1 compares every output with the CPU integer result.
 //#### JO changed (2026-11-09): B^T by NEON 16 x 16 byte transposes, 16-byte copies for A and C, the VTA buffers kept per
-//#### thread (and the bias while N and shift stay); EVTA_MATMUL_TIME=1 prints the time of each step at exit.
+//#### thread (and the bias while N and shift stay); EVTA_MATMUL_TIME=1 prints the time of each step at exit,
+//#### EVTA_MATMUL_CHECK=1 compares every output with the CPU integer result.
+//#### JO changed (2026-11-10): matmul_evta_n runs the products of several heads in one EVTA call (gConvBatch: one queue,
+//#### one replay); matmul_evta_qk takes Q and K as the EVTA outputs of their convs (N{C/16}HW16): the query heads are
+//#### views of that buffer (no copy), the key heads are its 256-byte blocks in the filter's order (no transpose).
 namespace {
+const int kMaxHeads = 8;
 struct MatMulEvtaBufs {
-  void *in = nullptr, *wgt = nullptr, *bias = nullptr, *out = nullptr;
-  size_t inCap = 0, wgtCap = 0, biasCap = 0, outCap = 0;
+  void *in[kMaxHeads] = {}, *wgt[kMaxHeads] = {}, *out[kMaxHeads] = {}, *bias = nullptr;
+  size_t inCap[kMaxHeads] = {}, wgtCap[kMaxHeads] = {}, outCap[kMaxHeads] = {}, biasCap = 0;
   int biasN = -1, biasShift = -1;
 };
 void *matmulBuf(void *&b, size_t &cap, size_t size) {
@@ -3651,17 +3689,45 @@ double matmulNowUs() {
   return ts.tv_sec * 1e6 + ts.tv_nsec * 1e-3;
 }
 double gMatMulT[7];
-long gMatMulCalls;
+long gMatMulCalls, gMatMulHeads;
 void matmulTimeReport() {
   const char *names[] = {"pack A", "pack B", "bias", "flush", "conv", "invalidate", "unpack C"};
   double s = 0;
   for (double t : gMatMulT)
     s += t;
-  fprintf(stderr, "matmul_evta: %ld calls, %.2f ms:", gMatMulCalls, s / 1000);
+  fprintf(stderr, "matmul_evta: %ld calls (%ld heads), %.2f ms:", gMatMulCalls, gMatMulHeads, s / 1000);
   for (int i = 0; i < 7; i++)
     fprintf(stderr, " %s %.2f", names[i], gMatMulT[i] / 1000);
   fprintf(stderr, " ms\n");
 }
+bool matmulTiming() {
+  static const bool on = [] {
+    const char *e = getenv("EVTA_MATMUL_TIME");
+    const bool o = e && atoi(e) != 0;
+    if (o)
+      atexit(matmulTimeReport);
+    return o;
+  }();
+  return on;
+}
+bool matmulCheck() {
+  static const bool on = [] {
+    const char *e = getenv("EVTA_MATMUL_CHECK");
+    return e && atoi(e) != 0;
+  }();
+  return on;
+}
+struct MatMulLap {
+  bool on = matmulTiming();
+  double t0 = on ? matmulNowUs() : 0;
+  void operator()(int k) {
+    if (on) {
+      const double t1 = matmulNowUs();
+      gMatMulT[k] += t1 - t0;
+      t0 = t1;
+    }
+  }
+};
 #if defined(__aarch64__)
 // dst[c * 16 + r] = row r [c], r, c < 16
 inline void transpose16x16(const uint8x16_t *R, int8_t *dst) {
@@ -3689,39 +3755,16 @@ inline void transpose16x16(const uint8x16_t *R, int8_t *dst) {
   }
 }
 #endif
-} // namespace
-
-int matmul_evta(const int8_t *A, const int8_t *B, int8_t *C, int M, int K, int N, int shift, void *vtaCmdH,
-                int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA) {
-  static const bool timing = [] {
-    const char *e = getenv("EVTA_MATMUL_TIME");
-    const bool on = e && atoi(e) != 0;
-    if (on)
-      atexit(matmulTimeReport);
-    return on;
-  }();
-  double t0 = timing ? matmulNowUs() : 0, t1;
-  auto lap = [&](int k) {
-    if (timing) {
-      t1 = matmulNowUs();
-      gMatMulT[k] += t1 - t0;
-      t0 = t1;
-    }
-  };
-  const int Kp = (K + 15) / 16 * 16, Np = (N + 15) / 16 * 16, KB = Kp / 16, NB = Np / 16;
+int matmulW(int M) {
   int w = 1;
   for (int d = 1; d * d <= M; d++)
     if (M % d == 0)
       w = d;
-  const int h = M / w;
-  thread_local MatMulEvtaBufs bufs;
-  void *inBuf = matmulBuf(bufs.in, bufs.inCap, (size_t)M * Kp);
-  void *wgtBuf = matmulBuf(bufs.wgt, bufs.wgtCap, (size_t)Np * Kp);
-  void *outBuf = matmulBuf(bufs.out, bufs.outCap, (size_t)M * Np);
-  int8_t *in = (int8_t *)VTABufferGetVirtAddr(inBuf), *wgt = (int8_t *)VTABufferGetVirtAddr(wgtBuf);
-  int8_t *out = (int8_t *)VTABufferGetVirtAddr(outBuf);
-  // input N{C/16}HW16 with HW = the M rows: in[kb][m][16]
-#pragma omp parallel for schedule(static)
+  return w;
+}
+// input N{C/16}HW16 with HW = the M rows: in[kb][m][16]
+void matmulPackA(const int8_t *A, int8_t *in, int M, int K) {
+  const int KB = (K + 15) / 16;
   for (int kb = 0; kb < KB; kb++) {
     const int nk = std::min(16, K - kb * 16);
     int8_t *o = in + (size_t)kb * M * 16;
@@ -3741,9 +3784,10 @@ int matmul_evta(const int8_t *A, const int8_t *B, int8_t *C, int M, int K, int N
       }
     }
   }
-  lap(0);
-  // filter {N/16}{C/16}HW1616 with filter[n][k] = B[k][n]: block (nb, kb) = the transposed 16 x 16 block of B
-#pragma omp parallel for schedule(static)
+}
+// filter {N/16}{C/16}HW1616 with filter[n][k] = B[k][n]: block (nb, kb) = the transposed 16 x 16 block of B
+void matmulPackB(const int8_t *B, int8_t *wgt, int K, int N) {
+  const int KB = (K + 15) / 16, NB = (N + 15) / 16;
   for (int nb = 0; nb < NB; nb++) {
     const int nn = std::min(16, N - nb * 16);
     for (int kb = 0; kb < KB; kb++) {
@@ -3772,29 +3816,10 @@ int matmul_evta(const int8_t *A, const int8_t *B, int8_t *C, int M, int K, int N
 #endif
     }
   }
-  lap(1);
-  const bool doBias = shift > 0;
-  void *biasBuf = matmulBuf(bufs.bias, bufs.biasCap, (size_t)Np * 4);
-  if (bufs.biasN != Np || bufs.biasShift != shift) {
-    int32_t *bias = (int32_t *)VTABufferGetVirtAddr(biasBuf);
-    for (int n = 0; n < Np; n++)
-      bias[n] = doBias ? 1 << (shift - 1) : 0;
-    VTABufferFlush(biasBuf, 0, (size_t)Np * 4);
-    bufs.biasN = Np;
-    bufs.biasShift = shift;
-  }
-  lap(2);
-  VTABufferFlush(inBuf, 0, (size_t)M * Kp);
-  VTABufferFlush(wgtBuf, 0, (size_t)Np * Kp);
-  lap(3);
-  int rc = convolution_wo_tr((int8_t *)inBuf, (int8_t *)wgtBuf, (int32_t *)biasBuf, (int8_t *)outBuf, 1, h, w, Kp, Np, 1,
-                             1, 0, 1, false, doBias, (uint8_t)shift, h, w, vtaCmdH, nVirtualThread, tileHSize, tileWSize,
-                             idEVTA);
-  lap(4);
-  VTABufferInvalidate(outBuf, 0, (size_t)M * Np);
-  lap(5);
-  // output N{C/16}HW16 -> C[M][N], the EVTA output read in order (just invalidated: from DRAM, prefetched)
-#pragma omp parallel for schedule(static)
+}
+// output N{C/16}HW16 -> C[M][N], the EVTA output read in order (just invalidated: from DRAM, prefetched)
+void matmulUnpackC(const int8_t *out, int8_t *C, int M, int N) {
+  const int NB = (N + 15) / 16;
   for (int nb = 0; nb < NB; nb++) {
     const int nn = std::min(16, N - nb * 16);
     const int8_t *o = out + (size_t)nb * M * 16;
@@ -3812,26 +3837,165 @@ int matmul_evta(const int8_t *A, const int8_t *B, int8_t *C, int M, int K, int N
         memcpy(c + (size_t)m * N, o + m * 16, nn);
     }
   }
+}
+void *matmulBias(MatMulEvtaBufs &bufs, int Np, int shift) {
+  void *biasBuf = matmulBuf(bufs.bias, bufs.biasCap, (size_t)Np * 4);
+  if (bufs.biasN != Np || bufs.biasShift != shift) {
+    int32_t *bias = (int32_t *)VTABufferGetVirtAddr(biasBuf);
+    for (int n = 0; n < Np; n++)
+      bias[n] = shift > 0 ? 1 << (shift - 1) : 0;
+    VTABufferFlush(biasBuf, 0, (size_t)Np * 4);
+    bufs.biasN = Np;
+    bufs.biasShift = shift;
+  }
+  return biasBuf;
+}
+// the H convs as one EVTA call (gConvBatch)
+int matmulConvs(int H, void *const *in, void *const *wgt, void *bias, void *const *out, int M, int Kp, int Np, int shift,
+                void *vtaCmdH, int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA) {
+  const int w = matmulW(M), h = M / w;
+  ConvBatch b;
+  b.n = H;
+  for (int i = 0; i < H; i++) {
+    b.in[i] = in[i];
+    b.wgt[i] = wgt[i];
+    b.bias[i] = bias;
+    b.out[i] = out[i];
+  }
+  gConvBatch = H > 1 ? &b : nullptr;
+  const int rc = convolution_wo_tr((int8_t *)in[0], (int8_t *)wgt[0], (int32_t *)bias, (int8_t *)out[0], 1, h, w, Kp, Np,
+                                   1, 1, 0, 1, false, shift > 0, (uint8_t)shift, h, w, vtaCmdH, nVirtualThread,
+                                   tileHSize, tileWSize, idEVTA);
+  gConvBatch = nullptr;
+  return rc;
+}
+// EVTA_MATMUL_CHECK: C against the integer product; a(m, k) and b(k, n) read the operands
+template <typename FA, typename FB>
+void matmulCheckOne(const char *what, FA a, FB b, const int8_t *C, int M, int K, int N, int shift) {
+  size_t bad = 0;
+  for (int m = 0; m < M; m++)
+    for (int n = 0; n < N; n++) {
+      int64_t acc = shift > 0 ? 1 << (shift - 1) : 0;
+      for (int k = 0; k < K; k++)
+        acc += (int32_t)a(m, k) * b(k, n);
+      acc >>= shift;
+      const int want = (int)std::max<int64_t>(-128, std::min<int64_t>(127, acc));
+      if (C[(size_t)m * N + n] != want && bad++ < 5)
+        fprintf(stderr, "%s %dx%dx%d [%d][%d]: %d, want %d\n", what, M, K, N, m, n, C[(size_t)m * N + n], want);
+    }
+  fprintf(stderr, "%s %dx%dx%d shift %d: %zu differ\n", what, M, K, N, shift, bad);
+}
+} // namespace
+
+int matmul_evta_n(int H, const int8_t *const *A, const int8_t *const *B, int8_t *const *C, int M, int K, int N, int shift,
+                  void *vtaCmdH, int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA) {
+  if (H < 1 || H > kMaxHeads)
+    return -1;
+  MatMulLap lap;
+  const int Kp = (K + 15) / 16 * 16, Np = (N + 15) / 16 * 16;
+  thread_local MatMulEvtaBufs bufs;
+  void *in[kMaxHeads], *wgt[kMaxHeads], *out[kMaxHeads];
+  for (int i = 0; i < H; i++) {
+    in[i] = matmulBuf(bufs.in[i], bufs.inCap[i], (size_t)M * Kp);
+    wgt[i] = matmulBuf(bufs.wgt[i], bufs.wgtCap[i], (size_t)Np * Kp);
+    out[i] = matmulBuf(bufs.out[i], bufs.outCap[i], (size_t)M * Np);
+  }
+  for (int i = 0; i < H; i++)
+    matmulPackA(A[i], (int8_t *)VTABufferGetVirtAddr(in[i]), M, K);
+  lap(0);
+  for (int i = 0; i < H; i++)
+    matmulPackB(B[i], (int8_t *)VTABufferGetVirtAddr(wgt[i]), K, N);
+  lap(1);
+  void *bias = matmulBias(bufs, Np, shift);
+  lap(2);
+  for (int i = 0; i < H; i++) {
+    VTABufferFlush(in[i], 0, (size_t)M * Kp);
+    VTABufferFlush(wgt[i], 0, (size_t)Np * Kp);
+  }
+  lap(3);
+  const int rc = matmulConvs(H, in, wgt, bias, out, M, Kp, Np, shift, vtaCmdH, nVirtualThread, tileHSize, tileWSize,
+                             idEVTA);
+  lap(4);
+  for (int i = 0; i < H; i++)
+    VTABufferInvalidate(out[i], 0, (size_t)M * Np);
+  lap(5);
+  for (int i = 0; i < H; i++)
+    matmulUnpackC((const int8_t *)VTABufferGetVirtAddr(out[i]), C[i], M, N);
   lap(6);
-  if (timing)
+  if (lap.on) {
     gMatMulCalls++;
-  static const bool check = [] {
-    const char *e = getenv("EVTA_MATMUL_CHECK");
-    return e && atoi(e) != 0;
-  }();
-  if (check) {
-    size_t bad = 0;
-    for (int m = 0; m < M; m++)
-      for (int n = 0; n < N; n++) {
-        int64_t acc = doBias ? 1 << (shift - 1) : 0;
-        for (int k = 0; k < K; k++)
-          acc += (int32_t)A[(size_t)m * K + k] * B[(size_t)k * N + n];
-        acc >>= shift;
-        const int want = (int)std::max<int64_t>(-128, std::min<int64_t>(127, acc));
-        if (C[(size_t)m * N + n] != want && bad++ < 5)
-          fprintf(stderr, "matmul_evta %dx%dx%d [%d][%d]: %d, want %d\n", M, K, N, m, n, C[(size_t)m * N + n], want);
+    gMatMulHeads += H;
+  }
+  if (matmulCheck())
+    for (int i = 0; i < H; i++) {
+      const int8_t *a = A[i], *b = B[i];
+      matmulCheckOne("matmul_evta", [&](int m, int k) { return a[(size_t)m * K + k]; },
+                     [&](int k, int n) { return b[(size_t)k * N + n]; }, C[i], M, K, N, shift);
+    }
+  return rc;
+}
+
+int matmul_evta(const int8_t *A, const int8_t *B, int8_t *C, int M, int K, int N, int shift, void *vtaCmdH,
+                int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA) {
+  return matmul_evta_n(1, &A, &B, &C, M, K, N, shift, vtaCmdH, nVirtualThread, tileHSize, tileWSize, idEVTA);
+}
+
+int matmul_evta_qk(void *qbuf, void *kbuf, int8_t *const *C, int H, int M, int dh, int shift, void *vtaCmdH,
+                   int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA) {
+  if (H < 1 || H > kMaxHeads || dh % 16)
+    return -1;
+  MatMulLap lap;
+  const int KB = dh / 16, Np = (M + 15) / 16 * 16, NB = Np / 16;
+  thread_local MatMulEvtaBufs bufs;
+  void *in[kMaxHeads], *wgt[kMaxHeads], *out[kMaxHeads];
+  for (int i = 0; i < H; i++) {
+    in[i] = VTABufferView(qbuf, (size_t)i * KB * M * 16);
+    wgt[i] = matmulBuf(bufs.wgt[i], bufs.wgtCap[i], (size_t)Np * dh);
+    out[i] = matmulBuf(bufs.out[i], bufs.outCap[i], (size_t)M * Np);
+  }
+  lap(0);
+  // key head i, filter block (nb, kb) = rows nb * 16 .. of channel block i * KB + kb of the key conv's output
+  const int8_t *kv = (const int8_t *)VTABufferGetVirtAddr(kbuf);
+  for (int i = 0; i < H; i++) {
+    int8_t *w = (int8_t *)VTABufferGetVirtAddr(wgt[i]);
+    for (int nb = 0; nb < NB; nb++) {
+      const int rows = std::min(16, M - nb * 16);
+      for (int kb = 0; kb < KB; kb++) {
+        int8_t *o = w + ((size_t)nb * KB + kb) * 256;
+        memcpy(o, kv + (((size_t)(i * KB + kb)) * M + nb * 16) * 16, (size_t)rows * 16);
+        if (rows < 16)
+          memset(o + rows * 16, 0, (size_t)(16 - rows) * 16);
       }
-    fprintf(stderr, "matmul_evta %dx%dx%d shift %d: %zu differ\n", M, K, N, shift, bad);
+    }
+  }
+  lap(1);
+  void *bias = matmulBias(bufs, Np, shift);
+  lap(2);
+  for (int i = 0; i < H; i++)
+    VTABufferFlush(wgt[i], 0, (size_t)Np * dh);
+  lap(3);
+  const int rc = matmulConvs(H, in, wgt, bias, out, M, dh, Np, shift, vtaCmdH, nVirtualThread, tileHSize, tileWSize,
+                             idEVTA);
+  lap(4);
+  for (int i = 0; i < H; i++)
+    VTABufferInvalidate(out[i], 0, (size_t)M * Np);
+  lap(5);
+  for (int i = 0; i < H; i++)
+    matmulUnpackC((const int8_t *)VTABufferGetVirtAddr(out[i]), C[i], M, M);
+  lap(6);
+  for (int i = 0; i < H; i++)
+    VTABufferViewFree(in[i]);
+  if (lap.on) {
+    gMatMulCalls++;
+    gMatMulHeads += H;
+  }
+  if (matmulCheck()) {
+    const int8_t *qv = (const int8_t *)VTABufferGetVirtAddr(qbuf);
+    for (int i = 0; i < H; i++)
+      matmulCheckOne("matmul_evta_qk",
+                     [&](int m, int k) { return qv[(((size_t)(i * KB + k / 16)) * M + m) * 16 + k % 16]; },
+                     [&](int k, int n) { return kv[(((size_t)(i * KB + k / 16)) * M + n) * 16 + k % 16]; }, C[i],
+                     M, dh, M, shift);
   }
   return rc;
 }

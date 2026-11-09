@@ -71,6 +71,9 @@ TVM_DLL void VTABufferCopy(const void* from,
                            size_t to_offset,
                            size_t size,
                            int kind_mask);
+//#### JO added (2026-11-10): a handle for bytes [offset, ...) of buffer (the same memory), freed by VTABufferViewFree
+TVM_DLL void* VTABufferView(void* buffer, size_t offset);
+TVM_DLL void VTABufferViewFree(void* view);
 TVM_DLL void* VTABufferGetVirtAddr(const void* buffer);
 
 //#### JO added: explicit cache maintenance for code that accesses a buffer through

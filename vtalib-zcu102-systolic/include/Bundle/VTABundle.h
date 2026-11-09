@@ -20,6 +20,11 @@ int convolution_wo_tr(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *outp
 //#### JO added (2026-11-09): int8 matmul with both operands written at run time, as an EVTA 1x1 conv (see VTABundle.cpp)
 int matmul_evta(const int8_t *A, const int8_t *B, int8_t *C, int M, int K, int N, int shift, void *vtaCmdH,
                 int nVirtualThread = 1, int tileHSize = 14, int tileWSize = 14, uint32_t idEVTA = 0);
+//#### JO added (2026-11-10): the products of H heads in one EVTA call; Q K^T from the EVTA outputs of the query / key convs
+int matmul_evta_n(int H, const int8_t *const *A, const int8_t *const *B, int8_t *const *C, int M, int K, int N, int shift,
+                  void *vtaCmdH, int nVirtualThread = 1, int tileHSize = 14, int tileWSize = 14, uint32_t idEVTA = 0);
+int matmul_evta_qk(void *qbuf, void *kbuf, int8_t *const *C, int H, int M, int dh, int shift, void *vtaCmdH,
+                   int nVirtualThread = 1, int tileHSize = 14, int tileWSize = 14, uint32_t idEVTA = 0);
 //#### JO added (2026-11-02): conv (with relu) + max pool 3x3 / stride 2 / pad 1 in one EVTA call (see VTABundle.cpp ConvPool)
 int convolution_wo_tr_pool(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *output, int N, int H, int W, int C, int KN, int KH, int KW, int pad_size,
                            int stride_size, bool doRelu, bool doBias, uint8_t shift, int out_h, int out_w, void* vtaCmdH,

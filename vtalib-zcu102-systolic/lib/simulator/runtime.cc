@@ -128,6 +128,13 @@ struct DataBuffer {
    * \param buffer The buffer pointer.
    * \return The corresponding data buffer header.
    */
+  //#### JO added (2026-11-10): a header for bytes [offset, ...) of buffer (the same memory; VTABufferView)
+  static DataBuffer* View(const DataBuffer* buffer, size_t offset) {
+    DataBuffer* v = new DataBuffer();
+    v->data_ = static_cast<char*>(buffer->data_) + offset;
+    v->phy_addr_ = buffer->phy_addr_ + offset;
+    return v;
+  }
   static DataBuffer* FromHandle(const void* buffer) {
     return const_cast<DataBuffer*>(
         reinterpret_cast<const DataBuffer*>(buffer));
@@ -1588,6 +1595,15 @@ void VTABufferCopy(const void* from,
                                size);
     to_buffer->FlushCache(to_offset, size);
   }
+}
+
+//#### JO added (2026-11-10): a buffer handle for bytes [offset, ...) of buffer, the same memory (the EVTA reads a part of
+//#### an activation in place: the DeiT query heads, matmul_evta_qk); free it with VTABufferViewFree, not VTABufferFree
+void* VTABufferView(void* buffer, size_t offset) {
+  return vta::DataBuffer::View(vta::DataBuffer::FromHandle(buffer), offset);
+}
+void VTABufferViewFree(void* view) {
+  delete vta::DataBuffer::FromHandle(view);
 }
 
 void* VTABufferGetVirtAddr(const void* buffer) {

@@ -87,6 +87,13 @@ struct DataBuffer {
    * \param buffer The buffer pointer.
    * \return The corresponding data buffer header.
    */
+  //#### JO added (2026-11-10): a header for bytes [offset, ...) of buffer (the same memory; VTABufferView)
+  static DataBuffer* View(const DataBuffer* buffer, size_t offset) {
+    DataBuffer* v = new DataBuffer();
+    v->data_ = static_cast<char*>(buffer->data_) + offset;
+    v->phy_addr_ = buffer->phy_addr_ + offset;
+    return v;
+  }
   static DataBuffer* FromHandle(const void* buffer) {
     return const_cast<DataBuffer*>(
         reinterpret_cast<const DataBuffer*>(buffer));

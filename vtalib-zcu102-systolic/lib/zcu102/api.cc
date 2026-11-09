@@ -103,6 +103,15 @@ void VTABufferCopy(const void* from,
   }
 }
 
+//#### JO added (2026-11-10): a buffer handle for bytes [offset, ...) of buffer, the same memory (the EVTA reads a part of
+//#### an activation in place: the DeiT query heads, matmul_evta_qk); free it with VTABufferViewFree, not VTABufferFree
+void* VTABufferView(void* buffer, size_t offset) {
+  return vta::DataBuffer::View(vta::DataBuffer::FromHandle(buffer), offset);
+}
+void VTABufferViewFree(void* view) {
+  delete vta::DataBuffer::FromHandle(view);
+}
+
 void* VTABufferGetVirtAddr(const void* buffer) {
   vta::DataBuffer* from_buffer = nullptr;
 
