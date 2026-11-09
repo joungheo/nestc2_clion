@@ -6105,36 +6105,55 @@ static inline int8_t satRound(int32_t acc, float scale) {
   return (int8_t)(v > 127.f ? 127.f : v < -128.f ? -128.f : v);
 }
 static void matmulI8(int8_t *C, const int8_t *A, const int8_t *B, size_t M, size_t K, size_t N, float scale) {
+  // rows in pairs: each 16 columns of B loaded once for two rows of A (8 independent sums)
 #pragma omp parallel for schedule(static)
-  for (long m = 0; m < (long)M; m++) {
-    const int8_t *a = A + m * K;
-    int8_t *c = C + m * N;
+  for (long p = 0; p < (long)(M + 1) / 2; p++) {
+    const size_t m = 2 * p;
+    const bool two = m + 1 < M;
+    const int8_t *a0 = A + m * K, *a1 = two ? a0 + K : a0;
+    int8_t *c0 = C + m * N, *c1 = c0 + N;
     size_t n = 0;
 #if defined(__aarch64__)
     for (; n + 16 <= N; n += 16) {
-      int32x4_t s0 = vdupq_n_s32(0), s1 = s0, s2 = s0, s3 = s0;
+      int32x4_t s0 = vdupq_n_s32(0), s1 = s0, s2 = s0, s3 = s0, t0 = s0, t1 = s0, t2 = s0, t3 = s0;
       const int8_t *b = B + n;
       for (size_t k = 0; k < K; k++, b += N) {
         const int8x16_t vb = vld1q_s8(b);
-        const int8x8_t va = vdup_n_s8(a[k]);
-        const int16x8_t lo = vmull_s8(vget_low_s8(vb), va), hi = vmull_s8(vget_high_s8(vb), va);
-        s0 = vaddw_s16(s0, vget_low_s16(lo));
-        s1 = vaddw_high_s16(s1, lo);
-        s2 = vaddw_s16(s2, vget_low_s16(hi));
-        s3 = vaddw_high_s16(s3, hi);
+        const int8x8_t bl = vget_low_s8(vb), bh = vget_high_s8(vb);
+        const int8x8_t x0 = vdup_n_s8(a0[k]), x1 = vdup_n_s8(a1[k]);
+        const int16x8_t l0 = vmull_s8(bl, x0), h0 = vmull_s8(bh, x0), l1 = vmull_s8(bl, x1), h1 = vmull_s8(bh, x1);
+        s0 = vaddw_s16(s0, vget_low_s16(l0));
+        s1 = vaddw_high_s16(s1, l0);
+        s2 = vaddw_s16(s2, vget_low_s16(h0));
+        s3 = vaddw_high_s16(s3, h0);
+        t0 = vaddw_s16(t0, vget_low_s16(l1));
+        t1 = vaddw_high_s16(t1, l1);
+        t2 = vaddw_s16(t2, vget_low_s16(h1));
+        t3 = vaddw_high_s16(t3, h1);
       }
-      int32_t acc[16];
+      int32_t acc[32];
       vst1q_s32(acc, s0);
       vst1q_s32(acc + 4, s1);
       vst1q_s32(acc + 8, s2);
       vst1q_s32(acc + 12, s3);
-      for (int j = 0; j < 16; j++) c[n + j] = satRound(acc[j], scale);
+      vst1q_s32(acc + 16, t0);
+      vst1q_s32(acc + 20, t1);
+      vst1q_s32(acc + 24, t2);
+      vst1q_s32(acc + 28, t3);
+      for (int j = 0; j < 16; j++) c0[n + j] = satRound(acc[j], scale);
+      if (two)
+        for (int j = 0; j < 16; j++) c1[n + j] = satRound(acc[16 + j], scale);
     }
 #endif
     for (; n < N; n++) {
-      int32_t acc = 0;
-      for (size_t k = 0; k < K; k++) acc += (int32_t)a[k] * B[k * N + n];
-      c[n] = satRound(acc, scale);
+      int32_t x = 0, y = 0;
+      for (size_t k = 0; k < K; k++) {
+        x += (int32_t)a0[k] * B[k * N + n];
+        y += (int32_t)a1[k] * B[k * N + n];
+      }
+      c0[n] = satRound(x, scale);
+      if (two)
+        c1[n] = satRound(y, scale);
     }
   }
 }
@@ -6158,6 +6177,32 @@ static void softmax(int8_t *o8, const int8_t *i8, size_t rows, size_t cols) {
     float *y = out + r * cols, m = x[0], sum = 0.f;
     for (size_t i = 1; i < cols; i++) m = x[i] > m ? x[i] : m;
     for (size_t i = 0; i < cols; i++) sum += (y[i] = std::exp(x[i] - m));
+    for (size_t i = 0; i < cols; i++) y[i] /= sum;
+  }
+}
+// the q of a value x = q * s (int8 q), -1000 if x is not one (callers then compute it directly)
+static inline int quantIndex(float x, float s, float inv) {
+  const float t = x * inv;
+  const int q = (int)(t + (t >= 0.f ? .5f : -.5f));
+  return q >= -128 && q < 128 && (float)q * s == x ? q : -1000;
+}
+// softmax of values dequantized from int8 at scale s (DeiT attention): x - max = -d * s exactly (d = 0..255), so exp
+// comes from a table of the 256 std::exp values; the sums and divisions as softmax, the same result
+static void softmaxQ(int8_t *o8, const int8_t *i8, size_t rows, size_t cols, float s) {
+  float *out = (float *)o8;
+  const float *in = (const float *)i8;
+  const float inv = 1.f / s;
+  float T[256];
+  for (int d = 0; d < 256; d++) T[d] = std::exp(-(float)d * s);
+  for (size_t r = 0; r < rows; r++) {
+    const float *x = in + r * cols;
+    float *y = out + r * cols, m = x[0], sum = 0.f;
+    for (size_t i = 1; i < cols; i++) m = x[i] > m ? x[i] : m;
+    const int qm = quantIndex(m, s, inv);
+    for (size_t i = 0; i < cols; i++) {
+      const int q = qm == -1000 ? -1000 : quantIndex(x[i], s, inv);
+      sum += (y[i] = q != -1000 ? T[qm - q] : std::exp(x[i] - m));
+    }
     for (size_t i = 0; i < cols; i++) y[i] /= sum;
   }
 }
@@ -6187,10 +6232,10 @@ static void erfQ(int8_t *o8, const int8_t *a8, size_t n, float s) {
   const float *a = (const float *)a8;
   float T[256];
   for (int q = -128; q < 128; q++) T[q + 128] = std::erf((float)q * s);
+  const float inv = 1.f / s;
   for (size_t i = 0; i < n; i++) {
-    const float x = a[i];
-    const long q = std::lrint(x / s);
-    o[i] = q >= -128 && q < 128 && (float)q * s == x ? T[q + 128] : std::erf(x);
+    const int q = quantIndex(a[i], s, inv);
+    o[i] = q != -1000 ? T[q + 128] : std::erf(a[i]);
   }
 }
 static void fill(int8_t *o8, size_t n, float v) {
@@ -6333,6 +6378,14 @@ static bool saveGenericCpuInst(const Instruction &I, std::string *bundle, VTASav
     requireFloat(&I, {C->getDest(), C->getSrc()});
     auto sd = C->getSrc()->dims();
     std::string d = P(C->getDest()), s = P(C->getSrc());
+    //#### JO added (2026-11-09): softmaxQ when the input was dequantized from int8 (dequantizedBefore)
+    if (auto *dq = dequantizedBefore(I, C->getSrc())) {
+      char sc[32];
+      snprintf(sc, sizeof(sc), "%.9g", dq->getSrc()->getType()->getScale());
+      call = "nestc_cpu::softmaxQ(" + d + ", " + s + ", " + std::to_string(sd[0]) + ", " +
+             std::to_string(C->getSrc()->getType()->size() / sd[0]) + ", " + sc + "f);";
+      break;
+    }
     call = "nestc_cpu::softmax(" + d + ", " + s + ", " + std::to_string(sd[0]) + ", " +
            std::to_string(C->getSrc()->getType()->size() / sd[0]) + ");";
     break;
