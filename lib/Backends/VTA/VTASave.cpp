@@ -6072,6 +6072,8 @@ static const char *const NESTC_CPU_OPS = R"~(
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
+#include <algorithm>
 #if defined(__aarch64__)
 #include <arm_neon.h>
 #endif
@@ -6509,6 +6511,31 @@ static void layerNormI8(int8_t *out, const int8_t *x, size_t rows, size_t cols, 
                         float v2b, float v2d, float a1a, float a1b, float a1d, float sD3, float sQ3, float v3a, float v3b,
                         float v3d, float sD4, float sQ4, float a2a, float a2b, float a2d, int approx) {
   const float *e = (const float *)e8, *w = (const float *)w8;
+  //#### JO added (2026-11-10): NESTC_LN_FLOAT=1 computes the layer norm in float from the dequantized int8 input
+  //#### (mean, variance, 1 / sqrt, * w + b) and quantizes only the output: the loss of the int8 chain in between
+  //#### (mean / variance / sd quantized to int8) apart from the int8 input and output (accuracy experiments only)
+  static const bool lnFloat = getenv("NESTC_LN_FLOAT") && atoi(getenv("NESTC_LN_FLOAT")) > 0;
+  if (lnFloat) {
+#pragma omp parallel for schedule(static)
+    for (long r = 0; r < (long)rows; r++) {
+      const int8_t *xr = x + r * cols;
+      double m = 0, v = 0;
+      for (size_t l = 0; l < cols; l++)
+        m += xr[l] * (double)sD0;
+      m /= cols;
+      for (size_t l = 0; l < cols; l++) {
+        const double d = xr[l] * (double)sD0 - m;
+        v += d * d;
+      }
+      v /= cols;
+      const double ep = std::max((double)eps[r] * a1b, 1e-12), rs = 1.0 / std::sqrt(v + ep);
+      for (size_t l = 0; l < cols; l++) {
+        const double y = (xr[l] * (double)sD0 - m) * rs * w[r * cols + l] + b[r * cols + l] * (double)a2b;
+        out[r * cols + l] = lnClip((float)(y / a2d));
+      }
+    }
+    return;
+  }
   const float large = float(1) / (1 << 15);
   const float ek0 = e1a / e1d, ek1 = e1b / e1d;
   const float c3 = v3b * v3d;
