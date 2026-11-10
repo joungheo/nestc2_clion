@@ -123,6 +123,7 @@ from CLion over remote.
 ### EVTA on this board (verified 2026-09-29/30)
 
 Overview of all EVTA work in date order with pointers to the detailed docs: [docs/evta_overview.md](docs/evta_overview.md);
+the Resnet18 path step by step (why, how, every table, 134.8 -> 23.3 ms): [docs/resnet18_optimization.md](docs/resnet18_optimization.md);
 how the whole stack works, for readers new to Glow / VTA (11 figures, entry: [docs/evta_stack_arch.md](docs/evta_stack_arch.md);
 frontend / lowering / quantization [docs/evta_compiler_frontend.md](docs/evta_compiler_frontend.md), VTA backend
 [docs/evta_compiler_backend.md](docs/evta_compiler_backend.md), runtime / driver [docs/evta_runtime_arch.md](docs/evta_runtime_arch.md));

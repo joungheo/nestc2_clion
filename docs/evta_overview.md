@@ -3,6 +3,7 @@
 NEST-C의 EVTA(VTA 계열 NPU)를 ZCU102 보드에서 돌리고 빠르게 만든 작업 전체를 날짜순으로 정리한다. 항목마다 무엇을 바꿨는지,
 효과, 자세한 내용이 있는 곳을 적는다. 명령과 옵션은 [evta_user_manual.md](evta_user_manual.md)에 있다.
 
+- Resnet18만 따로, 단계마다 왜 / 어떻게 / 표를 모두 모은 문서: [resnet18_optimization.md](resnet18_optimization.md) (11-10까지, 23.3 ms).
 - 기준 모델은 Resnet18(224×224, int8)이다. "single"은 EVTA 하나, "multi4"는 EVTA 4개 bitstream에 bundle 4 copy를 동시에 돈 것이다.
 - 시간은 보드 실측 중앙값이다. OMP 1/4는 CPU OpenMP thread 수다. 11-01부터는 기본값인 OMP 1로 비교한다.
 - 세부 기록: 날짜별 일지 [dailyreport/vta_synth/](dailyreport/vta_synth/)(bitstream 합성 세션, 10-19~10-28),
