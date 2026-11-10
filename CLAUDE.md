@@ -124,6 +124,8 @@ from CLion over remote.
 
 Overview of all EVTA work in date order with pointers to the detailed docs: [docs/evta_overview.md](docs/evta_overview.md);
 the Resnet18 path step by step (why, how, every table, 134.8 -> 23.3 ms): [docs/resnet18_optimization.md](docs/resnet18_optimization.md);
+the same for Resnet50 (160.3 -> 69.6 ms) [docs/resnet50_optimization.md](docs/resnet50_optimization.md), VGG16 CIFAR-10 (16.1 -> 7.0 ms)
+[docs/vgg16_optimization.md](docs/vgg16_optimization.md), MobileNetV2 (1048 -> 18.7 ms) [docs/mobilenetv2_optimization.md](docs/mobilenetv2_optimization.md);
 how the whole stack works, for readers new to Glow / VTA (11 figures, entry: [docs/evta_stack_arch.md](docs/evta_stack_arch.md);
 frontend / lowering / quantization [docs/evta_compiler_frontend.md](docs/evta_compiler_frontend.md), VTA backend
 [docs/evta_compiler_backend.md](docs/evta_compiler_backend.md), runtime / driver [docs/evta_runtime_arch.md](docs/evta_runtime_arch.md));
