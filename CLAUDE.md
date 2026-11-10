@@ -130,6 +130,9 @@ how the whole stack works, for readers new to Glow / VTA (11 figures, entry: [do
 frontend / lowering / quantization [docs/evta_compiler_frontend.md](docs/evta_compiler_frontend.md), VTA backend
 [docs/evta_compiler_backend.md](docs/evta_compiler_backend.md), runtime / driver [docs/evta_runtime_arch.md](docs/evta_runtime_arch.md));
 commands, options and where to run them: [docs/evta_user_manual.md](docs/evta_user_manual.md).
+Step by step from the compiler build to logs (cmake / make of Debug2_remote, VTASaverTest, image-classifier profile,
+model-compiler with its options, collect_hw_bundles.py, vtabundles_xcmpl build dirs, run_all / run_prof, where the logs are and how to read them):
+[docs/evta_walkthrough.md](docs/evta_walkthrough.md).
 Survey of other compilers, runtimes / drivers, NPUs and cheaper FPGAs, and the direction (a stack for several accelerators; kept up to date):
 [docs/npu_stack_survey.md](docs/npu_stack_survey.md). A product on KV260 with one model against Pi 5 + Hailo-8, Jetson Orin Nano Super and
 the KV260 DPU (price, power, size, interfaces, published numbers, which advantages hold, why DeiT-tiny, NPU IP business models):

@@ -1,6 +1,6 @@
 # EVTA on ZCU102 사용 설명서 (명령과 옵션)
 
-bitstream 만들기부터 bundle 생성, 보드 빌드, 실행, 측정까지의 명령을 모았다. 어느 기계의 어느 dir에서 실행하는지, 옵션의 뜻을
+bitstream 만들기부터 bundle 생성, 보드 빌드, 실행, 측정까지의 명령을 모았다. 처음부터 그대로 따라 하는 순서(컴파일러 cmake / make, VTASaverTest, profile, model-compiler, 보드 빌드, 실행, 로그 보기)는 [evta_walkthrough.md](evta_walkthrough.md)에 있다. 이 문서는 옵션 참고서다. 어느 기계의 어느 dir에서 실행하는지, 옵션의 뜻을
 적는다. 지금까지 한 일의 요약은 [evta_overview.md](evta_overview.md)에 있다.
 
 ## 0. 기계와 dir
