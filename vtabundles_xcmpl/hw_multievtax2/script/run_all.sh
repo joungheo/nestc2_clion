@@ -14,7 +14,6 @@ case " $* " in *" -h "*|*" --help "*) echo "usage: sudo $0 [-t <threads>] [Dir .
 [ -n "${BIN:-}" ] && BSRC="BIN= in the environment" || BSRC="BIN of $0"
 BIN=${BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_2evta_380mhz_hp333.bin}
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-1}
-[ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
 #### JO added (2026-11-10): -t <threads> = OMP_NUM_THREADS; other options (-s ...) belong to run_prof.sh; a Dir that is not a
 #### run line stops before any run (it ran nothing and said nothing) and names the run lines that match it ignoring case
 DIRS=()
@@ -34,6 +33,7 @@ for D in "${DIRS[@]}"; do
   echo "$D: not a run line of script/run_all.sh${m:+ (did you mean: $m)}"
 done
 [ $BAD = 0 ] || exit 1
+[ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
 exec 9>/tmp/evta_run.lock; flock -n 9 || { echo "another EVTA run is active (/tmp/evta_run.lock)"; exit 1; }
 # ONLY="$*"
 ONLY="${DIRS[*]}"
