@@ -453,6 +453,9 @@ SymbolTableEntry addConstantSymbolEntry_BNN(Value* val, VTASaveContext *ctx, boo
   return ste;
 }
 
+//#### JO added (2026-11-10): scales compared up to float rounding: with non-power-of-two scales (-vta-pow2-ratio) the bias
+//#### scale lhs * rhs and the conv's (1 / in) * (1 / w) differ in the last bits
+static bool sameScale(float a, float b) { return std::fabs(a - b) <= 1e-5f * std::fabs(a); }
 //#### JO added (2026-11-10): the callers pass a float ratio (1 / in) * (1 / w) / (1 / out); with non-power-of-two scales
 //#### (-vta-pow2-ratio) it is 2^k only up to float rounding, and the int conversion of 7.9999 gave -1. Rounds to the
 //#### nearest power of two when within 1e-4, else -1 as before.
@@ -760,7 +763,7 @@ void saveNonVTAConvolutionInst(
     }
   }
 
-  assert(biasScale == inScale * filterScale);
+  assert(sameScale(biasScale, inScale * filterScale));
 
   auto biasSte = addConstantSymbolEntry(bias, ctx);
 
@@ -1142,7 +1145,7 @@ void saveBNNNonVTAConvolutionInst(const glow::BNNConvolutionInst *Inst,
     }
   }
 
-  assert(biasScale == inScale * filterScale);
+  assert(sameScale(biasScale, inScale * filterScale));
 
   auto biasSte = addConstantSymbolEntry(bias, ctx);
 
@@ -3838,11 +3841,11 @@ ConvPath getConvPath(const glow::ConvolutionInst *Inst) {
   const bool symPad = P.size() == 4 && P[0] == P[1] && P[1] == P[2] && P[2] == P[3];
 
   if (symPad && Inst->getGroup() == 1 && scale > 1 && srcDims[3] % 16 == 0 &&
-      filterDims[0] % 16 == 0 && biasScale == matMulScale && outOffset == 0 &&
+      filterDims[0] % 16 == 0 && sameScale(biasScale, matMulScale) && outOffset == 0 &&
       inOffset == 0 && filterOffset == 0 && biasOffset == 0 && shift >= 0) {
     return ConvPath::VTA;
   } else if (Inst->getGroup() == srcDims[3] && scale > 1 &&
-             biasScale == matMulScale && outOffset == 0 && inOffset == 0 &&
+             sameScale(biasScale, matMulScale) && outOffset == 0 && inOffset == 0 &&
              filterOffset == 0 && biasOffset == 0 && shift >= 0) {
     return ConvPath::DepthwiseCPU;
   //#### JO added (2026-10-29): a quantized 3-channel conv (the image conv0 when it is not skipped from
@@ -3851,7 +3854,7 @@ ConvPath getConvPath(const glow::ConvolutionInst *Inst) {
   //#### JO changed (2026-11-07): + asymmetric pads when the packed conv0 takes them (getConv0Pack)
   } else if ((symPad || getConv0Pack(Inst, nullptr)) && Inst->getGroup() == 1 && scale > 1 && srcDims[3] == 3 &&
              filterDims[3] == 3 && filterDims[0] % 16 == 0 &&
-             biasScale == matMulScale && outOffset == 0 && inOffset == 0 &&
+             sameScale(biasScale, matMulScale) && outOffset == 0 && inOffset == 0 &&
              filterOffset == 0 && biasOffset == 0 && shift >= 0) {
     return ConvPath::FirstBNN;
   }
@@ -4612,7 +4615,7 @@ void saveFullyConnectedInst(const glow::FullyConnectedInst *Inst,
   }
   auto biasSte = addConstantSymbolEntry(bias, ctx);
 
-  assert(biasScale == inScale * filterScale);
+  assert(sameScale(biasScale, inScale * filterScale));
 
   auto srcWeight = static_cast<WeightVar *>(src);
   if (srcWeight->getMutability() == glow::WeightVar::MutabilityKind::Mutable) {

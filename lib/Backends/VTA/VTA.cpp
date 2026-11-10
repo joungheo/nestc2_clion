@@ -32,6 +32,7 @@
 #include "llvm/Support/CommandLine.h"
 
 #include <cstring>
+#include <set>
 #include <unordered_set>
 
 using namespace glow;
@@ -871,18 +872,28 @@ static bool isPow2Ratio(double r) {
 static bool layoutOnly(const Node *u) {
   return llvm::isa<ReshapeNode>(u) || llvm::isa<TransposeNode>(u) || llvm::isa<SliceNode>(u);
 }
-// can v's int8 type take another scale: its layout-only users follow it, a Concat only when its other inputs are constants
-static bool canRescale(NodeValue v) {
+static bool isScaledOp(const Node *n) {
+  return llvm::isa<ConvolutionNode>(n) || llvm::isa<FullyConnectedNode>(n) || llvm::isa<MatMulNode>(n);
+}
+// can v's int8 type take another scale: its layout-only users follow it; a Concat when its other inputs are constants
+// (requantized) or outputs of convs / FCs / matmuls with v's scale (the attention heads: rescaled with it)
+static bool canRescale(NodeValue v, std::set<const Node *> &seen) {
   for (auto &use : v.getUsers()) {
     Node *u = use.getUser();
+    if (!seen.insert(u).second)
+      continue;
     if (layoutOnly(u)) {
-      if (!canRescale(u->getNthResult(0)))
+      if (!canRescale(u->getNthResult(0), seen))
         return false;
     } else if (auto *C = llvm::dyn_cast<ConcatNode>(u)) {
-      for (auto &in : C->getInputs())
-        if (in != v && !llvm::isa<Constant>(in.getNode()))
+      for (auto &in : C->getInputs()) {
+        if (in == v || llvm::isa<Constant>(in.getNode()))
+          continue;
+        if (!isScaledOp(in.getNode()) || in.getType()->getScale() != v.getType()->getScale() ||
+            !canRescale(in, seen))
           return false;
-      if (!canRescale(C->getResult()))
+      }
+      if (!canRescale(C->getResult(), seen))
         return false;
     } else if (llvm::isa<SaveNode>(u)) {
       return false;
@@ -890,37 +901,45 @@ static bool canRescale(NodeValue v) {
   }
   return true;
 }
-static void rescale(Function *F, NodeValue v, float s) {
+static void rescale(Function *F, NodeValue v, float s);
+static void rescaleUsers(Function *F, NodeValue v, float s) {
   auto *M = F->getParent();
-  const float old = v.getType()->getScale();
-  v.setType(M->uniqueType(ElemKind::Int8QTy, v.dims(), s, 0));
   std::vector<Node *> users;
   for (auto &use : v.getUsers())
     users.push_back(use.getUser());
   for (Node *u : users) {
     if (layoutOnly(u)) {
-      rescale(F, u->getNthResult(0), s);
+      if (u->getNthResult(0).getType()->getScale() != s)
+        rescale(F, u->getNthResult(0), s);
     } else if (auto *C = llvm::dyn_cast<ConcatNode>(u)) {
       if (C->getResult().getType()->getScale() == s)
         continue;
+      C->getResult().setType(M->uniqueType(ElemKind::Int8QTy, C->getResult().dims(), s, 0));
       for (unsigned i = 0, e = C->getInputs().size(); i < e; i++) {
         NodeValue in = C->getInputs()[i];
-        if (in == v)
+        if (in == v || in.getType()->getScale() == s)
           continue;
-        auto *K = llvm::cast<Constant>(in.getNode());
-        auto *K2 = M->createConstant(ElemKind::Int8QTy, K->dims(), s, 0, K->getName().str() + "_rescaled");
-        auto hs = K->getPayload().getHandle<int8_t>();
-        auto hd = K2->getPayloadMutable().getHandle<int8_t>();
-        const float ks = K->getType()->getScale();
-        for (dim_t j = 0, n = hs.size(); j < n; j++) {
-          const long q = std::lround(hs.raw(j) * ks / s);
-          hd.raw(j) = (int8_t)(q > 127 ? 127 : q < -128 ? -128 : q);
+        if (auto *K = llvm::dyn_cast<Constant>(in.getNode())) {
+          auto *K2 = M->createConstant(ElemKind::Int8QTy, K->dims(), s, 0, K->getName().str() + "_rescaled");
+          auto hs = K->getPayload().getHandle<int8_t>();
+          auto hd = K2->getPayloadMutable().getHandle<int8_t>();
+          const float ks = K->getType()->getScale();
+          for (dim_t j = 0, n = hs.size(); j < n; j++) {
+            const long q = std::lround(hs.raw(j) * ks / s);
+            hd.raw(j) = (int8_t)(q > 127 ? 127 : q < -128 ? -128 : q);
+          }
+          C->setNthInput(i, K2->getOutput());
+        } else {
+          rescale(F, in, s);
         }
-        C->setNthInput(i, K2->getOutput());
       }
-      rescale(F, C->getResult(), s);
+      rescaleUsers(F, C->getResult(), s);
     }
   }
+}
+static void rescale(Function *F, NodeValue v, float s) {
+  v.setType(F->getParent()->uniqueType(ElemKind::Int8QTy, v.dims(), s, 0));
+  rescaleUsers(F, v, s);
 }
 static bool pow2Ratios(Function *F) {
   bool changed = false, again = true;
@@ -944,7 +963,8 @@ static bool pow2Ratios(Function *F) {
       const double r = out.getType()->getScale() / iw;
       if (isPow2Ratio(r))
         continue;
-      if (!canRescale(out)) {
+      std::set<const Node *> seen;
+      if (!canRescale(out, seen)) {
         llvm::errs() << "vta-pow2-ratio: cannot rescale the output of " << N.getName() << " (ratio " << r << ")\n";
         continue;
       }
