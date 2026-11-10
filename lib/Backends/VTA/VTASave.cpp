@@ -1604,7 +1604,10 @@ static bool getConv0Pack(const glow::ConvolutionInst *Inst, Conv0Pack *p) {
     return false;
   int vt, th, tw;
   getConvSchedule(N, p->H2, p->W2, p->CO, KN, p->KH2, 1, 1, 0, &vt, &th, &tw);
-  return outH % th == 0 && outW % tw == 0 && (th + p->KH2 - 1) * tw * (p->CO / 16) <= 1024;
+  //#### JO changed (2026-11-10): a 1x1 packed conv (KH2 = 1, DeiT) LOADs its input one channel block at a time: one block's
+  //#### tile must fit (was all CO / 16 blocks, which kept the DeiT patch embedding at 7 x 2 tiles)
+  // return outH % th == 0 && outW % tw == 0 && (th + p->KH2 - 1) * tw * (p->CO / 16) <= 1024;
+  return outH % th == 0 && outW % tw == 0 && (th + p->KH2 - 1) * tw * (p->KH2 == 1 ? 1 : p->CO / 16) <= 1024;
 }
 
 // the packed conv's filter in the EVTA layout [KN/16][CO/16][KH2][1][16][16] into the weights file
@@ -6687,6 +6690,7 @@ static std::string esStr(const Value *v) { return std::to_string(v->getType()->g
 
 // one generic CPU op; returns false for an instruction it does not handle
 static bool isUniformConstant(const Value *v, VTASaveContext *ctx);
+static std::string matMulSchedArgs(dim_t M, dim_t K, dim_t N);  //#### JO added (2026-11-10): below
 static bool saveGenericCpuInst(const Instruction &I, std::string *bundle, VTASaveContext *ctx) {
   auto P = [&](Value *v) { return cpuPtr(v, bundle, ctx); };
   std::string call;
@@ -6751,7 +6755,8 @@ static bool saveGenericCpuInst(const Instruction &I, std::string *bundle, VTASav
           w = q;
       if (vtaEvtaMatMul && mant == 0.5f && shift >= 1 && shift <= 15 && w >= 7) {
         call = "matmul_evta(" + a + ", " + b + ", " + d + ", " + std::to_string(ld[0]) + ", " + std::to_string(ld[1]) +
-               ", " + std::to_string(rd[1]) + ", " + std::to_string(shift) + ", vtaCmdH);";
+               ", " + std::to_string(rd[1]) + ", " + std::to_string(shift) + ", vtaCmdH" +
+               matMulSchedArgs(ld[0], ld[1], rd[1]) + ");";
         break;
       }
       char sc[32];
@@ -7851,7 +7856,8 @@ static void emitMatMulGroup(const MatMulGroup &g, std::string *bundle, VTASaveCo
     *bundle += "  // Q K^T of " + H + " heads from the EVTA outputs of the query / key convs (-vta-attn-keep-layout)\n";
     *bundle += "  matmul_evta_qk(" + g.qbuf->getName().str() + "_vbuf, " + g.kbuf->getName().str() + "_vbuf, mmC" + n +
                ", " + H + ", " + std::to_string(M0->getLHS()->dims()[0]) + ", " +
-               std::to_string(M0->getLHS()->dims()[1]) + ", " + std::to_string(g.shift) + ", vtaCmdH);\n";
+               std::to_string(M0->getLHS()->dims()[1]) + ", " + std::to_string(g.shift) + ", vtaCmdH" +
+               matMulSchedArgs(M0->getLHS()->dims()[0], M0->getLHS()->dims()[1], M0->getLHS()->dims()[0]) + ");\n";
     for (const Value *v : g.freeAfter)
       *bundle += "  VTABufferFree(" + v->getName().str() + "_vbuf);\n";
     return;
@@ -7865,7 +7871,24 @@ static void emitMatMulGroup(const MatMulGroup &g, std::string *bundle, VTASaveCo
   *bundle += "  // " + H + " heads in one EVTA call (-vta-matmul-heads)\n";
   *bundle += "  matmul_evta_n(" + H + ", mmA" + n + ", mmB" + n + ", mmC" + n + ", " +
              std::to_string(M0->getLHS()->dims()[0]) + ", " + std::to_string(M0->getLHS()->dims()[1]) + ", " +
-             std::to_string(M0->getRHS()->dims()[1]) + ", " + std::to_string(g.shift) + ", vtaCmdH);\n";
+             std::to_string(M0->getRHS()->dims()[1]) + ", " + std::to_string(g.shift) + ", vtaCmdH" +
+             matMulSchedArgs(M0->getLHS()->dims()[0], M0->getLHS()->dims()[1], M0->getRHS()->dims()[1]) + ");\n";
+}
+
+//#### JO added (2026-11-10): ", vt, tileH, tileW" of an attention matmul's EVTA conv (M rows as h x w over K -> N, both
+//#### padded to 16) from VTASchedules.h, or "" (vtalib's default 1, 14, 14) when it has none
+static std::string matMulSchedArgs(dim_t M, dim_t K, dim_t N) {
+  dim_t w = 1;
+  for (dim_t q = 1; q * q <= M; q++)
+    if (M % q == 0)
+      w = q;
+  const int h = M / w, Kp = (K + 15) / 16 * 16, Np = (N + 15) / 16 * 16;
+#include "VTASchedules.h"
+  for (auto elem : convTune.ConvolutionTune_)
+    if (elem.isMatch(1, h, w, Kp, Np, 1, 1, Kp, 1, 0))
+      return ", " + std::to_string(elem.nVirtualThread_) + ", " + std::to_string(elem.tileHSize_) + ", " +
+             std::to_string(elem.tileWSize_);
+  return "";
 }
 
 static std::string vtaOptionsComment() {

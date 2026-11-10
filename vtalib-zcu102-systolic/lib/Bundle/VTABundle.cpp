@@ -3310,6 +3310,10 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
   //#### JO changed (2026-11-08): a depthwise conv's schedule under KN 0 (dw_convolution_evta checks it after the override)
   if (!dw)
   schedOverride(H, W, C, KN, KH, stride_size, nVirtualThread, tileHSize, tileWSize);  //#### JO added (2026-11-05)
+  //#### JO added (2026-11-10): nVirtualThread must divide the output channel blocks (conv_kernel's nFilterinLoop was 0 for
+  //#### 13 blocks with 2 threads: no filter loop, garbage output, no error); else one thread
+  if (!dw && nVirtualThread > 1 && (KN / 16) % nVirtualThread)
+    nVirtualThread = 1;
   //#### JO added (2026-11-05): input written while this call runs (InputStream): one run per tile row
   InputStream *ins = gInputStream.buf && gInputStream.buf == (void *)input && N == 1 ? &gInputStream : nullptr;
   const bool stream = ins != nullptr;
@@ -3850,6 +3854,17 @@ void *matmulBias(MatMulEvtaBufs &bufs, int Np, int shift) {
   }
   return biasBuf;
 }
+//#### JO added (2026-11-10): the schedule of the matmul conv (h x w over Kp channels -> Np filters), EVTA_SCHED applied here
+//#### (key with the unpadded Np), and Np padded with zero filters to a multiple of nVirtualThread blocks (Q K^T: 198 -> 13
+//#### blocks; 2 threads need 14)
+int matmulSched(int M, int Kp, int Np, int &vt, int &th, int &tw) {
+  const int w = matmulW(M), h = M / w;
+  schedOverride(h, w, Kp, Np, 1, 1, vt, th, tw);
+  if (vt < 1)
+    vt = 1;
+  const int NB = Np / 16;
+  return (NB + vt - 1) / vt * vt * 16;
+}
 // the H convs as one EVTA call (gConvBatch)
 int matmulConvs(int H, void *const *in, void *const *wgt, void *bias, void *const *out, int M, int Kp, int Np, int shift,
                 void *vtaCmdH, int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA) {
@@ -3892,7 +3907,8 @@ int matmul_evta_n(int H, const int8_t *const *A, const int8_t *const *B, int8_t 
   if (H < 1 || H > kMaxHeads)
     return -1;
   MatMulLap lap;
-  const int Kp = (K + 15) / 16 * 16, Np = (N + 15) / 16 * 16;
+  // const int Kp = (K + 15) / 16 * 16, Np = (N + 15) / 16 * 16;
+  const int Kp = (K + 15) / 16 * 16, Np = matmulSched(M, Kp, (N + 15) / 16 * 16, nVirtualThread, tileHSize, tileWSize);
   thread_local MatMulEvtaBufs bufs;
   void *in[kMaxHeads], *wgt[kMaxHeads], *out[kMaxHeads];
   for (int i = 0; i < H; i++) {
@@ -3903,8 +3919,13 @@ int matmul_evta_n(int H, const int8_t *const *A, const int8_t *const *B, int8_t 
   for (int i = 0; i < H; i++)
     matmulPackA(A[i], (int8_t *)VTABufferGetVirtAddr(in[i]), M, K);
   lap(0);
-  for (int i = 0; i < H; i++)
+  for (int i = 0; i < H; i++) {
     matmulPackB(B[i], (int8_t *)VTABufferGetVirtAddr(wgt[i]), K, N);
+    //#### JO added (2026-11-10): the zero filter blocks of matmulSched's padding (reused buffers keep old contents)
+    const size_t used = (size_t)(N + 15) / 16 * 16 * Kp;
+    if ((size_t)Np * Kp > used)
+      memset((int8_t *)VTABufferGetVirtAddr(wgt[i]) + used, 0, (size_t)Np * Kp - used);
+  }
   lap(1);
   void *bias = matmulBias(bufs, Np, shift);
   lap(2);
@@ -3945,7 +3966,8 @@ int matmul_evta_qk(void *qbuf, void *kbuf, int8_t *const *C, int H, int M, int d
   if (H < 1 || H > kMaxHeads || dh % 16)
     return -1;
   MatMulLap lap;
-  const int KB = dh / 16, Np = (M + 15) / 16 * 16, NB = Np / 16;
+  // const int KB = dh / 16, Np = (M + 15) / 16 * 16, NB = Np / 16;
+  const int KB = dh / 16, Np = matmulSched(M, dh, (M + 15) / 16 * 16, nVirtualThread, tileHSize, tileWSize), NB = Np / 16;
   thread_local MatMulEvtaBufs bufs;
   void *in[kMaxHeads], *wgt[kMaxHeads], *out[kMaxHeads];
   for (int i = 0; i < H; i++) {
@@ -3959,7 +3981,8 @@ int matmul_evta_qk(void *qbuf, void *kbuf, int8_t *const *C, int H, int M, int d
   for (int i = 0; i < H; i++) {
     int8_t *w = (int8_t *)VTABufferGetVirtAddr(wgt[i]);
     for (int nb = 0; nb < NB; nb++) {
-      const int rows = std::min(16, M - nb * 16);
+      // const int rows = std::min(16, M - nb * 16);
+      const int rows = std::max(0, std::min(16, M - nb * 16));  //#### JO changed (2026-11-10): 0 in matmulSched's padding
       for (int kb = 0; kb < KB; kb++) {
         int8_t *o = w + ((size_t)nb * KB + kb) * 256;
         memcpy(o, kv + (((size_t)(i * KB + kb)) * M + nb * 16) * 16, (size_t)rows * 16);

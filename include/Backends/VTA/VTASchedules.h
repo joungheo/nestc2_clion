@@ -125,7 +125,18 @@ convTune.ConvolutionTune_.push_back({1, 2, 2, 512, 512, 3, 3, 512, 1, 1, 2, 2, 2
 convTune.ConvolutionTune_.push_back({1, 113, 112, 32, 32, 2, 1, 32, 1, 0, 2, 16, 28});
 //#### JO added (2026-11-09): DeiT-tiny patch embedding (16x16 / 16 over 224 x 224 x 3) over its packed input: 1x1 over
 //#### 14 x 14 x 768 -> 192; input tile 7 x 2 x 48 = 672 entries (the HLS GEMM pads it to 7 x 7: 2352, single-EVTA inp SRAM)
-convTune.ConvolutionTune_.push_back({1, 14, 14, 768, 192, 1, 1, 768, 1, 0, 1, 7, 2});
+// convTune.ConvolutionTune_.push_back({1, 14, 14, 768, 192, 1, 1, 768, 1, 0, 1, 7, 2});
+//#### JO changed (2026-11-10): 2 threads, 7 x 14 (EVTA_SCHED on the systolic _rq bitstream: 4.75 -> ~1 ms less; the 1x1 conv
+//#### LOADs its input one channel block at a time, 7 x 14 entries, VTASave getConv0Pack checks a block for KH2 = 1);
+//#### the linear layers (MatMul as a 1x1 conv over the 198 rows as 18 x 11, VTA.cpp matMulToConv) and the attention
+//#### matmuls (VTASave matmul_evta_n / _qk: h x w over K channels -> N filters, N padded to an even number of blocks with
+//#### 2 threads by vtalib matmulSched): 1, 14, 14 -> these, EVTA 55.8 -> ~41 ms (docs/evta_runtime_compare.md 7.28)
+convTune.ConvolutionTune_.push_back({1, 14, 14, 768, 192, 1, 1, 768, 1, 0, 2, 7, 14});
+convTune.ConvolutionTune_.push_back({1, 18, 11, 192, 192, 1, 1, 192, 1, 0, 2, 9, 11});
+convTune.ConvolutionTune_.push_back({1, 18, 11, 192, 768, 1, 1, 192, 1, 0, 2, 9, 11});
+convTune.ConvolutionTune_.push_back({1, 18, 11, 768, 192, 1, 1, 768, 1, 0, 2, 9, 11});
+convTune.ConvolutionTune_.push_back({1, 18, 11, 208, 64, 1, 1, 208, 1, 0, 2, 18, 11});
+convTune.ConvolutionTune_.push_back({1, 18, 11, 64, 208, 1, 1, 64, 1, 0, 2, 18, 11});
 convTune.ConvolutionTune_.push_back({1, 112, 112, 32, 16, 1, 1, 32, 1, 0, 1, 16, 56});
 convTune.ConvolutionTune_.push_back({1, 112, 112, 16, 96, 1, 1, 16, 1, 0, 2, 16, 28});
 convTune.ConvolutionTune_.push_back({1, 56, 56, 96, 32, 1, 1, 96, 1, 0, 2, 8, 56});
