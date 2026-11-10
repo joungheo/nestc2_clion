@@ -949,6 +949,22 @@ static bool pow2Ratios(Function *F) {
       NodeValue in, w, out;
       if (auto *C = llvm::dyn_cast<ConvolutionNode>(&N)) {
         in = C->getInput(), w = C->getFilter(), out = C->getResult();
+        // an input rescaled after the conv was made (the attention heads): the int32 bias to the new in * w
+        auto *B = llvm::dyn_cast<Constant>(C->getBias().getNode());
+        if (B && B->getElementType() == ElemKind::Int32QTy && in.getElementType() == ElemKind::Int8QTy &&
+            w.getElementType() == ElemKind::Int8QTy) {
+          const float bs = in.getType()->getScale() * w.getType()->getScale();
+          const float old = B->getType()->getScale();
+          if (std::fabs(old - bs) > 1e-6f * bs) {
+            auto *B2 = F->getParent()->createConstant(ElemKind::Int32QTy, B->dims(), bs, 0, B->getName().str() + "_rs");
+            auto hs = B->getPayload().getHandle<int32_t>();
+            auto hd = B2->getPayloadMutable().getHandle<int32_t>();
+            for (dim_t j = 0, n = hs.size(); j < n; j++)
+              hd.raw(j) = (int32_t)std::lround((double)hs.raw(j) * old / bs);
+            C->setNthInput(ConvolutionNode::BiasIdx, B2->getOutput());
+            changed = again = true;
+          }
+        }
       } else if (auto *FC = llvm::dyn_cast<FullyConnectedNode>(&N)) {
         in = FC->getInput(), w = FC->getWeights(), out = FC->getResult();
       } else if (auto *MM = llvm::dyn_cast<MatMulNode>(&N)) {
