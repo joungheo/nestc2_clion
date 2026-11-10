@@ -326,6 +326,8 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   output channel blocks (13 blocks with 2 computed nothing, no error), matmul N padded for it (`matmulSched`):
   EVTA 55.8 -> 38.3 ms, 123.5 -> 107.4 ms (`-t 4` 91.9 -> 75.2 ms). `gen_deit_bundle.sh` always passes `-vta-round-shift`.
   `prof_summary.py` folds the runs of a streamed conv (else no `_sysprof` table for DeiT).
+  The whole DeiT path (what changed, how much each step saved, where the time goes now, software and hardware next steps
+  ordered against the overall plan): [docs/deit_optimization.md](docs/deit_optimization.md).
 - Longer conv DMAs (2026-11-10, `docs/evta_runtime_compare.md` §7.29; vtalib-zcu102-systolic `EVTA_CONV_BURST`, default on): 2D LOAD /
   STOREs with contiguous rows as one row, a 1x1 conv's weights of a thread in one LOAD (`gemmop_mxn` `wgt_kernel_factor_`), the
   kernels of a full-width tile in one STORE; dumps byte-identical, golden all PASS. Single rq OMP 1: DeiT 107.3 -> 88.5 ms (EVTA
