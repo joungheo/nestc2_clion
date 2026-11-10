@@ -335,6 +335,9 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   `prof_summary.py` folds the runs of a streamed conv (else no `_sysprof` table for DeiT).
   The whole DeiT path (what changed, how much each step saved, where the time goes now, software and hardware next steps
   ordered against the overall plan): [docs/deit_optimization.md](docs/deit_optimization.md).
+  multi4 systolic (2026-11-10, §6.5): `vta/multievta_bundles/MultiEVTADeiTTest` (`gen_multi4_bundles.sh MultiEVTADeiTTest`; VTASave
+  matmul calls now carry the copy's handle and idEVTA), 4 copies at once 106.6 ms each = 37.5 images/s (one copy 88.3 ms);
+  the 18 ms per copy is mostly memory-bound CPU ops (layout transposes, quantize) sharing L2 / DDR.
 - Longer conv DMAs (2026-11-10, `docs/evta_runtime_compare.md` §7.29; vtalib-zcu102-systolic `EVTA_CONV_BURST`, default on): 2D LOAD /
   STOREs with contiguous rows as one row, a 1x1 conv's weights of a thread in one LOAD (`gemmop_mxn` `wgt_kernel_factor_`), the
   kernels of a full-width tile in one STORE; dumps byte-identical, golden all PASS. Single rq OMP 1: DeiT 107.3 -> 88.5 ms (EVTA

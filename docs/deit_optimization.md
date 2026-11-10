@@ -279,6 +279,46 @@ DeiT가 필요로 하는 것도 같은 순서로 놓으면 서로 도움이 된�
 
 추정값이다. 0번의 정수 LayerNorm / softmax와 H4는 정확도를 ImageNet으로 확인해야 한다.
 
+## 6.5 EVTA 4개에 copy 4개 (multi4 systolic, 11-10)
+
+같은 DeiT 번들을 copy 4개로 만들어(copy i = EVTA i) multi4 systolic 비트스트림(`..._4evta_sa_400mhz_rq.bin`)에서 동시에 돌렸다. 처리량을 늘리는 구성이고, 1장의 지연은 줄지 않는다. 한 장을 EVTA 4개로 나누는 일은 아직 하지 않았다.
+
+- **번들:** `vta/multievta_bundles/MultiEVTADeiTTest`, `vtabundles_xcmpl/gen_multi4_bundles.sh MultiEVTADeiTTest`. copy마다 graph hash를 고쳐 가며 다시 시도한다.
+- **고친 것:** VTASave의 attention matmul 호출(`matmul_evta_n` / `_qk`)에 copy의 명령 핸들(`vtaCmdH<n>`)과 EVTA 번호가 빠져 있었다(`matMulCallTail`). single 번들은 바뀌지 않는다. copy 0은 single 번들과 코드, weights 모두 같다.
+- **vtalib:** 같은 `vtalib-zcu102-systolic`을 multi4 설정(`build_multievtax4_sys*`)으로 빌드했다.
+- **검증:** copy 4개 모두 281(0.754596)이다. `EVTA_MATMUL_CHECK=1`로 288 head(4 × 72)가 0 differ였다.
+
+| (OMP 1, copy마다 25장 중앙값) | 1장 | EVTA conv | 처리량 |
+|---|---|---|---|
+| single 비트스트림, 1코어 (§6.1) | 88.5 ms | 17.1 ms | 11.3장/s |
+| single 비트스트림, `-t 4` | 55.7–57.9 ms | | 약 17.6장/s |
+| multi4 비트스트림, copy 0 혼자 | 88.3 ms | 18.05 ms | 11.3장/s |
+| **multi4, copy 4개 동시** | **106.6 ms** (copy마다) | 19.2–19.4 ms | **37.5장/s** |
+
+- 처리량은 copy 하나의 **3.32배**, single EVTA를 4코어로 돌릴 때의 약 2.1배다.
+- 4개를 같이 돌리면 copy마다 18 ms 느려진다. copy 0의 함수별 시간을 비교했다(혼자 → 4개 동시, ms).
+
+| 함수 | 혼자 | 4개 동시 | 차이 |
+|---|---|---|---|
+| transpose_nhwc2vtaio / vtaio2nhwc | 6.56 / 6.29 | 10.59 / 8.29 | +4.0 / +2.0 |
+| quantize | 2.68 | 5.57 | +2.9 |
+| matmul_evta_n / _qk | 3.54 / 4.19 | 5.76 / 5.72 | +2.2 / +1.5 |
+| softmaxI8 | 12.41 | 13.87 | +1.5 |
+| convolution_wo_tr (EVTA) | 18.04 | 19.23 | +1.2 |
+| VTABufferAlloc / Free, memmove | 0.24, 0.41 | 1.65, 1.29 | +2.3 |
+| layerNormI8, lut8, elemadd | 19.95, 5.14, 3.90 | 19.38, 5.32, 4.03 | 거의 그대로 |
+
+- **늘어난 것:** 대부분 메모리를 많이 쓰는 CPU 연산이다(배치 변환, quantize, memmove, matmul 포장). 4코어가 L2(1 MB)와 DDR를 나눠 쓰기 때문이다. EVTA conv도 Resnet50 multi4처럼(`resnet50_optimization.md` §4) DDR 경합으로 약 1 ms 는다. buffer pool은 mutex 하나를 copy들이 같이 쓴다.
+- **그대로인 것:** 계산 위주 연산(LayerNorm, GELU 표, elemadd)이다.
+- **줄이는 방법:** §6.1의 배치 변환 없애기와 quantize 합치기가 multi4에서는 효과가 두 배 가까이 된다. buffer pool은 thread별 list로 바꿀 수 있다.
+
+```bash
+cd vtabundles_xcmpl
+./gen_multi4_bundles.sh MultiEVTADeiTTest && python3 collect_hw_bundles.py --set multievtax4 MultiEVTADeiTTest
+(cd build_multievtax4_systimed && cmake . && make -j2 multivtaDeiTBundle singlevtaDeiTBundle)
+sudo hw_multievtax4/script/run_prof.sh -s _systimed -r MultiEVTADeiTTest     # 4개 동시와 copy 0 혼자
+```
+
 ## 7. 재현
 
 끄는 방법은 세 종류다. `-vta-*`는 번들 생성(`model-compiler`) 옵션이라 번들을 다시 만들어야 하고, `EVTA_*`는 실행할 때 주는 환경변수(`sudo /bin/sh -c "EVTA_X=0 hw/script/run_prof.sh ..."`), 하드웨어 단계는 `BIN=<비트스트림>`이다. 자세한 절차와 vtalib마다 읽는 변수의 차이는 `resnet18_optimization.md` §9.2–§9.5에 있다.

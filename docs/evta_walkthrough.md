@@ -264,7 +264,7 @@ head -20 $O/mxnet_exported_resnet18.cpp      # 어떤 옵션으로 만들어졌�
 ```bash
 $X/gen_mobilenetv2_bundle.sh [추가 옵션]       # → $D/vta/bundles/MobileNetV2Test/  (gen.log, prof.log)
 $X/gen_deit_bundle.sh [추가 옵션]              # → $D/vta/bundles/DeiTTest/          (gen.log, prof.log)
-$X/gen_multi4_bundles.sh                       # multi4 copy (Resnet18 / 50, VGG16)
+$X/gen_multi4_bundles.sh MultiEVTADeiTTest     # multi4 copy (MultiEVTAResnet18Test / Resnet50Test / Vgg16Cifar10Test / DeiTTest)
 ```
 
 - 스크립트가 profile(없을 때만)과 model-compiler를 부르고, 필요한 옵션을 넣는다. `[추가 옵션]`은 model-compiler에 그대로 넘어간다(예: `-vta-evta-depthwise=0`).
@@ -346,7 +346,7 @@ cd $X/build_systimed && make -j2 vtaDeiTBundle 2>&1 | grep -E "error|Built targe
 | MobileNetV2Test | `vtaMobileNetV2Bundle` | 이미지 |
 | DeiTTest | `vtaDeiTBundle` | 이미지 |
 | ConvTest, Conv2–5Test, ResConv1–10Test, FCTest, MaxPool, AvgPoolTest, ElemAdd, ... | `vta<이름>Bundle` (예 `vtaConvTestBundle`, `vtaResConv10TestBundle`, `vtaFCTestBundle`) | `<target 앞부분>Input.bin`, 정답 `...Golden.bin` |
-| (multi4) MultiEVTAResnet18Test / 50 / Vgg16Cifar10Test | `multivta<...>Bundle`(4 copy), `singlevta<...>Bundle`(copy 하나) | 이미지 |
+| (multi4) MultiEVTAResnet18Test / 50 / Vgg16Cifar10Test / MultiEVTADeiTTest | `multivta<...>Bundle`(4 copy), `singlevta<...>Bundle`(copy 하나) | 이미지 |
 | (multi4) MultiEVTAConv4Test, MultiEVTAResConv10Test | `multi4conv4Bundle`, `multi4resconv10Bundle` | `<EVTA mask> <반복 수> [conv]` (예 `15 100`) |
 
 ## 5. 실행
