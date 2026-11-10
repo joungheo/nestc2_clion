@@ -133,6 +133,9 @@ commands, options and where to run them: [docs/evta_user_manual.md](docs/evta_us
 Step by step from the compiler build to logs (cmake / make of Debug2_remote, VTASaverTest, image-classifier profile,
 model-compiler with its options, collect_hw_bundles.py, vtabundles_xcmpl build dirs, run_all / run_prof, where the logs are and how to read them):
 [docs/evta_walkthrough.md](docs/evta_walkthrough.md).
+What ETRI changed from TVM VTA and what this work changed from ETRI (ISA, runtime, bundle library, compiler; the ETRI EVTA
+HLS sources are not here, only its bitstream), and whether the output -> input buffer MOV of the NEST-C paper is worth adding
+(measured upper bound: Resnet18 6 %, Resnet50 13 %): [docs/vta_to_evta_diff.md](docs/vta_to_evta_diff.md).
 Survey of other compilers, runtimes / drivers, NPUs and cheaper FPGAs, and the direction (a stack for several accelerators; kept up to date):
 [docs/npu_stack_survey.md](docs/npu_stack_survey.md). A product on KV260 with one model against Pi 5 + Hailo-8, Jetson Orin Nano Super and
 the KV260 DPU (price, power, size, interfaces, published numbers, which advantages hold, why DeiT-tiny, NPU IP business models):
