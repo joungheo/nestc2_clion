@@ -129,7 +129,7 @@ frontend / lowering / quantization [docs/evta_compiler_frontend.md](docs/evta_co
 commands, options and where to run them: [docs/evta_user_manual.md](docs/evta_user_manual.md).
 Survey of other compilers, runtimes / drivers, NPUs and cheaper FPGAs, and the direction (a stack for several accelerators; kept up to date):
 [docs/npu_stack_survey.md](docs/npu_stack_survey.md). A product on KV260 with one model against Pi 5 + Hailo-8, Jetson Orin Nano Super and
-the KV260 DPU (price, power, size, interfaces, published numbers, which advantages hold, why DeiT-tiny):
+the KV260 DPU (price, power, size, interfaces, published numbers, which advantages hold, why DeiT-tiny, NPU IP business models):
 [docs/kv260_product_compare.md](docs/kv260_product_compare.md).
 
 - **ISA of the bitstream:** 256-bit instructions, but `memory_type` and `alu_opcode` are **2 bits**. Both

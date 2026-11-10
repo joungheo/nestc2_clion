@@ -1,4 +1,4 @@
-# KV260에 모델 하나를 올려 공급한다면: 비교 대상, 장점, DeiT-tiny를 고른 이유 (2026-11-08 ~ 11-10)
+# KV260에 모델 하나를 올려 공급한다면: 비교 대상, 장점, DeiT-tiny를 고른 이유, 비즈니스 모델 (2026-11-08 ~ 11-10)
 
 2026-11-08 밤부터 11-09 새벽까지 검색하고 비교한 내용을 정리했다. 11-09 ~ 11-10의 DeiT-tiny 작업 결과도 함께 넣었다.
 그때 대화의 내용은 `docs/dailyreport/vta_systolic/vta_systolic_요약_261108.md`에 시간순으로 있다.
@@ -31,6 +31,11 @@
   - ISP에 없는 전처리를 센서 속도로
   - 인코더 하드웨어(VCU)
   - 산업 등급과 장기 공급
+- **비즈니스 모델(§7):** NPU를 IP로 파는 회사는 있다(Arm, CEVA, Cadence, Synopsys, Quadric 등).
+  - 돈이 되는 것은 칩 회사에 라이선스하고 royalty를 받는 구조다.
+  - "새 모델도 돌아간다"는 Quadric이 실제로 내세워 투자와 매출을 얻는 문구다.
+  - 모델마다 하드웨어를 맞춰 주던 Flex Logix와 Mipsology는 대기업에 인수됐다.
+  - 우리에게는 K26 SOM + bitstream + 모델을 장비 회사에 묶어 공급하는 형태(B)가 가장 현실적이다. 새 모델 대응을 도구로 만드는 것이 과제다.
 - **DeiT-tiny 진행(ZCU102 실측):**
   - 1장 3.77 s에서 시작해 1코어 88.5 ms, 4코어(`-t 4`) 55.7–57.9 ms가 됐다.
   - EVTA 시간은 19.4 ms(130 GOPS)로, DRAM 전송을 모두 뺀 하한 수준이다.
@@ -339,7 +344,54 @@ ViT 계열의 연산량은 기억에 의존한 값이다.
 
 추정값이다(11-10 대화에서의 계산). KV260에서는 클럭이 300 MHz 안팎이라 EVTA 부분이 약 1.3배 길어진다.
 
-## 7. 출처
+## 7. 비즈니스 모델: 새 모델에 맞춰 NPU를 제공하는 업체들 (11-10)
+
+### 7.1 새 모델은 계속 나오고, NPU 업체는 따라가야 한다
+
+이 절의 모델 출시 연도와 Hailo-10H는 알고 있는 내용이다. 따로 검색하지 않았다.
+
+- **모델:** YOLO는 v8(2023), v9 / v10 / 11(2024), 12(2025)로 거의 매년 새 버전이 나오고, 새 연산(attention 등)이 들어간다. CNN에서 ViT / DeiT(2020–21), Swin, 하이브리드(FastViT, EfficientFormer)로 갔고, 이제 LLM / VLM이 edge로 내려온다.
+- **소프트웨어 갱신:** Hailo, Vitis AI, RKNN 모두 컴파일러를 계속 갱신한다. 그래도 지금 Hailo-8은 YOLO12 컴파일이 실패하고, DeiT-tiny를 비슷한 CNN보다 약 30배 느리게 돌린다(§5.1).
+- **칩을 새로:** 소프트웨어로 안 되면 칩을 다시 낸다. 칩을 새로 내는 데는 보통 2–3년이 걸린다.
+  - Arm: Ethos-U55 / U65는 Transformer 지원이 약해서 U85를 새로 냈다.
+  - Hailo: 생성형 AI용으로 Hailo-10H를 따로 냈다.
+
+### 7.2 NPU를 IP로 제공하는 업체 (검색, 11-10)
+
+| 업체 | 형태 | 내세우는 점 | 상황 |
+|---|---|---|---|
+| **Quadric** (Chimera GPNPU) | NPU IP 라이선스 | "완전 프로그래머블이라 지금과 앞으로의 모델을 하드웨어 변경 없이 돌린다." 2023-06에 하드웨어 변경 없이 ViT를 지원했고, 같은 해 Llama 2도 소프트웨어 이식으로 지원 | 2026-01 Series C $30M, 누적 약 $72M(출처에 따라 $76M). 2025년 제품 매출 3배 이상 |
+| **CEVA** (NeuPro) | NPU IP + royalty | DSP IP 회사가 NPU로 확장 | 2025년 NPU 라이선스 10건, AI가 라이선스 매출의 20% 이상. Microchip이 NeuPro 전체를 라이선스 |
+| **Arm** (Ethos), **Cadence**, **Synopsys** (ARC NPX), **VeriSilicon**, **Imagination** | NPU IP | SoC 업체에 CPU 등 다른 IP와 묶어서 공급 | 시장의 주류. 칩 회사 내부 설계팀과도 경쟁 |
+| **Flex Logix** (InferX) | 처음에는 칩, 2023년부터 IP만 | 재구성 가능한 eFPGA를 AI와 DSP에 사용 | X1 칩 판매를 중단하고 IP로 전환한 뒤, 2024-11 ADI가 기술과 팀을 인수(조건 비공개) |
+| **Mipsology** (Zebra) | FPGA 추론 소프트웨어 | 모델을 바꾸지 않고 FPGA에서 추론 | 2023-08 AMD가 인수(통합 AI 소프트웨어 스택 쪽으로 흡수) |
+| (오픈소스) AMD FINN, hls4ml | 모델마다 맞춘 FPGA 가속기 생성기 | 모델 전용 dataflow 하드웨어를 자동 생성 | 연구와 도구 수준이고 회사 비즈니스는 아님(알고 있는 내용) |
+
+**시장 규모:** 한 추정은 NPU IP 시장을 2025년 약 $1.7억, 2035년 $6억 이상으로 본다. NPU 시장 전체(칩 포함, 한 보고서는 2025년 약 $172억)와 범위가 달라 직접 비교할 수는 없다. 칩 시장에 비하면 IP는 작은 틈새다.
+
+### 7.3 비즈니스가 되나
+
+- **된다. 다만 수익이 나는 형태가 정해져 있다.** 주로 돈이 되는 것은 NPU IP를 칩 회사에 라이선스하고, 칩이 팔릴 때마다 royalty를 받는 구조다(Arm, CEVA). 고객이 칩을 내기까지 2–3년이 걸려서 royalty가 들어오기까지도 오래 걸린다.
+- **"새 모델에도 대응"은 실제로 팔리는 문구다.** Quadric이 바로 그 점을 앞세워 투자를 받고 매출을 늘리고 있다. 다만 Quadric은 모델마다 하드웨어를 바꾸지 않는다. 처음부터 프로그래머블한 하드웨어를 만들고, 새 모델에는 소프트웨어로만 대응한다.
+- **"모델마다 하드웨어를 맞춰 주는" 회사는 혼자 크지 못했다.** Flex Logix와 Mipsology는 기술 가치는 인정받았지만, 둘 다 대기업에 인수되는 것으로 끝났다. 이유는 둘이다.
+  - 모델마다 하는 일은 사람이 직접 해야 하는 용역(NRE)이 되기 쉬워서 확장이 어렵다.
+  - FPGA 쪽에서는 AMD가 DPU와 Vitis AI를 무료로 준다.
+
+### 7.4 우리에게 맞는 형태
+
+FPGA라서 ASIC IP 회사에 없는 선택지(B)가 하나 더 있다.
+
+| 형태 | 내용 | 장단점 |
+|---|---|---|
+| A. NPU IP 라이선스 | EVTA RTL + NEST-C를 칩 회사에 공급 | 시장은 있지만 Arm / CEVA / Quadric과 경쟁해야 하고, royalty까지 오래 걸린다. 성능부터 갖춰야 한다 |
+| **B. FPGA 솔루션 공급** | K26 SOM + bitstream + 모델 하나를 장비 회사에 묶어서 공급(이 문서의 시나리오) | 고객의 새 모델에 bitstream 갱신으로 대응해 "하드웨어도 바뀐다"는 장점이 가장 잘 드러난다. 대신 고객 수가 적은 산업용 틈새다 |
+| C. 모델 대응 서비스 | 새 모델이 나오면 HW와 SW를 최적화해서 납품 | 용역이라 규모를 키우기 어렵다(Mipsology와 같은 길) |
+
+- **가장 현실적인 것은 B다.** 시간이 지나면 A로 넓힐 수 있다.
+- **증명할 사례:** 어느 형태든 "새 모델 대응이 빠르다"를 보여 줄 사례가 필요하다. DeiT-tiny(이틀에 3.77 s → 88.5 ms)가 첫 사례다. YOLO12 같은 모델로 근거를 더 쌓아야 한다.
+- **약점:** 대응 시간이 사람에 달려 있다. 지금은 모델마다 VTASave에 패턴을 손으로 추가한다. 비즈니스로 만들려면 새 연산을 정의하면 컴파일러와 하드웨어 경로가 생기는 도구가 필요하다. Quadric이 프로그래머블을 앞세우는 것도 같은 이유다.
+
+## 8. 출처
 
 - Hailo model zoo: [HAILO8 classification](https://github.com/hailo-ai/hailo_model_zoo/blob/master/docs/public_models/HAILO8/HAILO8_classification.rst), [HAILO8L classification](https://github.com/hailo-ai/hailo_model_zoo/blob/master/docs/public_models/HAILO8L/HAILO8L_classification.rst)
 - AMD: [UG1354 (Vitis AI 3.0) KV260 performance](https://docs.amd.com/r/3.0-English/ug1354-xilinx-ai-sdk/KV260-Vision-AI-Starter-Kit), [KV260 power supply adapter](https://www.amd.com/en/products/system-on-modules/kria/k26/kv260-vision-starter-kit/power-supply-adapter.html), [K26 industrial](https://www.amd.com/en/products/system-on-modules/kria/k26/k26i-industrial.html)
@@ -351,4 +403,5 @@ ViT 계열의 연산량은 기억에 의존한 값이다.
 - [tinycomputers.io: RK3588 NPU benchmarks](https://tinycomputers.io/posts/rockchip-rk3588-npu-benchmarks.html), [Coral Edge TPU benchmarks](https://www.coral.ai/docs/edgetpu/benchmarks)
 - XCZU5EV / K26 가격: [DigiKey ES XCZU5EV](https://www.digikey.es/en/products/detail/amd/XCZU5EV-1SFVC784E/7034644), [DigiKey DE](https://www.digikey.de/en/products/detail/amd/XCZU5EV-1SFVC784E/7034644), [Octopart](https://octopart.com/part/amd/XCZU5EV-1SFVC784E), [DigiKey ES SM-K26-XCL2GC](https://www.digikey.es/en/products/detail/amd/SM-K26-XCL2GC/13985266), [Farnell IT](https://it.farnell.com/xilinx/sm-k26-xcl2gc/system-on-module-zynq-ultrascale/dp/3763930), [Cytech](https://www.cytechsystems.com.cn/de/product/sm-k26-xcl2gc), [ichome](https://ichome.com/product-detail/xilinx/sm-k26-xcl2gc)
 - 사용자가 붙인 자료(11-10): [Arm DeiT-tiny for Ethos-U](https://huggingface.co/Arm/deit-tiny-int8-ethos-u-executorch), [Ascend 910 DeiT-tiny distilled](https://ai.gitcode.com/gyccc/timm-deit_tiny_distilled_patch16_224.fb_in1k-NPU), [Renesas DeiT3-Small](https://huggingface.co/Renesas/DeiT3-Small-Patch16-224-ONNX)
+- NPU IP 업체(§7, 11-10 검색): [Quadric Series C (Edge AI and Vision Alliance, 2026-01)](https://www.edge-ai-vision.com/2026/01/quadric-inference-engine-for-on-device-ai-chips-raises-30m-series-c-as-design-wins-accelerate-across-edge/), [Quadric ViT support (BusinessWire, 2023)](https://www.businesswire.com/news/home/20230620311697/en/Quadric-Announces-Vision-Transformer-Support-for-Chimera-GPNPUs), [SemiWiki: Quadric Series C](https://semiwiki.com/ip/quadric/371357-quadric-extends-series-c-to-46-million-as-edge-ai-demand-accelerates/), [Ceva 2025 AI licensing (EE Journal)](https://www.eejournal.com/industry_news/ceva-highlights-breakthrough-year-for-ai-licensing-and-physical-ai-adoption-in-2025/), [Ceva NeuPro 20 % (TechEdgeAI)](https://techedgeai.com/?p=30253), [Microchip licenses CEVA NPUs](https://www.epdtonthenet.net/article/218645/Microchip-Commences-Licensing-of-an-Extensive-Range-of-CEVA-NPUs.aspx), [NPU IP market estimate](https://briefglance.com/articles/cevas-ai-surge-powering-the-physical-ai-revolution-at-the-edge), [NPU market report](https://www.meticulousresearch.com/product/neural-processing-units-npu-market-6881), [EE Times Japan: Flex Logix moves to IP (2023)](https://eetimes.itmedia.co.jp/ee/articles/2305/12/news098.html), [EE Times Japan: ADI acquires Flex Logix (2024-11)](https://eetimes.itmedia.co.jp/ee/articles/2411/12/news111.html), [AMD acquires Mipsology (2023)](https://www.amd.com/en/blogs/2023/amd-acquires-mipsology-to-deepen-ai-inference-soft.html), [Phoronix: AMD acquires Mipsology](https://www.phoronix.com/news/AMD-Acquires-Mipsology)
 - 우리 실측: `docs/evta_runtime_compare.md` §7.19–§7.29, `docs/dailyreport/vta_systolic/vta_systolic_요약_261108.md`
