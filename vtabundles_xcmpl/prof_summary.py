@@ -19,16 +19,28 @@ from timed_bundle import RUN, call_args, call_name, call_ops, note_first_conv_in
 
 def fold_streamed(calls, ev):
     """VTA_SYNC times with the runs of a streamed conv summed into one per call, or None. One streamed call only:
-    an inference has p > n runs with p dividing len(ev) (the smallest such p), the extra p - n runs belong to it."""
+    an inference has p > n runs (len(ev) / BUNDLE_RUNS, else the smallest p dividing len(ev)), the extra p - n runs belong to it."""
     n = len(calls)
     streamed = [i for i, c in enumerate(calls) if len(c) > 4 and c[4]]
     if len(streamed) != 1:
         return None
-    for p in range(n + 1, 2 * n + 1):
-        if len(ev) % p == 0:
-            break
+    #### JO changed (2026-11-10): the inference count from BUNDLE_RUNS (run_prof.sh -n sets it) when it divides the runs:
+    #### the smallest p dividing len(ev) was wrong for Resnet18 (675 runs = 25 x 27, conv0 streamed in 7 runs, p 25 taken)
+    # for p in range(n + 1, 2 * n + 1):
+    #     if len(ev) % p == 0:
+    #         break
+    # else:
+    #     return None
+    br = os.environ.get('BUNDLE_RUNS', '')
+    runs = int(br) if br.isdigit() else 0
+    if runs > 0 and len(ev) % runs == 0 and len(ev) // runs > n:
+        p = len(ev) // runs
     else:
-        return None
+        for p in range(n + 1, 2 * n + 1):
+            if len(ev) % p == 0:
+                break
+        else:
+            return None
     i, k = streamed[0], p - n + 1
     out = []
     for r in range(len(ev) // p):
