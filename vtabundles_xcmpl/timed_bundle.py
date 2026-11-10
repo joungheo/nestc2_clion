@@ -215,6 +215,13 @@ def call_ops(stmt, name):
         #### JO added (2026-11-03): fc on the EVTA with weights packed at compile time (input, wgt, bias, output, IN, OUT, ...)
         if name == 'fullyconnected_evta_packed':
             return 2 * n(4) * n(5)
+        #### JO added (2026-11-10): attention matmuls on the EVTA (VTASave -vta-evta-matmul / -vta-matmul-heads / -vta-attn-keep-layout)
+        if name == 'matmul_evta':  # (A, B, C, M, K, N, shift, cmdh)
+            return 2 * n(3) * n(4) * n(5)
+        if name == 'matmul_evta_n':  # (H, A[], B[], C[], M, K, N, shift, cmdh)
+            return 2 * n(0) * n(4) * n(5) * n(6)
+        if name == 'matmul_evta_qk':  # (qbuf, kbuf, C[], H, M, dh, shift, cmdh): H x (M x dh) (dh x M)
+            return 2 * n(3) * n(4) * n(5) * n(4)
     except (ValueError, IndexError):
         pass
     return 0

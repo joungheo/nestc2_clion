@@ -17,9 +17,31 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from timed_bundle import RUN, call_args, call_name, call_ops, note_first_conv_input
 
 
+def fold_streamed(calls, ev):
+    """VTA_SYNC times with the runs of a streamed conv summed into one per call, or None. One streamed call only:
+    an inference has p > n runs with p dividing len(ev) (the smallest such p), the extra p - n runs belong to it."""
+    n = len(calls)
+    streamed = [i for i, c in enumerate(calls) if len(c) > 4 and c[4]]
+    if len(streamed) != 1:
+        return None
+    for p in range(n + 1, 2 * n + 1):
+        if len(ev) % p == 0:
+            break
+    else:
+        return None
+    i, k = streamed[0], p - n + 1
+    out = []
+    for r in range(len(ev) // p):
+        e = ev[r * p:(r + 1) * p]
+        out += e[:i] + [sum(e[i:i + k])] + e[i + k:]
+    print(f'(call {i} is a streamed conv: {k} EVTA runs per inference, summed)')
+    return out
+
+
 def evta_calls(cpp):
     """(node, call, ops, EVTA index) of every EVTA call in the bundle .cpp, in execution order."""
     calls, node = [], '-'
+    stream_next = False
     #### JO added (2026-10-31): skip <entry>_convonly (make_multi4conv4.py: the conv alone in a loop, not run with the entry)
     skip = False
     for l in open(cpp):
@@ -34,6 +56,10 @@ def evta_calls(cpp):
         s = l.strip()
         if not s.startswith('//'):
             note_first_conv_input(s)
+        #### JO added (2026-11-10): a conv after preprocess_conv0pack_stream runs one EVTA run per tile row (several
+        #### VTA_SYNC for one call); table() folds them
+        if '_stream(' in s and not s.startswith('//'):
+            stream_next = True
         if 'vtaCmdH' in s and s.endswith(';') and not s.startswith('//'):
             c = call_name(s)
             #### JO added (2026-10-29): the last argument of convolution_wo_tr is the EVTA index
@@ -43,13 +69,20 @@ def evta_calls(cpp):
                 dev = int(a[-5] if c == 'convolution_wo_tr_pool' else a[-1])
             except (ValueError, IndexError):
                 dev = 0
-            calls.append((node, c, call_ops(s, c), dev))
+            #### JO changed (2026-11-10): 5th field: a streamed conv (the first EVTA call after a *_stream( statement)
+            # calls.append((node, c, call_ops(s, c), dev))
+            st = stream_next and c != 'assign'
+            calls.append((node, c, call_ops(s, c), dev, st))
+            stream_next = stream_next and not st
     return calls
 
 
 def table(name, calls, ev):
     """Per-call table of runs 1, 2, 3 and the last; returns (runs, last-run ms, GOPS) or None."""
     n = len(calls)
+    #### JO changed (2026-11-10): a streamed conv's runs folded first (DeiT patch embedding: 100 runs for 99 calls)
+    if n and len(ev) % n:
+        ev = fold_streamed(calls, ev) or ev
     if n == 0 or len(ev) % n:
         print(f'{name}: {len(ev)} VTA runs, {n} EVTA calls: not a multiple')
         return None
@@ -61,7 +94,7 @@ def table(name, calls, ev):
     print(f'---- EVTA calls per run ({name}, {runs} run(s)) ----')
     print(f'{"#":>3} {"Mops":>8}' + ''.join(f' {"run" + str(r + 1) + "_ms":>10}' for r in cols)
           + ''.join(f' {"GOPS" + str(r + 1):>7}' for r in cols) + '  node')
-    for i, (node, c, o, _) in enumerate(calls):
+    for i, (node, c, o) in enumerate(x[:3] for x in calls):
         t = [ev[r * n + i] for r in cols]
         print(f'{i:3d} {o / 1e6:8.1f}' + ''.join(f' {x:10.3f}' for x in t)
               + ''.join(f' {o / (x * 1e6) if x > 0 else 0:7.2f}' for x in t) + f'  {node}')
@@ -138,7 +171,7 @@ def main():
             print(f'---- {len(conc)} EVTAs at once, run {r + 1} (window = first start to last end of the conv) ----')
             print(f'{"#":>3} {"Mops":>8} {"skew_ms":>8} {"window_ms":>10} {"max_exe":>8} {"GOPS":>8}  node')
             tw = tops = 0
-            for i, (node, c, o, _) in enumerate(calls):
+            for i, (node, c, o) in enumerate(x[:3] for x in calls):
                 be = [ts[k][r * n + i] for k in conc]
                 b0, b1, e1 = min(b for b, _ in be), max(b for b, _ in be), max(e for _, e in be)
                 w = (e1 - b0) / 1000.0
