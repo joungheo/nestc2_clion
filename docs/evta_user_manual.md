@@ -135,6 +135,8 @@ bundle을 어떤 옵션으로 만들었는지는 그것으로 확인한다. 예:
 | `-enable-channelwise-depthwise` (기본 꺼짐, quantizer) | depthwise(group > 1) conv만 채널별 scale로 양자화, vtalib `cw_convolution`(CPU)으로 | §7.20 |
 | `-index-multi-evta=<mask>` | bundle을 EVTA 하나에 고정(1, 2, 4, 8 → EVTA 0..3) | README |
 
+**옵션 하나만 바꿔 번들을 만들 때:** 모델의 CMakeLists에 붙이면 Debug2_remote의 cmake가 다시 돌아 Glow가 다시 빌드된다. 그래서 `model-compiler`를 빈 작업 디렉터리에서 직접 부르고, 결과를 `hw/<Dir>/`에 복사해 빌드한다. 끝나면 `collect_hw_bundles.py <Dir>`로 되돌린다. 절차는 [resnet18_optimization.md](resnet18_optimization.md) §9.3에 있다.
+
 조건이 맞지 않는 층(채널 수, offset, scale 비, 모양)은 옵션이 켜져 있어도 이전 경로(CPU 함수나 따로 부르는 EVTA 호출)로 간다.
 "§"는 [evta_runtime_compare.md](evta_runtime_compare.md)의 절이다.
 

@@ -281,6 +281,8 @@ DeiT가 필요로 하는 것도 같은 순서로 놓으면 서로 도움이 된�
 
 ## 7. 재현
 
+끄는 방법은 세 종류다. `-vta-*`는 번들 생성(`model-compiler`) 옵션이라 번들을 다시 만들어야 하고, `EVTA_*`는 실행할 때 주는 환경변수(`sudo /bin/sh -c "EVTA_X=0 hw/script/run_prof.sh ..."`), 하드웨어 단계는 `BIN=<비트스트림>`이다. 자세한 절차와 vtalib마다 읽는 변수의 차이는 `resnet18_optimization.md` §9.2–§9.5에 있다.
+
 ```bash
 # 번들 생성 (보드, Debug2_remote의 model-compiler)
 vtabundles_xcmpl/gen_deit_bundle.sh                 # -vta-round-shift는 스크립트가 넣음

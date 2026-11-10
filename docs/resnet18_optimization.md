@@ -531,10 +531,12 @@ CPU 몫은 거의 없어졌다. 이제 시간은 EVTA가 정한다.
    - 다음 ISA 개정은 이것을 정식 버전 관리로 바꿔야 한다(`unified_runtime_plan.md`의 장치 능력 조회).
 4. **검증 도구를 먼저 만들었다.** 모든 단계를 byte 단위로 비교할 수 있었기 때문에 빠르게 진행할 수 있었다. 쓴 도구는 `EVTA_DUMP_CONV`(층 출력 dump), `EVTA_RES_CHECK`(CPU 경로와 실행 중 비교), golden, C 모델 → RTL testbench → CSim 순서다.
 
-## 9. 재현
+## 9. 재현과 단계별로 끄는 방법
+
+### 9.1 측정
 
 ```bash
-cd vtabundles_xcmpl
+cd ~/JO/npuprg/nestc2_clion/nest-compiler/vtabundles_xcmpl
 sudo hw/script/run_prof.sh -s _systimed -r Resnet18Test          # 1장, 1코어, 문장별
 sudo hw/script/run_prof.sh -s _systimed -r -t 4 Resnet18Test     # 4코어
 sudo hw/script/run_prof.sh -s _sysprof -r Resnet18Test           # EVTA 호출별 시간과 GOPS
@@ -542,23 +544,135 @@ sudo /bin/sh -c "hw_multievtax4/script/run_prof.sh -s _sysprof -n 25 -l -r Multi
 sudo hw/script/run_all.sh Resnet18Test                           # golden (HLS 380 MHz)
 ```
 
-단계별로 끄는 방법(그 단계 이전과 같은 동작):
+### 9.2 끄는 방법은 세 종류다
 
-| 단계 | 끄는 방법 |
+단계마다 끄는 방법이 어디에 걸려 있는지가 다르다. **`vtabundles_xcmpl`의 cmake / make 옵션이나 vtalib 빌드 옵션으로 끄는 단계는 없다.**
+
+| 종류 | 언제 정해지나 | 주는 곳 | 다시 빌드 | 해당 단계 |
+|---|---|---|---|---|
+| **A. 번들 생성 옵션** (`-vta-*`) | 번들 C++를 생성할 때. `VTA.cpp` / `VTASave.cpp`가 읽고, 결과가 생성된 `.cpp` / `.weights.bin`에 들어간다 | `model-compiler` 명령줄 | 번들 다시 생성 + 실행 파일 다시 빌드 | layout 유지, residual fusion, maxpool EVTA, fc EVTA, 전처리 합치기, conv0 pack, conv0 + pool |
+| **B. 실행 환경변수** (`EVTA_*`) | 실행할 때 vtalib이 `getenv`로 읽는다 | 실행 명령의 환경 | 필요 없음 | buffer pool, `dsb sy`, replay, bias reset, requantize, 최소 tile, conv0 입력 겹침, DMA 묶기 |
+| **C. 비트스트림** | 실행 직전에 FPGA에 올린다 | `run_prof.sh` / `run_all.sh`의 `BIN=<파일>` 환경변수 | 필요 없음 | ALU II = 1, bias reset, requantize 하드웨어 |
+
+- **끌 수 없는 단계:** 16 byte transpose(§3.4), CPU fc NEON(§3.6), vt 2 결함 수정 같은 코드 개선은 스위치가 없다. 이전 동작이 필요하면 그 commit 이전의 vtalib으로 빌드해야 한다.
+- **실행 파일의 종류(`_systimed`, `_sysprof`, `_sys`, 접미사 없음)는 측정 방식과 vtalib을 고르는 것이다.** 단계를 켜고 끄는 것과는 별개다(§9.5).
+
+### 9.3 A. 번들 생성 옵션: `model-compiler`에 붙여 번들을 다시 만든다
+
+`-vta-keep-layout` 같은 옵션은 `model-compiler`의 명령줄 옵션이다. 번들은 보드의 simulator 빌드(`Debug2_remote`)에 있는 `model-compiler`가 만든다. 옵션을 바꾸면 생성되는 C++ 코드 자체가 달라진다. 예를 들어 `-vta-fuse-pool=false`이면 `convolution_wo_tr_pool` 호출 하나 대신 `convolution_wo_tr`와 `maxpool_evta` 두 호출이 생긴다. 그래서 번들을 다시 생성하고 실행 파일을 다시 빌드해야 한다. 실행할 때는 줄 것이 없다.
+
+**Resnet18 번들의 생성 규칙은 `vta/bundles/Resnet18Test/CMakeLists.txt`에 고정돼 있다.** 그 파일에 옵션을 더하면 `Debug2_remote`에서 cmake가 다시 돌고, Glow 거의 전체가 다시 빌드된다(약 1시간). 그래서 **`model-compiler`를 직접 불러 다른 디렉터리에 만든다.** 다음은 11-10에 보드에서 확인한 절차다.
+
+```bash
+# 1) 보드: 옵션 하나를 바꾼 번들을 따로 생성 (예: -vta-fuse-pool=false)
+D=~/JO/npuprg/nestc2_clion/nest-compiler/Debug2_remote
+B=$D/vta/bundles/Resnet18Test                 # calibration yaml이 여기 있다
+O=~/JO/deit_tmp/r18_nofusepool                # 아무 작업 디렉터리 (hw/는 건드리지 않음)
+mkdir -p $O && cd $O                          # model-compiler는 ./VTASkipQuantizeNodes.txt를 읽으므로 빈 디렉터리에서 돌린다
+export TVM_HOME=$D/../tvm PYTHONPATH=$D/../tvm/python TVM_LIBRARY_PATH=$D/tvm
+$D/glow/bin/model-compiler -g -model=$D/models/mxnet_exported_resnet18.onnx -backend=VTA \
+  -emit-bundle=$O -bundle-api=dynamic -model-input=data,float,[1,224,224,3] \
+  -load-profile=$B/mxnet_exported_resnet18_calib_1.yaml -quantization-schema=symmetric_with_power2_scale \
+  -vta-fuse-pool=false > gen.log 2>&1
+head -20 $O/mxnet_exported_resnet18.cpp       # 머리 주석에 "-vta-fuse-pool=0"이 찍혔는지 확인
+
+# 2) 실행 파일 폴더에 넣고 빌드 (hw/Resnet18Test의 .cpp / .h / .weights.bin을 바꿈)
+X=~/JO/npuprg/nestc2_clion/nest-compiler/vtabundles_xcmpl
+cp $O/mxnet_exported_resnet18.{cpp,h,weights.bin} $X/hw/Resnet18Test/
+(cd $X/build_systimed && make -j2 vtaMxnetResnet18Bundle)     # 필요한 build dir마다
+
+# 3) 측정
+cd $X && sudo hw/script/run_prof.sh -s _systimed -r Resnet18Test
+
+# 4) 원래 번들로 되돌리기: Debug2_remote의 원래 생성물을 다시 복사하고 다시 빌드
+python3 $X/collect_hw_bundles.py Resnet18Test
+(cd $X/build_systimed && make -j2 vtaMxnetResnet18Bundle)
+```
+
+- **옵션 형식:** `-vta-fuse-pool=false`, `=0`, `=true`, `=1` 모두 된다.
+- **옵션 여러 개:** 한 줄에 함께 줘도 된다. 앞 단계를 끄면 뒤 단계는 조건이 안 맞아 저절로 빠진다. 예를 들어 `-vta-keep-layout=false`이면 residual fusion, maxpool EVTA, conv0 + pool도 함께 빠진다(모두 EVTA layout을 전제로 한다).
+- **어떤 옵션으로 만든 번들인지 확인하기:** 생성된 `.cpp` 맨 앞 주석에 모든 `-vta-*` 값이 기본값까지 찍힌다(`head -20 hw/Resnet18Test/mxnet_exported_resnet18.cpp`). 옵션 이름과 뜻의 전체 목록은 `docs/evta_user_manual.md` §2.2에 있다.
+- **`collect_hw_bundles.py`의 부작용:** `hw/script/run_all.sh`도 다시 쓰지만, 템플릿이 git의 파일과 같으므로(11-10) 바뀌는 것은 없다.
+- **multi4 copy:** `vta/multievta_bundles/MultiEVTAResnet18Test/CMakeLists.txt`의 플래그(copy i는 `-index-multi-evta=$((1<<i))`, `-network-name=mxnet_exported_resnet18_<i>`)에 같은 옵션을 붙여 4번 만든다(`docs/evta_user_manual.md` §2.1).
+- **다른 모델:** MobileNetV2 / DeiT는 생성 스크립트가 옵션을 그대로 넘긴다(`vtabundles_xcmpl/gen_mobilenetv2_bundle.sh -vta-evta-depthwise=0`, `gen_deit_bundle.sh -vta-matmul-heads=false` 식). 다만 결과는 `Debug2_remote/vta/bundles/<Dir>`에 바로 쓰이므로, 비교가 끝나면 옵션 없이 다시 생성해 둔다. Resnet50 / VGG16의 직접 호출 명령은 `~/JO/deit_tmp/regen2.sh`에 있다.
+
+### 9.4 B. 실행 환경변수: 실행할 때 준다 (다시 빌드하지 않음)
+
+`EVTA_*`는 vtalib이 실행 중에 `getenv`로 읽는다. 같은 실행 파일을 그대로 두고 값만 바꿔 비교할 수 있다.
+
+```bash
+cd ~/JO/npuprg/nestc2_clion/nest-compiler/vtabundles_xcmpl
+# sudo는 보통 환경변수를 지운다: 변수를 sudo 안의 sh -c 문자열 안에 넣는다
+sudo /bin/sh -c "EVTA_CONV_BURST=0 hw/script/run_prof.sh -s _systimed -r Resnet18Test"
+sudo /bin/sh -c "EVTA_REPLAY=0 EVTA_BUF_POOL_MB=0 hw/script/run_prof.sh -s _systimed -r Resnet18Test"
+# run_prof.sh를 거치지 않고 직접 돌릴 때도 같다(비트스트림을 먼저 올려야 함)
+sudo /bin/sh -c "hw/script/load_bit.sh vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_400mhz_rq.bin && cd hw/Resnet18Test && EVTA_INPUT_STREAM=0 ./vtaMxnetResnet18Bundle_systimed ../../../glow/tests/images/imagenet/cat_285.png"
+```
+
+- **`sudo EVTA_X=0 hw/script/run_prof.sh ...`처럼 쓰면 안 된다.** sudo 설정(`env_reset`)에 따라 변수가 실행 파일까지 가지 않을 수 있다. `run_prof.sh`의 머리 출력 `env :` 줄에 넘어간 `EVTA_*` 변수가 찍히므로, 그것으로 확인한다.
+- **vtalib에 따라 읽는 변수가 다르다.** 실행 파일 이름의 접미사로 vtalib이 정해진다(§9.5).
+
+| 변수 | 끄는 단계 | `vta/vtalib` (HLS용: 접미사 없음, `_timed`, `_prof`) | `vtalib-zcu102-systolic` (`_sys`, `_systimed`, `_sysprof`) |
+|---|---|---|---|
+| `EVTA_BUF_POOL_MB=0` | buffer pool | ○ | ○ |
+| `EVTA_NO_DSB=1` | `dsb sy` | ○ | ○ |
+| `EVTA_REPLAY=0` | record / replay | ○ | ○ |
+| `EVTA_BIAS_RESET=0` | bias reset | – (없음) | ○ |
+| `EVTA_REQUANT=0` | requantize | – | ○ |
+| `EVTA_MIN_TILE=7` | systolic 최소 tile 1 | – (항상 7) | ○ |
+| `EVTA_INPUT_STREAM=0` | conv0 입력 겹침 | – (항상 한 번에) | ○ |
+| `EVTA_CONV_BURST=0` | DMA 묶기 | – (묶기 없음) | ○ |
+| `EVTA_SCHED=...` | (schedule 바꿔 끼우기) | – | ○ |
+
+- 검증용 변수(`EVTA_DUMP_CONV=<dir>`, `EVTA_RES_CHECK=1`, `EVTA_REPLAY_LOG=2`, `EVTA_REPLAY_DUMP=<dir>`, `EVTA_MEMEXP=<mask>`)도 같은 방식으로 준다. 전체 목록은 `docs/evta_user_manual.md` §5에 있다.
+- `EVTA_DUMP_CONV=<dir>`의 디렉터리는 실행 위치(`hw/Resnet18Test/`) 기준이다. 미리 만들어 두거나 절대 경로를 쓴다.
+
+### 9.5 C. 비트스트림: `BIN=`으로 고른다
+
+하드웨어 단계(ALU II = 1, bias reset, requantize)는 비트스트림에 들어 있다. 끄려면 이전 비트스트림을 올린다. 실행 파일은 같은 것을 쓴다.
+
+```bash
+sudo /bin/sh -c "BIN=vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_400mhz_bias.bin hw/script/run_prof.sh -s _systimed -r Resnet18Test"
+```
+
+| 비트스트림 (`/lib/firmware/`) | 들어 있는 하드웨어 단계 |
 |---|---|
-| layout 유지 | `-vta-keep-layout=false` (번들 생성) |
-| residual fusion | `-vta-fuse-residual=false` |
-| maxpool EVTA | `-vta-evta-maxpool=false` |
-| fc EVTA | `-vta-evta-fc=false` |
-| 전처리 합치기 | `-vta-fuse-preprocess=false` |
-| conv0 pack | `-vta-conv0-pack=false` |
-| conv0 + pool | `-vta-fuse-pool=false` |
-| buffer pool | `EVTA_BUF_POOL_MB=0` (실행 시) |
-| `dsb sy` | `EVTA_NO_DSB=1` |
-| replay | `EVTA_REPLAY=0` |
-| bias reset / requantize | `EVTA_BIAS_RESET=0`, `EVTA_REQUANT=0`, 또는 이전 비트스트림(`BIN=...`) |
-| systolic 최소 tile | `EVTA_MIN_TILE=7` |
-| conv0 입력 겹침 | `EVTA_INPUT_STREAM=0` |
-| DMA 묶기 | `EVTA_CONV_BURST=0` |
+| `..._sa_400mhz.bin` | systolic 400 MHz만 |
+| `..._sa_400mhz_alu1_epr.bin` | + ALU imm II = 1 |
+| `..._sa_400mhz_bias.bin` | + bias reset |
+| `..._sa_400mhz_rq.bin` (지금 `SYS_BIN`) | + requantize |
+| `..._380mhz.bin` (지금 `BIN`) | HLS GEMM 380 MHz (`run_all.sh`, 접미사 없는 / `_timed` / `_prof` 실행 파일용) |
 
-검증용 환경변수: `EVTA_DUMP_CONV=<dir>`, `EVTA_RES_CHECK=1`, `EVTA_REPLAY_LOG=2`, `EVTA_REPLAY_DUMP=<dir>`, `EVTA_MEMEXP=<mask>`, `EVTA_SCHED=...`
+- **vtalib이 이름으로 기능을 켠다.** systolic vtalib은 올라간 비트스트림의 이름(`/tmp/evta_bitstream`)에 `bias`나 `_rq`가 있으면 bias reset을, `_rq`가 있으면 requantize를 켠다. 그래서 `BIN`만 바꾸면 소프트웨어도 따라 바뀐다. `EVTA_BIAS_RESET` / `EVTA_REQUANT`는 이 판단을 덮어쓴다. 기능이 없는 비트스트림에서 `=1`로 켜면 결과가 틀린다.
+- **짝을 맞춰야 한다.** `-s _sys*` 실행 파일(systolic vtalib)은 `_sa_` 비트스트림에서만 맞다. 접미사 없는 / `_timed` / `_prof` 실행 파일(HLS vtalib)은 HLS 비트스트림에서만 맞다. `run_prof.sh`는 짝이 안 맞으면 머리에 `WARNING`을 찍는다.
+
+**실행 파일 종류와 build dir** (`vtabundles_xcmpl/`, 각 build dir의 cmake 옵션으로 정해짐. 단계 끄기와는 무관):
+
+| 실행 파일 접미사 | build dir | vtalib | 무엇을 재나 |
+|---|---|---|---|
+| 없음 | `build/` | `vta/vtalib` | golden (`run_all.sh`) |
+| `_timed` / `_prof` | `build_timed/` / `build_prof/` | `vta/vtalib` | 문장별 wall time / EVTA 호출별 |
+| `_sys` / `_systimed` / `_sysprof` | `build_sys/` / `build_systimed/` / `build_sysprof/` | `vtalib-zcu102-systolic` (`-DVTALIB=`) | 위와 같고 systolic 비트스트림용 |
+
+### 9.6 단계별 정리
+
+| 단계 | 끄는 방법 | 종류 | 무엇을 다시 해야 하나 |
+|---|---|---|---|
+| layout 유지 (§3.1) | `-vta-keep-layout=false` | A | 번들 생성 + 빌드 |
+| residual fusion (§3.2) | `-vta-fuse-residual=false` | A | 번들 생성 + 빌드 |
+| maxpool EVTA (§3.3) | `-vta-evta-maxpool=false` | A | 번들 생성 + 빌드 |
+| 16 byte transpose (§3.4) | 없음 | – | 이전 vtalib |
+| buffer pool (§3.5) | `EVTA_BUF_POOL_MB=0` | B | 없음 |
+| CPU fc NEON (§3.6) | 없음 | – | 이전 vtalib |
+| `dsb sy` (§3.7) | `EVTA_NO_DSB=1` | B | 없음 |
+| fc EVTA (§3.8) | `-vta-evta-fc=false` | A | 번들 생성 + 빌드 |
+| 전처리 합치기 (§3.9) | `-vta-fuse-preprocess=false` | A | 번들 생성 + 빌드 |
+| record / replay (§3.10) | `EVTA_REPLAY=0` | B | 없음 |
+| conv0 pack (§3.12) | `-vta-conv0-pack=false` | A | 번들 생성 + 빌드 |
+| conv0 + pool (§3.13) | `-vta-fuse-pool=false` | A | 번들 생성 + 빌드 |
+| ALU imm II = 1 (§4.2) | `BIN=..._sa_400mhz.bin` | C | 없음 |
+| bias reset (§4.3) | `BIN=..._alu1_epr.bin` 또는 `EVTA_BIAS_RESET=0` | C / B | 없음 |
+| requantize (§4.4) | `BIN=..._bias.bin` 또는 `EVTA_REQUANT=0` | C / B | 없음 |
+| systolic 최소 tile (§5) | `EVTA_MIN_TILE=7` | B | 없음 |
+| conv0 입력 겹침 (§5) | `EVTA_INPUT_STREAM=0` | B | 없음 |
+| DMA 묶기 (§5) | `EVTA_CONV_BURST=0` | B | 없음 |
