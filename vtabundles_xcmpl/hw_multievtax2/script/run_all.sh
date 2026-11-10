@@ -35,7 +35,6 @@ done
 [ $BAD = 0 ] || exit 1
 [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
 exec 9>/tmp/evta_run.lock; flock -n 9 || { echo "another EVTA run is active (/tmp/evta_run.lock)"; exit 1; }
-# ONLY="$*"
 ONLY="${DIRS[*]}"
 mkdir -p result trace; : > result/results.txt
 #### JO added (2026-11-04): what this run is, at the start of the output and of result/results.txt
