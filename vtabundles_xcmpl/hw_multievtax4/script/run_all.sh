@@ -3,7 +3,7 @@
 set -u
 cd "$(dirname "$0")/.."
 #### JO added (2026-11-04): --help; the output starts with the bitstream and its features (../bininfo.sh)
-case " $* " in *" -h "*|*" --help "*) echo "usage: sudo $0 [Dir ...]   (in hw*/script/; no Dir = every run line)"
+case " $* " in *" -h "*|*" --help "*) echo "usage: sudo $0 [-t <threads>] [Dir ...]   (in hw*/script/; no Dir = every run line; Dir names are case-sensitive)"
   echo "  Reloads BIN (below; BIN=<file in /lib/firmware> in the environment wins) before each run line, runs the executable,"
   echo "  compares output.bin with the golden -> result/results.txt. HLS vtalib executables (build${PWD##*/hw}/)."
   echo "  Timing runs and the systolic bitstream (SYS_BIN): script/run_prof.sh --help"
@@ -15,9 +15,29 @@ case " $* " in *" -h "*|*" --help "*) echo "usage: sudo $0 [Dir ...]   (in hw*/s
 BIN=${BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_380mhz.bin}
 SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz_rq.bin}
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-1}
+#### JO added (2026-11-10): -t <threads> = OMP_NUM_THREADS; other options (-s ...) belong to run_prof.sh; a Dir that is not a
+#### run line stops before any run (it ran nothing and said nothing) and names the run lines that match it ignoring case
+DIRS=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    -t) [ $# -ge 2 ] || { echo "-t needs a value"; exit 1; }; export OMP_NUM_THREADS=$2; shift 2;;
+    -s|-n|-l|-r) echo "$1: an option of script/run_prof.sh (timing / systolic runs), e.g. sudo $(dirname $0)/run_prof.sh -s _systimed -t 4 DeiTTest"; exit 1;;
+    -*) echo "unknown option $1 (run_all.sh takes -t <threads> and Dirs; see --help)"; exit 1;;
+    *) DIRS+=("$1"); shift;;
+  esac
+done
+ALLD=$(sed -n "s/^run \([^ ]*\) .*/\1/p" script/run_all.sh | uniq)
+BAD=0
+for D in "${DIRS[@]}"; do
+  echo "$ALLD" | grep -qx -- "$D" && continue
+  BAD=1; m=$(echo "$ALLD" | grep -ix -- "$D"); [ -n "$m" ] || m=$(echo "$ALLD" | grep -i -- "$D" | tr '\n' ' ')
+  echo "$D: not a run line of script/run_all.sh${m:+ (did you mean: $m)}"
+done
+[ $BAD = 0 ] || exit 1
 [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
 exec 9>/tmp/evta_run.lock; flock -n 9 || { echo "another EVTA run is active (/tmp/evta_run.lock)"; exit 1; }
-ONLY="$*"
+# ONLY="$*"
+ONLY="${DIRS[*]}"
 mkdir -p result trace; : > result/results.txt
 #### JO added (2026-11-04): what this run is, at the start of the output and of result/results.txt
 . ../bininfo.sh

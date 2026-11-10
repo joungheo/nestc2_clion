@@ -88,11 +88,33 @@ RT=""
 #   case $1 in -l) export MULTI_LOCKSTEP=1; shift;; -r) RT="chrt -f 10"; shift;; -s) SUFFIX=$2; shift 2;; *) RUNS=$2; shift 2;; esac
 # done
 OMP=${OMP_NUM_THREADS:-1}
-while [ "${1:-}" = -s ] || [ "${1:-}" = -n ] || [ "${1:-}" = -l ] || [ "${1:-}" = -r ] || [ "${1:-}" = -t ]; do
-  case $1 in -l) export MULTI_LOCKSTEP=1; shift;; -r) RT="chrt -f 10"; shift;; -s) SUFFIX=$2; shift 2;; -t) OMP=$2; shift 2;; *) RUNS=$2; shift 2;; esac
-done
+# while [ "${1:-}" = -s ] || [ "${1:-}" = -n ] || [ "${1:-}" = -l ] || [ "${1:-}" = -r ] || [ "${1:-}" = -t ]; do
+#   case $1 in -l) export MULTI_LOCKSTEP=1; shift;; -r) RT="chrt -f 10"; shift;; -s) SUFFIX=$2; shift 2;; -t) OMP=$2; shift 2;; *) RUNS=$2; shift 2;; esac
+# done
 #### JO added (2026-11-04): an unknown option is an error (it was taken as a Dir name)
-case "${1:-}" in -*) echo "unknown option $1"; usage; exit 1;; esac
+# case "${1:-}" in -*) echo "unknown option $1"; usage; exit 1;; esac
+#### JO changed (2026-11-10): options anywhere (also after the Dirs; "DeiTTest -s _timed" took -s as a Dir); a Dir that is not
+#### in run_all.sh stops before any run and names the run lines that match it ignoring case (DeitTest -> DeiTTest)
+DIRS=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    -l) export MULTI_LOCKSTEP=1; shift;; -r) RT="chrt -f 10"; shift;;
+    -s|-n|-t) [ $# -ge 2 ] || { echo "$1 needs a value"; usage; exit 1; }
+       case $1 in -s) SUFFIX=$2;; -t) OMP=$2;; *) RUNS=$2;; esac; shift 2;;
+    -*) echo "unknown option $1"; usage; exit 1;;
+    *) DIRS+=("$1"); shift;;
+  esac
+done
+set -- "${DIRS[@]}"
+ALLD=$(sed -n "s/^run \([^ ]*\) .*/\1/p" $RUN_ALL | uniq)
+BAD=0
+for D in "$@"; do
+  case "$D" in all|hw_bundles) continue;; esac
+  echo "$ALLD" | grep -qx -- "$D" && continue
+  BAD=1; m=$(echo "$ALLD" | grep -ix -- "$D"); [ -n "$m" ] || m=$(echo "$ALLD" | grep -i -- "$D" | tr '\n' ' ')
+  echo "$D: not a run line of $RUN_ALL${m:+ (did you mean: $m)}"
+done
+[ $BAD = 0 ] || exit 1
 export OMP_NUM_THREADS=$OMP
 #### JO changed (2026-10-29): hw_<set>/: MULTI_RUNS = runs per EVTA copy of the multi-EVTA mains (4 x for single_thread_main)
 # [ "$HWD" = hw ] && export BUNDLE_RUNS=$RUNS || unset BUNDLE_RUNS
