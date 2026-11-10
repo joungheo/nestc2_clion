@@ -233,7 +233,11 @@ int main(int argc, char **argv) {
   }
   float *input = loadInput();
 #ifdef MULTI_SINGLE
-  const int runs = 4 * multiRuns();
+  //#### JO changed (2026-11-10): with BUNDLE_RUNS=<n> (run_prof.sh -n, the _timed / _prof builds: the timed_bundle.py wrapper runs
+  //#### the first call n - 1 times) two calls here, so n inferences in all (it was 4 x MULTI_RUNS + n - 2 = 123 for n = 25)
+  // const int runs = 4 * multiRuns();
+  const char *br = getenv("BUNDLE_RUNS");
+  const int runs = br && atoi(br) > 2 ? 2 : 4 * multiRuns();
   std::vector<int> sel = {0};
 #else
   //#### MULTI_MASK=<bits>: only these copies (copy i = EVTA i, e.g. 6 = EVTAs 1 and 2 at once), default all
