@@ -2,6 +2,7 @@
 
 ZCU102 위 EVTA(VTA 계열 int8 NPU)와 NEST-C로 Resnet18 1장을 줄인 과정을 정리했다. 시작은 134.8 ms(HLS GEMM 333 MHz, conv0은 CPU float)였고, 지금은 **23.3 ms**(systolic 400 MHz, 1코어)다. 단계마다 왜 바꿨는지, 어떻게 바꿨는지, 얼마나 줄었는지, 어떻게 검증했는지를 적었다.
 
+- **발표 자료(PowerPoint, 34장, 그림 32장 + 차트):** [slides/resnet18_optimization.pptx](slides/resnet18_optimization.pptx). 단계마다 그림, 전후 시간, 자세한 설명은 발표자 노트에 있다. 다시 만들기: `docs/slides/make_resnet18_deck.py`(python-pptx, cairosvg 필요)
 - **자세한 기록:** `docs/evta_runtime_compare.md` §3, §7–§7.19, §7.29
 - **날짜순 요약과 그림:** `docs/evta_overview.md`
 - **AOT와 replay:** `docs/evta_runtime_aot.md`
