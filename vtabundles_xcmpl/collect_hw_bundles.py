@@ -54,7 +54,7 @@ SETS = {  # name: (bundle dir under the NEST-C root, hw dir here, bitstream in /
 }
 #### JO added (2026-11-04): run_all.sh --help (with BIN / SYS_BIN of the file) and the header at the start of a run (bininfo.sh)
 RUN_ALL_HELP = r'''#### JO added (2026-11-04): --help; the output starts with the bitstream and its features (../bininfo.sh)
-case " $* " in *" -h "*|*" --help "*) echo "usage: sudo $0 [Dir ...]   (in hw*/script/; no Dir = every run line)"
+case " $* " in *" -h "*|*" --help "*) echo "usage: sudo $0 [-t <threads>] [Dir ...]   (in hw*/script/; no Dir = every run line; Dir names are case-sensitive)"
   echo "  Reloads BIN (below; BIN=<file in /lib/firmware> in the environment wins) before each run line, runs the executable,"
   echo "  compares output.bin with the golden -> result/results.txt. HLS vtalib executables (build${PWD##*/hw}/)."
   echo "  Timing runs and the systolic bitstream (SYS_BIN): script/run_prof.sh --help"
@@ -63,6 +63,28 @@ case " $* " in *" -h "*|*" --help "*) echo "usage: sudo $0 [Dir ...]   (in hw*/s
   [ -n "${BIN:-}" ] && echo "  BIN= in the environment: $BIN (used instead)"
   exit 0;; esac
 [ -n "${BIN:-}" ] && BSRC="BIN= in the environment" || BSRC="BIN of $0"
+'''
+#### JO added (2026-11-10): -t <threads>; -s / -n / -l / -r point to run_prof.sh; a Dir that is not a run line stops before
+#### any run (it ran nothing and said nothing) with the run lines that match it ignoring case
+RUN_ALL_ARGS = r'''#### JO added (2026-11-10): -t <threads> = OMP_NUM_THREADS; other options (-s ...) belong to run_prof.sh; a Dir that is not a
+#### run line stops before any run (it ran nothing and said nothing) and names the run lines that match it ignoring case
+DIRS=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    -t) [ $# -ge 2 ] || { echo "-t needs a value"; exit 1; }; export OMP_NUM_THREADS=$2; shift 2;;
+    -s|-n|-l|-r) echo "$1: an option of script/run_prof.sh (timing / systolic runs), e.g. sudo $(dirname $0)/run_prof.sh -s _systimed -t 4 DeiTTest"; exit 1;;
+    -*) echo "unknown option $1 (run_all.sh takes -t <threads> and Dirs; see --help)"; exit 1;;
+    *) DIRS+=("$1"); shift;;
+  esac
+done
+ALLD=$(sed -n "s/^run \([^ ]*\) .*/\1/p" script/run_all.sh | uniq)
+BAD=0
+for D in "${DIRS[@]}"; do
+  echo "$ALLD" | grep -qx -- "$D" && continue
+  BAD=1; m=$(echo "$ALLD" | grep -ix -- "$D"); [ -n "$m" ] || m=$(echo "$ALLD" | grep -i -- "$D" | tr '\n' ' ')
+  echo "$D: not a run line of script/run_all.sh${m:+ (did you mean: $m)}"
+done
+[ $BAD = 0 ] || exit 1
 '''
 RUN_ALL_HDR = r'''#### JO added (2026-11-04): what this run is, at the start of the output and of result/results.txt
 . ../bininfo.sh
@@ -241,6 +263,8 @@ def main():
                 + (f'SYS_BIN=${{SYS_BIN:-{SYS_BINS[SET]}}}\n' if SET in SYS_BINS else '') +
                 #### JO added (2026-10-31): OpenMP threads of the CPU ops, 1 by default for every set (as run_prof.sh -t)
                 'export OMP_NUM_THREADS=${OMP_NUM_THREADS:-1}\n'
+                #### JO added (2026-11-10): options and the Dir check (RUN_ALL_ARGS)
+                + RUN_ALL_ARGS +
                 '[ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }\n'
                 #### JO added (2026-10-26): one EVTA run at a time on the board (each run reloads the PL; two runs
                 #### swap bitstreams under each other -> SError / bus errors); run_prof.sh takes the same lock
@@ -249,7 +273,9 @@ def main():
                 # 'ONLY="$*"\n: > results.txt\n'
                 #### JO changed (2026-10-27): + trace/ for the sds_trace_data.dat libcma.so writes at exit
                 # 'ONLY="$*"\nmkdir -p result; : > result/results.txt\n'
-                'ONLY="$*"\nmkdir -p result trace; : > result/results.txt\n'
+                # 'ONLY="$*"\nmkdir -p result trace; : > result/results.txt\n'
+                #### JO changed (2026-11-10): the Dirs without the options
+                'ONLY="${DIRS[*]}"\nmkdir -p result trace; : > result/results.txt\n'
                 #### JO added (2026-11-04): header (../bininfo.sh)
                 + RUN_ALL_HDR +
                 #### JO changed: multi-EVTA sets have several executables per Dir -> one log/rc per executable
