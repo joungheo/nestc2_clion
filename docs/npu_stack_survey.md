@@ -58,6 +58,8 @@ Hardware 공통 제어 규약: AXI-Lite start/done/irq, DRAM 명령 링 버퍼 +
 
 근거: `docs/evta_runtime_aot.md` §4, 2026-10-28 대화(이 문서로 옮김).
 
+계획 전체(10-28 층 구조, 11-02 AOT 단계, 11-05 하드웨어 5단계, 11-10까지 구현한 것, HAL API 초안, 합친 순서)는 `docs/unified_runtime_plan.md`에 모았다.
+
 ## 2. 컴파일러
 
 ### 2.1 비교 (지금까지 본 것)
@@ -335,3 +337,4 @@ EVTA 쪽 수치는 저장소 utilization report에서, 보드 쪽은 공식 페�
 - 2026-11-10: conv 타일 DMA를 길게(§7.29): 1×1 conv의 weight를 스레드마다 한 번에 LOAD하고, 연속인 행은 한 행으로 합쳤다. DeiT EVTA 38.3 → 19.4 ms(130 GOPS, DRAM 없는 하한 수준), 1장 `-t 4` 55.7 ms. Resnet50 82.2 → 69.6 ms, MobileNetV2 24.3 → 18.8 ms. VTA 계열의 2D DMA 명령도 전송 길이가 가동률을 좌우한다(Gemmini / NVDLA의 burst 묶음과 같은 이유).
 - 2026-11-10: KV260에 모델 하나를 올려 공급할 때의 비교를 `kv260_product_compare.md`로 정리했다(11-08 ~ 11-09 검색: Pi 5 + Hailo-8, Jetson Orin Nano Super, KV260 DPU, RK3588, Coral의 가격·전력·크기·인터페이스·공개 성능; 정정한 장점; Hailo-8이 Transformer를 CNN보다 약 30배 느리게 돌려 DeiT-tiny를 고른 이유; DeiT-tiny 3.77 s → 88.5 ms 진행).
 - 2026-11-10: DeiT-tiny를 줄여 온 과정을 `deit_optimization.md`로 정리했다(3.77 s → 88.5 ms, 단계별 효과, 남은 시간, 소프트웨어 후보와 하드웨어 후보 H1–H8). 하드웨어 순서는 이 문서의 계획과 맞췄다: ISA 개정 한 번에 ALU opcode 확장 + 출력 경로 LUT + STORE 배치 옵션, 다음 명령 링 + interrupt, vector unit, 그 뒤에 배열 확대.
+- 2026-11-10: unified runtime / driver 계획을 `unified_runtime_plan.md`로 정리했다. 10-28 층 구조, IREE / MLIR / PJRT / DRM accel(amdxdna, qaic) 비교, AOT 0–2단계, 하드웨어 5단계(11-05)를 한곳에 모았다. HAL API 초안(IREE HAL 모양, qaic식 최소 uAPI)과 11-10까지 구현한 runtime 기능의 대응을 붙였다. 합친 순서: HAL 초안 → vtalib을 HAL로 감싸기 → ISA 개정 → IRQ + 링 → AOT 1단계 → DRM accel → 두 번째 가속기.
