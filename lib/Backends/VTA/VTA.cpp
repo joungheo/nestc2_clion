@@ -869,7 +869,7 @@ static bool isPow2Ratio(double r) {
   return std::fabs(l - std::round(l)) < 1e-6;
 }
 static bool layoutOnly(const Node *u) {
-  return isa<ReshapeNode>(u) || isa<TransposeNode>(u) || isa<SliceNode>(u);
+  return llvm::isa<ReshapeNode>(u) || llvm::isa<TransposeNode>(u) || llvm::isa<SliceNode>(u);
 }
 // can v's int8 type take another scale: its layout-only users follow it, a Concat only when its other inputs are constants
 static bool canRescale(NodeValue v) {
@@ -878,13 +878,13 @@ static bool canRescale(NodeValue v) {
     if (layoutOnly(u)) {
       if (!canRescale(u->getNthResult(0)))
         return false;
-    } else if (auto *C = dyn_cast<ConcatNode>(u)) {
+    } else if (auto *C = llvm::dyn_cast<ConcatNode>(u)) {
       for (auto &in : C->getInputs())
-        if (in != v && !isa<Constant>(in.getNode()))
+        if (in != v && !llvm::isa<Constant>(in.getNode()))
           return false;
       if (!canRescale(C->getResult()))
         return false;
-    } else if (isa<SaveNode>(u)) {
+    } else if (llvm::isa<SaveNode>(u)) {
       return false;
     }
   }
@@ -900,14 +900,14 @@ static void rescale(Function *F, NodeValue v, float s) {
   for (Node *u : users) {
     if (layoutOnly(u)) {
       rescale(F, u->getNthResult(0), s);
-    } else if (auto *C = dyn_cast<ConcatNode>(u)) {
+    } else if (auto *C = llvm::dyn_cast<ConcatNode>(u)) {
       if (C->getResult().getType()->getScale() == s)
         continue;
       for (unsigned i = 0, e = C->getInputs().size(); i < e; i++) {
         NodeValue in = C->getInputs()[i];
         if (in == v)
           continue;
-        auto *K = cast<Constant>(in.getNode());
+        auto *K = llvm::cast<Constant>(in.getNode());
         auto *K2 = M->createConstant(ElemKind::Int8QTy, K->dims(), s, 0, K->getName().str() + "_rescaled");
         auto hs = K->getPayload().getHandle<int8_t>();
         auto hd = K2->getPayloadMutable().getHandle<int8_t>();
@@ -921,7 +921,6 @@ static void rescale(Function *F, NodeValue v, float s) {
       rescale(F, C->getResult(), s);
     }
   }
-  (void)old;
 }
 static bool pow2Ratios(Function *F) {
   bool changed = false, again = true;
@@ -929,11 +928,11 @@ static bool pow2Ratios(Function *F) {
     again = false;
     for (auto &N : F->getNodes()) {
       NodeValue in, w, out;
-      if (auto *C = dyn_cast<ConvolutionNode>(&N)) {
+      if (auto *C = llvm::dyn_cast<ConvolutionNode>(&N)) {
         in = C->getInput(), w = C->getFilter(), out = C->getResult();
-      } else if (auto *FC = dyn_cast<FullyConnectedNode>(&N)) {
+      } else if (auto *FC = llvm::dyn_cast<FullyConnectedNode>(&N)) {
         in = FC->getInput(), w = FC->getWeights(), out = FC->getResult();
-      } else if (auto *MM = dyn_cast<MatMulNode>(&N)) {
+      } else if (auto *MM = llvm::dyn_cast<MatMulNode>(&N)) {
         in = MM->getLHS(), w = MM->getRHS(), out = MM->getResult();
       } else {
         continue;
