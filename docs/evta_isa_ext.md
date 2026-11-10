@@ -217,3 +217,104 @@ sudo -n /bin/sh -c "BIN=$NEW hw/script/run_prof.sh -s _systimed -n 2 <Dir>; cat 
 |---|---|---|---|---|
 | bias reset (11-04) | `bias`, `biashazard` | 96/96 | 0 errors | single golden 30, dumps 동일 / multi4 golden 3, dumps 80개 동일 |
 | requantize (11-04) | 무작위 300 | 49 vector × 2 = 98/98 | 0 errors | single: probes 10/10, golden 27 PASS + 분류 4개 같음, dumps 146개 동일, `EVTA_RES_CHECK` 0, `EVTA_REQUANT=0` 우회 동일 | / multi4(395.8 MHz): probes 40/40, golden 3 PASS, dumps 80개가 `bias`와 동일
+
+## 8. 다음 ISA 개정: ALU 확장 (설계, 2026-11-10, 아직 구현 전)
+
+DeiT의 LayerNorm / softmax / GELU, 2의 거듭제곱이 아닌 scale, avgpool, YOLO 계열 activation을 EVTA에 두려고 ALU를 넓힌다.
+H1(MUL), H2(LUT), H4(행 reduction)의 일부(`deit_optimization.md` §6.2)를 **한 번의 개정**으로 묶는다.
+bitstream과 vtalib의 짝이 한 번만 바뀌게 하려는 것이다.
+
+### 8.1 방식: `alu_opcode`는 그대로, pad에 `alu_op_ext`
+
+- 2비트 `alu_opcode`를 3비트로 넓히면 그 뒤 필드(`use_imm`, `imm`, `rq_*`)가 모두 밀린다. 그러면 모든 bitstream과 vtalib을 같이 바꿔야 한다.
+- 대신 **pad 자리(ALU 168~175)에 `alu_op_ext` 2비트**를 둔다. 연산 번호는 `alu_op_ext << 2 | alu_opcode`(4비트, 16개)다.
+- `alu_op_ext = 0`이면 지금의 MIN / MAX / ADD / SHR 그대로다.
+  - pad는 11-04부터 0으로 채운다(§1).
+  - 그래서 **이전 실행 파일 + 새 bitstream**은 지금과 똑같이 돈다.
+- **새 실행 파일 + 이전 bitstream:**
+  - vtalib은 bitstream 이름에 `_alux`가 있을 때만 새 연산을 쓴다(`_rq`와 같은 방식, `EVTA_ALUX=0|1`로 강제).
+  - 없으면 그 연산을 CPU 함수로 계산한다.
+- **명령 비트는 번들 `.cpp`에 없다.** vtalib이 실행 때 만든다(JIT / replay). 그래서 vtalib만 바뀌는 경우는 다시 링크만 하면 된다.
+  - 컴파일러가 새 연산을 쓰게 바뀐 모델(예: avgpool을 EVTA로)만 번들을 다시 생성한다.
+
+| 비트 | 명령 | 필드 | 폭 | 뜻 |
+|---|---|---|---|---|
+| 168~169 | ALU | `alu_op_ext` | 2 | 연산 번호의 위 2비트 (§8.2) |
+| 170 | ALU | `lut_en` | 1 | out에 쓰는 int8을 표로 바꿈(requantize 뒤) |
+| 171~175 | ALU | `pad_0` | 5 | 비어 있음 |
+| 165 | GEMM | `lut_en` | 1 | GEMM이 out에 쓰는 int8을 표로 바꿈(GELU를 fc1 출력에 바로) |
+| 166~171 | GEMM | `pad_0` | 6 | 비어 있음 |
+
+위치는 single 설정에서 정한 것이다. 넣을 때 §6.3 순서대로 세 곳의 hw_spec.h에서 비트를 찍어 확인한다.
+
+### 8.2 연산 표
+
+| 번호 | 이름 | 식 (lane마다, src = imm 또는 acc[src]) | 쓰는 곳 |
+|---|---|---|---|
+| 0–3 | MIN, MAX, ADD, SHR | 지금과 같음. SHR에 음수 shift(−16 … −1)를 주면 왼쪽 shift라서 **SHL은 따로 두지 않는다** | |
+| 4 | **MUL** | dst = dst × src[15:0] (32비트로 자름). requantize(`rq_*`)와 같이 쓰면 (dst × m + round) >> s, clip | 2의 거듭제곱이 아닌 scale(residual, concat, depthwise per-channel), **avgpool ÷n**, LayerNorm ×γ, softmax ×(1/합), SE / gating의 원소별 곱 |
+| 5 | **SUB** | dst = dst − src (imm이면 ADD −imm과 같아 vector 형태가 주 용도) | LayerNorm x − 평균, softmax x − max |
+| 6 | **CPY** | dst = src | concat, nearest upsample(YOLO), acc 안의 재배치 |
+| 7 | **LUT** | dst = ext(T[dst[7:0]]), imm 0번 비트 = 부호 확장 여부. out도 같은 값 | exp(softmax, x − max 뒤), GELU / SiLU / sigmoid / tanh / hard-swish, 역수 · rsqrt의 가수 |
+| 8 | **LUTSET** | T[16·imm + lane] = src[lane][7:0] (acc 한 행 → 표 16칸, 16번이면 256칸) | 표 채우기. 새 memory_type이 필요 없다 |
+| 9 | **RSUM** | dst[모든 lane] = Σ lane src | LayerNorm 평균 / 분산, softmax 합. 채널 블록 사이는 ADD로 먼저 더함 |
+| 10 | **RMAX** | dst[모든 lane] = max lane src | softmax의 행 max |
+| 11 | **CLZ** | dst = 부호 비트를 뺀 앞자리 0의 수 | 1/x, 1/√x: CLZ → SHR(vector)로 정규화 → LUT → 지수만큼 shift |
+| 12–15 | 예약 | | |
+
+- **avgpool(n이 2의 거듭제곱이 아님):** 창의 합은 ADD(maxpool의 MAX와 같은 uop 패턴), 나누기는 MUL m + `rq` shift k 한 번이다.
+  - m = round(2^k / n)이고, 결과가 CPU와 같아지는 k를 컴파일 때 모든 합의 범위에서 확인해 고른다.
+- **LayerNorm (EVTA 배치에서 한 token = 채널 블록 × 16 lane):**
+  1. 블록 ADD → RSUM(합) → MUL(1/C) = 평균
+  2. SUB
+  3. MUL(제곱) → 블록 ADD → RSUM → CLZ / LUT = rsqrt
+  4. MUL
+  5. MUL γ + ADD β, `rq`
+- **softmax:**
+  1. 블록 MAX → RMAX
+  2. SUB 후 `rq`로 int8 clip
+  3. LUT exp
+  4. 블록 ADD → RSUM
+  5. 역수(CLZ / LUT)
+  6. MUL, `rq`
+- 식이 정수로 바뀌므로 값은 지금 CPU 함수와 다를 수 있다. `deit_optimization.md` §6.1의 정수 LayerNorm / softmax를 먼저 CPU에서 정하고, ImageNet 정확도를 확인한 뒤 그 식을 그대로 하드웨어에 옮긴다.
+
+### 8.3 ALU로 안 되는 것
+
+| 연산 | 어디서 | 이유 |
+|---|---|---|
+| **matmul** | **GEMM** (지금도 `matmul_evta`) | 내적은 16×16 MAC 배열이 한다. ALU는 lane마다 연산 하나라 256배 느리다. matmul에 필요한 하드웨어는 연산이 아니라 **데이터 이동**이다: K / V를 weight 배치로 쓰는 STORE 옵션 또는 out → wgt 경로(H3, MOV). 지금은 CPU가 실행 때 묶는다 |
+| out → inp / wgt 이동 (MOV) | 명령 opcode 6 (ALU 밖) | `vta_to_evta_diff.md` §4. opcode 5는 ETRI 헤더의 XP_GEMM이 쓰고 있다 |
+| 전치, 배치 변환 | STORE 옵션 (H3) | 주소 생성의 문제다 |
+| 넓은 범위의 exp / 나누기 | LUT + CLZ로 근사 | 정밀도는 int8 출력에 맞춘다 |
+
+### 8.4 하드웨어 비용 (추정)
+
+| 부분 | 무엇 | 자원 | 400 MHz에서의 위험 |
+|---|---|---|---|
+| MUL | lane마다 32 × 16 곱셈 | DSP48E2 16개 (single 기준 여유 많음, multi4는 ×4) | DSP pipeline 3단. II는 그대로, latency만 는다 |
+| SUB, CPY, CLZ | lane마다 | LUT 수백 개 | 작음 |
+| RSUM / RMAX | 16 lane 32비트 덧셈 / 비교 tree | LUT 약 1,000개, 4단 pipeline | 중간 |
+| LUT / LUTSET | lane마다 256 × 8 표 사본(16개를 같이 읽으려고) | LUTRAM 약 512개 | 작음 |
+| GEMM 출력 LUT | `sa_rmw.v` S6 뒤 같은 표 사본 | LUTRAM 약 512개 | 작음. ALU 표와 따로 두거나 LUTSET이 둘 다 씀 |
+
+- 가장 큰 위험은 자원이 아니라 timing이다: multi4의 400 MHz와 Y219 배선(§7, `vta_synth_notes.md` §3).
+- ALU vector 연산(src와 dst를 둘 다 읽음)은 지금처럼 II = 2다. imm 연산은 II = 1이다.
+
+### 8.5 일의 양과 순서 (추정)
+
+| 단계 | 내용 | 기간 |
+|---|---|---|
+| 1 | 정수 LayerNorm / softmax 식을 CPU에서 정하고 ImageNet 확인 (소프트웨어, `deit_optimization.md` §6.1) | 3–5일 |
+| 2 | `hw_spec.h` 세 곳, C 모델(`systolic_model.cc`), vtalib 시뮬레이터 `sim_driver.cc`에 연산 12개 | 2–3일 |
+| 3 | HLS `vta.cc` `alu()` / `alu_lane()`, `sa_rmw.v` 출력 LUT, `vta_test.cc` `alu_test`에 새 연산, RTL testbench, CSim | 1–1.5주 |
+| 4 | single `_alux` bitstream(합성 약 1시간 × 몇 번), 보드 probe, golden, dump 비교 | 2–4일 |
+| 5 | multi4 bitstream (Y219 flow) | 1–3일 |
+| 6 | vtalib API(`VTAPushALUOp` ext 인자, `VTALutSet`), bitstream 이름 검사, CPU 대체 경로 | 2–3일 |
+| 7 | 컴파일러 / bundle: avgpool, 2^n이 아닌 residual scale, GELU 출력 LUT, LayerNorm, softmax, SiLU (연산마다) | 연산마다 1–3일, 합 2–3주 |
+
+- 하드웨어와 runtime(2–6)은 3–4주, 컴파일러까지 합하면 6–7주로 본다.
+- 효과(추정, DeiT `-t 4` 57.9 ms 기준):
+  - GELU 5.2, LayerNorm 5.6, softmax 3.9 ms가 EVTA로 가고, 그 앞뒤 배치 변환 5.4 ms도 없어진다(CPU를 오가지 않음).
+  - 합해서 약 −15–20 ms다. EVTA 쪽은 ALU 시간만큼 는다.
+- CNN 쪽 효과는 작다: avgpool 0.2–1 ms, 2^n이 아닌 scale 때문에 CPU에 남던 층. 대신 YOLO(SiLU, upsample, concat)와 MobileNetV3 / EfficientNet(hard-swish, SE)은 이 확장이 있어야 EVTA에 올라간다.

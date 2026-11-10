@@ -241,6 +241,8 @@ ZCU102 위 EVTA(16×16 int8 GEMM)와 NEST-C로 DeiT-tiny 1장을 3.77 s에서 88
 | H7. 배열 확대 / 여러 EVTA | 32×32(MAC 4배) 또는 multi4로 head / 행 분할 | EVTA 25 → 약 7–8 ms | 모든 모델 | 큼: SRAM, schedule, backend 블록 16 고정 |
 | H8. 배열만 2배 클럭 | DSP / FF만 약 600 MHz | GEMM 처리량 최대 2배 | 모든 모델 | 큼: 클럭 경계 |
 
+H1, H2와 H4의 reduction 일부를 한 번에 묶은 ALU 확장 설계(연산 12개, `alu_op_ext` 비트, 비용, 일정): [evta_isa_ext.md](evta_isa_ext.md) §8.
+
 ### 6.3 전체 계획에 비춘 순서
 
 전체 계획의 축(`npu_stack_survey.md` §1, §5.3, `evta_runtime_compare.md` §8)은 이렇다.
