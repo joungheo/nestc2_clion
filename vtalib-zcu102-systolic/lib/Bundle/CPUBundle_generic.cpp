@@ -1035,12 +1035,27 @@ int quantize(int8_t *input, int8_t *output, dim_t size, float scale, int32_t off
   if (offset == 0) {
     const bool mul = isPow2f(1.f / scale) && 1.f / scale * scale == 1.f;
     const float32x4_t vs = vdupq_n_f32(mul ? 1.f / scale : scale);
+    //#### JO added (2026-11-11): a non-power-of-two scale (-vta-pow2-ratio graphs) multiplies by 1 / scale too and divides
+    //#### only the 16 values with one within 1e-4 of a .5 tie (the product's error is < 1e-5 for |x / scale| < 2^9): the
+    //#### same int8 as the division. DeiT quantize 3.0 -> 5.1 ms with vdivq.
+    const float32x4_t vinv = vdupq_n_f32(1.f / scale), vhalf = vdupq_n_f32(0.5f), veps = vdupq_n_f32(1e-4f);
     ssize_t i = 0;
     for (; i + 16 <= n; i += 16) {
       int32x4_t r[4];
-      for (int j = 0; j < 4; j++) {
-        const float32x4_t x = vld1q_f32(inputF + i + 4 * j);
-        r[j] = vcvtaq_s32_f32(mul ? vmulq_f32(x, vs) : vdivq_f32(x, vs));
+      if (mul) {
+        for (int j = 0; j < 4; j++)
+          r[j] = vcvtaq_s32_f32(vmulq_f32(vld1q_f32(inputF + i + 4 * j), vs));
+      } else {
+        uint32x4_t near = vdupq_n_u32(0);
+        for (int j = 0; j < 4; j++) {
+          const float32x4_t y = vmulq_f32(vld1q_f32(inputF + i + 4 * j), vinv);
+          const float32x4_t d = vabsq_f32(vsubq_f32(vabsq_f32(vsubq_f32(y, vrndmq_f32(y))), vhalf));
+          near = vorrq_u32(near, vcltq_f32(d, veps));
+          r[j] = vcvtaq_s32_f32(y);
+        }
+        if (vmaxvq_u32(near))
+          for (int j = 0; j < 4; j++)
+            r[j] = vcvtaq_s32_f32(vdivq_f32(vld1q_f32(inputF + i + 4 * j), vs));
       }
       vst1q_s8(output + i, narrow16(r[0], r[1], r[2], r[3]));
     }
