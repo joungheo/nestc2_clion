@@ -301,6 +301,29 @@ bitstream과 vtalib의 짝이 한 번만 바뀌게 하려는 것이다.
 - 가장 큰 위험은 자원이 아니라 timing이다: multi4의 400 MHz와 Y219 배선(§7, `vta_synth_notes.md` §3).
 - ALU vector 연산(src와 dst를 둘 다 읽음)은 지금처럼 II = 2다. imm 연산은 II = 1이다.
 
+### 8.4.1 GEMM과 ALU는 동시에 돌지 않는다: 어디에 둘 것인가
+
+- **지금의 순서:** compute는 명령 큐를 순서대로 처리한다. GEMM은 `gemm_sa`로 보내고, 다른 명령(ALU 포함) 앞에서는 나가 있는 GEMM이 모두 끝나기를 기다린다(`vta.cc` compute 앞 주석, `gemm_done`).
+  - `acc_mem`의 두 포트도 `gemm_sa`가 돌 때는 그쪽으로 묶인다.
+  - 그래서 ALU는 그 tile의 GEMM이 끝난 뒤에 돈다. 겹치는 것은 LOAD / STORE와 compute(DAE, virtual thread)뿐이다.
+- **비용:** requantize 이전 Resnet18에서 ALU가 EVTA 시간의 17.5 %였다(4.63 / 26.47 ms, `evta_runtime_compare.md` §7.14).
+  - 그 대부분을 **GEMM이 out에 쓰는 길 위로** 옮겨 없앴다: bias reset, requantize(`sa_rmw.v` S4–S6).
+- **그래서 연산을 두 종류로 나눈다:**
+
+| 종류 | 예 | 어디서 | 추가 시간 |
+|---|---|---|---|
+| 원소 하나만 보는 연산 | requantize, clip, relu, LUT(GELU, SiLU), **per-tensor scale 곱** | GEMM 출력 경로(`rq_*`, `lut_en`, 더할 것: GEMM pad 192~255에 `rq_mul` 16비트) | 0 (GEMM 쓰기와 같이) |
+| 한 token의 모든 채널이 필요한 연산 | 평균, 분산, 행 max / 합, x − 평균, ×rsqrt | ALU 명령(별도 pass) | 있음 |
+
+- **별도 pass의 크기:** DeiT LayerNorm 한 번은 197 token × 12 블록 = 2,364 vector다. 약 15개 연산 × 1–2 cycle이면 400 MHz에서 약 0.1 ms이고, 25번이면 약 3 ms다.
+  - 겹치지 않아도 지금 CPU(LayerNorm 5.6 + 앞뒤 배치 변환 5.4 ms, `-t 4`)보다 짧다.
+- **ALU를 GEMM과 겹치려면 (나중, ISA는 그대로):**
+  - `acc_mem`을 virtual thread별 두 bank로 나눈다. virtual thread는 이미 acc의 절반씩을 쓴다.
+  - 그러면 `gemm_sa`가 bank 0에 쓰는 동안 ALU가 bank 1을 처리할 수 있다.
+  - compute는 다른 bank의 GEMM을 기다리지 않게 바꾼다.
+  - BRAM 양은 같고, 바뀌는 것은 포트 mux와 compute의 대기 조건이다.
+  - ALU pass가 GEMM보다 짧으면 그 시간이 숨는다. 컴파일러가 다음 Linear의 GEMM과 엇갈려 배치해야 한다.
+
 ### 8.5 일의 양과 순서 (추정)
 
 | 단계 | 내용 | 기간 |
