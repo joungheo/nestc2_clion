@@ -59,6 +59,18 @@ static llvm::cl::opt<bool> vtaMatMulConv(
 //#### JO added (2026-11-09): the Add of a constant bias (one row repeated) after a MatMul that becomes a conv (DeiT Linear):
 //#### folded into the conv's int32 bias when the int8 bias times its scale ratio is an integer; the conv then writes the
 //#### Add's type (one rounding instead of the conv's and the Add's)
+//#### JO added (2026-11-10): with a non-power-of-two quantization schema (-quantization-schema=symmetric) the EVTA's shift-only
+//#### requantize still works when in * w / out is a power of two, not each scale: every int8 Convolution / FullyConnected /
+//#### MatMul gets its output scale rounded up to in * w * 2^k (the other tensors keep their free scales; the layout-only
+//#### users after it (Reshape / Transpose / Slice / Concat with constant other inputs, requantized) take the same scale).
+//#### No effect on a power-of-two graph. DeiT ImageNetV2 (PC emulation, imagenet_eval/fakequant.py --ratio out):
+//#### all power-of-two 58.34 % -> 60.51 %, free scales 60.66 % (docs/deit_optimization.md 6.6)
+static llvm::cl::opt<bool> vtaPow2Ratio(
+    "vta-pow2-ratio",
+    llvm::cl::desc("Round the output scale of int8 convs / FCs / matmuls up so that in * w / out is a power of two "
+                   "(for -quantization-schema=symmetric)"),
+    llvm::cl::init(true));
+
 static llvm::cl::opt<bool> vtaFoldMatMulBias(
     "vta-fold-matmul-bias",
     llvm::cl::desc("Fold the constant bias Add after a MatMul run as an EVTA conv into the conv bias"),
@@ -809,9 +821,12 @@ static bool matMulToConv(Function *F) {
           for (dim_t r = 1; r < rows && same; r++)
             same = !memcmp(p, p + r * N, N);
           const double k = (double)Cb->getType()->getScale() / ((double)lTy->getScale() * W->getType()->getScale());
-          if (same && k >= 1 && k <= (1 << 22) && k == std::round(k)) {
+          //#### JO changed (2026-11-10): a non-integer k (non-power-of-two scales) rounds the int32 bias (error < 0.5 at the
+          //#### scale lhs * rhs, far below the output step)
+          // if (same && k >= 1 && k <= (1 << 22) && k == std::round(k)) {
+          if (same && k > 0 && k <= (1 << 22)) {
             for (dim_t n = 0; n < N; n++)
-              foldedBias.push_back((int32_t)p[n] * (int32_t)k);
+              foldedBias.push_back((int32_t)std::lround((double)p[n] * k));
             biasAdd = A;
           }
         }
@@ -848,6 +863,100 @@ static bool matMulToConv(Function *F) {
   return changed;
 }
 
+//#### JO added (2026-11-10): -vta-pow2-ratio (above)
+static bool isPow2Ratio(double r) {
+  const double l = std::log2(r);
+  return std::fabs(l - std::round(l)) < 1e-6;
+}
+static bool layoutOnly(const Node *u) {
+  return isa<ReshapeNode>(u) || isa<TransposeNode>(u) || isa<SliceNode>(u);
+}
+// can v's int8 type take another scale: its layout-only users follow it, a Concat only when its other inputs are constants
+static bool canRescale(NodeValue v) {
+  for (auto &use : v.getUsers()) {
+    Node *u = use.getUser();
+    if (layoutOnly(u)) {
+      if (!canRescale(u->getNthResult(0)))
+        return false;
+    } else if (auto *C = dyn_cast<ConcatNode>(u)) {
+      for (auto &in : C->getInputs())
+        if (in != v && !isa<Constant>(in.getNode()))
+          return false;
+      if (!canRescale(C->getResult()))
+        return false;
+    } else if (isa<SaveNode>(u)) {
+      return false;
+    }
+  }
+  return true;
+}
+static void rescale(Function *F, NodeValue v, float s) {
+  auto *M = F->getParent();
+  const float old = v.getType()->getScale();
+  v.setType(M->uniqueType(ElemKind::Int8QTy, v.dims(), s, 0));
+  std::vector<Node *> users;
+  for (auto &use : v.getUsers())
+    users.push_back(use.getUser());
+  for (Node *u : users) {
+    if (layoutOnly(u)) {
+      rescale(F, u->getNthResult(0), s);
+    } else if (auto *C = dyn_cast<ConcatNode>(u)) {
+      if (C->getResult().getType()->getScale() == s)
+        continue;
+      for (unsigned i = 0, e = C->getInputs().size(); i < e; i++) {
+        NodeValue in = C->getInputs()[i];
+        if (in == v)
+          continue;
+        auto *K = cast<Constant>(in.getNode());
+        auto *K2 = M->createConstant(ElemKind::Int8QTy, K->dims(), s, 0, K->getName().str() + "_rescaled");
+        auto hs = K->getPayload().getHandle<int8_t>();
+        auto hd = K2->getPayloadMutable().getHandle<int8_t>();
+        const float ks = K->getType()->getScale();
+        for (dim_t j = 0, n = hs.size(); j < n; j++) {
+          const long q = std::lround(hs.raw(j) * ks / s);
+          hd.raw(j) = (int8_t)(q > 127 ? 127 : q < -128 ? -128 : q);
+        }
+        C->setNthInput(i, K2->getOutput());
+      }
+      rescale(F, C->getResult(), s);
+    }
+  }
+  (void)old;
+}
+static bool pow2Ratios(Function *F) {
+  bool changed = false, again = true;
+  for (int iter = 0; again && iter < 1000; iter++) {
+    again = false;
+    for (auto &N : F->getNodes()) {
+      NodeValue in, w, out;
+      if (auto *C = dyn_cast<ConvolutionNode>(&N)) {
+        in = C->getInput(), w = C->getFilter(), out = C->getResult();
+      } else if (auto *FC = dyn_cast<FullyConnectedNode>(&N)) {
+        in = FC->getInput(), w = FC->getWeights(), out = FC->getResult();
+      } else if (auto *MM = dyn_cast<MatMulNode>(&N)) {
+        in = MM->getLHS(), w = MM->getRHS(), out = MM->getResult();
+      } else {
+        continue;
+      }
+      auto q = [](NodeValue v) { return v.getElementType() == ElemKind::Int8QTy && !v.getType()->getOffset(); };
+      if (!q(in) || !q(w) || !q(out))
+        continue;
+      const double iw = (double)in.getType()->getScale() * w.getType()->getScale();
+      const double r = out.getType()->getScale() / iw;
+      if (isPow2Ratio(r))
+        continue;
+      if (!canRescale(out)) {
+        llvm::errs() << "vta-pow2-ratio: cannot rescale the output of " << N.getName() << " (ratio " << r << ")\n";
+        continue;
+      }
+      const float s = (float)std::ldexp(iw, (int)std::ceil(std::log2(r)));
+      rescale(F, out, s);
+      changed = again = true;
+    }
+  }
+  return changed;
+}
+
 Expected<bool>
 VTA::transformPostLowering(Function *F, CompilationContext &cctx,
                            const glow::runtime::DeviceInfo *devInfo) const {
@@ -860,6 +969,9 @@ VTA::transformPostLowering(Function *F, CompilationContext &cctx,
   //#### JO added (2026-11-09): -vta-matmul-conv
   if (vtaMatMulConv)
     changed |= matMulToConv(F);
+  //#### JO added (2026-11-10): -vta-pow2-ratio
+  if (vtaPow2Ratio)
+    changed |= pow2Ratios(F);
   for (auto &node : F->getNodes()) {
     if (auto *channelwiseConv =
             llvm::dyn_cast<ChannelwiseQuantizedConvolutionNode>(&node)) {

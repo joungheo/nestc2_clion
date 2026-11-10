@@ -21,6 +21,10 @@ ap.add_argument('--no-weights', action='store_true')
 ap.add_argument('--skip', action='append', default=[])
 ap.add_argument('--exact', action='append', default=[], help='with --pow2: exact (not power-of-two) scale for tensors containing this')
 ap.add_argument('--out', default='')
+ap.add_argument('--ratio', choices=['', 'out', 'weight', 'best'], default='',
+                help='free scales, but every MatMul / Gemm / Conv (+ bias) has a power-of-two in * w / out ratio (EVTA shift): '
+                     'out = round the output scale up; weight = round the weight scale up (activation output exact); best = the smaller of the two per op; '
+                     'activation x activation matmuls always round the output')
 a = ap.parse_args()
 
 lst = [l.split() for l in open(a.png + '/list.txt')]
@@ -68,8 +72,43 @@ for p in calib:
     for n, v in zip(names, s.run(None, {'pixel_values': x})):
         amax[n] = max(amax.get(n, 0), float(np.abs(v).max()))
 def scale(mx, t=''):
+    if t in fixed: return fixed[t]
     sc = max(mx, 1e-8) / 127.5
     return float(2.0 ** np.ceil(np.log2(sc))) if a.pow2 and not any(e in t for e in a.exact) else sc
+fixed = {}
+
+# --ratio: the EVTA ops' requantize is a shift: in * w / out = 2^-k
+cons = {}
+for n in g.node:
+    for i in n.input: cons.setdefault(i, []).append(n)
+skipq = set()
+if a.ratio:
+    for n in g.node:
+        if n.op_type not in ('MatMul', 'Gemm', 'Conv'): continue
+        out = n.output[0]
+        c = cons.get(out, [])
+        if n.op_type == 'MatMul' and len(c) == 1 and c[0].op_type == 'Add' and any(i in inits for i in c[0].input):
+            skipq.add(out); out = c[0].output[0]      # bias folded: the MatMul output is not quantized on its own
+        xin = n.input[0]
+        if xin not in amax or out not in amax: continue
+        si = scale(amax[xin]); so_ = scale(amax[out])
+        if n.input[1] in inits:
+            w = numpy_helper.to_array(next(t for t in g.initializer if t.name == n.input[1]))
+            sw = max(float(np.abs(w).max()), 1e-8) / 127.5
+            r = so_ / (si * sw); fo = 2.0 ** np.ceil(np.log2(r)) / r   # output up by fo, or weight up by 2 / fo
+            if a.ratio == 'best' and fo <= 2.0 / fo:
+                fixed[n.input[1]] = sw; fixed[out] = float(si * sw * 2.0 ** np.ceil(np.log2(r)))
+            elif a.ratio in ('weight', 'best'):
+                # sw' = so / (si * 2^k) >= sw, the smallest such: k = floor(log2(so / (si * sw)))
+                kk = np.floor(np.log2(so_ / (si * sw)))
+                fixed[n.input[1]] = float(so_ / (si * 2.0 ** kk)); fixed[out] = so_
+            else:
+                fixed[n.input[1]] = sw
+                fixed[out] = float(si * sw * 2.0 ** np.ceil(np.log2(so_ / (si * sw))))
+        elif n.input[1] in amax:
+            sw = scale(amax[n.input[1]])
+            fixed[out] = float(si * sw * 2.0 ** np.ceil(np.log2(so_ / (si * sw))))
+    print('ratio-adjusted tensors:', len(fixed), flush=True)
 
 # fake-quant model
 nodes, k = [], 0
@@ -91,7 +130,7 @@ for n in list(g.node):
         wq, wd = qdq(n.input[1]); nodes += wq; n.input[1] = wd
     nodes.append(n)
     for o in n.output:
-        if o in qt and o in amax:
+        if o in qt and o in amax and o not in skipq:
             q, d = qdq(o); nodes += q; ren[o] = d
 outs = [o.name for o in g.output]
 for o in g.output:

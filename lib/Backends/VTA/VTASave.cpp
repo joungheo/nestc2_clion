@@ -453,6 +453,19 @@ SymbolTableEntry addConstantSymbolEntry_BNN(Value* val, VTASaveContext *ctx, boo
   return ste;
 }
 
+//#### JO added (2026-11-10): the callers pass a float ratio (1 / in) * (1 / w) / (1 / out); with non-power-of-two scales
+//#### (-vta-pow2-ratio) it is 2^k only up to float rounding, and the int conversion of 7.9999 gave -1. Rounds to the
+//#### nearest power of two when within 1e-4, else -1 as before.
+int getExpofPowerofTwo(int x);
+int getExpofPowerofTwo(float x) {
+  if (!(x > 0))
+    return getExpofPowerofTwo((int)x);
+  const double l = std::log2((double)x);
+  const double k = std::round(l);
+  if (std::fabs(l - k) > 1e-4 / std::log(2.0))
+    return -1;
+  return k < 0 ? -1 : (int)k;
+}
 int getExpofPowerofTwo(int x) {
   int n = 0;
   // checks whether a number is zero or not

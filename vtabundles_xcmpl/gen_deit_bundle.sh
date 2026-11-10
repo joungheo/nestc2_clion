@@ -19,7 +19,8 @@ B=$(cd "$H/../Debug2_remote" && pwd)
 export TVM_HOME=$B/../tvm PYTHONPATH=$B/../tvm/python TVM_LIBRARY_PATH=$B/tvm
 O=$B/vta/bundles/DeiTTest
 I=$B/../glow/tests/images/imagenet
-Q=-quantization-schema=symmetric_with_power2_scale
+#### JO changed (2026-11-10): QSCHEMA=symmetric for free scales (VTA.cpp -vta-pow2-ratio keeps the EVTA ratios power-of-two)
+Q=-quantization-schema=${QSCHEMA:-symmetric_with_power2_scale}
 PRE="-image-layout=NCHW -image-mode=0to1 -image-channel-order=RGB -mean=0.485,0.456,0.406 -stddev=0.229,0.224,0.225"
 mkdir -p $O && cd $O || exit 1
 if [ ! -s deit_fold.onnx ]; then
