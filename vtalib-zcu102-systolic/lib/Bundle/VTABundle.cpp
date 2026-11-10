@@ -169,9 +169,13 @@ struct gemmop_mxn {
   //#### JO added (2026-11-08, depthwise): inp entries between the input tiles of consecutive kernels (0: one input tile
   //#### for all n_kernel_ kernels, a dense conv; the depthwise conv has one input tile per 16-channel block)
   uint32_t in_kernel_factor_ = 0;
+  //#### JO added (2026-11-10, EVTA_CONV_BURST): wgt entries between the weights of consecutive kernels in gemmop_1x1 (1: one
+  //#### input channel block's weights loaded per GEMM; cBlocks: all of a thread's weights loaded at once, [kernel][channel])
+  uint32_t wgt_kernel_factor_ = 1;
   bool operator==(gemmop_mxn &op){
     if(tile_size_h_==op.tile_size_h_ &&
        in_kernel_factor_ == op.in_kernel_factor_ &&
+       wgt_kernel_factor_ == op.wgt_kernel_factor_ &&
        tile_size_w_ == op.tile_size_w_ &&
        in_tile_size_h_ == op.in_tile_size_h_ &&
        in_tile_size_w_ == op.in_tile_size_w_ &&
@@ -266,7 +270,8 @@ int gemmop_1x1(void *param,VTACommandHandle cmdh) {
   struct gemmop_mxn *ctx = (struct gemmop_mxn *) (param);
   // VTAUopLoopBegin(cmdh, ctx->tile_size_w_, 1, ctx->stride_w_, 0);
   // VTAUopLoopBegin(cmdh, ctx->n_kernel_, ctx->tile_size_w_ * ctx->tile_size_h_, 0, 1);
-  VTAUopLoopBegin(cmdh, ctx->n_kernel_, ctx->tile_size_w_ * ctx->tile_size_h_, 0, 1);
+  // VTAUopLoopBegin(cmdh, ctx->n_kernel_, ctx->tile_size_w_ * ctx->tile_size_h_, 0, 1);
+  VTAUopLoopBegin(cmdh, ctx->n_kernel_, ctx->tile_size_w_ * ctx->tile_size_h_, 0, ctx->wgt_kernel_factor_);
   VTAUopLoopBegin(cmdh, ctx->tile_size_w_, 1, ctx->stride_w_, 0);
 
   for (int dx = 0; dx < ctx->kernel_h_; dx++) {
@@ -785,6 +790,36 @@ static void pushDwShr(VTACommandHandle &cmdh, uint32_t idEVTA, uint32_t base, ui
   VTAPushALUOp(cmdh, h, &alu_dw_shr, &ctx, 0);
 }
 
+//#### JO added (2026-11-10): EVTA_CONV_BURST (default 1): longer DMA transfers in the conv tiles. A 2D LOAD / STORE whose rows
+//#### are contiguous in DRAM (stride = row) and in SRAM (no pads) becomes one row: the load / store modules move a row as one
+//#### transfer, and a 1x1 output tile 9 x 11 went out as 9 rows of 176 bytes. A 1x1 conv (no residual / pool / depthwise)
+//#### loads all of a thread's weights ([kernel][channel], rows of cBlocks x 256 bytes) with the first input channel block
+//#### when they fit its wgt part (was one 256-byte row per kernel and channel block); its GEMMs read them at
+//#### channel + kernel x cBlocks (gemmop_mxn wgt_kernel_factor_). Same instructions otherwise, same results.
+static bool evtaConvBurst() {
+  static const bool on = [] {
+    const char *e = getenv("EVTA_CONV_BURST");
+    return !e || atoi(e) != 0;
+  }();
+  return on;
+}
+static void loadBuffer2D(VTACommandHandle cmd, void *buf, uint32_t off, uint32_t x, uint32_t y, uint32_t stride,
+                         uint32_t xp0, uint32_t yp0, uint32_t xp1, uint32_t yp1, uint32_t sram, uint32_t type) {
+  if (evtaConvBurst() && y > 1 && stride == x && !xp0 && !yp0 && !xp1 && !yp1 && (uint64_t)x * y < 65536) {
+    x *= y;
+    y = 1;
+  }
+  VTALoadBuffer2D(cmd, buf, off, x, y, stride, xp0, yp0, xp1, yp1, sram, type);
+}
+static void storeBuffer2D(VTACommandHandle cmd, uint32_t sram, uint32_t type, void *buf, uint32_t off, uint32_t x,
+                          uint32_t y, uint32_t stride) {
+  if (evtaConvBurst() && y > 1 && stride == x && (uint64_t)x * y < 65536) {
+    x *= y;
+    y = 1;
+  }
+  VTAStoreBuffer2D(cmd, sram, type, buf, off, x, y, stride);
+}
+
 void conv_kernel(uint32_t sizeOutTileH,
                  uint32_t sizeOutTileW,
                  uint32_t pad_size,
@@ -958,6 +993,9 @@ void conv_kernel(uint32_t sizeOutTileH,
                             ? 0
                             : outputHOffset * stride_size - pad_size;
 
+    //#### JO added (2026-11-10, EVTA_CONV_BURST): a 1x1 conv's weights of a thread all at once (see evtaConvBurst)
+    const bool wgtAll = evtaConvBurst() && KH == 1 && KW == 1 && !dw && !res && !pool && cBlocks > 1 &&
+                        nFilterinLoop * cBlocks <= WGT_MEM_ENTRY / nVirtualThread;
     // Push operations for loading input and weight then gemming
     for (uint32_t channelIdx = 0; channelIdx < cBlocks;
          channelIdx++) {
@@ -1005,16 +1043,25 @@ void conv_kernel(uint32_t sizeOutTileH,
 #ifdef NESTC_EVTA_PROFILE_AUTOTUNE
           f15 ++;
 #endif
-          VTALoadBuffer2D(vtaCmdH, vta_input_buf, src_offset, x_size, y_size,
+          //#### JO changed (2026-11-10): loadBuffer2D (one row when contiguous, EVTA_CONV_BURST)
+          loadBuffer2D(vtaCmdH, vta_input_buf, src_offset, x_size, y_size,
                           inputWStride, x_pad_before, y_pad_before,
                           resizedInTileW - x_pad_before - x_size,
                           resizedInTileH - y_pad_before - y_size,
                           inputSramBaseAddr, // index
                           2);                // type
         }
-        VTALoadBuffer2D(vtaCmdH, vta_filter_buf, filter_offset, KH * KW,
-                        nFilterinLoop, KH * KW * cBlocks, 0, 0, 0,
-                        0, weightSramBaseAddr, 1);
+        //#### JO changed (2026-11-10, EVTA_CONV_BURST): wgtAll: the thread's nFilterinLoop x cBlocks weights with channel 0
+        // VTALoadBuffer2D(vtaCmdH, vta_filter_buf, filter_offset, KH * KW,
+        //                 nFilterinLoop, KH * KW * cBlocks, 0, 0, 0,
+        //                 0, weightSramBaseAddr, 1);
+        if (wgtAll) {
+          if (channelIdx == 0)
+            loadBuffer2D(vtaCmdH, vta_filter_buf, filter_offset, cBlocks, nFilterinLoop, cBlocks, 0, 0, 0, 0,
+                         weightSramBaseAddr, 1);
+        } else
+          loadBuffer2D(vtaCmdH, vta_filter_buf, filter_offset, KH * KW, nFilterinLoop, KH * KW * cBlocks, 0, 0, 0, 0,
+                       weightSramBaseAddr, 1);
         VTADepPush(vtaCmdH, 1, 2);
       }
       for (uint32_t threadIdx = 0; threadIdx < nVirtualThread; threadIdx++) {
@@ -1038,6 +1085,10 @@ void conv_kernel(uint32_t sizeOutTileH,
         gemm_ctx.input_base_addr_ = inputSramBaseAddr;
         gemm_ctx.output_base_addr_ = outputSramBaseAddr;
         gemm_ctx.weight_base_addr_ = weightSramBaseAddr;
+        if (wgtAll) {   //#### JO added (2026-11-10): [kernel][channel] in the thread's wgt part
+          gemm_ctx.weight_base_addr_ = weightSramBaseAddr + channelIdx;
+          gemm_ctx.wgt_kernel_factor_ = cBlocks;
+        }
         if (dw) {   //#### JO added (2026-11-08)
           gemm_ctx.input_base_addr_ = threadIdx * (INP_MEM_ENTRY / nVirtualThread);
           gemm_ctx.in_kernel_factor_ = resizedInTileH * resizedInTileW;
@@ -1334,12 +1385,21 @@ void conv_kernel(uint32_t sizeOutTileH,
                            ((filterIdx * nVirtualThread + threadIdx) * nFilterinLoop + fIdx) * pool->PH * pool->PW +
                                pool->py0 * pool->PW + pool->px0,
                            pool->ptw, pool->pth, pool->PW);
+      } else if (evtaConvBurst() && outDummyW == 0 && outDummyH == 0 && sizeOutTileW == out_w &&
+                 sizeOutTileW == resizedOutTileW && sizeOutTileH == resizedOutTileH) {
+        //#### JO added (2026-11-10, EVTA_CONV_BURST): full-width tile, no dummy rows: each kernel's tile is one contiguous
+        //#### run in DRAM and in acc, so all nFilterinLoop kernels are one STORE (a row per kernel, DRAM stride out_h x out_w)
+        const uint32_t T = sizeOutTileH * out_w;
+        VTAStoreBuffer2D(vtaCmdH, outputSramBaseAddr, 4, vta_output_buf,
+                         (filterIdx * nVirtualThread + threadIdx) * nFilterinLoop * out_w * out_h + outputHOffset * out_w,
+                         T, nFilterinLoop, out_w * out_h);
       } else if (outDummyW == 0) {
         for (uint32_t fIdx = 0; fIdx < nFilterinLoop; fIdx++) {
 #ifdef NESTC_EVTA_PROFILE_AUTOTUNE
           f17 ++;
 #endif
-          VTAStoreBuffer2D(
+          //#### JO changed (2026-11-10): storeBuffer2D (one row when contiguous, EVTA_CONV_BURST)
+          storeBuffer2D(
               vtaCmdH,
               outputSramBaseAddr + fIdx * resizedOutTileH * resizedOutTileW, 4,
               vta_output_buf,
