@@ -130,13 +130,14 @@ convTune.ConvolutionTune_.push_back({1, 113, 112, 32, 32, 2, 1, 32, 1, 0, 2, 16,
 //#### LOADs its input one channel block at a time, 7 x 14 entries, VTASave getConv0Pack checks a block for KH2 = 1);
 //#### the linear layers (MatMul as a 1x1 conv over the 198 rows as 18 x 11, VTA.cpp matMulToConv) and the attention
 //#### matmuls (VTASave matmul_evta_n / _qk: h x w over K channels -> N filters, N padded to an even number of blocks with
-//#### 2 threads by vtalib matmulSched): 1, 14, 14 -> these, EVTA 55.8 -> ~41 ms (docs/evta_runtime_compare.md 7.28)
+//#### 2 threads by vtalib matmulSched): 1, 14, 14 -> these (EVTA_SCHED, conv dumps identical), EVTA 55.8 -> ~38 ms (docs/evta_runtime_compare.md 7.28)
 convTune.ConvolutionTune_.push_back({1, 14, 14, 768, 192, 1, 1, 768, 1, 0, 2, 7, 14});
 convTune.ConvolutionTune_.push_back({1, 18, 11, 192, 192, 1, 1, 192, 1, 0, 2, 9, 11});
 convTune.ConvolutionTune_.push_back({1, 18, 11, 192, 768, 1, 1, 192, 1, 0, 2, 9, 11});
 convTune.ConvolutionTune_.push_back({1, 18, 11, 768, 192, 1, 1, 768, 1, 0, 2, 9, 11});
 convTune.ConvolutionTune_.push_back({1, 18, 11, 208, 64, 1, 1, 208, 1, 0, 2, 18, 11});
-convTune.ConvolutionTune_.push_back({1, 18, 11, 64, 208, 1, 1, 64, 1, 0, 2, 18, 11});
+//#### Q K^T (64 -> 208, 13 blocks, padded to 14 for 2 threads): 2, 18, 11 took 0.77 ms per call, 2, 9, 11 0.44 -> ~0.36 ms
+convTune.ConvolutionTune_.push_back({1, 18, 11, 64, 208, 1, 1, 64, 1, 0, 2, 9, 11});
 convTune.ConvolutionTune_.push_back({1, 112, 112, 32, 16, 1, 1, 32, 1, 0, 1, 16, 56});
 convTune.ConvolutionTune_.push_back({1, 112, 112, 16, 96, 1, 1, 16, 1, 0, 2, 16, 28});
 convTune.ConvolutionTune_.push_back({1, 56, 56, 96, 32, 1, 1, 96, 1, 0, 2, 8, 56});
