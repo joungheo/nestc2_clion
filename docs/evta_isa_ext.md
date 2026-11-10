@@ -324,11 +324,58 @@ bitstream과 vtalib의 짝이 한 번만 바뀌게 하려는 것이다.
   - BRAM 양은 같고, 바뀌는 것은 포트 mux와 compute의 대기 조건이다.
   - ALU pass가 GEMM보다 짧으면 그 시간이 숨는다. 컴파일러가 다음 Linear의 GEMM과 엇갈려 배치해야 한다.
 
+### 8.6 정수 LayerNorm / softmax 식과 정확도 (CPU에서 확인, 2026-11-10)
+
+§8.2의 연산(ADD, MUL, SUB, RSUM / RMAX, CLZ, LUT)만으로 계산하는 식을 bundle CPU 함수에 넣었다. 실행할 때 환경 변수로 켜고, 정확도를 ImageNetV2로 쟀다.
+- 코드: `lib/Backends/VTA/VTASave.cpp` `nestc_cpu::layerNormI8`(`NESTC_LN_INT=1`), `softmaxInt`(`NESTC_SM_INT=1|2`)
+- 하드웨어로 옮길 때 이 C 코드를 기준(golden)으로 쓴다.
+
+**LayerNorm** (한 token = C 채널, x는 int8)
+
+| 단계 | 정수 계산 | ALU 연산 | 크기 (C ≤ 1024) |
+|---|---|---|---|
+| 1 | S = Σx, Q = Σx² | MUL(제곱), 블록 ADD, RSUM | Q ≤ 2^24 |
+| 2 | W = C·Q − S² (= C²·분산, 정확) | MUL imm, MUL vector, SUB | < 2^31 |
+| 3 | 1/√W: 짝수 shift로 W를 [2^14, 2^16)에 맞추고(CLZ), 위 8비트로 8비트 표 T(255/√u)를 찾음 | CLZ, SHR(vector), LUT | 상대 오차 ≤ 0.4 % |
+| 4 | p = (C·x − S)·T >> 8 | MUL, SUB, SHR | < 2^16 |
+| 5 | y = (p·G[l] + round) >> (gs + sh/2 − 8) + b[l], clip | MUL(vector, G = γ / out scale, 14비트), `rq` | < 2^31 |
+
+- 평균을 따로 구해 빼지 않는다. 처음 식(평균을 1/4 LSB로 반올림)은 분산이 작은 행에서 5 LSB까지 틀렸다.
+- (C·x − S) / √(C·Q − S²) = (x − 평균) / 표준편차이므로, 1/√ 표 말고는 정확하다.
+- 무작위 197 × 192 행에서 float 계산과 최대 1 LSB 차이였다(72 %는 같음).
+
+**softmax** (한 행, 입력 int8 score, scale s)
+
+| 단계 | 정수 계산 | ALU 연산 |
+|---|---|---|
+| 1 | m = max x | 블록 MAX, RMAX |
+| 2 | e = E[min(m − x, 255)], E[k] = round(2^b·exp(−k·s)) | SUB, LUT (b = 8 또는 16) |
+| 3 | S = Σe, 1/S: CLZ로 [2^15, 2^16)에 맞추고 8비트 표 | 블록 ADD, RSUM, CLZ, LUT |
+| 4 | p = e·R >> (shift) → 다음 텐서의 scale로 | MUL, `rq` |
+
+- exp 표가 8비트면 작은 값이 0으로 반올림된다. 그래서 큰 확률이 최대 2.6 step(1/128 단위) 커진다.
+- 16비트면 0.42 step이다. 하드웨어 LUT는 출력 16비트 옵션을 둘 만하다. 다만 정확도에서는 차이가 보이지 않았다(아래 표).
+
+**정확도** (보드, systolic 400 MHz `_rq`, ImageNetV2 앞 9,000장. 같은 번들에 환경 변수만 바꿈)
+
+| 설정 | top-1 |
+|---|---|
+| 지금 (Glow의 int8 LayerNorm 체인, float softmax) | 56.17 % |
+| LayerNorm float (`NESTC_LN_FLOAT=1`) | 56.61 % |
+| **LayerNorm 정수식** (`NESTC_LN_INT=1`) | **56.54 %** |
+| softmax 정수, 8비트 exp 표 (`NESTC_SM_INT=1`) | 56.17 % |
+| softmax 정수, 16비트 exp 표 (`NESTC_SM_INT=2`) | 55.98 % |
+| **LayerNorm 정수 + softmax 정수 16비트** | **56.49 %** |
+
+- 9,000장의 표준오차는 약 ±0.5 %p다. 정수식은 정확도를 잃지 않는다.
+- 그래서 이 식을 그대로 하드웨어 ALU 확장(§8.2)의 기준으로 삼는다.
+- 정확도 손실은 대부분 다른 데서 온다(`deit_optimization.md` §6.6). 그중 power-of-2 scale 몫(약 −2.3 %p)은 GEMM 출력 경로의 `rq_mul`(§8.4.1)로 줄일 수 있다.
+
 ### 8.5 일의 양과 순서 (추정)
 
 | 단계 | 내용 | 기간 |
 |---|---|---|
-| 1 | 정수 LayerNorm / softmax 식을 CPU에서 정하고 ImageNet 확인 (소프트웨어, `deit_optimization.md` §6.1) | 3–5일 |
+| 1 | 정수 LayerNorm / softmax 식을 CPU에서 정하고 ImageNet 확인 (소프트웨어, `deit_optimization.md` §6.1) | **11-10 끝남 (§8.6)** |
 | 2 | `hw_spec.h` 세 곳, C 모델(`systolic_model.cc`), vtalib 시뮬레이터 `sim_driver.cc`에 연산 12개 | 2–3일 |
 | 3 | HLS `vta.cc` `alu()` / `alu_lane()`, `sa_rmw.v` 출력 LUT, `vta_test.cc` `alu_test`에 새 연산, RTL testbench, CSim | 1–1.5주 |
 | 4 | single `_alux` bitstream(합성 약 1시간 × 몇 번), 보드 probe, golden, dump 비교 | 2–4일 |

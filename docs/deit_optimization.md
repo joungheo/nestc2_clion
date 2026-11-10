@@ -321,6 +321,59 @@ cd vtabundles_xcmpl
 sudo hw_multievtax4/script/run_prof.sh -s _systimed -r MultiEVTADeiTTest     # 4개 동시와 copy 0 혼자
 ```
 
+## 6.6 정확도 (ImageNetV2, 2026-11-10)
+
+ImageNet val은 계정 동의가 필요해 받을 수 없었다. 그래서 공개된 **ImageNetV2 matched-frequency**(10,000장, 1000 클래스 × 10장)로 쟀다.
+- 전처리는 DeiT와 같다: 짧은 변을 256으로 bicubic resize한 뒤 가운데 224를 crop한다.
+- V2는 val보다 보통 10 %p 이상 낮게 나온다. 그래서 절대값보다 float과의 차이를 본다.
+
+### 6.6.1 도구 (`vtabundles_xcmpl/imagenet_eval/`)
+
+| 파일 | 하는 일 |
+|---|---|
+| `prep_imagenetv2.py` | JPEG → 224 PNG와 `list.txt`(클래스를 번갈아 늘어놓아, 앞부분만 써도 모든 클래스가 들어감). PC `~/data2/datasets/imagenetv2/png224`, 보드 `~/JO/imagenetv2_png224` |
+| `float_ref.py` | float ONNX(onnxruntime)의 top-1 |
+| `fakequant.py` | PC에서 ONNX에 int8 fake quantization(QDQ)을 넣어 근사. power-of-2 여부와 float로 둘 블록을 옵션으로 고른다. 1,000장에 약 40초 |
+| `eval_board.sh` | 보드 실행 파일의 `EVAL_LIST` 모드(weight를 한 번 올리고 여러 장을 분류, `DeiTTest/multi_threads_main.cpp`). 9,000장에 약 10–18분 |
+
+예:
+```bash
+# 보드 (vtabundles_xcmpl/, build_sys = -DBUNDLE_EXE_SUFFIX=_sys -DVTALIB=../vtalib-zcu102-systolic)
+sudo /bin/sh -c "NESTC_LN_INT=1 imagenet_eval/eval_board.sh hw/DeiTTest/vtaDeiTBundle_sys lnint_9k 9000"
+# PC (onnxruntime이 있는 python)
+python fakequant.py deit_fold.onnx ~/data2/datasets/imagenetv2/png224 --n 9000 --pow2 --ln-float
+```
+
+- 평가는 앞 9,000장으로 한다.
+- 뒤 1,000장 중 10장마다 하나(100장)는 calibration용이다(`deit_calib100.yaml`). 그전 번들은 cat / dog / zebra 3장으로 calibration했다.
+- 지금 `Debug2_remote/vta/bundles/DeiTTest/deit_calib.yaml`은 100장 profile이다. 3장 profile은 `deit_calib_3img.yaml`이다.
+
+### 6.6.2 결과 (앞 9,000장)
+
+| 설정 | top-1 | float 대비 |
+|---|---|---|
+| float ONNX | **62.34 %** | |
+| PC 근사: int8, scale 자유, LayerNorm 내부 float | 60.66 % | −1.7 |
+| PC 근사: 위 + power-of-2 scale | 58.34 % | −4.0 |
+| 보드, calibration 3장 | 55.84 % | −6.5 |
+| 보드, calibration 100장 | 56.17 % | −6.2 |
+| 보드, calibration 100장 + LayerNorm float | 56.61 % | −5.7 |
+| 보드, calibration 100장 + 정수 LayerNorm / softmax (`evta_isa_ext.md` §8.6) | 56.49 % | −5.9 |
+| Glow int8 Interpreter (300장, 같은 profile) | 32 % (float 68 %) | 참고: Glow 기본 int8 lowering은 훨씬 나쁨. VTAInterpreter는 이 그래프에서 segfault |
+
+**손실을 나누면** (±0.5 %p 잡음):
+- int8 자체: −1.7 %p
+- **power-of-2 scale: −2.3 %p.** EVTA의 requantize가 shift뿐이기 때문이다. 텐서 하나를 풀어서는 크게 좋아지지 않았고, 여러 곳에 퍼져 있다(1,000장 실험: residual 쪽이 +1 %p로 가장 큼).
+- 번들 구현 쪽(PC 근사와의 차이): −1.7 %p. 원인은 아직 모른다. 후보는 Glow lowering이 더 만드는 중간 텐서의 양자화와 attention ÷8 처리다.
+- LayerNorm int8 체인: −0.4 %p
+- calibration 3장 → 100장: +0.3 %p (차이 거의 없음)
+- 정수 LayerNorm / softmax는 float 계산과 같은 정확도다. 하드웨어로 옮겨도 정확도 걱정은 없다.
+
+**다음:**
+1. power-of-2를 풀 requantize 곱셈. GEMM 출력 경로의 `rq_mul`, 소프트웨어로는 2^n이 아닌 scale을 CPU에서. PC 근사로 최대 +2.3 %p
+2. 번들 구현 −1.7 %p의 원인. PC 근사와 보드의 층별 출력 비교
+3. 채널별(per-channel) weight scale
+
 ## 7. 재현
 
 끄는 방법은 세 종류다. `-vta-*`는 번들 생성(`model-compiler`) 옵션이라 번들을 다시 만들어야 하고, `EVTA_*`는 실행할 때 주는 환경변수(`sudo /bin/sh -c "EVTA_X=0 hw/script/run_prof.sh ..."`), 하드웨어 단계는 `BIN=<비트스트림>`이다. 자세한 절차와 vtalib마다 읽는 변수의 차이는 `resnet18_optimization.md` §9.2–§9.5에 있다.
