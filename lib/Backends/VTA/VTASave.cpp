@@ -6293,8 +6293,45 @@ static void softmaxQ(int8_t *o8, const int8_t *i8, size_t rows, size_t cols, flo
 // softmaxQ of the dequantized int8 input read directly (VTASave findSoftmaxI8: the dequantize and the softmax in one):
 // the same table and sums in the same order (four rows at a time, interleaved); approx 0: the same divisions, so the
 // same result as softmaxQ; approx 1 (-vta-cpu-approx): times 1 / sum instead (values may differ in the last bit)
+//#### JO added (2026-11-10): the integer softmax planned for the EVTA ALU (docs/evta_isa_ext.md 8.2, 8.6): RMAX, SUB, a LUT for
+//#### exp (NESTC_SM_INT=1: 8 bits, 255 * exp(-k * s); 2: 16 bits, 65535 * exp(-k * s); k = max - x clipped to 255), RSUM, the
+//#### reciprocal by CLZ + an 8-bit LUT, MUL and a rounding shift to a probability with 16 fraction bits (the next quantize
+//#### takes it to its scale; accuracy experiments, the output stays float).
+static void softmaxInt(float *out, const int8_t *q8, size_t rows, size_t cols, float s, int bits) {
+  uint16_t E[256];
+  uint8_t RT[256];
+  const double emax = bits > 8 ? 65535.0 : 255.0;
+  for (int k = 0; k < 256; k++) {
+    E[k] = (uint16_t)std::lround(emax * std::exp(-(double)k * s));
+    RT[k] = (uint8_t)(k < 128 ? 0 : std::lround(32768.0 / (k + 0.5)));
+  }
+#pragma omp parallel for schedule(static)
+  for (long r = 0; r < (long)rows; r++) {
+    const int8_t *x = q8 + r * cols;
+    int m = -128;
+    for (size_t i = 0; i < cols; i++) m = x[i] > m ? x[i] : m;
+    int64_t S = 0;
+    for (size_t i = 0; i < cols; i++) S += E[std::min(m - x[i], 255)];
+    // S = Sn * 2^sh with Sn in [2^15, 2^16); 1 / Sn ~ RT[Sn >> 8] / 2^23
+    const int bl = 64 - __builtin_clzll((uint64_t)S), sh = bl - 16;
+    const uint64_t Sn = sh >= 0 ? (uint64_t)S >> sh : (uint64_t)S << -sh;
+    const int64_t R = RT[Sn >> 8];
+    // p * 2^16 = e * R / 2^(23 - 16 + sh)
+    const int t = 7 + sh;
+    for (size_t i = 0; i < cols; i++) {
+      const int64_t v = (int64_t)E[std::min(m - x[i], 255)] * R;
+      const int64_t p = t > 0 ? (v + ((int64_t)1 << (t - 1))) >> t : v << -t;
+      out[r * cols + i] = (float)p * (1.f / 65536);
+    }
+  }
+}
 static void softmaxI8(int8_t *o8, const int8_t *q8, size_t rows, size_t cols, float s, int approx) {
   float *out = (float *)o8;
+  static const int smInt = getenv("NESTC_SM_INT") ? atoi(getenv("NESTC_SM_INT")) : 0;
+  if (smInt > 0) {
+    softmaxInt(out, q8, rows, cols, s, smInt > 1 ? 16 : 8);
+    return;
+  }
   float T[256];
   for (int d = 0; d < 256; d++) T[d] = std::exp(-(float)d * s);
   const long groups = (long)((rows + 3) / 4);
@@ -6514,6 +6551,52 @@ static void layerNormI8(int8_t *out, const int8_t *x, size_t rows, size_t cols, 
   //#### JO added (2026-11-10): NESTC_LN_FLOAT=1 computes the layer norm in float from the dequantized int8 input
   //#### (mean, variance, 1 / sqrt, * w + b) and quantizes only the output: the loss of the int8 chain in between
   //#### (mean / variance / sd quantized to int8) apart from the int8 input and output (accuracy experiments only)
+  //#### JO added (2026-11-10): NESTC_LN_INT=1: the integer layer norm planned for the EVTA ALU (docs/evta_isa_ext.md 8.2, 8.6),
+  //#### exact up to 1 / sqrt: (x - mean) / sd = (C x - S) / sqrt(W) with S = sum x, W = C sum x^2 - S^2 (all within 32 bits
+  //#### for C <= 1024: ADD / RSUM, MUL), 1 / sqrt(W) by an even normalizing shift (CLZ) and an 8-bit LUT, then
+  //#### ((C x - S) * T >> 8) * G[l] with G[l] < 2^14 the per-channel gamma / out scale, a rounding shift and the int bias.
+  //#### The constants come from the float parameters at each call (compile-time constants on the EVTA).
+  static const bool lnInt = getenv("NESTC_LN_INT") && atoi(getenv("NESTC_LN_INT")) > 0;
+  if (lnInt) {
+    uint8_t T[256];
+    for (int k = 0; k < 256; k++)
+      T[k] = (uint8_t)(k < 64 ? 0 : std::min(255L, std::lround(255.0 / std::sqrt((k + 0.5) / 64.0))));
+    const int32_t C = (int32_t)cols;
+    // 1 / sqrt(W) = T / (255 * 2^7 * 2^(sh / 2)); y = (C x - S) / sqrt(W) * gamma / a2d
+    const double gk = 1.0 / ((double)a2d * 255.0 * 128.0);
+#pragma omp parallel for schedule(static)
+    for (long r = 0; r < (long)rows; r++) {
+      const int8_t *xr = x + r * cols;
+      const float *wr = w + r * cols;
+      double gmax = 0;
+      for (size_t l = 0; l < cols; l++) gmax = std::max(gmax, std::fabs((double)wr[l]));
+      int gs = 0;
+      while (gmax * gk * std::ldexp(1.0, gs + 1) < 16383.0 && gs < 40) gs++;
+      int32_t S = 0, Q = 0;
+      for (size_t l = 0; l < cols; l++) {
+        S += xr[l];
+        Q += xr[l] * xr[l];
+      }
+      int32_t W = C * Q - S * S;
+      if (W < 1) W = 1;
+      // W = Wn * 2^sh, Wn in [2^14, 2^16), sh even
+      int sh = (32 - __builtin_clz((uint32_t)W)) - 16;
+      if (sh & 1) sh++;
+      const uint32_t Wn = sh >= 0 ? (uint32_t)W >> sh : (uint32_t)W << -sh;
+      const int32_t Tv = T[Wn >> 8];
+      const int t = gs + sh / 2 - 8;
+      for (size_t l = 0; l < cols; l++) {
+        const int32_t G = (int32_t)std::lround(wr[l] * gk * std::ldexp(1.0, gs));
+        const int32_t p = ((C * xr[l] - S) * Tv) >> 8;
+        const int32_t v = p * G;
+        const int32_t y = t > 0 ? (v + (1 << (t - 1))) >> t : v << -t;
+        const int32_t bq = (int32_t)std::lround(b[r * cols + l] * (double)a2b / a2d);
+        const int32_t o = y + bq;
+        out[r * cols + l] = (int8_t)(o > 127 ? 127 : o < -128 ? -128 : o);
+      }
+    }
+    return;
+  }
   static const bool lnFloat = getenv("NESTC_LN_FLOAT") && atoi(getenv("NESTC_LN_FLOAT")) > 0;
   if (lnFloat) {
 #pragma omp parallel for schedule(static)
