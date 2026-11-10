@@ -105,16 +105,16 @@ static bool readPngImage(const char *filename, float lo, float hi, float *&image
     free(rows[y]);
   png_destroy_read_struct(&png_ptr, &info_ptr, (png_infopp)NULL);
   fclose(fp);
-  printf("Loaded image: %s\n", filename);
+  if (!getenv("EVAL_LIST")) printf("Loaded image: %s\n", filename);
   return false;
 }
 
 /// The input tensor as the single bundles' mains make it: BGR, N x C x H x W (MODEL_NHWC: N x H x W x C)
-static float *loadInput() {
+static float *loadInput(const char *filename) {
   const size_t H = MODEL_HEIGHT, W = MODEL_WIDTH;
   float *imageT = nullptr;
   size_t dims[3];
-  bool failed = readPngImage(inputImageFilenames[0].c_str(), MODEL_RANGE_LO, MODEL_RANGE_HI, imageT, dims);
+  bool failed = readPngImage(filename, MODEL_RANGE_LO, MODEL_RANGE_HI, imageT, dims);
   assert(!failed && dims[0] == W && dims[1] == H && "Error reading input image.");
   (void)failed;
   float *t = static_cast<float *>(malloc(3 * H * W * sizeof(float)));
@@ -252,11 +252,55 @@ static void *threadMain(void *a) {
 int main(int argc, char **argv) {
   for (int i = 1; i < argc; i++)
     inputImageFilenames.push_back(argv[i]);
-  if (inputImageFilenames.empty()) {
+  if (inputImageFilenames.empty() && !getenv("EVAL_LIST")) {
     printf("usage: %s <image.png>\n", argv[0]);
     return 1;
   }
-  float *input = loadInput();
+#ifdef MULTI_SINGLE
+  //#### JO added (2026-11-10): accuracy over a labeled image set. EVAL_LIST=<file> with one "<image.png> <class>" per line
+  //#### (vtabundles_xcmpl/imagenet_eval/): copy 0 loads its weights once and classifies every image; prints one
+  //#### "EV <n> <pred> <class>" line per image (EVAL_QUIET=1: only every 500th) and the top-1 count at the end.
+  if (const char *el = getenv("EVAL_LIST")) {
+    FILE *lf = fopen(el, "r");
+    if (!lf) {
+      printf("cannot open EVAL_LIST %s\n", el);
+      return 1;
+    }
+    const bool quiet = getenv("EVAL_QUIET") && atoi(getenv("EVAL_QUIET")) > 0;
+    ModelCopy &m = copies[0];
+    const BundleConfig &c = *m.config;
+    uint8_t *cw = initConstantWeights(m.weights, c);
+    uint8_t *mw = static_cast<uint8_t *>(alignedAlloc(c, c.mutableWeightVarsMemSize));
+    uint8_t *act = static_cast<uint8_t *>(alignedAlloc(c, c.activationsMemSize));
+    const SymbolTableEntry &in = getMutableWeightVar(c, MODEL_INPUT);
+    m.initRuntime();
+    m.load(cw);
+    char path[4096];
+    int label, n = 0, ok = 0;
+    timeval t1, t2;
+    gettimeofday(&t1, NULL);
+    while (fscanf(lf, "%4095s %d", path, &label) == 2) {
+      float *x = loadInput(path);
+      memcpy(mw + in.offset, x, 3 * MODEL_HEIGHT * MODEL_WIDTH * sizeof(float));
+      free(x);
+      m.run(cw, mw, act);
+      float conf = 0;
+      const int pred = classify(c, mw, &conf);
+      ok += pred == label;
+      n++;
+      if (!quiet || n % 500 == 0)
+        printf("EV %d %d %d  top1 %d/%d\n", n, pred, label, ok, n);
+    }
+    gettimeofday(&t2, NULL);
+    fclose(lf);
+    printf("EVAL top1 %d / %d = %.2f %%  (%.1f s)\n", ok, n, n ? 100.0 * ok / n : 0.0,
+           (t2.tv_sec - t1.tv_sec) + (t2.tv_usec - t1.tv_usec) / 1e6);
+    m.destroy();
+    m.destroyRuntime();
+    return 0;
+  }
+#endif
+  float *input = loadInput(inputImageFilenames[0].c_str());
 #ifdef MULTI_SINGLE
   //#### JO changed (2026-11-10): with BUNDLE_RUNS=<n> (run_prof.sh -n, the _timed / _prof builds: the timed_bundle.py wrapper runs
   //#### the first call n - 1 times) two calls here, so n inferences in all (it was 4 x MULTI_RUNS + n - 2 = 123 for n = 25)
