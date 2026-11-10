@@ -62,6 +62,8 @@ run() {  # dir exe input golden
 }
 run MultiEVTAConv4Test multi4conv4Bundle '15 100' vtaConv4TestGolden.bin
 run MultiEVTAConvTest multievtaConvTestBundle multievtaConvTestInput.bin multievtaConvTestGolden0.bin
+run MultiEVTADeiTTest multivtaDeiTBundle /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler/glow/tests/images/imagenet/cat_285.png ''
+run MultiEVTADeiTTest singlevtaDeiTBundle /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler/glow/tests/images/imagenet/cat_285.png ''
 run MultiEVTAResConv10Test multi4resconv10Bundle '15 100' vtaResConv10TestGolden.bin
 run MultiEVTAResnet18Test multivtaMxnetResnet18Bundle /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler/glow/tests/images/imagenet/cat_285.png ''
 run MultiEVTAResnet18Test singlevtaMxnetResnet18Bundle /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler/glow/tests/images/imagenet/cat_285.png ''
