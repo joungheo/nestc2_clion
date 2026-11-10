@@ -11,6 +11,8 @@
 #### the failed run printed, up to 4 times.
 #### Output and gen.log / prof.log in Debug2_remote/vta/bundles/DeiTTest; then collect_hw_bundles.py DeiTTest.
 #### usage (on the board): vtabundles_xcmpl/gen_deit_bundle.sh [model-compiler options]
+#### JO changed (2026-11-10): -vta-round-shift always (the bundles since 11-09 were made with it; without it the EVTA conv
+#### biases lack the 2^(shift-1) term and the weights differ)
 set -u
 H=$(cd "$(dirname "$0")" && pwd)
 B=$(cd "$H/../Debug2_remote" && pwd)
@@ -32,7 +34,7 @@ fi
 cp deit_calib.yaml deit_calib_mc.yaml
 for i in 1 2 3 4; do
   $B/glow/bin/model-compiler -g -model=deit_fold.onnx -backend=VTA -emit-bundle=$O -bundle-api=dynamic -network-name=deit \
-    -model-input=pixel_values,float,[1,3,224,224] -load-profile=deit_calib_mc.yaml $Q "$@" > gen.log 2>&1
+    -model-input=pixel_values,float,[1,3,224,224] -load-profile=deit_calib_mc.yaml $Q -vta-round-shift "$@" > gen.log 2>&1
   r=$?
   h=$(grep -o "Current graph hash: 0x[0-9A-Fa-f]*" gen.log | awk '{print $4}')
   [ -z "$h" ] && break

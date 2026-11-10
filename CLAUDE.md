@@ -319,6 +319,11 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   §7.27: `-vta-attn-keep-layout` (Q K^T from the query / key conv outputs kept in the EVTA layout: vtalib `matmul_evta_qk`,
   `VTABufferView`), `-vta-matmul-heads` (heads in one EVTA call: `matmul_evta_n`, conv batch `gConvBatch`), `-vta-cpu-approx`
   (softmax / layer norm reciprocal multiplies, off = bit-identical): 137.2 -> 123.5 ms.
+  §7.28: DeiT schedules in `VTASchedules.h` (2 virtual threads; the transfers did not overlap the GEMM at all with 1),
+  also for the attention matmuls (VTASave `matMulSchedArgs`); vtalibs: one thread when nVirtualThread does not divide the
+  output channel blocks (13 blocks with 2 computed nothing, no error), matmul N padded for it (`matmulSched`):
+  EVTA 55.8 -> 38.3 ms, 123.5 -> 107.4 ms (`-t 4` 91.9 -> 75.2 ms). `gen_deit_bundle.sh` always passes `-vta-round-shift`.
+  `prof_summary.py` folds the runs of a streamed conv (else no `_sysprof` table for DeiT).
 - The lab board's PL has a defective configuration row (tile row SLICE Y219, cells stuck at 0; `log/BOARD_TODO.md`
   2026-10-23/24). `vivado.tcl` on zcu102 fences the design below it by default (`VTA_BRAM_FENCE=y219|upper|none`).
   multi2 fits below it and works (2026-10-24); multi4 needs more BRAM than the rows below, so it crosses the row with

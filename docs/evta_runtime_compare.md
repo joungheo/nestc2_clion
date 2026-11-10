@@ -1527,6 +1527,60 @@ Resnet18 / 50, VGG16, MobileNetV2는 다시 생성해도 bundle `.cpp`(옵션 �
 | lut8 | 5.2 |
 | elemadd | 3.8 |
 
+### 7.28 DeiT-tiny: EVTA schedule (가상 스레드 2개), Q·Kᵀ vt 2 결함 (2026-11-10)
+
+systolic 400 MHz `_rq`, `_systimed` / `_sysprof` 중앙값(25장):
+
+| | EVTA 바쁜 시간 | 1장 `-t 4` | 1장 OMP 1 |
+|---|---|---|---|
+| §7.27 | 55.8 ms (45.2 GOPS) | 91.9 ms | 123.5 ms |
+| schedule 변경 | **38.3 ms (65.9 GOPS)** | **75.2 ms** | **107.4 ms** |
+
+**원인:** 모든 Linear와 attention matmul이 가상 스레드 1개(`vt 1`, 1 / 14 / 14)로 돌았다. 그래서 LOAD와 GEMM이 겹치지 않았다.
+- `EVTA_MEMEXP`로 DRAM 전송을 빼 보면(결과는 틀어짐) EVTA 시간이 이렇게 줄었다.
+  - inp만 뺌: 56.2 → 43.9 ms
+  - wgt만 뺌: 39.7 ms
+  - STORE만 뺌: 48.5 ms
+  - 모두 뺌: 19.6 ms
+- 하나씩 뺀 효과의 합(36.6 ms)이 전체 차이와 같다. 즉 전송이 계산과 전혀 겹치지 않는다.
+- patch embedding(conv0 pack 1×1, 14×14×768 → 192)은 tile이 7×2여서 weight를 7번 다시 읽었다. 4.75 ms, 12 GOPS였다.
+
+**schedule** (`VTASchedules.h`, `EVTA_SCHED` 탐색, `~/JO/deit_tmp/schedsearch.sh`):
+
+| 모양 (입력 H×W×C → N) | 이전 → 새 값 | 호출 하나 (ms) |
+|---|---|---|
+| patch 14×14×768 → 192 | 1,7,2 → 2,7,14 | 4.75 → 0.66 |
+| 18×11×192 → 192 (q / k / v / proj) | 1,14,14 → 2,9,11 | 0.295 → 0.219 |
+| 18×11×192 → 768 (fc1) | 1,14,14 → 2,9,11 | 1.136 → 0.800 |
+| 18×11×768 → 192 (fc2) | 1,14,14 → 2,9,11 | 1.012 → 0.715 |
+| A·V 18×11×208 → 64 (3 head) | 1,14,14 → 2,18,11 | 0.477 → 0.35 |
+| Q·Kᵀ 18×11×64 → 208 (3 head) | 1,14,14 → 2,9,11 | 0.44 → ~0.36 (2,18,11은 0.77로 더 느림) |
+
+- **conv0 pack 검사(`VTASave.cpp` `getConv0Pack`):** 1×1(KH2 = 1)이면 input tile을 채널 블록 하나 단위로 본다. 1×1 conv는 입력을 채널 블록마다 따로 LOAD하기 때문이다(replay dump: `LOAD mem 2 y 7 x 2`가 블록마다 있음). 예전 검사는 블록 전부(× 48)를 보았고, 그래서 7×2에 묶여 있었다. Resnet18 / MobileNetV2의 conv0(KH2 4 / 2)는 예전 검사 그대로다.
+- **attention matmul:** VTASave `matMulSchedArgs`가 `VTASchedules.h`에서 matmul conv 모양(M행을 h×w로, K와 N은 16 배수)의 항목을 찾는다. 찾으면 `matmul_evta_n` / `_qk`에 `, vt, th, tw`를 붙이고, 없으면 예전처럼 vtalib 기본값을 쓴다.
+
+**Q·Kᵀ vt 2 결함 (두 vtalib):**
+- Q·Kᵀ의 출력 블록은 13개(198 → 208)다. conv_kernel `pickNF`는 13 % (n·2) == 0인 n을 찾지 못해 0을 골랐다.
+- 그러면 filter 루프 횟수 `KN / 0 / …`가 aarch64에서 0이 된다(0으로 나눠도 trap이 없다). 그래서 오류 없이 출력이 쓰레기였다(분류 599).
+- **수정 ① (안전장치):** `convolution_wo_tr_impl`은 vt가 출력 블록 수를 나누지 못하면 vt 1로 돈다.
+- **수정 ② (matmul):** `matmulSched`가 `EVTA_SCHED`를 패딩 전의 key로 먼저 적용하고, vt의 배수가 되도록 N을 0인 filter 블록으로 패딩한다(13 → 14). 출력은 N열만 꺼낸다.
+
+**확인:**
+- `EVTA_MATMUL_CHECK=1`로 3장 × 288 head가 0 differ이다. 분류는 281 / 207 / 340, 확률은 0.754596 / 0.950148 / 0.962557로 §7.27과 같다.
+- `EVTA_DUMP_CONV`로 새 schedule과 이전 schedule(`EVTA_SCHED`로 되돌림)의 conv 출력 299개가 공통 길이에서 byte 단위로 같다. Q·Kᵀ 출력은 뒤에 0인 블록 하나가 더 붙는다.
+- HLS 380 MHz bitstream(`run_all.sh`)에서도 281(0.754596)이다.
+- 번들은 `gen_deit_bundle.sh`로 다시 생성했다. 이 스크립트는 이제 `-vta-round-shift`를 늘 넣는다. 처음에 빠뜨렸더니 conv bias에 2^(shift−1)이 없어서 weights가 달랐다. weights는 §7.27 번들과 byte 단위로 같다.
+
+**측정 도구:**
+- `prof_summary.py`는 stream conv(patch embedding, 호출 1번에 EVTA run 2번)의 run을 합친다. 예전에는 2500 run / 99 호출이 나누어떨어지지 않아 표를 건너뛰었다.
+- `timed_bundle.py` `call_ops`는 `matmul_evta` / `_n` / `_qk`의 연산량을 센다. 합계가 2522 Mops = 1.26 G MAC가 된다.
+- DeiT / MobileNetV2 main은 `BUNDLE_RUNS`가 있으면 두 번만 부르므로 `-n` 값만큼 돈다. 예전에는 4 × 25 + 23 = 123번이었다.
+- `run_prof.sh` / `run_all.sh`는 옵션을 어느 위치에서나 받고, 없는 Dir 이름은 실행 전에 멈추며 대소문자를 무시한 후보를 알려준다.
+
+Resnet18 / 50, VGG16, MobileNetV2는 다시 생성해도 bundle `.cpp`(옵션 주석 제외)와 weights가 byte 단위로 같다(새 schedule 항목은 DeiT 모양뿐이고, 바뀐 conv0 pack 검사는 KH2 = 1에만 적용된다).
+
+**남은 것** (`-t 4`): EVTA 38.3 ms 가운데 전송 없는 GEMM / ALU 하한은 약 19.6 ms이다. vt 2로도 전송이 다 숨지 않는다. 다음은 vtalib `conv_kernel`의 1×1 경로다. weight LOAD를 블록마다 따로 하지 않고 크게 묶고, 출력 STORE의 burst 길이를 늘린다.
+
 ## 8. 하드웨어도 같이 비교해야 하나
 
 해야 한다. 다만 §7의 ①~④를 가르는 것은 어레이가 아니라 다음 네 가지다.
