@@ -203,7 +203,12 @@ add_bundle_if_present(MultiEVTAResnet50Test multivtaCaffe2Resnet50Bundle multi_t
 add_bundle_if_present(MultiEVTAVgg16Cifar10Test singlevtaVGG16Cifar10Bundle single_thread_main.cpp vgg16_cifar10.cpp)
 add_bundle_if_present(MultiEVTAVgg16Cifar10Test multivtaVGG16Cifar10Bundle multi_threads_main.cpp
   vgg16_cifar10.cpp vgg16_cifar10_1.cpp vgg16_cifar10_2.cpp vgg16_cifar10_3.cpp)
-foreach(t multivtaCaffe2Resnet50Bundle multivtaVGG16Cifar10Bundle)
+#### JO added (2026-11-10): DeiT-tiny on 4 EVTAs (vta/multievta_bundles/MultiEVTADeiTTest, gen_multi4_bundles.sh)
+add_bundle_if_present(MultiEVTADeiTTest singlevtaDeiTBundle single_thread_main.cpp deit.cpp)
+add_bundle_if_present(MultiEVTADeiTTest multivtaDeiTBundle multi_threads_main.cpp
+  deit.cpp deit_1.cpp deit_2.cpp deit_3.cpp)
+# foreach(t multivtaCaffe2Resnet50Bundle multivtaVGG16Cifar10Bundle)
+foreach(t multivtaCaffe2Resnet50Bundle multivtaVGG16Cifar10Bundle singlevtaDeiTBundle multivtaDeiTBundle)
   if(TARGET ${t})
     target_link_libraries(${t} pthread)
   endif()

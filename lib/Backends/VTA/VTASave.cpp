@@ -6691,6 +6691,7 @@ static std::string esStr(const Value *v) { return std::to_string(v->getType()->g
 // one generic CPU op; returns false for an instruction it does not handle
 static bool isUniformConstant(const Value *v, VTASaveContext *ctx);
 static std::string matMulSchedArgs(dim_t M, dim_t K, dim_t N);  //#### JO added (2026-11-10): below
+static std::string matMulCallTail(VTASaveContext *ctx, const std::string &sched);
 static bool saveGenericCpuInst(const Instruction &I, std::string *bundle, VTASaveContext *ctx) {
   auto P = [&](Value *v) { return cpuPtr(v, bundle, ctx); };
   std::string call;
@@ -6755,8 +6756,8 @@ static bool saveGenericCpuInst(const Instruction &I, std::string *bundle, VTASav
           w = q;
       if (vtaEvtaMatMul && mant == 0.5f && shift >= 1 && shift <= 15 && w >= 7) {
         call = "matmul_evta(" + a + ", " + b + ", " + d + ", " + std::to_string(ld[0]) + ", " + std::to_string(ld[1]) +
-               ", " + std::to_string(rd[1]) + ", " + std::to_string(shift) + ", vtaCmdH" +
-               matMulSchedArgs(ld[0], ld[1], rd[1]) + ");";
+               ", " + std::to_string(rd[1]) + ", " + std::to_string(shift) +
+               matMulCallTail(ctx, matMulSchedArgs(ld[0], ld[1], rd[1])) + ");";
         break;
       }
       char sc[32];
@@ -7856,8 +7857,9 @@ static void emitMatMulGroup(const MatMulGroup &g, std::string *bundle, VTASaveCo
     *bundle += "  // Q K^T of " + H + " heads from the EVTA outputs of the query / key convs (-vta-attn-keep-layout)\n";
     *bundle += "  matmul_evta_qk(" + g.qbuf->getName().str() + "_vbuf, " + g.kbuf->getName().str() + "_vbuf, mmC" + n +
                ", " + H + ", " + std::to_string(M0->getLHS()->dims()[0]) + ", " +
-               std::to_string(M0->getLHS()->dims()[1]) + ", " + std::to_string(g.shift) + ", vtaCmdH" +
-               matMulSchedArgs(M0->getLHS()->dims()[0], M0->getLHS()->dims()[1], M0->getLHS()->dims()[0]) + ");\n";
+               std::to_string(M0->getLHS()->dims()[1]) + ", " + std::to_string(g.shift) +
+               matMulCallTail(ctx, matMulSchedArgs(M0->getLHS()->dims()[0], M0->getLHS()->dims()[1],
+                                                   M0->getLHS()->dims()[0])) + ");\n";
     for (const Value *v : g.freeAfter)
       *bundle += "  VTABufferFree(" + v->getName().str() + "_vbuf);\n";
     return;
@@ -7871,8 +7873,9 @@ static void emitMatMulGroup(const MatMulGroup &g, std::string *bundle, VTASaveCo
   *bundle += "  // " + H + " heads in one EVTA call (-vta-matmul-heads)\n";
   *bundle += "  matmul_evta_n(" + H + ", mmA" + n + ", mmB" + n + ", mmC" + n + ", " +
              std::to_string(M0->getLHS()->dims()[0]) + ", " + std::to_string(M0->getLHS()->dims()[1]) + ", " +
-             std::to_string(M0->getRHS()->dims()[1]) + ", " + std::to_string(g.shift) + ", vtaCmdH" +
-             matMulSchedArgs(M0->getLHS()->dims()[0], M0->getLHS()->dims()[1], M0->getRHS()->dims()[1]) + ");\n";
+             std::to_string(M0->getRHS()->dims()[1]) + ", " + std::to_string(g.shift) +
+             matMulCallTail(ctx, matMulSchedArgs(M0->getLHS()->dims()[0], M0->getLHS()->dims()[1],
+                                                 M0->getRHS()->dims()[1])) + ");\n";
 }
 
 //#### JO added (2026-11-10): ", vt, tileH, tileW" of an attention matmul's EVTA conv (M rows as h x w over K -> N, both
@@ -7889,6 +7892,17 @@ static std::string matMulSchedArgs(dim_t M, dim_t K, dim_t N) {
       return ", " + std::to_string(elem.nVirtualThread_) + ", " + std::to_string(elem.tileHSize_) + ", " +
              std::to_string(elem.tileWSize_);
   return "";
+}
+
+//#### JO added (2026-11-10): ", vtaCmdH<idx>" and the schedule / EVTA index tail of a matmul_evta* call: a multi-EVTA copy
+//#### (-index-multi-evta) names its own command handle and passes idEVTA (the vtalib default schedule 1, 14, 14 when the
+//#### table has none); a single bundle keeps the old text
+static std::string matMulCallTail(VTASaveContext *ctx, const std::string &sched) {
+  const uint32_t idx = ctx->getIdxMultiEVTA();
+  if (!idx)
+    return ", vtaCmdH" + sched;
+  return ", vtaCmdH" + std::to_string(idx) + (sched.empty() ? std::string(", 1, 14, 14") : sched) + ", " +
+         std::to_string(idx);
 }
 
 static std::string vtaOptionsComment() {
