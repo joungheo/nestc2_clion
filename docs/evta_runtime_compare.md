@@ -1581,6 +1581,43 @@ Resnet18 / 50, VGG16, MobileNetV2는 다시 생성해도 bundle `.cpp`(옵션 �
 
 **남은 것** (`-t 4`): EVTA 38.3 ms 가운데 전송 없는 GEMM / ALU 하한은 약 19.6 ms이다. vt 2로도 전송이 다 숨지 않는다. 다음은 vtalib `conv_kernel`의 1×1 경로다. weight LOAD를 블록마다 따로 하지 않고 크게 묶고, 출력 STORE의 burst 길이를 늘린다.
 
+### 7.29 conv 타일의 DMA를 길게: weight 한 번에, 연속 행을 한 행으로 (2026-11-10)
+
+vtalib-zcu102-systolic `EVTA_CONV_BURST`(기본 켜짐, `0`이면 §7.28과 같은 명령어; `VTABundle.cpp` `evtaConvBurst`). systolic 400 MHz `_rq`, 25장 중앙값:
+
+| | EVTA 바쁜 시간 | 1장 `-t 4` | 1장 OMP 1 |
+|---|---|---|---|
+| DeiT-tiny, §7.28 | 38.3 ms (66 GOPS) | 75.0 ms | 107.3 ms |
+| DeiT-tiny, burst | **19.4 ms (130 GOPS)** | **55.7 ms** | **88.5 ms** |
+
+| 모델 (OMP 1, 1장) | burst 0 | burst 1 |
+|---|---|---|
+| Resnet18 | 24.08 ms | 23.27 ms |
+| Resnet50 | 82.18 ms | **69.57 ms** |
+| VGG16 (CIFAR-10) | 7.27 ms | 7.01 ms |
+| MobileNetV2 | 24.35 ms | **18.79 ms** |
+
+**원인 (q Linear 하나의 replay dump):** LOAD / STORE가 짧은 전송으로 쪼개져 있었다.
+- **weight:** K 블록마다, 스레드마다 `LOAD mem 1 y 6 x 1 stride 12`였다. 즉 256 byte짜리 행 6개다. DRAM 배치가 [출력 블록][K 블록]이라, K 블록 하나의 출력 블록들이 떨어져 있기 때문이다.
+- **입력 / 출력:** 9×11 tile이 DRAM과 SRAM 모두에서 연속인데도 `y 9 x 11 stride 11`로 176 byte 행 9개였다. 출력은 그것을 출력 블록마다 STORE했다.
+- load / store 모듈은 행마다 따로 전송하므로, 행이 짧으면 DRAM 지연이 그대로 드러난다.
+
+**바꾼 것:**
+- `loadBuffer2D` / `storeBuffer2D`: stride가 행 길이와 같고 패딩이 없으면 y행을 한 행(x·y)으로 합친다.
+- **1×1 conv(residual / pool / depthwise 제외):** 첫 입력 채널 블록에서 스레드의 weight 전체를 한 번에 LOAD한다(행 하나가 cBlocks × 256 byte인 [kernel][channel] 배치). 스레드의 wgt 영역(1024 / vt entry)에 들어갈 때만 이렇게 한다. 나머지 채널 블록에서는 입력만 LOAD한다. GEMM은 channel + kernel × cBlocks에서 weight를 읽는다(`gemmop_mxn` `wgt_kernel_factor_`, `gemmop_1x1`의 바깥 uop 루프).
+- **STORE:** tile 폭이 이미지 폭과 같고 dummy 행 / 열이 없으면, 출력 블록 nFilterinLoop개를 STORE 하나로 보낸다(행 하나가 블록 하나, DRAM stride H·W).
+- 계산 순서와 GEMM 내용은 같다. 바뀌는 것은 DMA 명령어 모양뿐이다.
+
+**확인:**
+- `EVTA_DUMP_CONV`로 DeiT(299), Resnet18(40), Resnet50(106), VGG16(34), MobileNetV2(5200)의 conv 출력이 burst 0 / 1에서 byte 단위로 같다.
+- DeiT `EVTA_MATMUL_CHECK=1` 288 head가 0 differ이다.
+- 분류는 DeiT 281(0.754596), MobileNetV2 282(0.944157), Resnet18 / 50 281이다.
+- `run_prof.sh -s _systimed all`에서 golden이 있는 테스트 29개가 모두 PASS다.
+
+**남은 것:**
+- DeiT EVTA 19.4 ms는 §7.28에서 잰, DRAM 전송을 모두 뺀 하한(19.6 ms)과 같은 수준이다. 이제 EVTA 시간은 GEMM / ALU가 정한다. 1장 55.7 ms(`-t 4`) 중 나머지는 CPU 쪽이다.
+- HLS용 `vta/vtalib`와 multi4 systolic 실행에는 아직 넣거나 확인하지 않았다.
+
 ## 8. 하드웨어도 같이 비교해야 하나
 
 해야 한다. 다만 §7의 ①~④를 가르는 것은 어레이가 아니라 다음 네 가지다.

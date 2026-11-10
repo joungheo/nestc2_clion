@@ -324,6 +324,10 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   output channel blocks (13 blocks with 2 computed nothing, no error), matmul N padded for it (`matmulSched`):
   EVTA 55.8 -> 38.3 ms, 123.5 -> 107.4 ms (`-t 4` 91.9 -> 75.2 ms). `gen_deit_bundle.sh` always passes `-vta-round-shift`.
   `prof_summary.py` folds the runs of a streamed conv (else no `_sysprof` table for DeiT).
+- Longer conv DMAs (2026-11-10, `docs/evta_runtime_compare.md` §7.29; vtalib-zcu102-systolic `EVTA_CONV_BURST`, default on): 2D LOAD /
+  STOREs with contiguous rows as one row, a 1x1 conv's weights of a thread in one LOAD (`gemmop_mxn` `wgt_kernel_factor_`), the
+  kernels of a full-width tile in one STORE; dumps byte-identical, golden all PASS. Single rq OMP 1: DeiT 107.3 -> 88.5 ms (EVTA
+  38.3 -> 19.4 ms, `-t 4` 55.7 ms), Resnet50 82.2 -> 69.6, MobileNetV2 24.3 -> 18.8, Resnet18 24.1 -> 23.3 ms. Not in vta/vtalib yet.
 - The lab board's PL has a defective configuration row (tile row SLICE Y219, cells stuck at 0; `log/BOARD_TODO.md`
   2026-10-23/24). `vivado.tcl` on zcu102 fences the design below it by default (`VTA_BRAM_FENCE=y219|upper|none`).
   multi2 fits below it and works (2026-10-24); multi4 needs more BRAM than the rows below, so it crosses the row with
