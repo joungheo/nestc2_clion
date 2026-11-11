@@ -6572,7 +6572,52 @@ static void layerNormI8(int8_t *out, const int8_t *x, size_t rows, size_t cols, 
   //#### for C <= 1024: ADD / RSUM, MUL), 1 / sqrt(W) by an even normalizing shift (CLZ) and an 8-bit LUT, then
   //#### ((C x - S) * T >> 8) * G[l] with G[l] < 2^14 the per-channel gamma / out scale, a rounding shift and the int bias.
   //#### The constants come from the float parameters at each call (compile-time constants on the EVTA).
-  static const bool lnInt = getenv("NESTC_LN_INT") && atoi(getenv("NESTC_LN_INT")) > 0;
+  //#### JO added (2026-11-11): NESTC_LN_INT=2: the 1 / sqrt LUT with 16-bit entries and a linear interpolation between two
+  //#### entries by the low 8 bits (two LUT reads, MUL, ADD); with the 8-bit LUT the free-scale DeiT bundle lost 0.5 %p
+  //#### (59.89 against 60.41 % float, docs/deit_optimization.md 6.6)
+  static const int lnInt = getenv("NESTC_LN_INT") ? atoi(getenv("NESTC_LN_INT")) : 0;
+  if (lnInt == 2) {
+    int32_t T16[258];
+    for (int k = 0; k < 258; k++)
+      T16[k] = k < 64 ? 0 : (int32_t)std::lround(65535.0 / std::sqrt(k / 64.0));
+    const int32_t C = (int32_t)cols;
+    // 1 / sqrt(W) = T / (65535 * 2^7 * 2^(sh / 2)); p = d * (T >> 1) >> 15 ~ d * T / 2^16
+    const double gk = 65536.0 / ((double)a2d * 65535.0 * 128.0);
+#pragma omp parallel for schedule(static)
+    for (long r = 0; r < (long)rows; r++) {
+      const int8_t *xr = x + r * cols;
+      const float *wr = w + r * cols;
+      double gmax = 0;
+      for (size_t l = 0; l < cols; l++) gmax = std::max(gmax, std::fabs((double)wr[l]));
+      int gs = 0;
+      while (gmax * gk * std::ldexp(1.0, gs + 1) < 16383.0 && gs < 40) gs++;
+      int32_t S = 0, Q = 0;
+      for (size_t l = 0; l < cols; l++) {
+        S += xr[l];
+        Q += xr[l] * xr[l];
+      }
+      int32_t W = C * Q - S * S;
+      if (W < 1) W = 1;
+      int sh = (32 - __builtin_clz((uint32_t)W)) - 16;
+      if (sh & 1) sh++;
+      const uint32_t Wn = sh >= 0 ? (uint32_t)W >> sh : (uint32_t)W << -sh;
+      const int32_t i0 = (int32_t)(Wn >> 8), fr = (int32_t)(Wn & 255);
+      const int32_t Tv = T16[i0] - (((T16[i0] - T16[i0 + 1]) * fr) >> 8);
+      const int t = gs + sh / 2;
+      for (size_t l = 0; l < cols; l++) {
+        const int32_t G = (int32_t)std::lround(wr[l] * gk * std::ldexp(1.0, gs));
+        const int32_t p = ((C * xr[l] - S) * (Tv >> 1)) >> 15;
+        const int32_t v = p * G;
+        //#### JO changed (2026-11-11): the bias added before the shift at the same fixed point (one rounding, as the conv
+        //#### bias); rounding it to an int8 step first moved 25 % of the outputs by 1 when b * a2b / a2d was a half
+        const int64_t Bf = std::llround(b[r * cols + l] * (double)a2b / a2d * std::ldexp(1.0, t));
+        const int64_t vb = (int64_t)v + Bf;
+        const int32_t o = (int32_t)(t > 0 ? (vb + ((int64_t)1 << (t - 1))) >> t : vb);
+        out[r * cols + l] = (int8_t)(o > 127 ? 127 : o < -128 ? -128 : o);
+      }
+    }
+    return;
+  }
   if (lnInt) {
     uint8_t T[256];
     for (int k = 0; k < 256; k++)
@@ -6605,9 +6650,11 @@ static void layerNormI8(int8_t *out, const int8_t *x, size_t rows, size_t cols, 
         const int32_t G = (int32_t)std::lround(wr[l] * gk * std::ldexp(1.0, gs));
         const int32_t p = ((C * xr[l] - S) * Tv) >> 8;
         const int32_t v = p * G;
-        const int32_t y = t > 0 ? (v + (1 << (t - 1))) >> t : v << -t;
-        const int32_t bq = (int32_t)std::lround(b[r * cols + l] * (double)a2b / a2d);
-        const int32_t o = y + bq;
+        //#### JO changed (2026-11-11): the bias added before the shift at the same fixed point (one rounding, as the conv
+        //#### bias); rounding it to an int8 step first moved 25 % of the outputs by 1 when b * a2b / a2d was a half
+        const int64_t Bf = std::llround(b[r * cols + l] * (double)a2b / a2d * std::ldexp(1.0, t));
+        const int64_t vb = (int64_t)v + Bf;
+        const int32_t o = (int32_t)(t > 0 ? (vb + ((int64_t)1 << (t - 1))) >> t : vb);
         out[r * cols + l] = (int8_t)(o > 127 ? 127 : o < -128 ? -128 : o);
       }
     }

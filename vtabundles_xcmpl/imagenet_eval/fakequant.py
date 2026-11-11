@@ -21,6 +21,8 @@ ap.add_argument('--no-weights', action='store_true')
 ap.add_argument('--skip', action='append', default=[])
 ap.add_argument('--exact', action='append', default=[], help='with --pow2: exact (not power-of-two) scale for tensors containing this')
 ap.add_argument('--out', default='')
+ap.add_argument('--threads', type=int, default=0, help='onnxruntime intra-op threads (0: all cores)')
+ap.add_argument('--per-channel', action='store_true', help='weights per output channel (MatMul column, Gemm / Conv row); with --ratio out the output keeps the per-tensor ratio rounding of the largest channel, with --ratio weight each channel is rounded up to a power-of-two ratio (a per-channel shift)')
 ap.add_argument('--ratio', choices=['', 'out', 'weight', 'best'], default='',
                 help='free scales, but every MatMul / Gemm / Conv (+ bias) has a power-of-two in * w / out ratio (EVTA shift): '
                      'out = round the output scale up; weight = round the weight scale up (activation output exact); best = the smaller of the two per op; '
@@ -63,6 +65,7 @@ for t in cands:
     if t not in have and t != 'pixel_values':
         cm.graph.output.append(helper.make_tensor_value_info(t, TensorProto.FLOAT, None))
 so = ort.SessionOptions(); so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+if a.threads: so.intra_op_num_threads = a.threads; so.inter_op_num_threads = 1
 s = ort.InferenceSession(cm.SerializeToString(), so, providers=['CPUExecutionProvider'])
 names = [o.name for o in s.get_outputs()]
 amax = {}
@@ -82,6 +85,7 @@ cons = {}
 for n in g.node:
     for i in n.input: cons.setdefault(i, []).append(n)
 skipq = set()
+chscale = {}
 if a.ratio:
     for n in g.node:
         if n.op_type not in ('MatMul', 'Gemm', 'Conv'): continue
@@ -95,6 +99,10 @@ if a.ratio:
         if n.input[1] in inits:
             w = numpy_helper.to_array(next(t for t in g.initializer if t.name == n.input[1]))
             sw = max(float(np.abs(w).max()), 1e-8) / 127.5
+            if a.per_channel and a.ratio == 'weight':
+                chscale[n.output[0]] = (lambda si, so_: lambda sc: so_ / (si * 2.0 ** np.floor(np.log2(so_ / (si * sc)))))(si, so_)
+                fixed[out] = so_
+                continue
             r = so_ / (si * sw); fo = 2.0 ** np.ceil(np.log2(r)) / r   # output up by fo, or weight up by 2 / fo
             if a.ratio == 'best' and fo <= 2.0 / fo:
                 fixed[n.input[1]] = sw; fixed[out] = float(si * sw * 2.0 ** np.ceil(np.log2(r)))
@@ -127,7 +135,20 @@ for n in list(g.node):
     if not a.no_weights and n.op_type in ('MatMul', 'Gemm', 'Conv') and n.input[1] in inits:
         w = numpy_helper.to_array(next(t for t in g.initializer if t.name == n.input[1]))
         amax[n.input[1]] = float(np.abs(w).max())
-        wq, wd = qdq(n.input[1]); nodes += wq; n.input[1] = wd
+        if a.per_channel and w.ndim >= 2:
+            ax = 1 if n.op_type == 'MatMul' else 0
+            if n.op_type == 'Gemm' and not any(at.name == 'transB' and at.i for at in n.attribute): ax = 1
+            red = tuple(i for i in range(w.ndim) if i != ax)
+            sc = np.maximum(np.abs(w).max(axis=red), 1e-8) / 127.5
+            if a.ratio == 'weight' and n.output[0] in chscale:
+                sc = chscale[n.output[0]](sc)
+            # opset 11 has no per-axis QuantizeLinear: the weight is replaced by its quantized-dequantized values
+            shp = [1] * w.ndim; shp[ax] = -1; scb = sc.reshape(shp)
+            wq = np.clip(np.round(w / scb), -128, 127) * scb
+            t = next(t for t in g.initializer if t.name == n.input[1])
+            t.CopyFrom(numpy_helper.from_array(wq.astype(np.float32), t.name))
+        else:
+            wq, wd = qdq(n.input[1]); nodes += wq; n.input[1] = wd
     nodes.append(n)
     for o in n.output:
         if o in qt and o in amax and o not in skipq:
