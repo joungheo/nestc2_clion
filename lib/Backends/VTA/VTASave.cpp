@@ -6595,9 +6595,26 @@ static void layerNormI8(int8_t *out, const int8_t *x, size_t rows, size_t cols, 
     const double gk = std::ldexp(1.0, k) / ((double)a2d * (i16 ? 65535.0 : 255.0) * 128.0);
     const float *w0 = w;
     const int8_t *b0 = b;
+    // gamma / beta are constants: whether their rows are all the same is checked once per pointer (the check is ~190 KB
+    // of memcmp on one core, 0.3 ms per call at 4 threads)
+    static const float *seenW[64];
+    static bool seenSame[64];
+    static int nSeen = 0;
+    int si = -1;
+    for (int i = 0; i < nSeen; i++)
+      if (seenW[i] == w)
+        si = i;
     bool sameRows = true;
-    for (size_t r = 1; r < rows && sameRows; r++)
-      sameRows = !memcmp(w + r * cols, w0, cols * sizeof(float)) && !memcmp(b + r * cols, b0, cols);
+    if (si >= 0) {
+      sameRows = seenSame[si];
+    } else {
+      for (size_t r = 1; r < rows && sameRows; r++)
+        sameRows = !memcmp(w + r * cols, w0, cols * sizeof(float)) && !memcmp(b + r * cols, b0, cols);
+      if (nSeen < 64) {
+        seenW[nSeen] = w;
+        seenSame[nSeen++] = sameRows;
+      }
+    }
     // G and B (at 2^(gs + 16) / out step, made exact to 1 / 2^16 of an output step) for a row's gamma / beta
     auto coeffs = [&](const float *wr, const int8_t *br, int32_t *G, int32_t *B, int &gs) {
       double gmax = 0;
