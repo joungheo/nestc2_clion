@@ -28,3 +28,4 @@ ${CXX:-c++} -std=c++14 -O1 -w -fopenmp -DLLVM_DISABLE_ABI_BREAKING_CHECKS_ENFORC
   -I"$V/include/simulator/vta" -I"$V/3rdparty/dlpack/include" -I"$V/3rdparty/dmlc-core/include" -I"$L" -I"$R" -I. \
   "$H/ln_evta_test.cc" -o ln_evta_test libVTABundle.a libvta_runtime.a -lpthread
 OMP_NUM_THREADS=1 ./ln_evta_test
+OMP_NUM_THREADS=1 ./ln_evta_test after-conv

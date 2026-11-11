@@ -642,10 +642,17 @@ bool VTAHasAluExt() {
 }
 static void *outLutBuffer(const int8_t *T) {
   static std::mutex m;
-  static std::map<const int8_t *, void *> bufs;
+  static std::map<const int8_t *, std::pair<void *, std::vector<int8_t>>> bufs;
   std::lock_guard<std::mutex> g(m);
-  void *&b = bufs[T];
+  //#### JO changed (2026-11-12): remade when the table at that address changed (a freed table's address can come back)
+  auto &e = bufs[T];
+  void *&b = e.first;
+  if (b && memcmp(e.second.data(), T, 256)) {
+    VTABufferFree(b);
+    b = nullptr;
+  }
   if (!b) {
+    e.second.assign(T, T + 256);
     b = VTABufferAlloc(256 * sizeof(int32_t));
     int32_t *p = (int32_t *)VTABufferGetVirtAddr(b);
     for (int k = 0; k < 256; k++) p[k] = (uint8_t)T[k];   // entry k / 16, lane k % 16
@@ -5235,6 +5242,10 @@ static void pushAlu2(VTACommandHandle cmdh, uint32_t idEVTA, int op, int io, int
 
 namespace {
 struct LnConsts {
+  std::vector<float> w0;     // what they were made from: the first gamma row, the beta row, the scales, the rows
+  std::vector<int8_t> b0;
+  float a2b = 0, a2d = 0;
+  int rows = 0;
   bool sameRows = false;
   int gs = 0;
   std::vector<int32_t> G, B;
@@ -5287,15 +5298,25 @@ int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float
   const int n = std::min(64, (kAcc - 2 * NB - 16) / std::max(1, 3 * NB + 13));
   if (!VTAHasAluExt() || lnInt != 1 || cols % 16 || n < 17 || rows < 1)
     return 0;
-  // the constants of this gamma / beta (once per pointer)
+  // the constants of this gamma / beta (once per pointer; remade if the first row, the scales or the rows changed: a
+  // freed buffer's address can come back for other parameters)
   static std::mutex m;
   static std::map<std::pair<const float *, const int8_t *>, LnConsts *> known;
   LnConsts *k;
   {
     std::lock_guard<std::mutex> g(m);
     LnConsts *&kk = known[{w, b}];
+    if (kk && (kk->rows != rows || kk->a2b != a2b || kk->a2d != a2d || (int)kk->w0.size() != cols ||
+               memcmp(kk->w0.data(), w, cols * sizeof(float)) || memcmp(kk->b0.data(), b, cols))) {
+      if (kk->buf)
+        VTABufferFree(kk->buf);
+      delete kk;
+      kk = nullptr;
+    }
     if (!kk) {
       kk = new LnConsts;
+      kk->w0.assign(w, w + cols), kk->b0.assign(b, b + cols);
+      kk->a2b = a2b, kk->a2d = a2d, kk->rows = rows;
       kk->sameRows = true;
       for (int r = 1; r < rows && kk->sameRows; r++)
         kk->sameRows = !memcmp(w + (size_t)r * cols, w, cols * sizeof(float)) && !memcmp(b + (size_t)r * cols, b, cols);

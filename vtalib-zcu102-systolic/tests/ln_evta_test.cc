@@ -47,9 +47,27 @@ static int run(int R, int C, float a2b, float a2d, unsigned seed) {
   return !done || bad;
 }
 
-int main() {
+// an EVTA conv before (the layer norms of a bundle run between convs)
+static void convBefore(int H, int W, int C, int KN, int vt, int tile) {
+  std::vector<int8_t> v((size_t)H * W * C + (size_t)KN * C);
+  for (size_t i = 0; i < v.size(); i++) v[i] = (int8_t)(i * 37 % 251 - 120);
+  void *in = VTABufferAlloc((size_t)H * W * C), *wt = VTABufferAlloc((size_t)KN * C), *bs = VTABufferAlloc(KN * 4),
+       *o = VTABufferAlloc((size_t)H * W * KN);
+  memcpy(VTABufferGetVirtAddr(in), v.data(), (size_t)H * W * C);
+  memcpy(VTABufferGetVirtAddr(wt), v.data() + (size_t)H * W * C, (size_t)KN * C);
+  memset(VTABufferGetVirtAddr(bs), 0, KN * 4);
+  convolution_wo_tr((int8_t *)in, (int8_t *)wt, (int32_t *)bs, (int8_t *)o, 1, H, W, C, KN, 1, 1, 0, 1, false, true, 8, H,
+                    W, VTATLSCommandHandle(0), vt, tile, W, 0);
+  VTABufferFree(in), VTABufferFree(wt), VTABufferFree(bs), VTABufferFree(o);
+}
+
+int main(int argc, char **argv) {
   setenv("NESTC_LN_INT", "1", 1);
   int bad = 0;
+  if (argc > 1) {
+    printf("after an EVTA conv (18 x 11 x 192 -> 768, as the DeiT fc1)\n");
+    convBefore(18, 11, 192, 768, 2, 9);
+  }
   bad |= run(198, 192, 1.f / 37.3f, 1.f / 21.9f, 1);   // DeiT shape
   bad |= run(198, 192, 1.f / 9.07f, 1.f / 6.37f, 2);
   bad |= run(50, 384, 1.f / 12.f, 1.f / 30.f, 3);       // DeiT-small width, rows not a multiple of the run
