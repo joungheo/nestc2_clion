@@ -420,7 +420,24 @@ class Device {
   //#### acc): an instruction with rq_en / lut_en writes its int8 out value into acc sign-extended, so a STORE after it gives
   //#### the hardware's out (the hardware keeps the 32-bit acc; programs only requantize in their last instruction).
   uint8_t lut_[256] = {0};
+  //#### JO added (2026-11-12, ALU extension): EVTA_ALU_HAZARD=<window> (17 for the HLS ALUX vector loop): count the steps of
+  //#### each ALU instruction that read an acc entry written by one of the <window> steps before them (vta_alu_ref::hazards;
+  //#### no forwarding in the HLS ALU loop); printed at exit, and the first such instruction
+  void HazardCheck(const VTAAluInsn* op) {
+    static const int w = getenv("EVTA_ALU_HAZARD") ? atoi(getenv("EVTA_ALU_HAZARD")) : 0;
+    if (w <= 0 || (op->use_imm && VTA_ALU_FULL_OP(*op) < 4 && !op->lut_en)) return;   // the imm loop (II 1) has no hazard
+    struct Count {
+      long insns = 0, steps = 0, bad = 0;
+      ~Count() { fprintf(stderr, "EVTA_ALU_HAZARD: %ld vector ALU instructions, %ld steps, %ld read an entry written within the last %d steps\n", insns, steps, bad, w); }
+    };
+    static Count c;
+    const long h = vta_alu_ref::hazards(*op, static_cast<VTAUop*>(uop_.BeginPtr(0)), w);
+    if (h && !c.bad)
+      fprintf(stderr, "EVTA_ALU_HAZARD: first at ALU op %d, %u x %u steps, %ld hazards\n", VTA_ALU_FULL_OP(*op), op->iter_out, op->iter_in, h);
+    c.insns++, c.steps += (long)op->iter_out * op->iter_in * (op->uop_end - op->uop_bgn), c.bad += h;
+  }
   void RunALUExt(const VTAAluInsn* op) {
+    HazardCheck(op);
     prof_->alu_counter += op->iter_out * op->iter_in * (op->uop_end - op->uop_bgn);
     if (prof_->SkipExec()) return;
     static_assert(VTA_ACC_WIDTH == 32, "the reference model takes int32 acc entries");
@@ -442,6 +459,7 @@ class Device {
       RunALUExt(op);
       return;
     }
+    HazardCheck(op);
     if (op->use_imm) {
       RunALU_<true>(op);
     } else {
