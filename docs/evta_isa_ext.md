@@ -218,7 +218,7 @@ sudo -n /bin/sh -c "BIN=$NEW hw/script/run_prof.sh -s _systimed -n 2 <Dir>; cat 
 | bias reset (11-04) | `bias`, `biashazard` | 96/96 | 0 errors | single golden 30, dumps 동일 / multi4 golden 3, dumps 80개 동일 |
 | requantize (11-04) | 무작위 300 | 49 vector × 2 = 98/98 | 0 errors | single: probes 10/10, golden 27 PASS + 분류 4개 같음, dumps 146개 동일, `EVTA_RES_CHECK` 0, `EVTA_REQUANT=0` 우회 동일 | / multi4(395.8 MHz): probes 40/40, golden 3 PASS, dumps 80개가 `bias`와 동일
 
-## 8. 다음 ISA 개정: ALU 확장 (설계, 2026-11-10, 아직 구현 전)
+## 8. 다음 ISA 개정: ALU 확장 (설계 11-10, 1–2단계 끝 11-11, 하드웨어는 아직)
 
 DeiT의 LayerNorm / softmax / GELU, 2의 거듭제곱이 아닌 scale, avgpool, YOLO 계열 activation을 EVTA에 두려고 ALU를 넓힌다.
 H1(MUL), H2(LUT), H4(행 reduction)의 일부(`deit_optimization.md` §6.2)를 **한 번의 개정**으로 묶는다.
@@ -396,7 +396,7 @@ bitstream과 vtalib의 짝이 한 번만 바뀌게 하려는 것이다.
 |---|---|---|
 | 1 | 정수 LayerNorm / softmax 식을 CPU에서 정하고 ImageNet 확인 (소프트웨어, `deit_optimization.md` §6.1) | **11-10 끝남 (§8.6)** |
 | 2 | `hw_spec.h` 세 곳, C 모델(`systolic_model.cc`), vtalib 시뮬레이터 `sim_driver.cc`에 연산 12개 | **11-11 끝남 (§8.7)** |
-| 3 | HLS `vta.cc` `alu()` / `alu_lane()`, `sa_rmw.v` 출력 LUT, `vta_test.cc` `alu_test`에 새 연산, RTL testbench, CSim | 1–1.5주 |
+| 3 | HLS `vta.cc` `alu()` / `alu_lane()`, `sa_rmw.v` 출력 LUT, `vta_test.cc` `alu_test`에 새 연산, RTL testbench, CSim | 1–1.5주. **11-11 설계만 (§8.8)**, 코드는 아직 |
 | 4 | single `_alux` bitstream(합성 약 1시간 × 몇 번), 보드 probe, golden, dump 비교 | 2–4일 |
 | 5 | multi4 bitstream (Y219 flow) | 1–3일 |
 | 6 | vtalib API(`VTAPushALUOp` ext 인자, `VTALutSet`), bitstream 이름 검사, CPU 대체 경로 | 2–3일 |
@@ -457,4 +457,42 @@ bitstream과 vtalib의 짝이 한 번만 바뀌게 하려는 것이다.
 - HLS `vta.cc` `alu()` / `alu_lane()`에 같은 연산을 넣는다.
 - `vta_test.cc`의 `alu_test`가 기준 모델(`alu_ext_ref.h`)과 같은 결과를 내는지 CSim으로 확인한다.
 - 비트스트림 합성(4단계)은 PC 냉각을 고친 뒤에 한다.
+
+### 8.8 3단계: HLS ALU 설계 (2026-11-11, 코드 전)
+
+**아카이브.** 하드웨어를 바꾸기 전의 상태를 남겼다.
+- git tag `alux-step2-261111`(commit `f847659b`)
+- `~/npuprg/archive/alux_step2_before_hls_261111/`: 소스 tarball, `SHA256SUMS`, 요약 `README.md`
+
+돌아갈 때는 `git checkout -b from-alux-step2 alux-step2-261111`.
+
+**HLS `vta.cc`를 읽고 정한 방침.** `vta-hw-zcu102-systolic`만 바꾼다.
+
+| 항목 | 정한 것 |
+|---|---|
+| 켜는 방법 | Makefile `ALUX=1` → `-DVTA_ALUX`, IP / bitstream 이름에 `_alux`. 기본 `ALUX=0`이면 지금 HLS와 같은 코드가 나온다 |
+| 연산 번호 | `op = alu_op_ext << 2 \| alu_opcode`. 0–3은 지금 `alu_lane()` 그대로 |
+| MUL | lane마다 32 × 16비트 곱(`(int16) src`), 아래 32비트. lane당 DSP 2개, 16 lane이면 32개 |
+| SUB, CPY, CLZ | lane마다 조합 회로. CLZ는 32비트 priority encoder |
+| RSUM / RMAX | src 16 lane의 덧셈 / 비교 tree. 결과를 dst 모든 lane에. `use_imm`이면 imm |
+| LUT 표 저장 | `T[16·e + b]`를 **bank b(= 주소 하위 4비트), 칸 e(상위 4비트)**로 나눈다. lane마다 사본 하나씩 두고, 각 사본은 16 bank × 16칸(8비트)이다. 사본 1개는 bank 16개, 16 lane이면 bank 256개다(16칸짜리 LUTRAM, 쓰기 포트 1개). |
+| LUTSET | step 하나가 lane b의 값을 모든 사본의 bank b, 칸 `(imm + step) & 15`에 쓴다. 그래서 bank마다 한 번만 쓰면 된다. `step`은 명령 안에서 루프 순서대로 세는 counter다. acc / out은 쓰지 않는다 |
+| LUT 읽기 | lane c는 자기 사본의 bank `x[3:0]`, 칸 `x[7:4]`를 읽는다(16칸 RAM 16개를 읽고 16:1 mux). imm 0번 비트가 1이면 부호 확장 |
+| ALU `lut_en` | 한 명령에서 LUT 연산과 `lut_en`이 같이 쓰일 수 있다(기준 모델이 허용). 그래서 out용 사본을 따로 한 벌 더 두고, LUTSET이 둘 다 쓴다. LUTRAM은 약 2 × 2,000개로 추정한다(§8.4의 512개보다 크다. 16 bank로 나눈 만큼 RAM이 작게 쪼개지기 때문) |
+| imm 루프 (II = 1) | 지금은 dst만 읽는다. LUTSET(`use_imm = 1`로 씀)은 읽는 주소를 src로 바꾼다. 그래서 이 루프에도 src offset을 더한다. 여전히 읽기 하나, 쓰기 하나다 |
+| vector 루프 (II = 2) | src와 dst를 읽는다. 같은 연산 함수를 쓴다 |
+| GEMM `lut_en` | RTL `sa_rmw.v`에 표가 있어야 한다. 그러려면 LUTSET이 쓰는 값을 HLS compute에서 gemm_sa로 넘기는 포트가 필요하다. CSim용 `gemm_sa_csim`은 같은 표를 쓰면 된다. 3단계 뒷부분(3b)으로 미룬다 |
+
+**검증 방법 (CSim)**
+- 새 testbench `sim/alux_test.cc`를 `vta_test.cc`에서 `VTA_ALUX`일 때 부른다.
+- 명령열 구성:
+  1. 무작위 acc를 LOAD한다.
+  2. LUTSET으로 무작위 표를 채운다.
+  3. 무작위 ALU 명령을 수십 개 돌린다. 연산 0–11, `use_imm`, factor, `rq_*`, `lut_en`을 무작위로 고른다. 명령마다 out 전체를 STORE한다.
+  4. 마지막에 CPY와 SHR 8을 세 번 해서 acc 32비트 전체를 바이트별로 STORE한다.
+- 같은 명령을 기준 모델 `alu_ext_ref.h`에도 돌려 모든 바이트를 비교한다.
+- 실행은 `make ip CSIM=1 SYSTOLIC=1 ALUX=1`(docker `vivado2020-build`)로 한다. 한 코어로 몇 분 걸린다.
+- **CSim은 C를 순서대로 실행한다.** pipeline 안에서 step끼리 겹치는 문제(같은 dst를 가까운 step이 쓰는 경우, forwarding 없음)는 CSim에서 보이지 않는다. 이 문제는 보드의 명령열 시험(§8.7의 LayerNorm / softmax 명령열)과 RTL / cosim에서 확인한다.
+
+**상태:** 11-11 16:07에 PC가 과열로 꺼져서(`host_pc_shutdown.md`) 코드는 아직 쓰지 않았다. 냉각을 확인한 뒤 위 방침대로 `vta.cc`와 testbench를 쓴다.
 

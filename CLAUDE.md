@@ -167,7 +167,8 @@ the KV260 DPU (price, power, size, interfaces, published numbers, which advantag
 
 ### EVTA bitstreams (host PC, Vivado 2020.1 in docker)
 
-The bitstream is synthesized on the x86 host PC, not on the board. Vivado 2020.1 does not install on the
+The bitstream is synthesized on the x86 host PC, not on the board. The host PC powered off from overheating several times (2026-10-25 to 11-11, likely a failed AIO pump; records, causes and the
+commands to watch the temperature: [docs/host_pc_shutdown.md](docs/host_pc_shutdown.md)); no all-core jobs (synthesis) until the cooler is fixed. Vivado 2020.1 does not install on the
 host's Ubuntu 20.04, so it lives in the docker container **`vivado2020-build`** (ubuntu:18.04, user
 `ubuntu`, `/tools/Xilinx` and the nest-compiler tree mounted at the same paths). Vivado is installed at
 **`/tools/Xilinx/v2020.1/`** (Y2K22 HLS patch applied); `/tools/Xilinx/Vivado/2018.3` and `2020.2` on the host
