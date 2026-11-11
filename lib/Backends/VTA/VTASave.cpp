@@ -6639,7 +6639,10 @@ static void layerNormI8(int8_t *out, const int8_t *x, size_t rows, size_t cols, 
   const float ek0 = e1a / e1d, ek1 = e1b / e1d;
   const float c3 = v3b * v3d;
   const float ak0 = a2a / large, ak1 = a2b / large, akd = large / a2d;
-  const bool q4mul = lnPow2Inv(sQ4);
+  //#### JO changed (2026-11-11): approx (-vta-cpu-approx) also multiplies by 1 / sQ4 when it is not a power of two
+  //#### (-vta-pow2-ratio graphs: the division cost 1.8 ms in DeiT)
+  // const bool q4mul = lnPow2Inv(sQ4);
+  const bool q4mul = lnPow2Inv(sQ4) || approx;
   const float q4k = q4mul ? 1.f / sQ4 : sQ4;
   const long groups = (long)((rows + 3) / 4);
 #pragma omp parallel for schedule(static)
