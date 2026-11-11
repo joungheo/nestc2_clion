@@ -6572,67 +6572,60 @@ static void layerNormI8(int8_t *out, const int8_t *x, size_t rows, size_t cols, 
   //#### for C <= 1024: ADD / RSUM, MUL), 1 / sqrt(W) by an even normalizing shift (CLZ) and an 8-bit LUT, then
   //#### ((C x - S) * T >> 8) * G[l] with G[l] < 2^14 the per-channel gamma / out scale, a rounding shift and the int bias.
   //#### The constants come from the float parameters at each call (compile-time constants on the EVTA).
-  //#### JO added (2026-11-11): NESTC_LN_INT=2: the 1 / sqrt LUT with 16-bit entries and a linear interpolation between two
-  //#### entries by the low 8 bits (two LUT reads, MUL, ADD); with the 8-bit LUT the free-scale DeiT bundle lost 0.5 %p
-  //#### (59.89 against 60.41 % float, docs/deit_optimization.md 6.6)
+  //#### JO added (2026-11-10, changed 2026-11-11): NESTC_LN_INT=1|2: the integer layer norm planned for the EVTA ALU
+  //#### (docs/evta_isa_ext.md 8.2, 8.6), exact up to 1 / sqrt: (x - mean) / sd = (C x - S) / sqrt(W) with S = sum x,
+  //#### W = C sum x^2 - S^2 (within 32 bits for C <= 1024: ADD / RSUM, MUL); 1 / sqrt(W) by an even normalizing shift (CLZ)
+  //#### and a LUT on the top 8 bits (1: 8-bit entries; 2: 16-bit entries interpolated by the low 8 bits, two LUT reads,
+  //#### MUL, ADD); y = (((C x - S) * T >> k) * G[l] + B[l] + round) >> t with G[l] < 2^14 the gamma / out scale and B[l]
+  //#### the bias at the same fixed point (one rounding, as the conv bias: rounding it to an int8 step first moved 25 % of
+  //#### the outputs by 1). G / B are made once per call when every row has the same gamma / beta (DeiT), else per row:
+  //#### at each element they cost 6x the float layer norm (20 -> 130 ms). Accuracy (DeiT free scales, ImageNetV2 9,000):
+  //#### float 60.41 %, 1: 60.29 %, 2: 60.30 % (docs/deit_optimization.md 6.6).
   static const int lnInt = getenv("NESTC_LN_INT") ? atoi(getenv("NESTC_LN_INT")) : 0;
-  if (lnInt == 2) {
-    int32_t T16[258];
-    for (int k = 0; k < 258; k++)
-      T16[k] = k < 64 ? 0 : (int32_t)std::lround(65535.0 / std::sqrt(k / 64.0));
-    const int32_t C = (int32_t)cols;
-    // 1 / sqrt(W) = T / (65535 * 2^7 * 2^(sh / 2)); p = d * (T >> 1) >> 15 ~ d * T / 2^16
-    const double gk = 65536.0 / ((double)a2d * 65535.0 * 128.0);
-#pragma omp parallel for schedule(static)
-    for (long r = 0; r < (long)rows; r++) {
-      const int8_t *xr = x + r * cols;
-      const float *wr = w + r * cols;
-      double gmax = 0;
-      for (size_t l = 0; l < cols; l++) gmax = std::max(gmax, std::fabs((double)wr[l]));
-      int gs = 0;
-      while (gmax * gk * std::ldexp(1.0, gs + 1) < 16383.0 && gs < 40) gs++;
-      int32_t S = 0, Q = 0;
-      for (size_t l = 0; l < cols; l++) {
-        S += xr[l];
-        Q += xr[l] * xr[l];
-      }
-      int32_t W = C * Q - S * S;
-      if (W < 1) W = 1;
-      int sh = (32 - __builtin_clz((uint32_t)W)) - 16;
-      if (sh & 1) sh++;
-      const uint32_t Wn = sh >= 0 ? (uint32_t)W >> sh : (uint32_t)W << -sh;
-      const int32_t i0 = (int32_t)(Wn >> 8), fr = (int32_t)(Wn & 255);
-      const int32_t Tv = T16[i0] - (((T16[i0] - T16[i0 + 1]) * fr) >> 8);
-      const int t = gs + sh / 2;
-      for (size_t l = 0; l < cols; l++) {
-        const int32_t G = (int32_t)std::lround(wr[l] * gk * std::ldexp(1.0, gs));
-        const int32_t p = ((C * xr[l] - S) * (Tv >> 1)) >> 15;
-        const int32_t v = p * G;
-        //#### JO changed (2026-11-11): the bias added before the shift at the same fixed point (one rounding, as the conv
-        //#### bias); rounding it to an int8 step first moved 25 % of the outputs by 1 when b * a2b / a2d was a half
-        const int64_t Bf = std::llround(b[r * cols + l] * (double)a2b / a2d * std::ldexp(1.0, t));
-        const int64_t vb = (int64_t)v + Bf;
-        const int32_t o = (int32_t)(t > 0 ? (vb + ((int64_t)1 << (t - 1))) >> t : vb);
-        out[r * cols + l] = (int8_t)(o > 127 ? 127 : o < -128 ? -128 : o);
-      }
-    }
-    return;
-  }
   if (lnInt) {
-    uint8_t T[256];
-    for (int k = 0; k < 256; k++)
-      T[k] = (uint8_t)(k < 64 ? 0 : std::min(255L, std::lround(255.0 / std::sqrt((k + 0.5) / 64.0))));
+    const bool i16 = lnInt > 1;
+    int32_t T[258];
+    for (int k = 0; k < 258; k++)
+      T[k] = k < 64 ? 0
+                    : i16 ? (int32_t)std::lround(65535.0 / std::sqrt(k / 64.0))
+                          : (int32_t)std::min(255L, std::lround(255.0 / std::sqrt((k + 0.5) / 64.0)));
     const int32_t C = (int32_t)cols;
-    // 1 / sqrt(W) = T / (255 * 2^7 * 2^(sh / 2)); y = (C x - S) / sqrt(W) * gamma / a2d
-    const double gk = 1.0 / ((double)a2d * 255.0 * 128.0);
+    // 1 / sqrt(W) = T / (Tmax * 2^7 * 2^(sh / 2)); p = (C x - S) * T >> k ~ d * T / 2^k (16-bit T: d * (T >> 1) >> 15)
+    const int k = i16 ? 16 : 8;
+    const double gk = std::ldexp(1.0, k) / ((double)a2d * (i16 ? 65535.0 : 255.0) * 128.0);
+    const float *w0 = w;
+    const int8_t *b0 = b;
+    bool sameRows = true;
+    for (size_t r = 1; r < rows && sameRows; r++)
+      sameRows = !memcmp(w + r * cols, w0, cols * sizeof(float)) && !memcmp(b + r * cols, b0, cols);
+    // G and B (at 2^(gs + 16) / out step, made exact to 1 / 2^16 of an output step) for a row's gamma / beta
+    auto coeffs = [&](const float *wr, const int8_t *br, int32_t *G, int64_t *B, int &gs) {
+      double gmax = 0;
+      for (size_t l = 0; l < cols; l++) gmax = std::max(gmax, std::fabs((double)wr[l]));
+      gs = 0;
+      while (gmax * gk * std::ldexp(1.0, gs + 1) < 16383.0 && gs < 40) gs++;
+      for (size_t l = 0; l < cols; l++) {
+        G[l] = (int32_t)std::lround(wr[l] * gk * std::ldexp(1.0, gs));
+        B[l] = std::llround(br[l] * (double)a2b / a2d * 65536.0);
+      }
+    };
+    int32_t G0[1024];
+    int64_t B0[1024];
+    int gs0 = 0;
+    if (sameRows)
+      coeffs(w0, b0, G0, B0, gs0);
 #pragma omp parallel for schedule(static)
     for (long r = 0; r < (long)rows; r++) {
       const int8_t *xr = x + r * cols;
-      const float *wr = w + r * cols;
-      double gmax = 0;
-      for (size_t l = 0; l < cols; l++) gmax = std::max(gmax, std::fabs((double)wr[l]));
-      int gs = 0;
-      while (gmax * gk * std::ldexp(1.0, gs + 1) < 16383.0 && gs < 40) gs++;
+      int32_t Gr[1024];
+      int64_t Br[1024];
+      int gs = gs0;
+      const int32_t *G = G0;
+      const int64_t *B = B0;
+      if (!sameRows) {
+        coeffs(w + r * cols, b + r * cols, Gr, Br, gs);
+        G = Gr, B = Br;
+      }
       int32_t S = 0, Q = 0;
       for (size_t l = 0; l < cols; l++) {
         S += xr[l];
@@ -6644,18 +6637,20 @@ static void layerNormI8(int8_t *out, const int8_t *x, size_t rows, size_t cols, 
       int sh = (32 - __builtin_clz((uint32_t)W)) - 16;
       if (sh & 1) sh++;
       const uint32_t Wn = sh >= 0 ? (uint32_t)W >> sh : (uint32_t)W << -sh;
-      const int32_t Tv = T[Wn >> 8];
-      const int t = gs + sh / 2 - 8;
+      const int32_t i0 = (int32_t)(Wn >> 8);
+      const int32_t Tv = i16 ? T[i0] - (((T[i0] - T[i0 + 1]) * (int32_t)(Wn & 255)) >> 8) : T[i0];
+      const int t = gs + sh / 2;
+      const int32_t Tm = i16 ? Tv >> 1 : Tv, km = i16 ? 15 : 8;
+      // B is at 2^16 per output step: to 2^t
+      const int bsh = t - 16;
+      const int64_t half = t > 0 ? (int64_t)1 << (t - 1) : 0;
+      int8_t *o = out + r * cols;
       for (size_t l = 0; l < cols; l++) {
-        const int32_t G = (int32_t)std::lround(wr[l] * gk * std::ldexp(1.0, gs));
-        const int32_t p = ((C * xr[l] - S) * Tv) >> 8;
-        const int32_t v = p * G;
-        //#### JO changed (2026-11-11): the bias added before the shift at the same fixed point (one rounding, as the conv
-        //#### bias); rounding it to an int8 step first moved 25 % of the outputs by 1 when b * a2b / a2d was a half
-        const int64_t Bf = std::llround(b[r * cols + l] * (double)a2b / a2d * std::ldexp(1.0, t));
-        const int64_t vb = (int64_t)v + Bf;
-        const int32_t o = (int32_t)(t > 0 ? (vb + ((int64_t)1 << (t - 1))) >> t : vb);
-        out[r * cols + l] = (int8_t)(o > 127 ? 127 : o < -128 ? -128 : o);
+        const int32_t p = ((C * xr[l] - S) * Tm) >> km;
+        const int64_t Bt = bsh >= 0 ? B[l] << bsh : B[l] >> -bsh;
+        const int64_t vb = (int64_t)p * G[l] + Bt;
+        const int64_t y = t > 0 ? (vb + half) >> t : vb << -t;
+        o[l] = (int8_t)(y > 127 ? 127 : y < -128 ? -128 : y);
       }
     }
     return;
