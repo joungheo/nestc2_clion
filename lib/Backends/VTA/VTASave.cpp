@@ -241,6 +241,8 @@ public:
   std::map<const Instruction *, const SoftMaxInst *> softmaxAtDq;
   std::set<const Instruction *> softmaxAway;
   std::set<const Value *> softmaxHoist; // dest allocations after the dequantize
+  //#### JO added (2026-11-12, -vta-alu-softmax): the quantize after a fused softmax, done with it (softmaxIntQ)
+  std::map<const SoftMaxInst *, const QuantizeInst *> softmaxQuant;
   std::map<const Instruction *, LayerNormFusion> layerNorms; // by the last instruction
   std::set<const Instruction *> layerNormAway;
   std::map<const Instruction *, MatMulGroup> matMulGroups; // by the first matmul
@@ -3889,7 +3891,7 @@ void saveConvolutionInst(const glow::ConvolutionInst *Inst, std::string *bundle,
     const std::string lut = makeLutTable(r, bundle, ctx);
     *bundle += "  // the table of the elementwise region after this conv as its output LUT (-vta-alu-output-lut)\n";
     *bundle += "#ifdef VTA_OUTPUT_LUT\n  static const nestc_cpu::Lut8U " + lut + "_u = nestc_cpu::lutByByte(" + lut +
-               ");\n  if (VTAHasAluExt())\n    VTASetOutputLut(" + lut + "_u.v);\n#endif\n";
+               ");\n  VTASetOutputLut(VTAHasAluExt() ? " + lut + "_u.v : nullptr);\n#endif\n";
     std::string conv;
     saveVTAConvolutionInst(Inst, &conv, initConst, ctx);
     // the transpose of the output into out
@@ -6375,6 +6377,44 @@ static void softmaxInt(float *out, const int8_t *q8, size_t rows, size_t cols, f
     }
   }
 }
+//#### JO added (2026-11-12, ALU extension step 7, docs/evta_isa_ext.md 8.10): the integer softmax (softmaxInt with the 8-bit
+//#### exp table) and the quantize after it in integers, as the EVTA ALU does it (vtalib-systolic softmax_evta; VTASave
+//#### -vta-alu-softmax): q = clip((p * M + 2^(k-1)) >> k, -128, 127) with p the probability at 2^16 and M / 2^k the
+//#### reciprocal of the output scale (M < 2^14, so p * M + 2^(k-1) < 2^31: the ALU MUL and the requantize of one step)
+static void softmaxQParams(float outInv, int32_t *M, int *k) {
+  int kk = 0;
+  while (kk < 14 && std::lround(outInv * std::ldexp(1.0, kk + 1)) <= 16383)
+    kk++;
+  *M = (int32_t)std::lround(outInv * std::ldexp(1.0, kk));
+  *k = 16 + kk;
+}
+static void softmaxIntQ(int8_t *o8, const int8_t *q8, size_t rows, size_t cols, float s, float outInv) {
+  int32_t E[256], RT[256], M;
+  int k;
+  for (int j = 0; j < 256; j++) {
+    E[j] = (int32_t)std::lround(255.0 * std::exp(-(double)j * s));
+    RT[j] = j < 128 ? 0 : (int32_t)std::lround(32768.0 / (j + 0.5));
+  }
+  softmaxQParams(outInv, &M, &k);
+#pragma omp parallel for schedule(static)
+  for (long r = 0; r < (long)rows; r++) {
+    const int8_t *x = q8 + r * cols;
+    int8_t *o = o8 + r * cols;
+    int m = -128;
+    for (size_t i = 0; i < cols; i++) m = x[i] > m ? x[i] : m;
+    int32_t S = 0;
+    for (size_t i = 0; i < cols; i++) S += E[m - x[i]];
+    const int sh = (32 - __builtin_clz((uint32_t)S)) - 16;
+    const uint32_t Sn = sh >= 0 ? (uint32_t)S >> sh : (uint32_t)S << -sh;
+    const int32_t R = RT[Sn >> 8], t = 7 + sh;
+    for (size_t i = 0; i < cols; i++) {
+      const int32_t v = E[m - x[i]] * R;
+      const int32_t p = t > 0 ? (v + (1 << (t - 1))) >> t : v << -t;
+      const int32_t q = (int32_t)(((int64_t)p * M + ((int64_t)1 << (k - 1))) >> k);
+      o[i] = (int8_t)(q > 127 ? 127 : q < -128 ? -128 : q);
+    }
+  }
+}
 static void softmaxI8(int8_t *o8, const int8_t *q8, size_t rows, size_t cols, float s, int approx) {
   float *out = (float *)o8;
   static const int smInt = getenv("NESTC_SM_INT") ? atoi(getenv("NESTC_SM_INT")) : 0;
@@ -7610,9 +7650,11 @@ static void emitLutRegion(const LutRegion &r, std::string *bundle, VTASaveContex
   //#### JO added (2026-11-12): findOutLutConvs: the conv wrote its output into out; the table there, unless the EVTA did it
   if (ctx->outLutRegion.count(r.instrs.front())) {
     *bundle += "  // the conv before wrote " + r.out->getName().str() + " (-vta-alu-output-lut)\n";
-    *bundle += "#ifdef VTA_OUTPUT_LUT\n  if (!VTAHasAluExt())\n#endif\n";
-    *bundle += "  nestc_cpu::lut8(" + r.out->getName().str() + ", " + r.out->getName().str() + ", " + lut + ", " + num +
-               ");\n";
+    //#### one statement per line: timed_bundle.py wraps each line that is a statement (an if on its own line would take
+    //#### the timer as its body)
+    const std::string look =
+        "nestc_cpu::lut8(" + r.out->getName().str() + ", " + r.out->getName().str() + ", " + lut + ", " + num + ");\n";
+    *bundle += "#ifdef VTA_OUTPUT_LUT\n  if (!VTAHasAluExt()) " + look + "#else\n  " + look + "#endif\n";
     return;
   }
   *bundle += "  nestc_cpu::lut8(" + r.out->getName().str() + ", " + r.root->getName().str() + ", " + lut + ", " +
@@ -7681,6 +7723,18 @@ static void findOutLutConvs(IRFunction *F, VTASaveContext *ctx) {
 //#### JO added (2026-11-09): a softmax over rows of a tensor dequantized from int8 (softmaxQ) whose dequantized copy is
 //#### read by nothing else: nestc_cpu::softmaxI8 reads the int8 tensor at the dequantize (it may be freed before the
 //#### softmax, DeiT attention); the softmax's dest allocation is moved there
+//#### JO added (2026-11-12, ALU extension step 7, docs/evta_isa_ext.md 8.10): -vta-alu-softmax: a fused softmax (findSoftmaxI8)
+//#### whose float output is read only by one quantize to int8 runs with that quantize as the integer softmax (8-bit exp
+//#### table, CLZ + reciprocal table, as NESTC_SM_INT=1) and an integer quantize (nestc_cpu::softmaxIntQ), on the EVTA ALU when
+//#### it has the extended operations (vtalib-systolic softmax_evta, the same bytes), else on the CPU. Off by default: the
+//#### float softmax is the default and its results differ in the last bit (ImageNetV2 accuracy of NESTC_SM_INT=1: the same
+//#### within the noise, docs/evta_isa_ext.md 8.6).
+static llvm::cl::opt<bool> vtaAluSoftmax(
+    "vta-alu-softmax",
+    llvm::cl::desc("Run a fused softmax and the quantize after it as the integer softmax (nestc_cpu::softmaxIntQ), on the "
+                   "EVTA ALU when it has the extended operations (vtalib softmax_evta)"),
+    llvm::cl::init(false));
+
 static void findSoftmaxI8(IRFunction *F, VTASaveContext *ctx) {
   std::vector<const Instruction *> L;
   std::map<const Instruction *, size_t> pos;
@@ -7728,6 +7782,45 @@ static void findSoftmaxI8(IRFunction *F, VTASaveContext *ctx) {
     auto *DI = llvm::cast<Instruction>(D);
     if (pos.count(DI) && pos[DI] > pos[dq])
       ctx->softmaxHoist.insert(D);
+    //#### JO added (2026-11-12): -vta-alu-softmax: the one quantize that reads D (nothing else but views / its dealloc), its
+    //#### dest not touched between the dequantize and it
+    if (!vtaAluSoftmax)
+      continue;
+    const QuantizeInst *Q = nullptr;
+    bool qok = true;
+    for (size_t k = i + 1; k < L.size() && qok; k++) {
+      const Instruction *J = L[k];
+      bool t = false;
+      for (unsigned q = 0, e = J->getNumOperands(); q < e; q++)
+        t |= getOrigin(const_cast<Value *>(J->getOperand(q).first)) == D;
+      if (!t || J->getKind() == Kinded::Kind::TensorViewInstKind)
+        continue;
+      if (J->getKind() == Kinded::Kind::DeallocActivationInstKind)
+        break;
+      auto *QQ = llvm::dyn_cast<QuantizeInst>(J);
+      if (Q || !QQ || zeroOffsetActivation(QQ->getSrc()) != D || QQ->getSrc()->size() != D->size() ||
+          QQ->getDest()->getType()->getElementType() != ElemKind::Int8QTy || QQ->getDest()->getType()->getOffset() ||
+          !zeroOffsetActivation(QQ->getDest()) || QQ->getDest()->size() != D->size())
+        qok = false;
+      Q = QQ;
+    }
+    if (!qok || !Q)
+      continue;
+    const Value *QD = zeroOffsetActivation(Q->getDest());
+    for (size_t k = pos[dq] + 1; k < pos[Q] && qok; k++) {
+      const Instruction *J = L[k];
+      if (J == QD || J->getKind() == Kinded::Kind::TensorViewInstKind)
+        continue;
+      for (unsigned q = 0, e = J->getNumOperands(); q < e; q++)
+        qok &= getOrigin(const_cast<Value *>(J->getOperand(q).first)) != QD;
+    }
+    if (!qok)
+      continue;
+    ctx->softmaxQuant[S] = Q;
+    ctx->softmaxAway.insert(Q);
+    auto *QI = llvm::cast<Instruction>(QD);
+    if (pos.count(QI) && pos[QI] > pos[dq])
+      ctx->softmaxHoist.insert(QD);
   }
 }
 
@@ -7738,6 +7831,26 @@ static void emitSoftmaxI8(const DequantizeInst *dq, const SoftMaxInst *S, std::s
   char sc[32];
   snprintf(sc, sizeof(sc), "%.9g", dq->getSrc()->getType()->getScale());
   ctx->usesCpuOps = true;
+  //#### JO added (2026-11-12): -vta-alu-softmax: with the quantize after it, integer (softmaxIntQ / softmax_evta)
+  auto sq = ctx->softmaxQuant.find(S);
+  if (sq != ctx->softmaxQuant.end()) {
+    const Value *QD = zeroOffsetActivation(sq->second->getDest());
+    if (ctx->softmaxHoist.count(QD) && ctx->getHoisted()->insert(QD).second)
+      *bundle += "  int8_t *" + QD->getName().str() + " = (int8_t *)malloc(" + std::to_string(QD->getSizeInBytes()) +
+                 ");\n";
+    char oi[32];
+    snprintf(oi, sizeof(oi), "%.9g", 1.0 / sq->second->getDest()->getType()->getScale());
+    const std::string args = QD->getName().str() + ", " + cpuPtr(dq->getSrc(), bundle, ctx) + ", " +
+                             std::to_string(S->getSrc()->dims()[0]) + ", " + std::to_string(S->getSrc()->dims()[1]) +
+                             ", " + sc + "f, " + oi + "f";
+    const uint32_t idx = ctx->getIdxMultiEVTA();
+    *bundle += "  // the dequantize, the softmax " + S->getName().str() + " and the quantize " +
+               sq->second->getName().str() + " in one, integer (softmaxIntQ, -vta-alu-softmax)\n";
+    *bundle += "#ifdef VTA_OUTPUT_LUT\n  if (!softmax_evta(" + args + ", vtaCmdH" +
+               (idx ? std::to_string(idx) + ", " + std::to_string(idx) : "") + ")) nestc_cpu::softmaxIntQ(" + args +
+               ");\n#else\n  nestc_cpu::softmaxIntQ(" + args + ");\n#endif\n";
+    return;
+  }
   *bundle += "  // the dequantize and the softmax " + S->getName().str() + " in one (softmaxI8)\n";
   *bundle += "  nestc_cpu::softmaxI8(" + D->getName().str() + ", " + cpuPtr(dq->getSrc(), bundle, ctx) + ", " +
              std::to_string(S->getSrc()->dims()[0]) + ", " + std::to_string(S->getSrc()->dims()[1]) + ", " + sc +
@@ -7964,10 +8077,13 @@ static void emitLayerNormI8(const LayerNormFusion &f, std::string *bundle, VTASa
   //#### operations (vtalib-systolic layernorm_evta, the same bytes as layerNormI8 with NESTC_LN_INT=1), else on the CPU
   if (vtaAluLayerNorm && f.scales.size() == 26) {
     const uint32_t idx = ctx->getIdxMultiEVTA();
-    *bundle += "#ifdef VTA_OUTPUT_LUT\n  if (!layernorm_evta(" + ptr(f.out) + ", " + ptr(f.x) + ", " + std::to_string(f.rows) +
-               ", " + std::to_string(f.cols) + ", (const float *)" + ptr(f.w) + ", " + ptr(f.b) + ", " + f.scales[24] +
-               ", " + f.scales[25] + ", vtaCmdH" + (idx ? std::to_string(idx) + ", " + std::to_string(idx) : "") +
-               "))\n#endif\n";
+    // one line (timed_bundle.py wraps each statement line)
+    *bundle += "#ifdef VTA_OUTPUT_LUT\n  if (!layernorm_evta(" + ptr(f.out) + ", " + ptr(f.x) + ", " +
+               std::to_string(f.rows) + ", " + std::to_string(f.cols) + ", (const float *)" + ptr(f.w) + ", " + ptr(f.b) +
+               ", " + f.scales[24] + ", " + f.scales[25] + ", vtaCmdH" +
+               (idx ? std::to_string(idx) + ", " + std::to_string(idx) : "") + ")) " + call.substr(2) + ");\n#else\n" +
+               call + ");\n#endif\n";
+    return;
   }
   *bundle += call + ");\n";
 }
@@ -8267,7 +8383,7 @@ static std::string vtaOptionsComment() {
       "vta-keep-layout",   "vta-fuse-residual", "vta-evta-maxpool", "vta-evta-fc",
       "vta-fuse-preprocess", "vta-conv0-pack",  "vta-fuse-pool",    "vta-evta-depthwise",
       "vta-round-shift",   "vta-pad-channels",  "vta-matmul-conv", "vta-fold-matmul-bias", "vta-evta-matmul", "vta-lut-elementwise", "vta-fuse-layernorm",
-      "vta-matmul-heads", "vta-attn-keep-layout", "vta-cpu-approx", "vta-alu-output-lut", "vta-alu-layernorm",
+      "vta-matmul-heads", "vta-attn-keep-layout", "vta-cpu-approx", "vta-alu-output-lut", "vta-alu-layernorm", "vta-alu-softmax",
       "enable-channelwise-depthwise", "enable-channelwise"};
   auto &opts = llvm::cl::getRegisteredOptions();
   std::string s = "// Generated by the NEST-C VTA backend with:";

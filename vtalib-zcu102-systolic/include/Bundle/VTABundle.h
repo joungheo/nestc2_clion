@@ -200,6 +200,10 @@ bool VTAHasAluExt();
 //#### program; 0 = not run (no extended ALU, unsupported shape): the caller runs the CPU function. See VTABundle.cpp
 int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float *w, const int8_t *b, float a2b, float a2d,
                    void *vtaCmdH, uint32_t idEVTA = 0);
+//#### JO added (2026-11-12, ALU extension): the integer softmax with the quantize after it (nestc_cpu::softmaxIntQ) as an EVTA
+//#### ALU program; 0 = not run
+int softmax_evta(int8_t *out, const int8_t *x, int rows, int cols, float s, float outInv, void *vtaCmdH,
+                 uint32_t idEVTA = 0);
 void preprocess_conv0pack_stream(const float *input, void *buf, int N, int H, int W, int C, int nchw, float scale,
                                  int32_t offset, const int8_t *lut, int KH, int KW, int stride, int pad, int CO,
                                  int padEnd = -1);

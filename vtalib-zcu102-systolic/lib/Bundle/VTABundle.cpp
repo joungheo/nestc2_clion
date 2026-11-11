@@ -5445,6 +5445,161 @@ int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float
   return 1;
 }
 
+//#### JO added (2026-11-12, ALU extension step 7, docs/evta_isa_ext.md 8.10): the integer softmax over rows of int8 scores
+//#### (scale s) and the quantize to the output scale 1 / outInv, as nestc_cpu::softmaxIntQ (VTASave -vta-alu-softmax), on the
+//#### EVTA ALU: the program of tests/alu_ext_test.cc softmaxTest (8-bit exp table, CLZ + 8-bit reciprocal table, the
+//#### probability at 2^16), then one MUL by M with the requantize (round, shift k, clip). Rows padded to blocks of 16 with a
+//#### very negative score (its exp is E[255], which must be 0 unless cols is a multiple of 16). Per run of n rows: LOAD the
+//#### rows as int32, the program, STORE the int8 rows. Returns 0 (not run) without the extended ALU or for other shapes.
+//#### EVTA_SM_CHECK=1 compares every call with the CPU arithmetic.
+namespace {
+void smParams(float outInv, int32_t *M, int *k) {   // = nestc_cpu softmaxQParams
+  int kk = 0;
+  while (kk < 14 && std::lround(outInv * std::ldexp(1.0, kk + 1)) <= 16383)
+    kk++;
+  *M = (int32_t)std::lround(outInv * std::ldexp(1.0, kk));
+  *k = 16 + kk;
+}
+void smTables(float s, int32_t *E, int32_t *RT) {
+  for (int j = 0; j < 256; j++) {
+    E[j] = (int32_t)std::lround(255.0 * std::exp(-(double)j * s));
+    RT[j] = j < 128 ? 0 : (int32_t)std::lround(32768.0 / (j + 0.5));
+  }
+}
+void softmaxIntQRef(int8_t *o, const int8_t *x, size_t cols, const int32_t *E, const int32_t *RT, int32_t M, int k) {
+  int m = -128;
+  for (size_t i = 0; i < cols; i++) m = x[i] > m ? x[i] : m;
+  int32_t S = 0;
+  for (size_t i = 0; i < cols; i++) S += E[m - x[i]];
+  const int sh = (32 - __builtin_clz((uint32_t)S)) - 16;
+  const uint32_t Sn = sh >= 0 ? (uint32_t)S >> sh : (uint32_t)S << -sh;
+  const int32_t R = RT[Sn >> 8], t = 7 + sh;
+  for (size_t i = 0; i < cols; i++) {
+    const int32_t v = E[m - x[i]] * R;
+    const int32_t p = t > 0 ? (v + (1 << (t - 1))) >> t : v << -t;
+    const int32_t q = (int32_t)(((int64_t)p * M + ((int64_t)1 << (k - 1))) >> k);
+    o[i] = (int8_t)(q > 127 ? 127 : q < -128 ? -128 : q);
+  }
+}
+} // namespace
+
+int softmax_evta(int8_t *out, const int8_t *x, int rows, int cols, float s, float outInv, void *vtaCmdH, uint32_t idEVTA) {
+  const int NB = (cols + 15) / 16, kAcc = 2048;
+  const int n = std::min(64, (kAcc - 32) / std::max(1, 2 * NB + 8));
+  int32_t M;
+  int k;
+  smParams(outInv, &M, &k);
+  struct Tabs {
+    float s = 0;
+    void *buf = nullptr;
+    int32_t E[256], RT[256];
+  };
+  static std::mutex mu;
+  static std::vector<Tabs *> tabs;
+  Tabs *T = nullptr;
+  {
+    std::lock_guard<std::mutex> g(mu);
+    for (Tabs *t : tabs)
+      if (t->s == s)
+        T = t;
+    if (!T) {
+      T = new Tabs;
+      T->s = s;
+      smTables(s, T->E, T->RT);
+      T->buf = VTABufferAlloc(512 * sizeof(int32_t));
+      int32_t *p = (int32_t *)VTABufferGetVirtAddr(T->buf);
+      memcpy(p, T->E, 256 * sizeof(int32_t));
+      memcpy(p + 256, T->RT, 256 * sizeof(int32_t));
+      VTABufferFlush(T->buf, 0, 512 * sizeof(int32_t));
+      tabs.push_back(T);
+    }
+  }
+  if (!VTAHasAluExt() || n < 17 || rows < 1 || cols < 1 || M < 1 || (cols % 16 && T->E[255] != 0))
+    return 0;
+  VTACommandHandle cmd = (VTACommandHandle)vtaCmdH;
+  const int R = (rows + n - 1) / n * n, W = NB * 16;
+  void *xin = VTABufferAlloc((size_t)R * W * sizeof(int32_t)), *xo = VTABufferAlloc((size_t)R * W);
+  int32_t *xi = (int32_t *)VTABufferGetVirtAddr(xin);
+  for (int r = 0; r < R; r++)
+    for (int c = 0; c < W; c++)
+      xi[(size_t)r * W + c] = r < rows && c < cols ? x[(size_t)r * cols + c] : -(1 << 20);
+  VTABufferFlush(xin, 0, (size_t)R * W * sizeof(int32_t));
+  // acc layout (alu_ext_test.cc softmaxTest)
+  const int X = 0, D = X + n * NB, Mx = D + n * NB, S = Mx + n, A = S + n, SH = A + n, RV = SH + n, TT = RV + n, H = TT + n,
+            K = H + n, TE = K + n, TR = TE + 16;
+  auto I = [&](int op, int io, int ii, int d, int dfo, int dfi, int s_, int sfo, int sfi, bool useImm = false, int imm = 0) {
+    pushAlu2(cmd, idEVTA, op, io, ii, d, dfo, dfi, s_, sfo, sfi, useImm, imm);
+  };
+  VTALoadBuffer2D(cmd, T->buf, 0, 32, 1, 32, 0, 0, 0, 0, TE, 3);
+  for (int r0 = 0; r0 < rows; r0 += n) {
+    if (r0)
+      VTADepPop(cmd, 3, 2);
+    VTALoadBuffer2D(cmd, xin, r0 * NB, n * NB, 1, n * NB, 0, 0, 0, 0, X, 3);
+    // 1. m = max x, d = min(m - x, 255), e = E[d]
+    I(VTA_ALUX_LUTSET, 1, 16, 0, 0, 0, TE, 0, 1, true, 0);
+    I(VTA_ALUX_CPY, n, 1, Mx, 1, 0, X, NB, 0);
+    if (NB > 1)
+      I(RES_ALU_MAX, NB - 1, n, Mx, 0, 1, X + 1, 1, NB);
+    I(VTA_ALUX_RMAX, n, 1, Mx, 1, 0, Mx, 1, 0);
+    I(VTA_ALUX_CPY, n, NB, D, NB, 1, Mx, 1, 0);
+    I(VTA_ALUX_SUB, n, NB, D, NB, 1, X, NB, 1);
+    I(RES_ALU_MIN, n, NB, D, NB, 1, 0, 0, 0, true, 255);
+    I(VTA_ALUX_LUT, n, NB, D, NB, 1, 0, 0, 0, true, 0);
+    // 2. S = sum e; sh = 16 - clz(S); R = RT[(S >> sh) >> 8]
+    I(VTA_ALUX_CPY, n, 1, S, 1, 0, D, NB, 0);
+    if (NB > 1)
+      I(RES_ALU_ADD, NB - 1, n, S, 0, 1, D + 1, 1, NB);
+    I(VTA_ALUX_RSUM, n, 1, S, 1, 0, S, 1, 0);
+    I(VTA_ALUX_CPY, n, 1, A, 1, 0, S, 1, 0);
+    I(VTA_ALUX_CLZ, n, 1, A, 1, 0, 0, 0, 0);
+    I(VTA_ALUX_CPY, n, 1, SH, 1, 0, 0, 0, 0, true, 16);
+    I(VTA_ALUX_SUB, n, 1, SH, 1, 0, A, 1, 0);
+    I(VTA_ALUX_LUTSET, 1, 16, 0, 0, 0, TR, 0, 1, true, 0);
+    I(VTA_ALUX_CPY, n, 1, RV, 1, 0, S, 1, 0);
+    I(RES_ALU_SHR, n, 1, RV, 1, 0, SH, 1, 0);
+    I(RES_ALU_SHR, n, 1, RV, 1, 0, 0, 0, 0, true, 8);
+    I(VTA_ALUX_LUT, n, 1, RV, 1, 0, 0, 0, 0, true, 0);
+    // 3. t = 7 + sh; H = 1 >> (1 - t); p = (e * R + H) >> t
+    I(VTA_ALUX_CPY, n, 1, TT, 1, 0, SH, 1, 0);
+    I(RES_ALU_ADD, n, 1, TT, 1, 0, 0, 0, 0, true, 7);
+    I(VTA_ALUX_CPY, n, 1, K, 1, 0, 0, 0, 0, true, 1);
+    I(VTA_ALUX_SUB, n, 1, K, 1, 0, TT, 1, 0);
+    I(VTA_ALUX_CPY, n, 1, H, 1, 0, 0, 0, 0, true, 1);
+    I(RES_ALU_SHR, n, 1, H, 1, 0, K, 1, 0);
+    I(VTA_ALUX_MUL, n, NB, D, NB, 1, RV, 1, 0);
+    I(RES_ALU_ADD, n, NB, D, NB, 1, H, 1, 0);
+    I(RES_ALU_SHR, n, NB, D, NB, 1, TT, 1, 0);
+    // 4. q = clip((p * M + 2^(k-1)) >> k) into out
+    VTARequant(cmd, 1, 1, k, -128, 127);
+    I(VTA_ALUX_MUL, n, NB, D, NB, 1, 0, 0, 0, true, M);
+    VTARequant(cmd, 0, 0, 0, 0, 0);
+    VTADepPush(cmd, 2, 3);
+    VTADepPop(cmd, 2, 3);
+    VTAStoreBuffer2D(cmd, D, 4, xo, r0 * NB, n * NB, 1, n * NB);
+    VTADepPush(cmd, 3, 2);
+  }
+  VTADepPop(cmd, 3, 2);
+  VTASynchronize(cmd, 1 << 31);
+  VTABufferInvalidate(xo, 0, (size_t)R * W);
+  const int8_t *po = (const int8_t *)VTABufferGetVirtAddr(xo);
+  for (int r = 0; r < rows; r++)
+    memcpy(out + (size_t)r * cols, po + (size_t)r * W, cols);
+  VTABufferFree(xin);
+  VTABufferFree(xo);
+  static const bool check = getenv("EVTA_SM_CHECK") && atoi(getenv("EVTA_SM_CHECK")) > 0;
+  if (check) {
+    std::vector<int8_t> ref(cols);
+    long bad = 0;
+    for (int r = 0; r < rows; r++) {
+      softmaxIntQRef(ref.data(), x + (size_t)r * cols, cols, T->E, T->RT, M, k);
+      for (int c = 0; c < cols; c++)
+        bad += ref[c] != out[(size_t)r * cols + c];
+    }
+    printf("EVTA_SM_CHECK softmax %d x %d: %ld differ\n", rows, cols, bad);
+  }
+  return 1;
+}
+
 // #### add 260907, JO
 // #### add __attribute__((weak)) to avoid the collision with the strong LLVMSupport when using VTASIM, 260908, JO  
 //namespace llvm {
