@@ -218,7 +218,7 @@ sudo -n /bin/sh -c "BIN=$NEW hw/script/run_prof.sh -s _systimed -n 2 <Dir>; cat 
 | bias reset (11-04) | `bias`, `biashazard` | 96/96 | 0 errors | single golden 30, dumps 동일 / multi4 golden 3, dumps 80개 동일 |
 | requantize (11-04) | 무작위 300 | 49 vector × 2 = 98/98 | 0 errors | single: probes 10/10, golden 27 PASS + 분류 4개 같음, dumps 146개 동일, `EVTA_RES_CHECK` 0, `EVTA_REQUANT=0` 우회 동일 | / multi4(395.8 MHz): probes 40/40, golden 3 PASS, dumps 80개가 `bias`와 동일
 
-## 8. 다음 ISA 개정: ALU 확장 (설계 11-10, 1–2단계 끝 11-11, 하드웨어는 아직)
+## 8. 다음 ISA 개정: ALU 확장 (설계 11-10, 1–3단계 끝 11-11, 비트스트림은 아직)
 
 DeiT의 LayerNorm / softmax / GELU, 2의 거듭제곱이 아닌 scale, avgpool, YOLO 계열 activation을 EVTA에 두려고 ALU를 넓힌다.
 H1(MUL), H2(LUT), H4(행 reduction)의 일부(`deit_optimization.md` §6.2)를 **한 번의 개정**으로 묶는다.
@@ -396,7 +396,7 @@ bitstream과 vtalib의 짝이 한 번만 바뀌게 하려는 것이다.
 |---|---|---|
 | 1 | 정수 LayerNorm / softmax 식을 CPU에서 정하고 ImageNet 확인 (소프트웨어, `deit_optimization.md` §6.1) | **11-10 끝남 (§8.6)** |
 | 2 | `hw_spec.h` 세 곳, C 모델(`systolic_model.cc`), vtalib 시뮬레이터 `sim_driver.cc`에 연산 12개 | **11-11 끝남 (§8.7)** |
-| 3 | HLS `vta.cc` `alu()` / `alu_lane()`, `sa_rmw.v` 출력 LUT, `vta_test.cc` `alu_test`에 새 연산, RTL testbench, CSim | 1–1.5주. **11-11 HLS ALU와 CSim 끝 (§8.8)**, GEMM `lut_en` / RTL testbench 남음 |
+| 3 | HLS `vta.cc` `alu()` / `alu_lane()`, `sa_rmw.v` 출력 LUT, `vta_test.cc` `alu_test`에 새 연산, RTL testbench, CSim | 1–1.5주. **11-11 끝 (§8.8)**: HLS ALU, CSim(무작위 명령열, LayerNorm / softmax 명령열), C 합성, 기존 모델 명령의 겹침 검사. GEMM `lut_en`은 예약만 하고 ALU pass로 한다. RTL 변경 없음 |
 | 4 | single `_alux` bitstream(합성 약 1시간 × 몇 번), 보드 probe, golden, dump 비교 | 2–4일 |
 | 5 | multi4 bitstream (Y219 flow) | 1–3일 |
 | 6 | vtalib API(`VTAPushALUOp` ext 인자, `VTALutSet`), bitstream 이름 검사, CPU 대체 경로 | 2–3일 |
@@ -458,7 +458,31 @@ bitstream과 vtalib의 짝이 한 번만 바뀌게 하려는 것이다.
 - `vta_test.cc`의 `alu_test`가 기준 모델(`alu_ext_ref.h`)과 같은 결과를 내는지 CSim으로 확인한다.
 - 비트스트림 합성(4단계)은 PC 냉각을 고친 뒤에 한다.
 
-### 8.8 3단계: HLS ALU 설계 (2026-11-11, 코드 전)
+### 8.8 3단계: HLS ALU (2026-11-11)
+
+**요약**
+- HLS `vta.cc`에 연산 4–11과 ALU `lut_en`을 넣었다. `ALUX=1`일 때만 들어가고, 이름에 `_alux`가 붙는다.
+- CSim으로 확인했다:
+  - 무작위 명령열 200개가 기준 모델 `alu_ext_ref.h`와 바이트 단위로 같다. 일부러 넣은 버그 다섯 가지도 모두 잡혔다.
+  - LayerNorm / softmax 명령열을 HLS로 돌린 결과가 번들의 CPU 함수와 같다.
+- compute C 합성: LUT +19.9k, FF +36.4k, DSP +16. 기존 imm 루프는 II 1 그대로고, 확장 연산은 vector 루프(II 2, depth 33)에서 돈다.
+- 기존 다섯 모델의 EVTA ALU 명령을 보드에서 뽑아 검사했다. pipeline 겹침은 0건이다.
+- GEMM `lut_en`은 비트만 예약하고, 같은 일을 ALU pass로 한다.
+- 남은 것은 4단계(`_alux` 비트스트림, 보드)다. 합성은 PC 쿨러를 고친 뒤에 한다(`host_pc_shutdown.md`).
+
+| 커밋 | 내용 |
+|---|---|
+| `e6df7fa7` | HLS ALU, `ALUX=1`, `sim/alux_test.cc`, `sim/run_csim.sh`, `hls.tcl` 한 stage C 합성 |
+| `e43a1531` | LayerNorm / softmax 명령열을 HLS CSim으로(`sim/alux_prog_hls.cc`, `run_csim.sh PROG=1`), `hazards()` 검사기 |
+| `24b4960f` | 다섯 모델의 replay dump 겹침 검사(`tests/hazard_dump.py`), GEMM `lut_en` 결정 |
+
+**4단계에서 할 일**
+1. `make ip SYSTOLIC=1 ALUX=1` → `make bin SYSTOLIC=1 ALUX=1 FREQ=400 ...`(single). WNS ≥ 0을 확인한다.
+2. 보드: 기존 golden / layer dump가 `_rq`와 바이트 단위로 같은지 본다(확장 비트를 쓰지 않는 실행 파일).
+3. 확장 명령 probe: `sim/alux_test.cc`와 같은 무작위 명령열, LayerNorm / softmax 명령열을 보드 EVTA로 돌려 기준 모델과 비교한다. vtalib에 확장 ALU 명령을 내는 시험 API가 필요하다(6단계의 일부를 앞당김).
+4. GEMM + ALU pass(CPY, `rq_*`, `lut_en`)가 GEMM `rq_*` + CPU 표와 같은 바이트인지 본다.
+
+**설계 (아래는 구현 전에 정한 것이다. 바뀐 점은 그 뒤 "구현과 결과"에 있다)**
 
 **아카이브.** 하드웨어를 바꾸기 전의 상태를 남겼다.
 - git tag `alux-step2-261111`(commit `f847659b`)
@@ -479,9 +503,9 @@ bitstream과 vtalib의 짝이 한 번만 바뀌게 하려는 것이다.
 | LUTSET | step 하나가 lane b의 값을 모든 사본의 bank b, 칸 `(imm + step) & 15`에 쓴다. 그래서 bank마다 한 번만 쓰면 된다. `step`은 명령 안에서 루프 순서대로 세는 counter다. acc / out은 쓰지 않는다 |
 | LUT 읽기 | lane c는 자기 사본의 bank `x[3:0]`, 칸 `x[7:4]`를 읽는다(16칸 RAM 16개를 읽고 16:1 mux). imm 0번 비트가 1이면 부호 확장 |
 | ALU `lut_en` | 한 명령에서 LUT 연산과 `lut_en`이 같이 쓰일 수 있다(기준 모델이 허용). 그래서 out용 사본을 따로 한 벌 더 두고, LUTSET이 둘 다 쓴다. LUTRAM은 약 2 × 2,000개로 추정한다(§8.4의 512개보다 크다. 16 bank로 나눈 만큼 RAM이 작게 쪼개지기 때문) |
-| imm 루프 (II = 1) | 지금은 dst만 읽는다. LUTSET(`use_imm = 1`로 씀)은 읽는 주소를 src로 바꾼다. 그래서 이 루프에도 src offset을 더한다. 여전히 읽기 하나, 쓰기 하나다 |
+| imm 루프 (II = 1) | 처음에는 LUTSET 등도 이 루프에서 돌리려 했다. → 구현에서는 연산 0–3이고 `lut_en`이 없을 때만 이 루프를 탄다(두 루프에 회로를 두면 II 2, LUT 82k) |
 | vector 루프 (II = 2) | src와 dst를 읽는다. 같은 연산 함수를 쓴다 |
-| GEMM `lut_en` | RTL `sa_rmw.v`에 표가 있어야 한다. 그러려면 LUTSET이 쓰는 값을 HLS compute에서 gemm_sa로 넘기는 포트가 필요하다. CSim용 `gemm_sa_csim`은 같은 표를 쓰면 된다. 3단계 뒷부분(3b)으로 미룬다 |
+| GEMM `lut_en` | RTL `sa_rmw.v`에 표가 있어야 한다. 그러려면 LUTSET이 쓰는 값을 HLS compute에서 gemm_sa로 넘기는 포트가 필요하다. → 결국 하지 않았다. 비트만 예약하고 ALU pass로 한다(아래 "남은 3단계") |
 
 **검증 방법 (CSim)**
 - 새 testbench `sim/alux_test.cc`를 `vta_test.cc`에서 `VTA_ALUX`일 때 부른다.
@@ -567,7 +591,7 @@ bitstream과 vtalib의 짝이 한 번만 바뀌게 하려는 것이다.
   - window 200에서도 0이다. vtalib의 ALU 명령은 한 명령 안에서 같은 entry를 두 번 쓰거나, 쓴 entry를 다시 읽지 않는다(conv tile의 entry를 한 번씩 지나감). 그래서 pipeline이 더 깊어져도 기존 모델은 영향이 없다.
   - 새 명령열(LayerNorm / softmax, 앞으로의 컴파일러 출력)은 같은 entry에 누적하므로 이 규칙이 필요하다. 컴파일러가 명령을 낼 때 `hazards()`로 검사한다.
 
-**남은 3단계**
+**3단계에서 정리한 것**
 - 3b: GEMM `lut_en`. RTL `sa_rmw.v`에 표 사본을 두고, HLS compute에서 gemm_sa로 LUTSET 값을 넘기는 포트를 내야 한다. block design(`gen_gemm_sa_bd.py`)과 RTL testbench까지 바뀐다.
   - 대안: GEMM 뒤에 ALU 한 번(CPY + `rq_*` + `lut_en`, II 2)을 더 돈다.
   - DeiT fc1 출력(197 × 768 = 9,456 entry)이면 층당 약 19k cycle = 47 µs, 12층 0.6 ms다.

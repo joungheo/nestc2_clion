@@ -275,6 +275,13 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   left in row Y219 rerouted with `Y219RWRoute.java -Dtd=0`; WNS +0.002 ns; first a 395.8 MHz `..._396mhz_rq.bin`, `mmcm_set.tcl ... 11.875`):
   probes 40/40, golden 3 PASS, dumps byte-identical, EVTA per copy 24.49-24.62 -> 23.44-23.56 ms, busy union 583.8 -> 610.4 GOPS.
   vtalib instructions are zeroed now (`NextInsn`; the pad bits were uninitialized).
+- ALU extension (2026-11-11, [docs/evta_isa_ext.md](docs/evta_isa_ext.md) §8, no bitstream yet): ALU `alu_op_ext` / `lut_en` (operations 4-11:
+  MUL, SUB, CPY, LUT, LUTSET, RSUM, RMAX, CLZ), reference model `vtalib-zcu102-systolic/include/zcu102/vta/alu_ext_ref.h` (also in the vtalib
+  simulator), integer layer norm / softmax as ALU programs (`vtalib-zcu102-systolic/tests/run_alu_ext_test.sh`). HLS `vta.cc` with
+  `make ... SYSTOLIC=1 ALUX=1` (`_alux`): extended operations in the vector loop (II 2, depth 33, so a step must not read an entry written in
+  the 17 steps before it; `alu_ext_ref.h` `hazards()`, `tests/hazard_dump.py` over `EVTA_REPLAY_DUMP`: no current model does). C simulation
+  without vivado_hls: `vta-hw-zcu102-systolic/hardware/xilinx/sim/run_csim.sh` (random programs vs the reference model; `PROG=1` the layer
+  norm / softmax programs). GEMM `lut_en` is reserved, done as an ALU pass (CPY + `rq_*` + `lut_en`). Code before it: tag `alux-step2-261111`.
 - Other models (2026-11-05, `docs/evta_runtime_compare.md` §7.19): Resnet50 res2_0 residual fused (relu to a 2^q smaller scale), schedules of the
   Resnet50 / VGG16 shapes in `VTASchedules.h` (found with vtalib-systolic `EVTA_SCHED`), conv tiles below 7 x 7: the dummy-padded store
   used the wrong channel block with nVirtualThread 2 (fixed in both vtalibs) and the systolic vtalib's minimum tile is 1 on an `_sa_` bitstream
