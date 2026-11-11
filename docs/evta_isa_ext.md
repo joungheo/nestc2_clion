@@ -554,14 +554,31 @@ bitstream과 vtalib의 짝이 한 번만 바뀌게 하려는 것이다.
   - softmax: 0 step
   - token / 행 32개를 안쪽 루프에 두어 같은 entry 사이가 32 step이기 때문이다.
 - **지금 vtalib이 내는 vector ALU 명령도 ALUX bitstream에서는 이 루프를 탄다.** depthwise의 채널별 SHR, pool MAX, residual 등이다. 7 step에서는 괜찮던 명령열이 17 step에서는 깨질 수 있다.
-  - 4단계에서 보드의 `EVTA_REPLAY_DUMP`로 모든 모델의 명령을 뽑아 검사기로 확인한다.
-  - 문제가 있으면 vector 루프의 depth를 줄이거나(`alu_reg`를 빼고 MUL 단수를 줄임), 기존 연산 0–3은 옛 vector 루프로 보낸다.
+  - **확인함 (11-11, 보드):** 지금 `_sa_400mhz_rq` bitstream의 `_systimed` 빌드로 다섯 모델을 `EVTA_REPLAY_DUMP`로 돌렸다. 기록된 명령은 모두 `vtalib-zcu102-systolic/tests/hazard_dump.py`로 검사했다. 이 스크립트는 uop LOAD를 따라가 각 step의 dst / src를 계산한다.
+
+    | 모델 | vector ALU 명령 | imm ALU 명령 | 검사한 step | window 7 / 17 / 200에서 겹침 |
+    |---|---|---|---|---|
+    | Resnet18 | 530 | 168 | 263,848 | 0 / 0 / 0 |
+    | Resnet50 | 490 | 1,336 | 1,225,032 | 0 / 0 / 0 |
+    | VGG16 CIFAR-10 | 256 | 0 | 7,680 | 0 / 0 / 0 |
+    | MobileNetV2 | 212 | 0 | 107,408 | 0 / 0 / 0 |
+    | DeiT-tiny | 0 | 0 | 0 | ALU 명령 없음(conv / matmul 모두 GEMM `rq_*`) |
+
+  - window 200에서도 0이다. vtalib의 ALU 명령은 한 명령 안에서 같은 entry를 두 번 쓰거나, 쓴 entry를 다시 읽지 않는다(conv tile의 entry를 한 번씩 지나감). 그래서 pipeline이 더 깊어져도 기존 모델은 영향이 없다.
+  - 새 명령열(LayerNorm / softmax, 앞으로의 컴파일러 출력)은 같은 entry에 누적하므로 이 규칙이 필요하다. 컴파일러가 명령을 낼 때 `hazards()`로 검사한다.
 
 **남은 3단계**
 - 3b: GEMM `lut_en`. RTL `sa_rmw.v`에 표 사본을 두고, HLS compute에서 gemm_sa로 LUTSET 값을 넘기는 포트를 내야 한다. block design(`gen_gemm_sa_bd.py`)과 RTL testbench까지 바뀐다.
   - 대안: GEMM 뒤에 ALU 한 번(CPY + `rq_*` + `lut_en`, II 2)을 더 돈다.
   - DeiT fc1 출력(197 × 768 = 9,456 entry)이면 층당 약 19k cycle = 47 µs, 12층 0.6 ms다.
-  - 하드웨어 일에 비해 이득이 작아서, **GEMM `lut_en`은 비트만 예약해 두고 ALU 경로로 하자고 제안한다**(결정 필요).
+  - **정함 (11-11): 지금은 ALU 경로로 한다. GEMM `lut_en`(비트 165)은 예약만 하고 하드웨어는 읽지 않는다.**
+    - ALU 경로는 하드웨어를 더 바꾸지 않는다. ALU의 `rq_*`와 `lut_en`은 이미 HLS에 들어갔고 CSim으로 확인했다.
+    - 컴파일러 / vtalib은 이렇게 낸다: GEMM은 `rq_en = 0`으로 acc에 32비트 합만 남긴다. tile마다 STORE 전에 ALU CPY(dst = src)를 한 번 돌려 `rq_*` + `lut_en`으로 out을 쓴다.
+    - requantize 식은 `sa_rmw.v`와 HLS `requant()`가 같다. 그래서 GEMM에서 requantize한 뒤 표를 찾은 값과 같은 바이트가 나와야 한다. 4단계 보드에서 확인한다.
+    - 나중에 GEMM `lut_en`이 필요해지는 경우: 출력이 큰 CNN의 activation(YOLO의 SiLU 등)이다.
+      - ALU pass는 출력 entry마다 2 cycle이고, GEMM과 겹치지 않는다(§8.4.1).
+      - 예를 들어 출력 3,000만 원소면 190만 entry × 2 = 9.5 ms(400 MHz)다.
+      - 그때 RTL 표를 넣는다. 비트를 예약해 두었으니 ISA는 그대로이고, bitstream과 vtalib만 바뀐다.
 - 비트스트림(4단계)은 PC 냉각을 고친 뒤에 한다.
 - PC 온도: 감시 스크립트(`~/templog/thermal_guard.sh`: 85 °C에서 docker 정지, 95 °C 두 번이면 `systemctl poweroff`)를 켜고 돌렸다. CSim과 C 합성(한 코어, 약 7분) 동안 최고 58 °C였다.
 
