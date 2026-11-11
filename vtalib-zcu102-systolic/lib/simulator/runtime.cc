@@ -1135,6 +1135,15 @@ class InsnQueue : public BaseQueue<VTAGenericInsn> {
  */
 class CommandQueue {
  public:
+  //#### JO added (2026-11-11, ALU extension): ALU rq_* / lut_en of the instructions pushed from now on. GEMM rq_* is not
+  //#### simulated (the simulator GEMM has no out buffer), so bundles keep EVTA_REQUANT off here.
+  bool alu_lut_ = false, rq_en_ = false;
+  int rq_round_ = 0, rq_shift_ = 0, rq_lo_ = 0, rq_hi_ = 0;
+  void SetAluLut(int en) { alu_lut_ = en != 0; }
+  void SetRequant(int en, int round, int shift, int lo, int hi) {
+    rq_en_ = en != 0; rq_round_ = round; rq_shift_ = shift; rq_lo_ = lo; rq_hi_ = hi;
+  }
+ public:
   CommandQueue(int index=0) {
     this->InitSpace(index);
   }
@@ -1505,6 +1514,14 @@ class CommandQueue {
     insn->uop_bgn = kernel->sram_begin_;
     insn->uop_end = kernel->sram_end_;
     insn->alu_opcode = kernel->opcode_;
+    //#### JO added (2026-11-11, ALU extension): operations 4-11, rq_* (VTARequant) and lut_en (VTAAluLut) as the zcu102 queue
+    insn->alu_op_ext = kernel->opcode_ >> VTA_ALU_OPCODE_BIT_WIDTH;
+    insn->lut_en = alu_lut_;
+    insn->rq_en = rq_en_;
+    insn->rq_round = rq_en_ ? rq_round_ : 0;
+    insn->rq_shift = rq_en_ ? rq_shift_ : 0;
+    insn->rq_lo = rq_en_ ? rq_lo_ : 0;
+    insn->rq_hi = rq_en_ ? rq_hi_ : 0;
     insn->use_imm = kernel->use_imm_;
     insn->imm = kernel->imm_val_;
     const std::vector<UopKernel::LoopEntry> &loop = kernel->loop();
@@ -1753,6 +1770,12 @@ int VTAPushALUOp(VTACommandHandle cmdH,
       PushALUUop(uop_handle, finit, signature, nbytes);
   return 0;
 }
+
+//#### JO added (2026-11-11, ALU extension)
+void VTARequant(VTACommandHandle cmd, int en, int round, int shift, int lo, int hi) {
+  static_cast<vta::CommandQueue*>(cmd)->SetRequant(en, round, shift, lo, hi);
+}
+void VTAAluLut(VTACommandHandle cmd, int en) { static_cast<vta::CommandQueue*>(cmd)->SetAluLut(en); }
 
 int VTADepPush(VTACommandHandle cmd, int from_qid, int to_qid) {
   static_cast<vta::CommandQueue*>(cmd)->

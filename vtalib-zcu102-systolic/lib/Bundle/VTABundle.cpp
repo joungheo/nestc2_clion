@@ -606,6 +606,32 @@ static void pushAlu(VTACommandHandle &cmdh, uint32_t idEVTA, uint32_t base, uint
 thread_local int gEvtaClipHi = 127;
 void VTASetActivationClip(int hi) { gEvtaClipHi = hi < 127 ? hi : 127; }
 
+//#### JO added (2026-11-11, ALU extension, docs/evta_isa_ext.md 8.8): an elementwise int8 -> int8 table on the output of the
+//#### plain EVTA convs (GELU after fc1, ...), on an "_alux" bitstream: VTASetOutputLut(T) ... VTASetOutputLut(nullptr) around
+//#### the conv; out[i] = T[(uint8_t) conv out[i]]. conv_kernel LOADs T into acc 0..15 and LUTSETs it, then before each
+//#### thread's STORE runs one ALU CPY over the tile (dst = src) with the conv's rq_* (if on) and lut_en: the GEMM keeps the
+//#### 32-bit sum in acc, so this pass requantizes and looks up in one step (GEMM lut_en, bit 165, stays reserved).
+//#### T is copied into a VTA buffer once per table pointer (the replay keeps that buffer's address).
+#ifndef VTA_ALUX_CPY   // this file sees vta/vtalib's hw_spec.h, which has no extended operation numbers
+#define VTA_ALUX_CPY 6
+#define VTA_ALUX_LUTSET 8
+#endif
+thread_local const int8_t *gOutLut = nullptr;
+void VTASetOutputLut(const int8_t *T) { gOutLut = T; }
+static void *outLutBuffer(const int8_t *T) {
+  static std::mutex m;
+  static std::map<const int8_t *, void *> bufs;
+  std::lock_guard<std::mutex> g(m);
+  void *&b = bufs[T];
+  if (!b) {
+    b = VTABufferAlloc(256 * sizeof(int32_t));
+    int32_t *p = (int32_t *)VTABufferGetVirtAddr(b);
+    for (int k = 0; k < 256; k++) p[k] = (uint8_t)T[k];   // entry k / 16, lane k % 16
+    VTABufferFlush(b, 0, 256 * sizeof(int32_t));
+  }
+  return b;
+}
+
 // acc[acc + i] += inp[inp + i] x wgt[wgt], i < size
 struct ResGemmContext {
   uint32_t acc_;
@@ -668,6 +694,7 @@ static bool evtaBiasReset() {
 //#### JO added (2026-11-04): declared here: this file includes vta/vtalib's runtime.h (not this copy's include/zcu102/vta/runtime.h,
 //#### where it is declared); defined in this copy's lib/zcu102/api.cc
 extern "C" void VTARequant(VTACommandHandle cmd, int en, int round, int shift, int lo, int hi);
+extern "C" void VTAAluLut(VTACommandHandle cmd, int en);   //#### JO added (2026-11-11, ALU extension)
 //#### JO added (2026-11-04, requantize): the requantize of conv / fc outputs on the write to out (VTARequant, GEMM / ALU rq_*)
 //#### instead of the ALU SHR / MAX / MIN (+ the rounding ADD); only on a bitstream that has it (gemm_sa sa_rmw.v, vta.cc
 //#### alu(), 2026-11-04): "_rq" in the name of the bitstream the run scripts loaded (/tmp/evta_bitstream); EVTA_REQUANT=0|1
@@ -906,6 +933,13 @@ void conv_kernel(uint32_t sizeOutTileH,
     uint32_t outDummyW = 0;
     uint32_t inDummyW = 0;
 
+  //#### JO added (2026-11-11, ALU extension): the output LUT (VTASetOutputLut) into the ALU table: T LOADed into acc 0..15
+  //#### (overwritten by the tiles below) and one LUTSET of 16 steps
+  const bool outLut = gOutLut && !res && !pool && !dw;
+  if (outLut) {
+    VTALoadBuffer2D(vtaCmdH, (int32_t *)outLutBuffer(gOutLut), 0, 16, 1, 16 * 16, 0, 0, 0, 0, 0, 3);
+    pushAlu(vtaCmdH, idEVTA, 0, 0, 16, VTA_ALUX_LUTSET, 1, 0);
+  }
   for (uint32_t filterIdx = 0; filterIdx < KN / nFilterinLoop / nVirtualThread / 16; filterIdx++) {
 
     uint32_t inputSramPtr = 0;
@@ -1365,6 +1399,13 @@ void conv_kernel(uint32_t sizeOutTileH,
                                          pool->ptw, 1, 2 * TW, 2, nF, P, T});
         }
         if (rqPool) VTARequant(vtaCmdH, 0, 0, 0, 0, 0);
+      }
+      //#### JO added (2026-11-11, ALU extension): the output LUT pass over the tile before its STORE (rq_* of rqConv still set)
+      if (outLut) {
+        VTAAluLut(vtaCmdH, 1);
+        pushAlu(vtaCmdH, idEVTA, outputSramBaseAddr, outputSramBaseAddr, resizedOutTileH * resizedOutTileW * nFilterinLoop,
+                VTA_ALUX_CPY, 0, 0);
+        VTAAluLut(vtaCmdH, 0);
       }
       VTADepPush(vtaCmdH, 2, 3);
     }

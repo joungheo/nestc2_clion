@@ -280,6 +280,9 @@ void VTARequant(VTACommandHandle cmd, int en, int round, int shift, int lo, int 
   static_cast<vta::CommandQueue*>(cmd)->SetRequant(en, round, shift, lo, hi);
 }
 
+//#### JO added (2026-11-11, ALU extension)
+void VTAAluLut(VTACommandHandle cmd, int en) { static_cast<vta::CommandQueue*>(cmd)->SetAluLut(en); }
+
 void VTASynchronize(VTACommandHandle cmd, uint32_t wait_cycles) {
   static_cast<vta::CommandQueue*>(cmd)->
       Synchronize(wait_cycles);

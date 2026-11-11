@@ -137,6 +137,10 @@ class CommandQueue {
   void SetRequant(int en, int round, int shift, int lo, int hi) {
     rq_.en = en != 0; rq_.round = round; rq_.shift = shift; rq_.lo = lo; rq_.hi = hi;
   }
+  //#### JO added (2026-11-11, ALU extension, docs/evta_isa_ext.md 8.8): lut_en of the ALU instructions pushed from now on
+  //#### (VTAAluLut); only an "_alux" bitstream reads it
+  bool alu_lut_ = false;
+  void SetAluLut(int en) { alu_lut_ = en != 0; }
   template <class T> void ApplyRequant(T *insn) const {
     insn->rq_en = rq_.en;
     insn->rq_round = rq_.en ? rq_.round : 0;
@@ -629,8 +633,9 @@ class CommandQueue {
         fprintf(fp, " reset %d uop %u %u iter %u %u dst %u %u src %u %u alu %d imm %d %d", (int)x->reset_reg,
                 (unsigned)x->uop_bgn, (unsigned)x->uop_end, (unsigned)x->iter_out, (unsigned)x->iter_in,
                 (unsigned)x->dst_factor_out, (unsigned)x->dst_factor_in, (unsigned)x->src_factor_out,
-                (unsigned)x->src_factor_in, (int)x->alu_opcode, (int)x->use_imm, (int)x->imm);
+                (unsigned)x->src_factor_in, VTA_ALU_FULL_OP(*x), (int)x->use_imm, (int)x->imm);   //#### JO changed (2026-11-11): full op
         if (x->rq_en) fprintf(fp, " rq %d %d %d %d", (int)x->rq_round, (int)x->rq_shift, (int)x->rq_lo, (int)x->rq_hi);
+        if (x->lut_en) fprintf(fp, " lut");   //#### JO added (2026-11-11)
       }
       fputc('\n', fp);
     }
@@ -904,6 +909,9 @@ class CommandQueue {
     insn->uop_bgn = kernel->sram_begin_;
     insn->uop_end = kernel->sram_end_;
     insn->alu_opcode = kernel->opcode_;
+    //#### JO added (2026-11-11, ALU extension): operations 4-11 (VTA_ALUX_*) as alu_op_ext << 2 | alu_opcode, and lut_en
+    insn->alu_op_ext = kernel->opcode_ >> VTA_ALU_OPCODE_BIT_WIDTH;
+    insn->lut_en = alu_lut_;
     insn->use_imm = kernel->use_imm_;
     insn->imm = kernel->imm_val_;
     ApplyRequant(insn);   //#### JO added (2026-11-04)

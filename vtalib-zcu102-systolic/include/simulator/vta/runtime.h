@@ -289,6 +289,9 @@ TVM_DLL int VTAPushALUOp(VTACommandHandle cmdH,
  * \return 0 if success.
  */
 TVM_DLL int VTADepPush(VTACommandHandle cmd, int from_qid, int to_qid);
+//#### JO added (2026-11-11, ALU extension): as include/zcu102/vta/runtime.h (the simulator applies them to ALU instructions)
+TVM_DLL void VTARequant(VTACommandHandle cmd, int en, int round, int shift, int lo, int hi);
+TVM_DLL void VTAAluLut(VTACommandHandle cmd, int en);
 
 /*!
  * \brief Pop dependence signal.

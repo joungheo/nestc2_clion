@@ -316,6 +316,9 @@ TVM_DLL int VTADepPop(VTACommandHandle cmd, int from_qid, int to_qid);
 //#### systolic bitstream with "_rq" in the name does it, others ignore the fields). round 0: none, 1: + 2^(shift-1),
 //#### 2: + 2^(shift-1) - (acc < 0) (half away from zero); shift 0..31. en 0 turns it off again.
 TVM_DLL void VTARequant(VTACommandHandle cmd, int en, int round, int shift, int lo, int hi);
+//#### JO added (2026-11-11, ALU extension, docs/evta_isa_ext.md 8.8): the ALU instructions pushed after this call have lut_en
+//#### (out = T[out], T set by an ALU LUTSET; only an "_alux" bitstream does it). en 0 turns it off again.
+TVM_DLL void VTAAluLut(VTACommandHandle cmd, int en);
 
 /*!
  * \brief Synchronize the command handle.
