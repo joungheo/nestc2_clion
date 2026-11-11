@@ -232,6 +232,11 @@ public:
   std::set<const Instruction *> *getLutAway() { return &lutAway; }
   bool isLutAway(const Instruction *I) const { return lutAway.count(I) != 0; }
   std::string lutFuncs; // the functions that make the tables (file scope, before load_module)
+  //#### JO added (2026-11-12, ALU extension step 7): a table region on the output of a plain EVTA conv (findOutLutConvs):
+  //#### by the conv, and the regions done that way; lutNames: the table of a region (by its first instruction)
+  std::map<const Instruction *, const Instruction *> outLutConv; // conv -> the region's first instruction
+  std::set<const Instruction *> outLutRegion;                    // regions (first instruction) applied at the conv
+  std::map<const Instruction *, std::string> lutNames;
   //#### JO added (2026-11-09): softmax of a dequantized int8 tensor emitted at the dequantize (findSoftmaxI8)
   std::map<const Instruction *, const SoftMaxInst *> softmaxAtDq;
   std::set<const Instruction *> softmaxAway;
@@ -3862,6 +3867,7 @@ ConvPath getConvPath(const glow::ConvolutionInst *Inst) {
 }
 
 static bool saveEvtaConvAsFc(const glow::ConvolutionInst *Inst, std::string *bundle, VTASaveContext *ctx);
+static std::string makeLutTable(const LutRegion &r, std::string *bundle, VTASaveContext *ctx);   //#### JO (2026-11-12)
 
 void saveConvolutionInst(const glow::ConvolutionInst *Inst, std::string *bundle,
                          std::string *initConst, VTASaveContext *ctx) {
@@ -3872,6 +3878,34 @@ void saveConvolutionInst(const glow::ConvolutionInst *Inst, std::string *bundle,
   const int clipHi = convClipHi(Inst);
   if (clipHi < 127)
     bundle->append("  VTASetActivationClip(" + std::to_string(clipHi) + ");\n");
+  //#### JO added (2026-11-12): findOutLutConvs: the table region after this conv as its output LUT, the output into the
+  //#### region's out
+  auto olc = ctx->outLutConv.find(Inst);
+  if (olc != ctx->outLutConv.end()) {
+    const LutRegion &r = ctx->getLutRegions()->at(olc->second);
+    if (r.outAlloc && ctx->getHoisted()->insert(r.outAlloc).second)
+      *bundle += "  int8_t *" + r.out->getName().str() + " = (int8_t *)malloc(" +
+                 std::to_string(r.out->getSizeInBytes()) + ");\n";
+    const std::string lut = makeLutTable(r, bundle, ctx);
+    *bundle += "  // the table of the elementwise region after this conv as its output LUT (-vta-alu-output-lut)\n";
+    *bundle += "#ifdef VTA_OUTPUT_LUT\n  static const nestc_cpu::Lut8U " + lut + "_u = nestc_cpu::lutByByte(" + lut +
+               ");\n  if (VTAHasAluExt())\n    VTASetOutputLut(" + lut + "_u.v);\n#endif\n";
+    std::string conv;
+    saveVTAConvolutionInst(Inst, &conv, initConst, ctx);
+    // the transpose of the output into out
+    const std::string from = "_output_bef_transpose), " + Inst->getDest()->getName().str() + ", ";
+    const size_t at = conv.find(from);
+    if (at == std::string::npos || conv.find(from, at + 1) != std::string::npos) {
+      llvm::errs() << "VTASave: -vta-alu-output-lut: unexpected code for " << Inst->getName() << "\n" << conv;
+      std::exit(1);
+    }
+    conv.replace(at, from.size(), "_output_bef_transpose), " + r.out->getName().str() + ", ");
+    *bundle += conv;
+    *bundle += "#ifdef VTA_OUTPUT_LUT\n  VTASetOutputLut(nullptr);\n#endif\n";
+    if (clipHi < 127)
+      bundle->append("  VTASetActivationClip(127);\n");
+    return;
+  }
   switch (getConvPath(Inst)) {
   case ConvPath::Float:
     saveFloatConvolutionInst(Inst, bundle, ctx);
@@ -6465,6 +6499,16 @@ static void erfQ(int8_t *o8, const int8_t *a8, size_t n, float s) {
 struct Lut8 {
   int8_t v[256];
 };
+//#### JO added (2026-11-12): the table indexed by the byte (VTASetOutputLut: T[(uint8_t) v])
+struct Lut8U {
+  int8_t v[256];
+};
+static Lut8U lutByByte(const Lut8 &t) {
+  Lut8U u;
+  for (int k = 0; k < 256; k++)
+    u.v[k] = t.v[(uint8_t)k ^ 0x80];
+  return u;
+}
 static void lut8(int8_t *o, const int8_t *a, const Lut8 &lut, size_t n) {
   const int8_t *t = lut.v;
   size_t i = 0;
@@ -7258,6 +7302,14 @@ static llvm::cl::opt<bool> vtaLutElementwise(
                    "constants with one value) as a 256-entry table computed once at run time by the same code"),
     llvm::cl::init(true));
 
+//#### JO added (2026-11-12, ALU extension step 7, docs/evta_isa_ext.md 8.10): -vta-alu-output-lut (findOutLutConvs)
+static llvm::cl::opt<bool> vtaAluOutputLut(
+    "vta-alu-output-lut",
+    llvm::cl::desc("A table region (-vta-lut-elementwise) on the output of a plain EVTA conv (GELU after fc1) as the conv's "
+                   "output LUT (vtalib VTASetOutputLut, an ALU pass) when the EVTA has the extended ALU; else the "
+                   "table on the CPU as before"),
+    llvm::cl::init(true));
+
 // a constant whose elements all have the same bytes (a broadcast scalar)
 static bool isUniformConstant(const Value *v, VTASaveContext *ctx) {
   if (!isConstantWeight(v))
@@ -7486,7 +7538,13 @@ static std::string renameTokens(const std::string &s, const std::map<std::string
   return o;
 }
 
-static void emitLutRegion(const LutRegion &r, std::string *bundle, VTASaveContext *ctx) {
+//#### JO changed (2026-11-12): the table (its maker function and the static that holds it) by makeLutTable, also called
+//#### by the conv of findOutLutConvs before the region; emitLutRegion emits the lookup
+static std::string makeLutTable(const LutRegion &r, std::string *bundle, VTASaveContext *ctx) {
+  const Instruction *key = r.instrs.front();
+  auto known = ctx->lutNames.find(key);
+  if (known != ctx->lutNames.end())
+    return known->second;
   static int id = 0;
   std::map<std::string, std::string> ren;
   std::map<const Value *, std::string> probe;
@@ -7525,9 +7583,6 @@ static void emitLutRegion(const LutRegion &r, std::string *bundle, VTASaveContex
     body += "    " + t2;
   }
   ctx->usesCpuOps = true;
-  if (r.outAlloc && ctx->getHoisted()->insert(r.outAlloc).second)
-    *bundle += "  int8_t *" + r.out->getName().str() + " = (int8_t *)malloc(" +
-               std::to_string(r.out->getSizeInBytes()) + ");\n";
   std::string decl;
   for (auto &p : probe)
     decl += "    alignas(16) int8_t " + p.second + "[1024];\n";
@@ -7542,8 +7597,85 @@ static void emitLutRegion(const LutRegion &r, std::string *bundle, VTASaveContex
                    "[q] = (int8_t)(q - 128);\n" + body + "    nestc_cpu::Lut8 t;\n    memcpy(t.v, " + probe[r.out] +
                    ", 256);\n    return t;\n}\n";
   *bundle += "  static const nestc_cpu::Lut8 " + lut + " = " + lut + "_make();\n";
+  ctx->lutNames[key] = lut;
+  return lut;
+}
+
+static void emitLutRegion(const LutRegion &r, std::string *bundle, VTASaveContext *ctx) {
+  const std::string num = std::to_string(r.n);
+  if (r.outAlloc && ctx->getHoisted()->insert(r.outAlloc).second)
+    *bundle += "  int8_t *" + r.out->getName().str() + " = (int8_t *)malloc(" +
+               std::to_string(r.out->getSizeInBytes()) + ");\n";
+  const std::string lut = makeLutTable(r, bundle, ctx);
+  //#### JO added (2026-11-12): findOutLutConvs: the conv wrote its output into out; the table there, unless the EVTA did it
+  if (ctx->outLutRegion.count(r.instrs.front())) {
+    *bundle += "  // the conv before wrote " + r.out->getName().str() + " (-vta-alu-output-lut)\n";
+    *bundle += "#ifdef VTA_OUTPUT_LUT\n  if (!VTAHasAluExt())\n#endif\n";
+    *bundle += "  nestc_cpu::lut8(" + r.out->getName().str() + ", " + r.out->getName().str() + ", " + lut + ", " + num +
+               ");\n";
+    return;
+  }
   *bundle += "  nestc_cpu::lut8(" + r.out->getName().str() + ", " + r.root->getName().str() + ", " + lut + ", " +
              num + ");\n";
+}
+
+//#### JO added (2026-11-12, ALU extension step 7, docs/evta_isa_ext.md 8.10): a table region whose root is the NHWC output of
+//#### a plain EVTA conv (no fused pool / residual, H x W > 1) that nothing else reads (DeiT: the GELU after each fc1). The
+//#### conv writes its output transposed straight into the region's out (allocated before the conv) and runs with
+//#### VTASetOutputLut(table by byte) when the EVTA has the extended ALU (VTAHasAluExt: an ALU pass per tile, LUTSET once);
+//#### else the bundle looks the table up in place in out (nestc_cpu::lut8, as before but in place). vta/vtalib has no
+//#### VTASetOutputLut (no VTA_OUTPUT_LUT): the CPU table always.
+static void findOutLutConvs(IRFunction *F, VTASaveContext *ctx) {
+  if (!vtaAluOutputLut || !vtaLutElementwise)
+    return;
+  std::vector<const Instruction *> L;
+  std::map<const Instruction *, size_t> pos;
+  for (const auto &I : F->getInstrs()) {
+    pos[&I] = L.size();
+    L.push_back(&I);
+  }
+  for (auto &kv : *ctx->getLutRegions()) {
+    const LutRegion &r = kv.second;
+    const size_t first = pos[kv.first];
+    // the conv that writes root
+    const ConvolutionInst *conv = nullptr;
+    size_t cpos = 0;
+    for (size_t k = first; k-- > 0;) {
+      const Instruction *J = L[k];
+      bool writes = false;
+      for (unsigned q = 0, e = J->getNumOperands(); q < e; q++)
+        if (J->getOperand(q).second != OperandKind::In &&
+            getOrigin(const_cast<Value *>(J->getOperand(q).first)) == r.root)
+          writes = true;
+      if (!writes)
+        continue;
+      conv = llvm::dyn_cast<ConvolutionInst>(J);
+      cpos = k;
+      break;
+    }
+    if (!conv || getConvPath(conv) != ConvPath::VTA || ctx->getPoolFusion(conv) || ctx->getFusion(conv) ||
+        ctx->isPacked(conv->getDest()) || zeroOffsetActivation(conv->getDest()) != r.root ||
+        conv->getDest()->dims()[1] * conv->getDest()->dims()[2] <= 1 || ctx->outLutConv.count(conv))
+      continue;
+    // nothing but the region (and deallocs / views) touches root after the conv; out is not touched before the region
+    std::set<const Instruction *> members(r.instrs.begin(), r.instrs.end());
+    bool ok = true;
+    for (size_t k = cpos + 1; k < L.size() && ok; k++) {
+      const Instruction *J = L[k];
+      if (members.count(J) || J->getKind() == Kinded::Kind::DeallocActivationInstKind ||
+          J->getKind() == Kinded::Kind::TensorViewInstKind || J->getKind() == Kinded::Kind::AllocActivationInstKind)
+        continue;
+      for (unsigned q = 0, e = J->getNumOperands(); q < e; q++) {
+        const Value *o = getOrigin(const_cast<Value *>(J->getOperand(q).first));
+        if (o == r.root || (k < first && o == r.out))
+          ok = false;
+      }
+    }
+    if (!ok)
+      continue;
+    ctx->outLutConv[conv] = kv.first;
+    ctx->outLutRegion.insert(kv.first);
+  }
 }
 
 //#### JO added (2026-11-09): a softmax over rows of a tensor dequantized from int8 (softmaxQ) whose dequantized copy is
@@ -8119,7 +8251,7 @@ static std::string vtaOptionsComment() {
       "vta-keep-layout",   "vta-fuse-residual", "vta-evta-maxpool", "vta-evta-fc",
       "vta-fuse-preprocess", "vta-conv0-pack",  "vta-fuse-pool",    "vta-evta-depthwise",
       "vta-round-shift",   "vta-pad-channels",  "vta-matmul-conv", "vta-fold-matmul-bias", "vta-evta-matmul", "vta-lut-elementwise", "vta-fuse-layernorm",
-      "vta-matmul-heads", "vta-attn-keep-layout", "vta-cpu-approx",
+      "vta-matmul-heads", "vta-attn-keep-layout", "vta-cpu-approx", "vta-alu-output-lut",
       "enable-channelwise-depthwise", "enable-channelwise"};
   auto &opts = llvm::cl::getRegisteredOptions();
   std::string s = "// Generated by the NEST-C VTA backend with:";
@@ -8291,6 +8423,7 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
   findInputPreprocess(IR.get(), &ctx);
   findPoolFusions(IR.get(), &ctx);
   findLutRegions(IR.get(), &ctx);
+  findOutLutConvs(IR.get(), &ctx);
   findSoftmaxI8(IR.get(), &ctx);
   findLayerNorms(IR.get(), &ctx);
   findMatMulGroups(IR.get(), &ctx);

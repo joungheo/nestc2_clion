@@ -191,7 +191,11 @@ void preprocess_conv0pack_rows(const float *input, int8_t *output, int N, int H,
 void VTASetActivationClip(int hi);
 //#### JO added (2026-11-11, ALU extension): int8 -> int8 table on the output of the plain EVTA convs (nullptr = off;
 //#### an "_alux" bitstream, or the simulator); see VTABundle.cpp
+//#### JO changed (2026-11-12): T indexed by the byte (T[(uint8_t) v]); on the CPU after the conv without the extended
+//#### ALU (VTAHasAluExt). VTA_OUTPUT_LUT tells a bundle that this vtalib has it (vta/vtalib does not).
+#define VTA_OUTPUT_LUT 1
 void VTASetOutputLut(const int8_t *T);
+bool VTAHasAluExt();
 void preprocess_conv0pack_stream(const float *input, void *buf, int N, int H, int W, int C, int nchw, float scale,
                                  int32_t offset, const int8_t *lut, int KH, int KW, int stride, int pad, int CO,
                                  int padEnd = -1);

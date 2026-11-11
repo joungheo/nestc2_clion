@@ -618,6 +618,28 @@ void VTASetActivationClip(int hi) { gEvtaClipHi = hi < 127 ? hi : 127; }
 #endif
 thread_local const int8_t *gOutLut = nullptr;
 void VTASetOutputLut(const int8_t *T) { gOutLut = T; }
+//#### JO added (2026-11-12, ALU extension step 6): whether the EVTA has the extended ALU operations: "_alux" in the name of
+//#### the bitstream the run scripts loaded (/tmp/evta_bitstream), always in the simulator (sim_driver.cc runs them through
+//#### alu_ext_ref.h); EVTA_ALUX=0|1 overrides. Without it the extended paths fall back to the CPU (VTASetOutputLut: the
+//#### table over the conv output after the run, convolution_wo_tr) or report that they did not run (layernorm_evta).
+bool VTAHasAluExt() {
+  static int on = -1;
+  if (on < 0) {
+    const char *e = getenv("EVTA_ALUX");
+    if (e && *e) on = atoi(e) > 0;
+    else {
+#if (NESTC_USE_VTASIM)
+      on = 1;
+#else
+      char name[256] = {0};
+      FILE *f = fopen("/tmp/evta_bitstream", "r");
+      on = f && fgets(name, sizeof(name), f) && strstr(name, "_alux") && strncmp(name, "FAILED", 6);
+      if (f) fclose(f);
+#endif
+    }
+  }
+  return on;
+}
 static void *outLutBuffer(const int8_t *T) {
   static std::mutex m;
   static std::map<const int8_t *, void *> bufs;
@@ -3441,10 +3463,11 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
                          res ? (int32_t)res->resShl : 0, res ? (int32_t)res->convShl : 0,
                          res ? (int32_t)res->sumShr : 0, res ? (int32_t)res->relu + 2 * (int32_t)res->reluShl : 0, res ? res->buf == output : 0,
                          pool != nullptr, stream, gEvtaClipHi,   //#### JO: + gEvtaClipHi (2026-11-06)
-                         dw != nullptr, dw ? dw->lo : 0, dw ? dw->hi : 0};   //#### JO: + depthwise (2026-11-08)
+                         dw != nullptr, dw ? dw->lo : 0, dw ? dw->hi : 0,   //#### JO: + depthwise (2026-11-08)
+                         gOutLut && !res && !pool && !dw};   //#### JO: + output LUT (2026-11-12; its table is a relocated buffer)
   //#### JO changed (2026-11-02): a fused max pool writes its output, not the conv's
   void *replayBufs[] = {input, kernel, doBias ? bias : nullptr, pool ? pool->out : (void *)output, res ? res->buf : nullptr,
-                        dw ? dw->shift : nullptr};
+                        dw ? dw->shift : nullptr, gOutLut && !res && !pool && !dw ? outLutBuffer(gOutLut) : nullptr};
   void *dumpBuf = pool ? pool->out : (void *)output;
   const size_t dumpBytes = pool ? (size_t)KN * pool->PH * pool->PW : (size_t)N * KN * out_h * out_w;
   if (stream)
@@ -3465,7 +3488,7 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
   }
   const int replayed = batch ? VTAReplayBegin(vtaCmdH, batchKey.data(), (int)(batchKey.size() * sizeof(int32_t)),
                                               batchBufs.data(), (int)batchBufs.size())
-                             : VTAReplayBegin(vtaCmdH, replayKey, sizeof(replayKey), replayBufs, 6);
+                             : VTAReplayBegin(vtaCmdH, replayKey, sizeof(replayKey), replayBufs, 7);
   if (stream) {
     VTASetSegmentHook(vtaCmdH, nullptr, nullptr);
     inputStreamEnd(ins);  // the rows a replay wrote; all of them before a recording
@@ -3757,9 +3780,26 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
 
 int convolution_wo_tr(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *output, int N, int H, int W, int C, int KN, int KH, int KW, int pad_size,
                       int stride_size, bool doRelu, bool doBias, uint8_t shift, int out_h, int out_w, void* vtaCmdH, int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA) {
-  return convolution_wo_tr_impl(input, kernel, bias, output, N, H, W, C, KN, KH, KW, pad_size, stride_size, doRelu,
-                                doBias, shift, out_h, out_w, vtaCmdH, nVirtualThread, tileHSize, tileWSize, idEVTA,
-                                nullptr);
+  //#### JO added (2026-11-12, ALU extension step 6): the output LUT on the CPU when the EVTA has no extended ALU
+  //#### (VTAHasAluExt): the conv as before, then out[i] = T[(uint8_t) out[i]] over its VTA buffer (invalidated, then flushed:
+  //#### the caller invalidates it again before reading)
+  const int8_t *T = gOutLut;
+  const bool cpuLut = T && !VTAHasAluExt();
+  if (cpuLut)
+    gOutLut = nullptr;
+  int rc = convolution_wo_tr_impl(input, kernel, bias, output, N, H, W, C, KN, KH, KW, pad_size, stride_size, doRelu,
+                                  doBias, shift, out_h, out_w, vtaCmdH, nVirtualThread, tileHSize, tileWSize, idEVTA,
+                                  nullptr);
+  if (cpuLut) {
+    gOutLut = T;
+    const size_t n = (size_t)N * KN * out_h * out_w;
+    VTABufferInvalidate(output, 0, n);
+    int8_t *o = (int8_t *)VTABufferGetVirtAddr(output);
+    for (size_t i = 0; i < n; i++)
+      o[i] = T[(uint8_t)o[i]];
+    VTABufferFlush(output, 0, n);
+  }
+  return rc;
 }
 
 //#### JO added (2026-11-09): int8 C[M][N] = clip(floor((A[M][K] B[K][N] + 2^(shift-1)) / 2^shift)), both operands

@@ -15,3 +15,5 @@ ${CXX:-c++} -std=c++14 -O1 -w -DLLVM_DISABLE_ABI_BREAKING_CHECKS_ENFORCING=1 -DN
   -I"$V/include/simulator/vta" -I"$V/3rdparty/dlpack/include" -I"$V/3rdparty/dmlc-core/include" -I"$L" -I"$R" \
   "$H/lut_conv_test.cc" -o lut_conv_test libVTABundle.a libvta_runtime.a -lpthread
 ./lut_conv_test
+echo "without the extended ALU (EVTA_ALUX=0: the table on the CPU after the conv)"
+EVTA_ALUX=0 ./lut_conv_test
