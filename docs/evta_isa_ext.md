@@ -218,7 +218,7 @@ sudo -n /bin/sh -c "BIN=$NEW hw/script/run_prof.sh -s _systimed -n 2 <Dir>; cat 
 | bias reset (11-04) | `bias`, `biashazard` | 96/96 | 0 errors | single golden 30, dumps 동일 / multi4 golden 3, dumps 80개 동일 |
 | requantize (11-04) | 무작위 300 | 49 vector × 2 = 98/98 | 0 errors | single: probes 10/10, golden 27 PASS + 분류 4개 같음, dumps 146개 동일, `EVTA_RES_CHECK` 0, `EVTA_REQUANT=0` 우회 동일 | / multi4(395.8 MHz): probes 40/40, golden 3 PASS, dumps 80개가 `bias`와 동일
 
-## 8. 다음 ISA 개정: ALU 확장 (설계 11-10, 1–3단계 끝 11-11, 비트스트림은 아직)
+## 8. 다음 ISA 개정: ALU 확장 (설계 11-10, 1–3단계 끝 11-11, 6·7단계의 소프트웨어 부분 11-12, 비트스트림은 아직)
 
 DeiT의 LayerNorm / softmax / GELU, 2의 거듭제곱이 아닌 scale, avgpool, YOLO 계열 activation을 EVTA에 두려고 ALU를 넓힌다.
 H1(MUL), H2(LUT), H4(행 reduction)의 일부(`deit_optimization.md` §6.2)를 **한 번의 개정**으로 묶는다.
@@ -399,8 +399,8 @@ bitstream과 vtalib의 짝이 한 번만 바뀌게 하려는 것이다.
 | 3 | HLS `vta.cc` `alu()` / `alu_lane()`, `sa_rmw.v` 출력 LUT, `vta_test.cc` `alu_test`에 새 연산, RTL testbench, CSim | 1–1.5주. **11-11 끝 (§8.8)**: HLS ALU, CSim(무작위 명령열, LayerNorm / softmax 명령열), C 합성, 기존 모델 명령의 겹침 검사. GEMM `lut_en`은 예약만 하고 ALU pass로 한다. RTL 변경 없음 |
 | 4 | single `_alux` bitstream(합성 약 1시간 × 몇 번), 보드 probe, golden, dump 비교 | 2–4일 |
 | 5 | multi4 bitstream (Y219 flow) | 1–3일 |
-| 6 | vtalib API(`VTAPushALUOp` ext 인자, `VTALutSet`), bitstream 이름 검사, CPU 대체 경로 | 2–3일 |
-| 7 | 컴파일러 / bundle: avgpool, 2^n이 아닌 residual scale, GELU 출력 LUT, LayerNorm, softmax, SiLU (연산마다) | 연산마다 1–3일, 합 2–3주 |
+| 6 | vtalib API(`VTAPushALUOp` ext 인자, `VTALutSet`), bitstream 이름 검사, CPU 대체 경로 | 2–3일. **11-12 (§8.9, §8.10)**: `VTAAluLut`, `alu_op_ext`, `VTAHasAluExt`(`_alux`), CPU 대체 경로 |
+| 7 | 컴파일러 / bundle: avgpool, 2^n이 아닌 residual scale, GELU 출력 LUT, LayerNorm, softmax, SiLU (연산마다) | 연산마다 1–3일, 합 2–3주. **11-12 (§8.10)**: GELU 출력 LUT, LayerNorm, softmax(기본 꺼짐). 시뮬레이터에서 바이트 일치. CNN 항목은 남음 |
 
 - 하드웨어와 runtime(2–6)은 3–4주, 컴파일러까지 합하면 6–7주로 본다.
 - 효과(추정, DeiT `-t 4` 57.9 ms 기준):
@@ -638,3 +638,69 @@ bitstream과 vtalib의 짝이 한 번만 바뀌게 하려는 것이다.
 **남은 것**
 - 하드웨어 경로의 `rq_*` + `lut_en`(GEMM이 32비트 합을 남기고 ALU가 requantize와 표를 한 번에 함)은 시뮬레이터에서 볼 수 없다. 시뮬레이터 GEMM에 out buffer가 없어서다. 그래서 4단계 보드에서 본다(`_alux` 비트스트림, `EVTA_REQUANT=1`).
 - 컴파일러: VTASave가 GELU 같은 원소별 표(`findLutRegions`가 이미 256칸 표를 만든다)를 앞의 EVTA conv에 붙여 `VTASetOutputLut`를 내게 한다. 7단계 일이다. `_alux`가 아닌 bitstream에서는 지금처럼 CPU 표를 쓴다.
+
+### 8.10 6·7단계 중 소프트웨어로 되는 것: DeiT의 GELU / LayerNorm / softmax를 ALU로 (2026-11-12)
+
+비트스트림(4단계) 없이 할 수 있는 vtalib(6단계)과 컴파일러(7단계) 일을 했다. 모두 vtalib 시뮬레이터에서 CPU 경로와 바이트 단위로 맞췄고, 지금 보드 비트스트림에서는 예전과 같은 결과·시간인지 확인했다.
+
+**동작 방식: 한 bundle이 두 비트스트림에서 다 돈다**
+- vtalib `VTAHasAluExt()`: `/tmp/evta_bitstream`의 이름에 `_alux`가 있으면 참이다. 시뮬레이터에서는 늘 참이고, `EVTA_ALUX=0|1`로 바꿀 수 있다.
+- bundle은 실행할 때 이 값을 보고 ALU 경로나 예전 CPU 경로로 간다. `_alux` 비트스트림이 나오면 다시 컴파일하지 않고 같은 실행 파일로 빨라진다.
+- vta/vtalib(HLS GEMM 비트스트림용)에는 이 기능이 없다. 그래서 bundle 코드는 `#ifdef VTA_OUTPUT_LUT`(vtalib-zcu102-systolic의 `VTABundle.h`가 정의) 안에만 넣었고, 그 밖에서는 예전 코드가 그대로 나온다.
+
+| 연산 | 컴파일러 (VTASave) | vtalib-zcu102-systolic | 기본값 |
+|---|---|---|---|
+| GELU (fc1 뒤 표) | `-vta-alu-output-lut` (`findOutLutConvs`): `findLutRegions`가 만든 표가 EVTA conv의 출력(NHWC, 다른 데서 안 읽음)에 바로 붙으면, conv 출력을 그 표의 결과 버퍼로 transpose하고 `VTASetOutputLut(VTAHasAluExt() ? 표 : nullptr)`로 감싼다. 확장이 없으면 결과 버퍼에서 `lut8`을 제자리로 한다 | `VTASetOutputLut` (§8.9), `convolution_wo_tr`: 표가 걸렸는데 확장이 없으면 conv 뒤 CPU에서 표를 적용(bundle은 이 길을 쓰지 않음). 표 유무와 표 버퍼를 replay key / relocation에 넣었다(층마다 표가 다르다) | 켜짐 |
+| LayerNorm | `-vta-alu-layernorm`: `findLayerNorms`가 묶은 호출을 `if (!layernorm_evta(...)) nestc_cpu::layerNormI8(...);`로 낸다 | `layernorm_evta`: `alu_ext_test.cc`의 정수 LayerNorm 명령열. 한 번에 n token(multi buffer acc 2048 entry에 맞춰 DeiT 40개), token을 int32로 LOAD, int8 행을 STORE. 상수(G, B, 1/√ 표)는 gamma마다 한 번 만든다 | 켜짐 |
+| softmax | `-vta-alu-softmax`: `findSoftmaxI8`의 dequantize + softmax에 뒤의 quantize 하나를 더 묶어, 정수 softmax + 정수 quantize(`nestc_cpu::softmaxIntQ`)로 낸다. `if (!softmax_evta(...)) nestc_cpu::softmaxIntQ(...);` | `softmax_evta`: `alu_ext_test.cc`의 softmax 명령열(8비트 exp 표, CLZ + 역수 표, 확률 2^16) 뒤에 MUL M 한 번 + `rq`(round, shift k, clip). M < 2^14라 p·M + 2^(k−1) < 2^31 | **꺼짐** (기본 softmax는 float이고 결과가 마지막 비트에서 다르다) |
+
+- 확장이 없을 때(`VTAHasAluExt()` 거짓): `layernorm_evta` / `softmax_evta`는 아무것도 하지 않고 0을 돌려준다. 그러면 bundle이 CPU 함수를 부른다. NESTC_LN_INT가 1이 아니거나, 행마다 gamma가 다르거나, 열이 16의 배수가 아니거나 너무 넓어도 0이다.
+- 시험용 검사: `EVTA_LN_CHECK=1`, `EVTA_SM_CHECK=1`은 매 호출을 CPU 계산과 비교해 다른 바이트 수를 찍는다.
+- 시뮬레이터 `EVTA_ALU_HAZARD=17`: 시뮬레이터가 실행하는 vector ALU 명령마다 `vta_alu_ref::hazards()`로 17 step 겹침을 센다(§8.8의 규칙).
+
+**시험** (`vtalib-zcu102-systolic/tests/run_lut_conv_test.sh`, PC에서 시뮬레이터 vtalib을 빌드해 1–2코어로 몇 분)
+
+| 시험 | 내용 | 결과 | 일부러 틀리게 했을 때 |
+|---|---|---|---|
+| `lut_conv_test` | conv 출력 표 4가지 (§8.9), 확장 있음 / `EVTA_ALUX=0` | 둘 다 0바이트 다름 | LUTSET 시작 칸 +1: 62–100 % 다름 |
+| `ln_evta_test` | 198 × 192 (scale 두 가지), 50 × 384, 17 × 64; 그대로, 그리고 EVTA conv 뒤에 | 0바이트 다름 | gs + 1: 72–95 % 다름 |
+| `softmax_evta_test` | DeiT attention 594 × 198 (s 0.1055, out 1/127.1), 594 × 198 (다른 scale), 100 × 64 (E[255] ≠ 0, 열 16의 배수), 40 × 37; 10 × 197 (E[255] ≠ 0이고 열에 padding)은 안 돌려야 함 | 0바이트 다름, 마지막은 0 반환 | 7 → 8 한 곳: 117,612개 중 34,416개 다름 |
+| 겹침 (`EVTA_ALU_HAZARD=17`) | 위 세 시험의 vector ALU 명령 | LN 702 명령 / 133,483 step, softmax 675 / 179,862, conv 표 279 / 204,864: 겹침 0 | |
+
+**DeiT 전체를 PC 시뮬레이터에서** (보드에서 만든 bundle을 PC의 시뮬레이터 vtalib에 링크, 한 장 4회 약 21초)
+
+| bundle | 확장 있음 (ALU) | `EVTA_ALUX=0` (CPU) | 비교 |
+|---|---|---|---|
+| 기본 (GELU 표 12 + LayerNorm 24를 ALU로) | 281, 0.788097 | 281, 0.788097 | conv dump 388개 중 fc1 출력 48개(12층 × 4회)만 다름: ALU 쪽은 표를 적용한 값이라 다른 것이 맞다. 그 뒤의 fc2 출력은 모두 같다. `EVTA_LN_CHECK` 96회 모두 0 |
+| `-vta-alu-softmax` 추가 | 281, 0.772822 | 281, 0.772822 | `EVTA_SM_CHECK` 48회, `EVTA_LN_CHECK` 96회 모두 0. 이 실행의 vector ALU 명령 40,976개(10,388,736 step)에 17 step 겹침 0 |
+
+- 시뮬레이터에는 GEMM `rq`가 없어서, 보드의 `_rq` 경로(GEMM이 32비트 합을 남기고 ALU가 requantize + 표)는 여기서 볼 수 없다. 4단계에서 본다.
+- 마지막 LayerNorm(encoder 뒤 `deit_layernorm`)은 원래부터 `findLayerNorms`에 묶이지 않아 CPU의 Glow 체인으로 돈다. 그래서 LayerNorm 호출은 25개가 아니라 24개다.
+
+**지금 보드(`_sa_400mhz_rq`, 확장 없음)에서 그대로인지**
+- 기본 bundle을 `build_systimed`로 빌드해 `run_prof.sh -s _systimed -n 25`로 돌렸다. 281, 0.788097, 1장 76.1 ms다. 옵션을 다 끈 bundle은 76.2 ms였고, 어제는 75.9 ms였다.
+- 처음에는 보드에서만 611이 나오고 88.4 ms로 느렸다.
+  - 원인: `_systimed` 빌드는 `timed_bundle.py`가 문장 줄마다 시간 재는 코드를 끼운다. `if (VTAHasAluExt())` 다음 줄에 `VTASetOutputLut(...)`을 두었더니, `if`가 시간 코드만 감싸고 `VTASetOutputLut`이 늘 불렸다.
+  - 그래서 확장이 없는데 vtalib이 표를 적용하고, bundle도 한 번 더 적용했다(표 두 번, 스칼라 loop로 +12 ms).
+  - PC 시뮬레이터 빌드에는 시간 코드가 없어서 드러나지 않았다.
+  - 고침: bundle에 내는 조건문을 모두 한 줄 문장으로 바꿨다(`VTASetOutputLut(VTAHasAluExt() ? T : nullptr);`, `if (!...) f(...);`).
+- 시험하다 찾은 vtalib 버그: LayerNorm 상수와 표 버퍼를 포인터로만 캐시했다. 해제된 버퍼 주소가 다른 매개변수로 다시 오면 옛 상수를 썼다. 이제 내용(gamma 첫 행, beta, scale, 행 수; 표 256바이트)도 비교한다.
+
+**정수 softmax의 정확도** (보드, CPU 경로, ImageNetV2 앞 9,000장, `imagenet_eval/eval_board.sh`)
+
+| bundle | top-1 |
+|---|---|
+| 기본 (정수 LayerNorm, float softmax; `result/sym4_lnint1_9k.log`, 11-11) | 60.29 % |
+| 정수 LayerNorm + 정수 softmax 16비트 exp, quantize는 float (`NESTC_SM_INT=2`, §8.6) | 60.13 % |
+| **`-vta-alu-softmax`** (정수 softmax 8비트 exp + 정수 quantize; `result/sym5_smintq_9k.log`) | **59.94 %** |
+
+- 기본보다 0.35 %p 낮다. 9,000장의 표준오차(약 ±0.5 %p) 안이지만 세 번 모두 기본보다 낮은 쪽이다.
+- 그래서 `-vta-alu-softmax`는 기본으로 켜지 않는다. `_alux` 보드에서 시간 이득(softmax CPU 약 1 ms × 12층, 추정)을 잰 뒤 다시 정한다.
+- 16비트 exp 표(LUT 출력 16비트)로 하면 손실이 줄 수 있다. 하드웨어 LUT는 지금 8비트다.
+
+**남은 것**
+- `_alux` 비트스트림(4단계)이 나오면 같은 실행 파일을 그대로 돌려 본다: 결과가 CPU 경로와 같은지(`EVTA_LN_CHECK`, `EVTA_SM_CHECK`, `EVTA_DUMP_CONV`), 시간이 얼마나 주는지.
+  - GEMM `rq` + ALU 표 경로는 그때 처음 확인된다.
+  - LayerNorm / softmax는 지금 token을 CPU에서 int32로 넓혀 LOAD한다(한 번에 0.1–0.2 ms 추정). 입력이 EVTA 출력이면 identity GEMM으로 acc에 올리거나 EVTA 배치로 바로 쓰면 이 복사와 앞뒤 transpose가 없어진다. 그다음 일이다.
+- softmax를 기본으로 켤지: 위 정확도(−0.35 %p)와 `_alux` 보드의 시간으로 정한다.
+- CNN 쪽 7단계 항목(avgpool, 2^n이 아닌 residual scale, SiLU)은 지금 모델에서 이득이 작다(avgpool 0.2–1 ms; residual은 모두 2^n으로 묶였다). SiLU 같은 표는 `findOutLutConvs`가 그대로 쓰지만, CNN activation은 EVTA 배치로 남아 있어(`-vta-keep-layout`) 표 region이 생기지 않는다. YOLO류 모델을 올릴 때 한다.

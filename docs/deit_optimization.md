@@ -464,3 +464,5 @@ EVTA_REPLAY_LOG=2 / EVTA_REPLAY_DUMP=<dir>   # run별 GEMM / DRAM byte, 명령�
 ```
 
 VTASave 옵션은 모두 기본 켜짐이고, 끄면 그 단계 이전과 같은 코드가 나온다: `-vta-matmul-conv`, `-vta-fold-matmul-bias`, `-vta-evta-matmul`, `-vta-lut-elementwise`, `-vta-fuse-layernorm`, `-vta-matmul-heads`, `-vta-attn-keep-layout`, `-vta-cpu-approx`.
+
+- 2026-11-12: GELU / LayerNorm / softmax를 EVTA ALU로 내는 컴파일러·vtalib 경로(비트스트림 `_alux`에서만 켜짐, 없으면 지금 CPU 경로): `evta_isa_ext.md` §8.10.

@@ -284,6 +284,13 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   norm / softmax programs). GEMM `lut_en` is reserved, done as an ALU pass (CPY + `rq_*` + `lut_en`). Code before it: tag `alux-step2-261111`.
   The pass is in vtalib-zcu102-systolic: `VTASetOutputLut(T)` around a plain conv (LUTSET once, an ALU CPY with lut_en per tile; `VTAAluLut`),
   checked byte for byte against the CPU table in the vtalib simulator (`vtalib-zcu102-systolic/tests/run_lut_conv_test.sh`, builds the simulator vtalib on the PC).
+  Software side of steps 6 / 7 (2026-11-12, §8.10): vtalib-systolic `VTAHasAluExt()` (`_alux` in /tmp/evta_bitstream, always in the
+  simulator, `EVTA_ALUX=0|1`), `layernorm_evta`, `softmax_evta` (return 0 without the extension: the bundle then calls the CPU function);
+  VTASave `-vta-alu-output-lut` (GELU table as the fc1 output LUT, `findOutLutConvs`), `-vta-alu-layernorm` (both default on),
+  `-vta-alu-softmax` (default off: integer softmax + quantize, `nestc_cpu::softmaxIntQ`). One bundle runs on both bitstreams (code under
+  `#ifdef VTA_OUTPUT_LUT`; emit conditionals as one statement per line: `timed_bundle.py` wraps every statement line). The whole DeiT
+  bundle links against the PC simulator vtalib (same result with and without the ALU paths; `EVTA_LN_CHECK` / `EVTA_SM_CHECK` /
+  simulator `EVTA_ALU_HAZARD=17`); on today's `_rq` bitstream unchanged (281, 76.1 ms).
 - Other models (2026-11-05, `docs/evta_runtime_compare.md` §7.19): Resnet50 res2_0 residual fused (relu to a 2^q smaller scale), schedules of the
   Resnet50 / VGG16 shapes in `VTASchedules.h` (found with vtalib-systolic `EVTA_SCHED`), conv tiles below 7 x 7: the dummy-padded store
   used the wrong channel block with nVirtualThread 2 (fixed in both vtalibs) and the systolic vtalib's minimum tile is 1 on an `_sa_` bitstream
