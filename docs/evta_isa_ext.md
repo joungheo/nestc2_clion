@@ -606,3 +606,35 @@ bitstream과 vtalib의 짝이 한 번만 바뀌게 하려는 것이다.
 - 비트스트림(4단계)은 PC 냉각을 고친 뒤에 한다.
 - PC 온도: 감시 스크립트(`~/templog/thermal_guard.sh`: 85 °C에서 docker 정지, 95 °C 두 번이면 `systemctl poweroff`)를 켜고 돌렸다. CSim과 C 합성(한 코어, 약 7분) 동안 최고 58 °C였다.
 
+### 8.9 conv 출력 표를 ALU pass로 (vtalib, 시뮬레이터, 2026-11-11)
+
+§8.8에서 정한 대로, GEMM `lut_en` 대신 ALU pass로 conv 출력에 표를 적용하는 경로를 vtalib(`vtalib-zcu102-systolic`)에 넣었다. 비트스트림 없이 vtalib 시뮬레이터에서, 지금 방식(conv 뒤 CPU에서 표)과 바이트 단위로 비교했다.
+
+**바꾼 것**
+
+| 파일 | 내용 |
+|---|---|
+| `lib/Bundle/VTABundle.cpp`, `include/Bundle/VTABundle.h` | `VTASetOutputLut(T)` … `VTASetOutputLut(nullptr)`로 conv를 감싼다. conv_kernel이 하는 일: (1) 시작할 때 T를 acc 0–15에 LOAD하고 LUTSET(16 step) 한 번. (2) thread마다 STORE 직전에 tile 전체에 ALU CPY(dst = src) 한 번, conv의 `rq_*`(켜져 있으면) + `lut_en`. 그래서 out = T[(uint8) conv 출력]이 된다. 일반 conv만 해당한다(residual / pool / depthwise 제외). T는 표 포인터마다 VTA 버퍼에 한 번 복사한다(replay가 주소를 그대로 씀) |
+| `include/zcu102/cmd_queue.h`, `lib/zcu102/api.cc`, `include/zcu102/vta/runtime.h` | `VTAAluLut(cmd, en)`: 이후 ALU 명령의 `lut_en`. uop의 opcode 4–11을 `alu_op_ext`로 나눠 넣는다(전에는 2비트로 잘렸음). replay dump는 연산 번호 전체와 ` lut`를 적는다 |
+| `lib/simulator/runtime.cc`, `include/simulator/vta/runtime.h` | 시뮬레이터에도 `VTARequant`, `VTAAluLut`, `alu_op_ext`. 시뮬레이터 GEMM은 out buffer가 없어서 GEMM `rq_*`는 흉내 내지 않는다(번들은 시뮬레이터에서 `EVTA_REQUANT`를 끈 채로 돈다) |
+| `tests/lut_conv_test.cc`, `tests/run_lut_conv_test.sh` | 시뮬레이터용 vtalib을 임시 dir에 빌드하고(cmake, `make -j2`) 시험을 돌린다. 1–2코어, 약 1분 |
+
+**결과** (`vtalib-zcu102-systolic/tests/run_lut_conv_test.sh`)
+
+| 경우 | 출력 | 다른 바이트 |
+|---|---|---|
+| DeiT fc1 모양(197 × 1 × 192 → 768, 1×1, vt 2), GELU 표 | 151,296 | 0 |
+| 같은 모양, 무작위 표 | 151,296 | 0 |
+| 3×3 relu(28 × 28 × 32 → 64, vt 2, tile 14), 무작위 표 | 50,176 | 0 |
+| 3×3 relu(14 × 14 × 64 → 32, vt 1, tile 7), GELU 표 | 6,272 | 0 |
+
+- 시험이 틀린 것을 잡는지도 확인했다. LUTSET 시작 칸을 1 틀리게 하면, 네 경우 모두 출력의 62–100 %가 틀린다.
+- 기존 경로가 그대로인지도 확인했다(보드, `_sa_400mhz_rq`). 표를 쓰지 않는 conv의 명령은 바뀌지 않아야 한다.
+  - 보드에서 `build_systimed`로 DeiT와 Resnet18을 다시 빌드했다.
+  - `EVTA_REPLAY_DUMP`로 명령을 다시 뽑아 변경 전 dump와 비교했다. DRAM 주소를 빼면 Resnet18 26개, DeiT 13개 기록이 모두 같다.
+  - DeiT는 1장 75.9 ms(281, 0.788097), Resnet18은 23.3 ms(281)다.
+- 시뮬레이터 시험에서 알게 된 것: `convolution_wo_tr`는 CPU 배열이 아니라 EVTA 배치의 VTA 버퍼(handle)를 받는다. 처음에 CPU 배열을 넘겼다가 시뮬레이터가 잘못된 DRAM 주소로 멈췄다.
+
+**남은 것**
+- 하드웨어 경로의 `rq_*` + `lut_en`(GEMM이 32비트 합을 남기고 ALU가 requantize와 표를 한 번에 함)은 시뮬레이터에서 볼 수 없다. 시뮬레이터 GEMM에 out buffer가 없어서다. 그래서 4단계 보드에서 본다(`_alux` 비트스트림, `EVTA_REQUANT=1`).
+- 컴파일러: VTASave가 GELU 같은 원소별 표(`findLutRegions`가 이미 256칸 표를 만든다)를 앞의 EVTA conv에 붙여 `VTASetOutputLut`를 내게 한다. 7단계 일이다. `_alux`가 아닌 bitstream에서는 지금처럼 CPU 표를 쓴다.

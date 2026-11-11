@@ -282,6 +282,8 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   the 17 steps before it; `alu_ext_ref.h` `hazards()`, `tests/hazard_dump.py` over `EVTA_REPLAY_DUMP`: no current model does). C simulation
   without vivado_hls: `vta-hw-zcu102-systolic/hardware/xilinx/sim/run_csim.sh` (random programs vs the reference model; `PROG=1` the layer
   norm / softmax programs). GEMM `lut_en` is reserved, done as an ALU pass (CPY + `rq_*` + `lut_en`). Code before it: tag `alux-step2-261111`.
+  The pass is in vtalib-zcu102-systolic: `VTASetOutputLut(T)` around a plain conv (LUTSET once, an ALU CPY with lut_en per tile; `VTAAluLut`),
+  checked byte for byte against the CPU table in the vtalib simulator (`vtalib-zcu102-systolic/tests/run_lut_conv_test.sh`, builds the simulator vtalib on the PC).
 - Other models (2026-11-05, `docs/evta_runtime_compare.md` §7.19): Resnet50 res2_0 residual fused (relu to a 2^q smaller scale), schedules of the
   Resnet50 / VGG16 shapes in `VTASchedules.h` (found with vtalib-systolic `EVTA_SCHED`), conv tiles below 7 x 7: the dummy-padded store
   used the wrong channel block with nVirtualThread 2 (fixed in both vtalibs) and the systolic vtalib's minimum tile is 1 on an `_sa_` bitstream
