@@ -6599,29 +6599,26 @@ static void layerNormI8(int8_t *out, const int8_t *x, size_t rows, size_t cols, 
     for (size_t r = 1; r < rows && sameRows; r++)
       sameRows = !memcmp(w + r * cols, w0, cols * sizeof(float)) && !memcmp(b + r * cols, b0, cols);
     // G and B (at 2^(gs + 16) / out step, made exact to 1 / 2^16 of an output step) for a row's gamma / beta
-    auto coeffs = [&](const float *wr, const int8_t *br, int32_t *G, int64_t *B, int &gs) {
+    auto coeffs = [&](const float *wr, const int8_t *br, int32_t *G, int32_t *B, int &gs) {
       double gmax = 0;
       for (size_t l = 0; l < cols; l++) gmax = std::max(gmax, std::fabs((double)wr[l]));
       gs = 0;
       while (gmax * gk * std::ldexp(1.0, gs + 1) < 16383.0 && gs < 40) gs++;
       for (size_t l = 0; l < cols; l++) {
         G[l] = (int32_t)std::lround(wr[l] * gk * std::ldexp(1.0, gs));
-        B[l] = std::llround(br[l] * (double)a2b / a2d * 65536.0);
+        B[l] = (int32_t)std::lround(br[l] * (double)a2b / a2d * 65536.0);
       }
     };
-    int32_t G0[1024];
-    int64_t B0[1024];
+    int32_t G0[1024], B0[1024];
     int gs0 = 0;
     if (sameRows)
       coeffs(w0, b0, G0, B0, gs0);
 #pragma omp parallel for schedule(static)
     for (long r = 0; r < (long)rows; r++) {
       const int8_t *xr = x + r * cols;
-      int32_t Gr[1024];
-      int64_t Br[1024];
+      int32_t Gr[1024], Br[1024];
       int gs = gs0;
-      const int32_t *G = G0;
-      const int64_t *B = B0;
+      const int32_t *G = G0, *B = B0;
       if (!sameRows) {
         coeffs(w + r * cols, b + r * cols, Gr, Br, gs);
         G = Gr, B = Br;
@@ -6641,15 +6638,37 @@ static void layerNormI8(int8_t *out, const int8_t *x, size_t rows, size_t cols, 
       const int32_t Tv = i16 ? T[i0] - (((T[i0] - T[i0 + 1]) * (int32_t)(Wn & 255)) >> 8) : T[i0];
       const int t = gs + sh / 2;
       const int32_t Tm = i16 ? Tv >> 1 : Tv, km = i16 ? 15 : 8;
-      // B is at 2^16 per output step: to 2^t
+      // B is at 2^16 per output step: to 2^t (saturating); y = round half up of (p * G + B) / 2^t, all in int32
+      // (p < 2^16, G < 2^14)
       const int bsh = t - 16;
-      const int64_t half = t > 0 ? (int64_t)1 << (t - 1) : 0;
       int8_t *o = out + r * cols;
-      for (size_t l = 0; l < cols; l++) {
-        const int32_t p = ((C * xr[l] - S) * Tm) >> km;
-        const int64_t Bt = bsh >= 0 ? B[l] << bsh : B[l] >> -bsh;
-        const int64_t vb = (int64_t)p * G[l] + Bt;
-        const int64_t y = t > 0 ? (vb + half) >> t : vb << -t;
+      size_t l = 0;
+#if defined(__aarch64__)
+      const int32x4_t vC = vdupq_n_s32(C), vS = vdupq_n_s32(S), vT = vdupq_n_s32(Tm), vkm = vdupq_n_s32(-km),
+                      vb = vdupq_n_s32(bsh), vt = vdupq_n_s32(-t);
+      for (; l + 16 <= cols; l += 16) {
+        const int8x16_t xv = vld1q_s8(xr + l);
+        const int16x8_t lo = vmovl_s8(vget_low_s8(xv)), hi = vmovl_s8(vget_high_s8(xv));
+        const int32x4_t X[4] = {vmovl_s16(vget_low_s16(lo)), vmovl_s16(vget_high_s16(lo)), vmovl_s16(vget_low_s16(hi)),
+                                vmovl_s16(vget_high_s16(hi))};
+        int32x4_t Y[4];
+        for (int j = 0; j < 4; j++) {
+          const int32x4_t d = vsubq_s32(vmulq_s32(vC, X[j]), vS);
+          const int32x4_t pp = vshlq_s32(vmulq_s32(d, vT), vkm);
+          const int32x4_t v = vqaddq_s32(vmulq_s32(pp, vld1q_s32(G + l + 4 * j)), vqshlq_s32(vld1q_s32(B + l + 4 * j), vb));
+          Y[j] = vrshlq_s32(v, vt);
+        }
+        const int16x8_t n0 = vcombine_s16(vqmovn_s32(Y[0]), vqmovn_s32(Y[1])), n1 = vcombine_s16(vqmovn_s32(Y[2]), vqmovn_s32(Y[3]));
+        vst1q_s8(o + l, vcombine_s8(vqmovn_s16(n0), vqmovn_s16(n1)));
+      }
+#endif
+      for (; l < cols; l++) {
+        const int32_t pp = ((C * xr[l] - S) * Tm) >> km;
+        int64_t Bt = bsh >= 0 ? (int64_t)B[l] << bsh : (int64_t)(B[l] >> -bsh);
+        Bt = Bt > INT32_MAX ? INT32_MAX : Bt < INT32_MIN ? INT32_MIN : Bt;
+        int64_t v = (int64_t)pp * G[l] + Bt;
+        v = v > INT32_MAX ? INT32_MAX : v < INT32_MIN ? INT32_MIN : v;
+        const int64_t y = t > 0 ? (v + ((int64_t)1 << (t - 1))) >> t : v << -t;
         o[l] = (int8_t)(y > 127 ? 127 : y < -128 ? -128 : y);
       }
     }
