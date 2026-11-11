@@ -5184,6 +5184,246 @@ int xp_convolution_wo_tr_scale(int8_t* input, int8_t *kernel, int32_t *bias, int
   return 0;
 }
 
+//#### JO added (2026-11-12, ALU extension step 7, docs/evta_isa_ext.md 8.10): the integer layer norm (nestc_cpu::layerNormI8
+//#### with NESTC_LN_INT=1, the default; docs/evta_isa_ext.md 8.6) as a program of ALU instructions on the EVTA, the program
+//#### of tests/alu_ext_test.cc (checked there against the CPU function on the reference model and on the HLS ALU).
+//#### x: int8 [rows][cols] (CPU memory), w: float gamma [rows][cols], b: int8 beta [rows][cols] (DeiT: every row the same,
+//#### required), a2b / a2d: the beta and output scales as layerNormI8 takes them. Per run of n tokens: LOAD the tokens as
+//#### int32 into acc, the program, STORE the int8 rows from out. The constants (gamma / out scale G, beta B at 2^16 per
+//#### output step, the 8-bit rsqrt table) are made once per gamma pointer, LOADed and the table LUTSET once per call.
+//#### Returns 0 (not run; the caller runs the CPU function) without the extended ALU (VTAHasAluExt), with NESTC_LN_INT other
+//#### than 1, cols not a multiple of 16 or too wide for 17 tokens per run, or rows with different gamma / beta.
+//#### EVTA_LN_CHECK=1 compares every call with the CPU arithmetic (layerNormIntRef below) and prints the differences.
+#ifndef VTA_ALUX_MUL
+#define VTA_ALUX_MUL 4
+#define VTA_ALUX_SUB 5
+#define VTA_ALUX_LUT 7
+#define VTA_ALUX_RSUM 9
+#define VTA_ALUX_RMAX 10
+#define VTA_ALUX_CLZ 11
+#endif
+struct Alu2Context {
+  int32_t op, io, ii, d, dfo, dfi, s, sfo, sfi, useImm, imm;
+  bool operator==(const Alu2Context &o) const { return !memcmp(this, &o, sizeof(o)); }
+};
+static int alu2_generic(void *param, VTACommandHandle cmdh) {
+  const Alu2Context *p = (const Alu2Context *)param;
+  VTAUopLoopBegin(cmdh, p->io, p->dfo, p->sfo, 0);
+  VTAUopLoopBegin(cmdh, p->ii, p->dfi, p->sfi, 0);
+  VTAUopPush(cmdh, 1, 0, p->d, p->s, 0, p->op, p->useImm, p->imm);
+  VTAUopLoopEnd(cmdh);
+  VTAUopLoopEnd(cmdh);
+  return 0;
+}
+static std::vector<std::pair<Alu2Context, void **>> vAlu2Uops[4];
+// iter_out x iter_in steps of one uop: dst = d + io * dfo + ii * dfi, src = s + io * sfo + ii * sfi (as alu_ext_test.cc I())
+static void pushAlu2(VTACommandHandle cmdh, uint32_t idEVTA, int op, int io, int ii, int d, int dfo, int dfi, int s, int sfo,
+                     int sfi, bool useImm = false, int imm = 0) {
+  Alu2Context c = {op, io, ii, d, dfo, dfi, s, sfo, sfi, useImm, imm};
+  void **h = nullptr;
+  for (auto &u : vAlu2Uops[idEVTA])
+    if (u.first == c) {
+      h = u.second;
+      break;
+    }
+  if (!h) {
+    h = new void *[2]();
+    vAlu2Uops[idEVTA].push_back({c, h});
+  }
+  VTAPushALUOp(cmdh, h, &alu2_generic, &c, 0);
+}
+
+namespace {
+struct LnConsts {
+  bool sameRows = false;
+  int gs = 0;
+  std::vector<int32_t> G, B;
+  void *buf = nullptr; // int32 [G: NB entries][B: NB entries][T: 16 entries] (16 lanes each)
+};
+// G, B, gs and the table exactly as nestc_cpu::layerNormI8 (NESTC_LN_INT=1) makes them
+void lnCoeffs(const float *w, const int8_t *b, size_t cols, float a2b, float a2d, LnConsts *k) {
+  const double gk = 256.0 / ((double)a2d * 255.0 * 128.0);
+  double gmax = 0;
+  for (size_t l = 0; l < cols; l++) gmax = std::max(gmax, std::fabs((double)w[l]));
+  k->gs = 0;
+  while (gmax * gk * std::ldexp(1.0, k->gs + 1) < 16383.0 && k->gs < 40) k->gs++;
+  k->G.resize(cols), k->B.resize(cols);
+  for (size_t l = 0; l < cols; l++) {
+    k->G[l] = (int32_t)std::lround(w[l] * gk * std::ldexp(1.0, k->gs));
+    k->B[l] = (int32_t)std::lround(b[l] * (double)a2b / a2d * 65536.0);
+  }
+}
+uint8_t lnTable(int k) {
+  return (uint8_t)(k < 64 ? 0 : std::min(255L, std::lround(255.0 / std::sqrt((k + 0.5) / 64.0))));
+}
+// the CPU arithmetic of layerNormI8 (NESTC_LN_INT=1, scalar) for EVTA_LN_CHECK
+void layerNormIntRef(int8_t *o, const int8_t *xr, size_t cols, const LnConsts &k) {
+  const int32_t C = (int32_t)cols;
+  int32_t S = 0, Q = 0;
+  for (size_t l = 0; l < cols; l++) S += xr[l], Q += xr[l] * xr[l];
+  int32_t W = C * Q - S * S;
+  if (W < 1) W = 1;
+  int sh = (32 - __builtin_clz((uint32_t)W)) - 16;
+  if (sh & 1) sh++;
+  const uint32_t Wn = sh >= 0 ? (uint32_t)W >> sh : (uint32_t)W << -sh;
+  const int32_t Tm = lnTable((int)(Wn >> 8));
+  const int t = k.gs + sh / 2, bsh = t - 16;
+  for (size_t l = 0; l < cols; l++) {
+    const int32_t pp = ((C * xr[l] - S) * Tm) >> 8;
+    int64_t Bt = bsh >= 0 ? (int64_t)k.B[l] << bsh : (int64_t)(k.B[l] >> -bsh);
+    Bt = Bt > INT32_MAX ? INT32_MAX : Bt < INT32_MIN ? INT32_MIN : Bt;
+    int64_t v = (int64_t)pp * k.G[l] + Bt;
+    v = v > INT32_MAX ? INT32_MAX : v < INT32_MIN ? INT32_MIN : v;
+    const int64_t y = t > 0 ? (v + ((int64_t)1 << (t - 1))) >> t : v << -t;
+    o[l] = (int8_t)(y > 127 ? 127 : y < -128 ? -128 : y);
+  }
+}
+} // namespace
+
+int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float *w, const int8_t *b, float a2b, float a2d,
+                   void *vtaCmdH, uint32_t idEVTA) {
+  static const int lnInt = getenv("NESTC_LN_INT") ? atoi(getenv("NESTC_LN_INT")) : 1;
+  const int NB = cols / 16, kAcc = 2048;   // the acc entries of the multi-EVTA buffers (the single ones have more)
+  const int n = std::min(64, (kAcc - 2 * NB - 16) / std::max(1, 3 * NB + 13));
+  if (!VTAHasAluExt() || lnInt != 1 || cols % 16 || n < 17 || rows < 1)
+    return 0;
+  // the constants of this gamma / beta (once per pointer)
+  static std::mutex m;
+  static std::map<std::pair<const float *, const int8_t *>, LnConsts *> known;
+  LnConsts *k;
+  {
+    std::lock_guard<std::mutex> g(m);
+    LnConsts *&kk = known[{w, b}];
+    if (!kk) {
+      kk = new LnConsts;
+      kk->sameRows = true;
+      for (int r = 1; r < rows && kk->sameRows; r++)
+        kk->sameRows = !memcmp(w + (size_t)r * cols, w, cols * sizeof(float)) && !memcmp(b + (size_t)r * cols, b, cols);
+      if (kk->sameRows) {
+        lnCoeffs(w, b, cols, a2b, a2d, kk);
+        kk->buf = VTABufferAlloc((2 * NB + 16) * 16 * sizeof(int32_t));
+        int32_t *p = (int32_t *)VTABufferGetVirtAddr(kk->buf);
+        for (int l = 0; l < cols; l++) p[l] = kk->G[l], p[cols + l] = kk->B[l];
+        for (int q = 0; q < 256; q++) p[2 * cols + q] = lnTable(q);
+        VTABufferFlush(kk->buf, 0, (2 * NB + 16) * 16 * sizeof(int32_t));
+      }
+    }
+    k = kk;
+  }
+  if (!k->sameRows)
+    return 0;
+  VTACommandHandle cmd = (VTACommandHandle)vtaCmdH;
+  const int R = (rows + n - 1) / n * n;
+  void *xin = VTABufferAlloc((size_t)R * cols * sizeof(int32_t)), *xo = VTABufferAlloc((size_t)rows * cols);
+  int32_t *xi = (int32_t *)VTABufferGetVirtAddr(xin);
+  for (size_t i = 0, e = (size_t)rows * cols; i < e; i++) xi[i] = x[i];
+  memset(xi + (size_t)rows * cols, 0, (size_t)(R - rows) * cols * sizeof(int32_t));
+  VTABufferFlush(xin, 0, (size_t)R * cols * sizeof(int32_t));
+  // acc layout (alu_ext_test.cc main)
+  const int X = 0, D = X + n * NB, E = D + n * NB, S = E + n * NB, Q = S + n, Wv = Q + n, A = Wv + n, SH = A + n,
+            TV = SH + n, TT = TV + n, A2 = TT + n, H = A2 + n, K = H + n, K1 = K + n, GB = K1 + n, TB = GB + 2 * NB;
+  const int C = cols, gs = k->gs;
+  auto I = [&](int op, int io, int ii, int d, int dfo, int dfi, int s, int sfo, int sfi, bool useImm = false, int imm = 0) {
+    pushAlu2(cmd, idEVTA, op, io, ii, d, dfo, dfi, s, sfo, sfi, useImm, imm);
+  };
+  auto vshr = [&](int dst, int dfo, int dfi, int io, int ii, int amt, bool last) {
+    I(VTA_ALUX_CPY, n, 1, K1, 1, 0, amt, 1, 0);
+    I(RES_ALU_SHR, n, 1, K1, 1, 0, 0, 0, 0, true, 1);
+    I(VTA_ALUX_CPY, n, 1, K, 1, 0, amt, 1, 0);
+    I(VTA_ALUX_SUB, n, 1, K, 1, 0, K1, 1, 0);
+    I(RES_ALU_SHR, io, ii, dst, dfo, dfi, K1, 1, 0);
+    if (last) VTARequant(cmd, 1, 0, 0, -128, 127);
+    I(RES_ALU_SHR, io, ii, dst, dfo, dfi, K, 1, 0);
+    if (last) VTARequant(cmd, 0, 0, 0, 0, 0);
+  };
+  // the constants and the table (acc GB .. TB + 16)
+  VTALoadBuffer2D(cmd, k->buf, 0, 2 * NB + 16, 1, 2 * NB + 16, 0, 0, 0, 0, GB, 3);
+  I(VTA_ALUX_LUTSET, 1, 16, 0, 0, 0, TB, 0, 1, true, 0);
+  for (int r0 = 0; r0 < rows; r0 += n) {
+    if (r0)
+      VTADepPop(cmd, 3, 2);   // the STORE of the run before has read out
+    VTALoadBuffer2D(cmd, xin, r0 * NB, n * NB, 1, n * NB, 0, 0, 0, 0, X, 3);
+    // 1. S = sum x; 2. Q = sum x^2
+    I(VTA_ALUX_CPY, n, 1, S, 1, 0, X, NB, 0);
+    I(RES_ALU_ADD, NB - 1, n, S, 0, 1, X + 1, 1, NB);
+    I(VTA_ALUX_RSUM, n, 1, S, 1, 0, S, 1, 0);
+    I(VTA_ALUX_CPY, n, NB, D, NB, 1, X, NB, 1);
+    I(VTA_ALUX_MUL, n, NB, D, NB, 1, X, NB, 1);
+    I(VTA_ALUX_CPY, n, 1, Q, 1, 0, D, NB, 0);
+    I(RES_ALU_ADD, NB - 1, n, Q, 0, 1, D + 1, 1, NB);
+    I(VTA_ALUX_RSUM, n, 1, Q, 1, 0, Q, 1, 0);
+    // 3. W = max(C Q - S^2, 1)
+    I(VTA_ALUX_CPY, n, 1, Wv, 1, 0, Q, 1, 0);
+    I(VTA_ALUX_MUL, n, 1, Wv, 1, 0, 0, 0, 0, true, C);
+    I(VTA_ALUX_CPY, n, 1, A, 1, 0, S, 1, 0);
+    I(VTA_ALUX_MUL, n, 1, A, 1, 0, S, 1, 0);
+    I(VTA_ALUX_SUB, n, 1, Wv, 1, 0, A, 1, 0);
+    I(RES_ALU_MAX, n, 1, Wv, 1, 0, 0, 0, 0, true, 1);
+    // 4. sh = 16 - clz(W), made even
+    I(VTA_ALUX_CPY, n, 1, A, 1, 0, Wv, 1, 0);
+    I(VTA_ALUX_CLZ, n, 1, A, 1, 0, 0, 0, 0);
+    I(VTA_ALUX_CPY, n, 1, SH, 1, 0, 0, 0, 0, true, 16);
+    I(VTA_ALUX_SUB, n, 1, SH, 1, 0, A, 1, 0);
+    I(RES_ALU_ADD, n, 1, SH, 1, 0, 0, 0, 0, true, 1);
+    I(RES_ALU_SHR, n, 1, SH, 1, 0, 0, 0, 0, true, 1);
+    I(RES_ALU_SHR, n, 1, SH, 1, 0, 0, 0, 0, true, -1);
+    // 5. TV = T[(W >> sh) >> 8]
+    I(VTA_ALUX_CPY, n, 1, TV, 1, 0, Wv, 1, 0);
+    I(RES_ALU_SHR, n, 1, TV, 1, 0, SH, 1, 0);
+    I(RES_ALU_SHR, n, 1, TV, 1, 0, 0, 0, 0, true, 8);
+    I(VTA_ALUX_LUT, n, 1, TV, 1, 0, 0, 0, 0, true, 0);
+    // 6. t = gs + sh / 2; A2 = 16 - t; H = 1 << (t - 1)
+    I(VTA_ALUX_CPY, n, 1, TT, 1, 0, SH, 1, 0);
+    I(RES_ALU_SHR, n, 1, TT, 1, 0, 0, 0, 0, true, 1);
+    I(RES_ALU_ADD, n, 1, TT, 1, 0, 0, 0, 0, true, gs);
+    I(VTA_ALUX_CPY, n, 1, A2, 1, 0, 0, 0, 0, true, 16);
+    I(VTA_ALUX_SUB, n, 1, A2, 1, 0, TT, 1, 0);
+    I(VTA_ALUX_CPY, n, 1, H, 1, 0, 0, 0, 0, true, 1);
+    I(VTA_ALUX_CPY, n, 1, A, 1, 0, 0, 0, 0, true, 1);
+    I(VTA_ALUX_SUB, n, 1, A, 1, 0, TT, 1, 0);
+    vshr(H, 1, 0, n, 1, A, false);
+    // 7. D = ((C x - S) * TV >> 8) * G[b]; E = B[b] >> (16 - t); D = (D + E + H) >> t, clipped to int8 (rq)
+    I(VTA_ALUX_CPY, n, NB, D, NB, 1, X, NB, 1);
+    I(VTA_ALUX_MUL, n, NB, D, NB, 1, 0, 0, 0, true, C);
+    I(VTA_ALUX_SUB, n, NB, D, NB, 1, S, 1, 0);
+    I(VTA_ALUX_MUL, n, NB, D, NB, 1, TV, 1, 0);
+    I(RES_ALU_SHR, n, NB, D, NB, 1, 0, 0, 0, true, 8);
+    I(VTA_ALUX_MUL, n, NB, D, NB, 1, GB, 0, 1);
+    I(VTA_ALUX_CPY, n, NB, E, NB, 1, GB + NB, 0, 1);
+    vshr(E, NB, 1, n, NB, A2, false);
+    I(RES_ALU_ADD, n, NB, D, NB, 1, E, NB, 1);
+    I(RES_ALU_ADD, n, NB, D, NB, 1, H, 1, 0);
+    vshr(D, NB, 1, n, NB, TT, true);
+    VTADepPush(cmd, 2, 3);
+    VTADepPop(cmd, 2, 3);
+    const int nr = std::min(n, rows - r0);
+    VTAStoreBuffer2D(cmd, D, 4, xo, r0 * NB, nr * NB, 1, nr * NB);
+    VTADepPush(cmd, 3, 2);
+  }
+  VTADepPop(cmd, 3, 2);
+  VTASynchronize(cmd, 1 << 31);
+  VTABufferInvalidate(xo, 0, (size_t)rows * cols);
+  memcpy(out, VTABufferGetVirtAddr(xo), (size_t)rows * cols);
+  VTABufferFree(xin);
+  VTABufferFree(xo);
+  static const bool check = getenv("EVTA_LN_CHECK") && atoi(getenv("EVTA_LN_CHECK")) > 0;
+  if (check) {
+    std::vector<int8_t> ref(cols);
+    long bad = 0, first = -1;
+    for (int r = 0; r < rows; r++) {
+      layerNormIntRef(ref.data(), x + (size_t)r * cols, cols, *k);
+      for (int l = 0; l < cols; l++)
+        if (ref[l] != out[(size_t)r * cols + l] && bad++ == 0)
+          first = (long)r * cols + l;
+    }
+    printf("EVTA_LN_CHECK layer norm %d x %d: %ld differ", rows, cols, bad);
+    if (bad)
+      printf(" (first at %ld: evta %d, cpu %d)", first, out[first], (layerNormIntRef(ref.data(), x + first / cols * cols, cols, *k), ref[first % cols]));
+    printf("\n");
+  }
+  return 1;
+}
+
 // #### add 260907, JO
 // #### add __attribute__((weak)) to avoid the collision with the strong LLVMSupport when using VTASIM, 260908, JO  
 //namespace llvm {
