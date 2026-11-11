@@ -29,6 +29,11 @@
 #include "../src/vta.h"
 #include "../../../tests/hardware/common/test_lib.h"
 
+#ifdef VTA_ALUX
+//#### JO added (2026-11-11, ALU extension): sim/alux_test.cc
+int alux_test(unsigned seed, int ninsn);
+#endif
+
 int main(void) {
 #if DEBUG == 1
     printParameters();
@@ -55,6 +60,15 @@ int main(void) {
     status |= alu_test(VTA_ALU_OPCODE_ADD, false, VTA_BLOCK_OUT, 128, false);
     status |= alu_test(VTA_ALU_OPCODE_SHR, false, VTA_BLOCK_OUT, 128, true);
     status |= alu_test(VTA_ALU_OPCODE_SHR, false, VTA_BLOCK_OUT, 128, false);
+
+#ifdef VTA_ALUX
+    //#### JO added (2026-11-11): random extended ALU programs against the reference model (VTA_ALUX_SEEDS, default 20)
+    {
+      const char *e = getenv("VTA_ALUX_SEEDS");
+      int seeds = e ? atoi(e) : 20;
+      for (int s = 1; s <= seeds; s++) status |= alux_test(s, 48);
+    }
+#endif
 
     // Run blocked GEMM test
     status |= blocked_gemm_test(256, 256, VTA_BLOCK_OUT*4, false, 2);

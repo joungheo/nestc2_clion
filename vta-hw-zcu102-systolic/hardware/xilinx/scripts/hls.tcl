@@ -55,6 +55,10 @@ if {[info exists ::env(VTA_MEM_OREG)] && $::env(VTA_MEM_OREG) eq "1"} {
 if {[info exists ::env(VTA_SYSTOLIC)] && $::env(VTA_SYSTOLIC) eq "1"} {
     append cflags " -DVTA_SYSTOLIC"
 }
+#### JO added (2026-11-11, ALU extension): Makefile ALUX=1 -> ALU operations 4-11 and lut_en (vta.cc VTA_ALUX)
+if {[info exists ::env(VTA_ALUX)] && $::env(VTA_ALUX) eq "1"} {
+    append cflags " -DVTA_ALUX"
+}
 
 # Get the VTA configuration paramters
 set ::device $FPGA_DEVICE
@@ -111,6 +115,8 @@ open_project vta_sim
 set_top vta
 add_files $src_dir/vta.cc -cflags $cflags
 add_files -tb $sim_dir/vta_test.cc -cflags $cflags
+#### JO added (2026-11-11): random ALU programs against the reference model (only with VTA_ALUX)
+add_files -tb $sim_dir/alux_test.cc -cflags $cflags
 add_files -tb $test_dir/test_lib.cc -cflags $cflags
 open_solution "soln"
 init_design
@@ -118,45 +124,64 @@ csim_design -clean
 close_project
 }
 
+#### JO added (2026-11-11): environment VTA_HLS_STAGES = the stages to synthesize (default "fetch load compute store"),
+#### VTA_HLS_NO_EXPORT=1 = C synthesis only (reports, no IP), for a quick II / resource check of one stage
+proc stage_on {st} {
+    if {[info exists ::env(VTA_HLS_STAGES)]} { return [expr {[lsearch $::env(VTA_HLS_STAGES) $st] >= 0}] }
+    return 1
+}
+proc export_ip {} {
+    if {[info exists ::env(VTA_HLS_NO_EXPORT)] && $::env(VTA_HLS_NO_EXPORT) eq "1"} { return }
+    export_design -format ip_catalog
+}
+
 # Generate fetch stage
+if {[stage_on fetch]} {
 open_project vta_fetch
 set_top fetch
 add_files $src_dir/vta.cc -cflags $cflags
 open_solution "soln"
 init_design
 csynth_design
-export_design -format ip_catalog
+export_ip
 close_project
+}
 
 # Generate load stage
+if {[stage_on load]} {
 open_project vta_load
 set_top load
 add_files $src_dir/vta.cc -cflags $cflags
 open_solution "soln"
 init_design
 csynth_design
-export_design -format ip_catalog
+export_ip
 close_project
+}
 
 # Generate compute stage
+if {[stage_on compute]} {
 open_project vta_compute
 set_top compute
 add_files $src_dir/vta.cc -cflags $cflags
 open_solution "soln"
 init_design
 csynth_design
-export_design -format ip_catalog
+export_ip
 close_project
+}
 
 # Generate store stage
+if {[stage_on store]} {
 open_project vta_store
 set_top store
 add_files $src_dir/vta.cc -cflags $cflags
 open_solution "soln"
 init_design
 csynth_design
-export_design -format ip_catalog
+export_ip
 close_project
+}
 
 exit
 

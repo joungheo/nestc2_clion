@@ -127,6 +127,18 @@ while :; do
 done
 ```
 
+**감시 스크립트** `~/templog/thermal_guard.sh` (11-11):
+- 2초마다 Tctl을 본다.
+- 85 °C 이상이면 docker `vivado2020-build`를 멈춘다. CSim이나 합성을 중단하는 것이다.
+- 95 °C 이상이 두 번 연속이면 `systemctl poweroff`로 정상 종료한다. 107 °C에서 갑자기 꺼지기 전에 끄려는 것이다.
+- 이 PC의 데스크톱 세션은 sudo 없이 poweroff할 수 있다(`CanPowerOff = yes`).
+- 무엇을 했는지는 `~/templog/thermal_guard.log`에 남는다.
+
+```bash
+cd ~/templog && setsid nohup ./thermal_guard.sh >/dev/null 2>&1 < /dev/null &
+pgrep -af thermal_guard
+```
+
 - **부팅마다 다시 켜야 한다.**
   ```bash
   cd ~/templog && setsid nohup ./tctl_log.sh >/dev/null 2>&1 < /dev/null &
@@ -159,5 +171,5 @@ done
 ## 6. 영향
 
 - 비트스트림 합성(ALU 확장 4단계, `evta_isa_ext.md` §8.5)은 쿨러를 고친 뒤로 미뤘다.
-- HLS CSim(3단계)은 가볍다. 그래도 온도가 안정된 것을 확인하고 짧게 돌린다.
+- HLS CSim과 compute C 합성(3단계)은 한 코어 작업이다. 11-11 저녁에 감시 스크립트를 켜고 돌렸을 때 최고 58 °C였다.
 - 11-11 16:07 꺼짐 때 바꾸던 파일은 없었다. 코드 상태는 tag `alux-step2-261111`과 `~/npuprg/archive/alux_step2_before_hls_261111/`에 남아 있다.

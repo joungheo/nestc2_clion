@@ -511,6 +511,104 @@ inline void alu_lane(uint32_t opcode, acc_T src_0, acc_T src_1, acc_T &d, out_T 
   }
 }
 
+#ifdef VTA_ALUX
+#ifndef VTA_SYSTOLIC
+#error "VTA_ALUX (Makefile ALUX=1) needs VTA_SYSTOLIC (SYSTOLIC=1)"
+#endif
+//#### JO added (2026-11-11, ALU extension, docs/evta_isa_ext.md 8.8): the operations 4-11 (VTA_ALUX_*), the ALU lut_en, as the
+//#### reference model vtalib-zcu102-systolic/include/zcu102/vta/alu_ext_ref.h. The 256-entry LUT T is kept in copies, one per
+//#### lane so that 16 lanes read it at once, each split into 16 banks (bank = address bits 3..0, entry = bits 7..4): a LUTSET
+//#### step writes lane b's value to bank b, entry (imm + step) & 15, of every copy, so each bank takes one write per step.
+//#### alux_lut_d serves the LUT operation, alux_lut_o the lut_en of the out write (both in one instruction is allowed).
+#define VTA_ALUX_LANES (VTA_BATCH * VTA_BLOCK_OUT)
+static ap_uint<8> alux_lut_d[VTA_ALUX_LANES][16][16];
+static ap_uint<8> alux_lut_o[VTA_ALUX_LANES][16][16];
+
+inline acc_T alux_clz(acc_T x) {
+#pragma HLS INLINE
+  ap_uint<VTA_ACC_WIDTH> v = x.range(VTA_ACC_WIDTH - 1, 0);
+  ap_uint<7> n = VTA_ACC_WIDTH;
+  for (int i = 0; i < VTA_ACC_WIDTH; i++) {
+#pragma HLS UNROLL
+    if (v[i]) n = VTA_ACC_WIDTH - 1 - i;
+  }
+  return (acc_T) n;
+}
+
+//#### one step of an ALU instruction (any operation 0-11) on one acc entry: D = acc[dst] (updated in place), S = acc[src]
+//#### (the imm loop passes the entry it read), O = the out entry; lut_entry = (imm + step) & 15 for LUTSET, which writes
+//#### only the LUT (the caller skips the acc / out writes)
+//#### (the fields are passed by value: HLS cannot take the instruction struct by reference, a pointer reinterpretation)
+struct AluxFields {
+  bool use_imm, rq_en, lut_en, sign;
+  acc_T imm;
+  ap_uint<2> rq_round;
+  ap_uint<5> rq_shift;
+  ap_int<8> rq_lo, rq_hi;
+};
+
+inline void alux_step(AluxFields f, ap_uint<4> op, ap_uint<4> lut_entry,
+                      acc_T D[VTA_BATCH][VTA_BLOCK_OUT], acc_T S[VTA_BATCH][VTA_BLOCK_OUT],
+                      out_T O[VTA_BATCH][VTA_BLOCK_OUT]) {
+#pragma HLS INLINE
+  const acc_T imm = f.imm;
+  if (op == VTA_ALUX_LUTSET) {
+    for (int k = 0; k < VTA_ALUX_LANES; k++) {
+      for (int i = 0; i < VTA_BATCH; i++) {
+        for (int b = 0; b < VTA_BLOCK_OUT; b++) {
+          ap_uint<8> v = S[i][b].range(7, 0);
+          alux_lut_d[k][i * VTA_BLOCK_OUT + b][lut_entry] = v;
+          alux_lut_o[k][i * VTA_BLOCK_OUT + b][lut_entry] = v;
+        }
+      }
+    }
+    return;
+  }
+  // RSUM / RMAX: a tree over the src lanes (wraps as the ADD), the same value to every dst lane
+  acc_T sum = 0, mx = S[0][0];
+  for (int i = 0; i < VTA_BATCH; i++) {
+    for (int b = 0; b < VTA_BLOCK_OUT; b++) {
+      sum = (acc_T) (sum + S[i][b]);
+      mx = S[i][b] > mx ? S[i][b] : mx;
+    }
+  }
+  const acc_T red = f.use_imm ? imm : (op == VTA_ALUX_RSUM ? sum : mx);
+  for (int i = 0; i < VTA_BATCH; i++) {
+    for (int b = 0; b < VTA_BLOCK_OUT; b++) {
+      const int c = i * VTA_BLOCK_OUT + b;
+      const acc_T x = D[i][b];
+      const acc_T y = f.use_imm ? imm : S[i][b];
+      acc_T r = x;
+      out_T o0;
+      if (op < 4) {
+        alu_lane((uint32_t) op, x, y, r, o0);
+      } else if (op == VTA_ALUX_MUL) {
+        ap_int<16> m = y.range(15, 0);
+        r = (acc_T) (x * m);
+      } else if (op == VTA_ALUX_SUB) {
+        r = (acc_T) (x - y);
+      } else if (op == VTA_ALUX_CPY) {
+        r = y;
+      } else if (op == VTA_ALUX_LUT) {
+        ap_uint<8> v = alux_lut_d[c][x.range(3, 0)][x.range(7, 4)];
+        r = f.sign ? (acc_T) (ap_int<8>) v : (acc_T) v;
+      } else if (op == VTA_ALUX_RSUM || op == VTA_ALUX_RMAX) {
+        r = red;
+      } else if (op == VTA_ALUX_CLZ) {
+        r = alux_clz(x);
+      }
+      D[i][b] = r;
+      out_T o = requant(r, (out_T) r.range(VTA_OUT_WIDTH - 1, 0), f.rq_en, f.rq_round, f.rq_shift, f.rq_lo, f.rq_hi);
+      if (f.lut_en) {
+        ap_uint<8> ob = o.range(7, 0);
+        o = (out_T) alux_lut_o[c][ob.range(3, 0)][ob.range(7, 4)];
+      }
+      O[i][b] = o;
+    }
+  }
+}
+#endif
+
 void alu(
   insn_T insn_raw,
   uop_T uop_mem[VTA_UOP_BUFF_DEPTH],
@@ -521,13 +619,41 @@ void alu(
 #pragma HLS INLINE
 
   VTAAluInsn insn = *((VTAAluInsn *) &insn_raw);
+#ifdef VTA_ALUX
+  //#### JO added (2026-11-11, ALU extension): copies and banks in registers / small RAMs, entries in LUTRAM
+#pragma HLS ARRAY_PARTITION variable = alux_lut_d complete dim = 1
+#pragma HLS ARRAY_PARTITION variable = alux_lut_d complete dim = 2
+#pragma HLS ARRAY_PARTITION variable = alux_lut_o complete dim = 1
+#pragma HLS ARRAY_PARTITION variable = alux_lut_o complete dim = 2
+#pragma HLS RESOURCE variable = alux_lut_d core = RAM_1P_LUTRAM
+#pragma HLS RESOURCE variable = alux_lut_o core = RAM_1P_LUTRAM
+  const ap_uint<4> op = (ap_uint<4>) VTA_ALU_FULL_OP(insn);
+  ap_uint<4> lut_entry = (ap_uint<4>) insn.imm;   // (imm + step) & 15, step in loop order
+  AluxFields af;
+  af.use_imm = insn.use_imm;
+  af.imm = (acc_T) insn.imm;
+  af.sign = insn.imm & 1;
+  af.rq_en = insn.rq_en;
+  af.rq_round = insn.rq_round;
+  af.rq_shift = insn.rq_shift;
+  af.rq_lo = (ap_int<8>) insn.rq_lo;
+  af.rq_hi = (ap_int<8>) insn.rq_hi;
+  af.lut_en = insn.lut_en;
+#endif
 
 #ifdef VTA_SYSTOLIC
   //#### JO added (2026-11-02, docs/evta_runtime_compare.md 7.14): an op with an immediate reads only dst. One acc read and
   //#### one acc write per step fit the two ports of acc_mem, so this loop runs at II = 1; the loop below reads src and dst
   //#### and needs II = 2. Like that loop (DEPENDENCE inter false on acc_mem), it assumes that no step reads a dst written
   //#### by a step still in the pipeline (the bundles' imm ops write each dst once per instruction).
+#ifdef VTA_ALUX
+  //#### JO changed (2026-11-11, ALU extension): only MIN / MAX / ADD / SHR without lut_en take this loop; the extended
+  //#### operations run in the vector loop below (II = 2), so their datapath exists once (in both loops: II 2 here,
+  //#### LUT 42.6k -> 82.0k, FF 23k -> 76k in C synthesis)
+  if (insn.use_imm && op < 4 && !insn.lut_en) {
+#else
   if (insn.use_imm) {
+#endif
     acc_idx_T imm_dst_offset_out = 0;
     ALU_IMM_OUT_LOOP: for (int it_out = 0; it_out < insn.iter_out; it_out++) {
       acc_idx_T dst_offset_in = imm_dst_offset_out;
@@ -595,6 +721,21 @@ void alu(
         // Output tensor
         out_T o_tensor[VTA_BATCH][VTA_BLOCK_OUT];
 
+#ifdef VTA_ALUX
+        //#### JO added (2026-11-11, ALU extension): every operation through alux_step, no acc / out write for LUTSET
+        alux_step(af, op, lut_entry, dst_tensor, src_tensor, o_tensor);
+        lut_entry++;
+        for (int i = 0; i < VTA_BATCH; i++) {
+          for (int b = 0; b < VTA_BLOCK_OUT; b++) {
+            dst_tensor[i][b] = alu_reg(dst_tensor[i][b]);
+            o_tensor[i][b] = alu_reg(o_tensor[i][b]);
+          }
+        }
+        if (op != VTA_ALUX_LUTSET) {
+          write_tensor<bus_T, acc_T, acc_idx_T, VTA_BUS_WIDTH, VTA_ACC_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, dst_tensor, acc_mem);
+          write_tensor<bus_T, out_T, acc_idx_T, VTA_BUS_WIDTH, VTA_OUT_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, o_tensor, out_mem);
+        }
+#else
         // Perform ALU op over matrix elements
         for (int i = 0; i < VTA_BATCH; i++) {
           for (int b = 0; b < VTA_BLOCK_OUT; b++) {
@@ -637,6 +778,7 @@ void alu(
         write_tensor<bus_T, acc_T, acc_idx_T, VTA_BUS_WIDTH, VTA_ACC_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, dst_tensor, acc_mem);
         // Write the results back in the output buffer
         write_tensor<bus_T, out_T, acc_idx_T, VTA_BUS_WIDTH, VTA_OUT_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, o_tensor, out_mem);
+#endif
       }
       // Update offsets
       dst_offset_in += insn.dst_factor_in;

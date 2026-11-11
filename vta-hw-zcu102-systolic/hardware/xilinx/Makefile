@@ -54,7 +54,11 @@ FREQ ?=
 #### JO changed (2026-10-27, systolic Phase D): SYSTOLIC=1 -> GEMM in the RTL unit gemm_sa (-DVTA_SYSTOLIC, _sa dirs)
 SYSTOLIC ?= 0
 #IP_NAME := $(CONF)$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(MEM_OREG)),_oreg)
-IP_NAME := $(CONF)$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(MEM_OREG)),_oreg)$(if $(filter 1,$(SYSTOLIC)),_sa)
+#### JO changed (2026-11-11, ALU extension, docs/evta_isa_ext.md 8.8): ALUX=1 -> ALU operations 4-11 and the ALU lut_en
+#### (-DVTA_ALUX, needs SYSTOLIC=1; _alux dirs and bitstream name, which vtalib checks)
+ALUX ?= 0
+#IP_NAME := $(CONF)$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(MEM_OREG)),_oreg)$(if $(filter 1,$(SYSTOLIC)),_sa)
+IP_NAME := $(CONF)$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(MEM_OREG)),_oreg)$(if $(filter 1,$(SYSTOLIC)),_sa)$(if $(filter 1,$(ALUX)),_alux)
 #### JO changed (2026-10-28, systolic D8): IMPL_STRATEGY=<Vivado impl strategy>, BUILD_TAG=<suffix of the vivado dir>
 #BUILD_NAME := $(IP_NAME)$(if $(FREQ),_$(FREQ)mhz)
 IMPL_STRATEGY ?=
@@ -64,6 +68,7 @@ export VTA_IMPL_STRATEGY := $(IMPL_STRATEGY)
 IP_BUILD_PATH := $(BUILD_DIR)/hls/$(IP_NAME)
 export VTA_MEM_OREG := $(MEM_OREG)
 export VTA_SYSTOLIC := $(SYSTOLIC)
+export VTA_ALUX := $(ALUX)
 export VTA_FREQ := $(FREQ)
 HW_BUILD_PATH := $(BUILD_DIR)/vivado/$(BUILD_NAME)
 

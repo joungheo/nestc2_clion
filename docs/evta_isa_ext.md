@@ -396,7 +396,7 @@ bitstream과 vtalib의 짝이 한 번만 바뀌게 하려는 것이다.
 |---|---|---|
 | 1 | 정수 LayerNorm / softmax 식을 CPU에서 정하고 ImageNet 확인 (소프트웨어, `deit_optimization.md` §6.1) | **11-10 끝남 (§8.6)** |
 | 2 | `hw_spec.h` 세 곳, C 모델(`systolic_model.cc`), vtalib 시뮬레이터 `sim_driver.cc`에 연산 12개 | **11-11 끝남 (§8.7)** |
-| 3 | HLS `vta.cc` `alu()` / `alu_lane()`, `sa_rmw.v` 출력 LUT, `vta_test.cc` `alu_test`에 새 연산, RTL testbench, CSim | 1–1.5주. **11-11 설계만 (§8.8)**, 코드는 아직 |
+| 3 | HLS `vta.cc` `alu()` / `alu_lane()`, `sa_rmw.v` 출력 LUT, `vta_test.cc` `alu_test`에 새 연산, RTL testbench, CSim | 1–1.5주. **11-11 HLS ALU와 CSim 끝 (§8.8)**, GEMM `lut_en` / RTL testbench 남음 |
 | 4 | single `_alux` bitstream(합성 약 1시간 × 몇 번), 보드 probe, golden, dump 비교 | 2–4일 |
 | 5 | multi4 bitstream (Y219 flow) | 1–3일 |
 | 6 | vtalib API(`VTAPushALUOp` ext 인자, `VTALutSet`), bitstream 이름 검사, CPU 대체 경로 | 2–3일 |
@@ -494,5 +494,52 @@ bitstream과 vtalib의 짝이 한 번만 바뀌게 하려는 것이다.
 - 실행은 `make ip CSIM=1 SYSTOLIC=1 ALUX=1`(docker `vivado2020-build`)로 한다. 한 코어로 몇 분 걸린다.
 - **CSim은 C를 순서대로 실행한다.** pipeline 안에서 step끼리 겹치는 문제(같은 dst를 가까운 step이 쓰는 경우, forwarding 없음)는 CSim에서 보이지 않는다. 이 문제는 보드의 명령열 시험(§8.7의 LayerNorm / softmax 명령열)과 RTL / cosim에서 확인한다.
 
-**상태:** 11-11 16:07에 PC가 과열로 꺼져서(`host_pc_shutdown.md`) 코드는 아직 쓰지 않았다. 냉각을 확인한 뒤 위 방침대로 `vta.cc`와 testbench를 쓴다.
+**구현과 결과 (11-11 저녁)**
+
+바꾼 파일(`vta-hw-zcu102-systolic/hardware/xilinx/`):
+
+| 파일 | 내용 |
+|---|---|
+| `src/vta.cc` | `#ifdef VTA_ALUX`: 표 `alux_lut_d` / `alux_lut_o`(lane 16 × bank 16 × 16칸, LUTRAM), `alux_clz`, `alux_step`(연산 0–11, rq, `lut_en`, LUTSET). 명령 필드는 `AluxFields`로 값으로 넘긴다. HLS는 명령 struct를 참조로 받지 못한다(SYNCHK 200-41, pointer reinterpretation) |
+| `src/vta.cc` `alu()` | imm 루프(II = 1)는 **연산 0–3이고 `lut_en`이 없을 때만** 탄다. 나머지는 모두 vector 루프(II = 2)에서 `alux_step`을 쓴다 |
+| `Makefile`, `scripts/hls.tcl` | `ALUX=1` → `-DVTA_ALUX`, 이름에 `_alux`. `VTA_HLS_STAGES=compute VTA_HLS_NO_EXPORT=1`이면 그 stage의 C 합성만 한다(보고서용) |
+| `sim/alux_test.cc`, `sim/vta_test.cc` | 무작위 명령열 시험(위 방법). `VTA_ALUX_SEEDS`로 개수를 정한다(기본 20) |
+| `sim/run_csim.sh` | `vivado_hls` 없이 docker 안에서 g++로 CSim(`vta_test.cc` 전체)을 한다. 한 코어, 수십 초 |
+
+**CSim** (`sim/run_csim.sh`, `VTA_ALUX_SEEDS=200`)
+- 무작위 명령열 200개가 모두 기준 모델과 같았다. 명령열 하나는 ALU 명령 54개(연산 0–11이 고루 섞임)이고, 110,592바이트를 비교한다.
+- 기존 시험도 모두 통과했다: `alu_test` 16개, blocked GEMM 2개, GEMM 1개.
+- `ALUX=0` 빌드도 기존 시험 19개가 모두 통과했다.
+- 시험이 틀린 것을 잡는지도 확인했다. HLS 쪽에 버그를 하나씩 넣은 사본 다섯 개로 돌렸다(seed 5개씩).
+
+  | 넣은 버그 | 실패한 seed |
+  |---|---|
+  | SUB를 ADD로 | 5 / 5 |
+  | CLZ를 1 틀리게 | 4 / 5 |
+  | `lut_en`이 bank / 칸을 뒤바꿔 다른 표를 읽게 | 5 / 5 |
+  | LUTSET 칸을 2씩 증가 | 5 / 5 |
+  | RMAX를 RMIN으로 | 4 / 5 |
+
+**C 합성** (compute만, `ALUX=1 SYSTOLIC=1`, HLS 2020.1, 목표 2 ns)
+
+| | 지금 `_sa` | 처음 판(확장 연산이 두 루프 모두에) | 지금 판 |
+|---|---|---|---|
+| imm 루프 II / depth | 1 / 12 | **2** / 24 | 1 / 12 |
+| vector 루프 II / depth | 2 / 14 | 2 / 31 | 2 / 33 |
+| LUT | 42,638 | 81,985 | 62,514 (+19.9k) |
+| FF | 22,965 | 76,129 | 59,341 (+36.4k) |
+| DSP | 6 | 38 | 22 (+16, MUL) |
+| BRAM_18K | 37 | 37 | 37 |
+
+- 표 메모리는 LUTRAM으로 잡혔다(16칸 × 8비트 512개, LUT 1,024, FF 4,096).
+- 늘어난 부분: FF는 대부분 vector 루프의 깊어진 pipeline 레지스터다(depth 14 → 33, 16 lane × 32비트). LUT는 연산 선택과 표 읽기의 mux, MUL / CLZ / reduction 회로다.
+- ZCU102(LUT 274k)에서 single EVTA는 여유가 있다. multi4는 EVTA마다 +20k LUT라 Y219 fence 아래 배치가 빠듯할 수 있다. 4단계에서 배치와 timing을 본다.
+- 줄일 곳(4단계 전): vector 루프의 `alu_reg`, MUL 단수, `lut_d`와 `lut_o`를 한 벌로 합치기(한 명령에서 LUT 연산과 `lut_en`을 같이 쓰지 않는다고 정하면).
+- 확장 연산은 모두 II = 2다. §8.7의 시간 추정(step당 평균 1.5 cycle)은 2 cycle로 고쳐 봐야 한다. 그러면 DeiT에서 약 11 ms다.
+
+**남은 3단계**
+- 3b: GEMM `lut_en`. RTL `sa_rmw.v`에 표 사본을 둔다. LUTSET 값을 HLS compute에서 gemm_sa로 넘기는 포트가 필요하다.
+- §8.7의 LayerNorm / softmax 명령열을 HLS CSim으로도 돌린다(지금은 vtalib 시뮬레이터에서만).
+- RTL testbench. cosim에서 pipeline 겹침을 확인한다.
+- PC 온도: 감시 스크립트(`~/templog/thermal_guard.sh`: 85 °C에서 docker 정지, 95 °C 두 번이면 `systemctl poweroff`)를 켜고 돌렸다. CSim과 C 합성(한 코어, 약 7분) 동안 최고 58 °C였다.
 
