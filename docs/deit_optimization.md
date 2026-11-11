@@ -369,10 +369,74 @@ python fakequant.py deit_fold.onnx ~/data2/datasets/imagenetv2/png224 --n 9000 -
 - calibration 3장 → 100장: +0.3 %p (차이 거의 없음)
 - 정수 LayerNorm / softmax는 float 계산과 같은 정확도다. 하드웨어로 옮겨도 정확도 걱정은 없다.
 
-**다음:**
+**다음** (11-11에 했다, §6.6.3):
 1. power-of-2를 풀 requantize 곱셈. GEMM 출력 경로의 `rq_mul`, 소프트웨어로는 2^n이 아닌 scale을 CPU에서. PC 근사로 최대 +2.3 %p
 2. 번들 구현 −1.7 %p의 원인. PC 근사와 보드의 층별 출력 비교
 3. 채널별(per-channel) weight scale
+
+### 6.6.3 정확도 개선 (2026-11-11): 56.17 → 60.47 %, 그리고 더 빠름
+
+| 단계 | 바꾼 것 | top-1 (9,000장) | 1코어 / 4코어 |
+|---|---|---|---|
+| 시작 | power-of-2 scale, Glow int8 LayerNorm 체인 | 56.17 % | 88.8 / 55.7 ms |
+| ① | scale 자유(`-quantization-schema=symmetric`) + EVTA 연산은 비율만 2의 거듭제곱(`-vta-pow2-ratio`) | 59.71 % | 89.5 / 55.9 ms |
+| ② | 정수 LayerNorm (bias를 shift 전에 더함) | **60.29 %** | **76.5 / 52.9 ms** |
+| 기본값으로 다시 만든 번들 (`gen_deit_bundle.sh`, ① + ②) | 같음 | **60.47 %** | **75.7** / 52.9 ms |
+| 참고 | LayerNorm float (`NESTC_LN_FLOAT=1`) | 60.41 % | |
+| 참고 | float ONNX | 62.34 % | |
+
+**① `rq_mul` 없이 power-of-2 손실 줄이기 (`VTA.cpp` `-vta-pow2-ratio`, 기본 on)**
+- EVTA의 requantize는 shift뿐이지만, 필요한 것은 **비율** 입력 × weight / 출력이 2의 거듭제곱인 것이다. 텐서 scale마다 2의 거듭제곱일 필요는 없다.
+- 그래서 Glow는 `symmetric`(자유 scale)으로 양자화하고, VTA backend pass가 int8 Convolution / FullyConnected / MatMul의 출력 scale을 입력 × weight × 2^k로 올림한다.
+  - weight는 그대로 둔다.
+  - 그 뒤의 Reshape / Transpose / Slice / Concat 출력도 같은 scale로 맞춘다. Concat의 상수 입력(cls 토큰)은 다시 양자화하고, attention head들은 함께 바꾼다.
+  - 입력이 바뀐 conv의 int32 bias는 다시 양자화한다.
+- PC 근사로 고른 방식이다(`fakequant.py --ratio`):
+
+| 맞추는 쪽 | top-1 (PC 근사, LayerNorm float) |
+|---|---|
+| 출력 scale을 올림 | 60.51 % |
+| weight scale을 올림 | 60.43 % |
+| 연산마다 둘 중 작은 쪽 | 60.31 % |
+| scale 완전 자유 (`rq_mul`가 있을 때) | 60.66 % |
+| 모두 power-of-2 (전) | 58.34 % |
+
+- 같이 고친 것:
+  - VTASave의 scale 비교를 float 오차를 허용하게 바꿨다(`sameScale`, `getExpofPowerofTwo(float)`). 정확 비교라서 Linear 28개가 CPU conv로 빠졌었다.
+  - matmul bias 접기를 비율이 정수가 아닐 때도 한다(반올림).
+  - vtalib `quantize`는 2의 거듭제곱이 아닌 scale에서도 역수를 곱한다. 나눗셈이 3 → 7 ms였다.
+    - .5 경계 검사는 A53에서 나눗셈만큼 비쌌다(117,612개: 나눗셈 0.50, 곱 + 검사 0.66 / 0.52, 곱 0.28 ms).
+    - 곱으로 결과가 달라지는 것은 원소 약 10⁻⁶ 비율이다. `EVTA_QUANT_EXACT=1`이면 나눗셈을 쓴다.
+  - `layerNormI8`는 `-vta-cpu-approx`일 때 출력 양자화도 역수로 곱한다.
+- **결론: DeiT에서는 하드웨어 `rq_mul`가 필요 없다.** 남는 이득은 PC 근사로 0.15 %p다.
+
+**② 번들 구현 −1.7 %p의 원인**
+- ①에서 대부분 사라졌다(보드 59.71 %, PC 근사 60.51 %).
+- 남은 0.7 %p는 Glow의 int8 LayerNorm 체인이었다. 평균 / 분산 / 표준편차를 int8로 양자화한다. 보드에서 LayerNorm을 float로 하면 60.41 %로, PC 근사와 같다.
+- 정수 LayerNorm(`evta_isa_ext.md` §8.6)은 처음에 59.89 %였다.
+  - 원인은 bias를 int8 단위로 먼저 반올림한 것이다. b × scale 비가 .5일 때 출력의 25 %가 1씩 달라졌다.
+  - bias를 shift 전의 고정소수점에 더하자(conv bias와 같이) 60.29 %가 되었다.
+  - 1/√ 표는 8비트로 충분하다. 16비트 보간은 60.30 %였다.
+- 정수 LayerNorm을 NEON int32로 짜서 Glow 체인보다 빠르다(1코어 20.2 → 8.0 ms). γ / β 계수는 호출마다 한 번만 만든다.
+- 그래서 기본으로 삼았다(`NESTC_LN_INT=0`이면 예전 체인). 정수 softmax(16비트 exp)는 60.13 %라 기본으로 하지 않았다.
+
+**③ 채널별 weight scale: 효과 없음 (PC 근사, 9,000장, 4스레드)**
+
+| 설정 | top-1 |
+|---|---|
+| 텐서별 weight, 출력 scale로 비율 맞춤 (지금 방식) | 60.32 % |
+| 채널별 weight, 채널마다 비율을 2의 거듭제곱으로 (하드웨어에 채널별 shift 필요) | 60.48 % |
+| 채널별 weight, scale 자유 | 60.16 % |
+
+- DeiT의 Linear weight는 채널 사이 범위 차이가 작아, 채널별 scale이 이득이 없다. 하드웨어 / 소프트웨어 작업 대상에서 뺀다.
+
+**남은 손실** (float 62.34 % 대비 −2.0 %p):
+- int8 자체 −1.7 %p
+- 출력 scale 올림 −0.15 %p
+- 나머지는 잡음 범위다.
+- 더 줄이려면 다음이 필요하다(아직 안 함):
+  - 민감한 층(첫 patch embedding, 마지막 classifier)을 16비트로 두기
+  - percentile / KL calibration
 
 ## 7. 재현
 

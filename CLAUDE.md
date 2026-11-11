@@ -336,6 +336,10 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   output channel blocks (13 blocks with 2 computed nothing, no error), matmul N padded for it (`matmulSched`):
   EVTA 55.8 -> 38.3 ms, 123.5 -> 107.4 ms (`-t 4` 91.9 -> 75.2 ms). `gen_deit_bundle.sh` always passes `-vta-round-shift`.
   `prof_summary.py` folds the runs of a streamed conv (else no `_sysprof` table for DeiT).
+  Accuracy (2026-11-11, ImageNetV2 9,000 images, `docs/deit_optimization.md` §6.6; `vtabundles_xcmpl/imagenet_eval/`: the board
+  `EVAL_LIST` mode, a PC fake-quant emulator): float 62.34 %; power-of-two int8 56.17 % -> 60.47 % with free activation scales whose
+  EVTA ratios in * w / out are powers of two (`VTA.cpp` `-vta-pow2-ratio`, `gen_deit_bundle.sh` `QSCHEMA=symmetric` default) and the
+  integer layer norm (default, `NESTC_LN_INT=0` = the int8 chain); 1 core 75.7 ms, `-t 4` 52.9 ms. No `rq_mul` / per-channel weights needed.
   The whole DeiT path (what changed, how much each step saved, where the time goes now, software and hardware next steps
   ordered against the overall plan): [docs/deit_optimization.md](docs/deit_optimization.md).
   multi4 systolic (2026-11-10, §6.5): `vta/multievta_bundles/MultiEVTADeiTTest` (`gen_multi4_bundles.sh MultiEVTADeiTTest`; VTASave

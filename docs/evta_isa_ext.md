@@ -369,7 +369,26 @@ bitstream과 vtalib의 짝이 한 번만 바뀌게 하려는 것이다.
 
 - 9,000장의 표준오차는 약 ±0.5 %p다. 정수식은 정확도를 잃지 않는다.
 - 그래서 이 식을 그대로 하드웨어 ALU 확장(§8.2)의 기준으로 삼는다.
-- 정확도 손실은 대부분 다른 데서 온다(`deit_optimization.md` §6.6). 그중 power-of-2 scale 몫(약 −2.3 %p)은 GEMM 출력 경로의 `rq_mul`(§8.4.1)로 줄일 수 있다.
+- 정확도 손실은 대부분 다른 데서 온다(`deit_optimization.md` §6.6).
+- power-of-2 scale 몫(약 −2.3 %p)은 GEMM 출력 경로의 `rq_mul`(§8.4.1)로 줄일 수 있다.
+  - 다만 2026-11-11에 소프트웨어만으로 거의 다 되찾았다: activation scale은 자유롭게, EVTA 연산의 비율만 2의 거듭제곱으로(`-vta-pow2-ratio`).
+  - 그래서 DeiT에는 `rq_mul`가 필요 없다(`deit_optimization.md` §6.6.3).
+
+**2026-11-11 수정과 결과**
+- 출력 bias는 shift 전의 고정소수점(2^t)에 더한다. 반올림을 한 번만 하는 것이고, conv bias와 같은 방식이다.
+  - 하드웨어에서는 bias 벡터를 acc에 ADD한 뒤 `rq` shift를 하면 된다.
+  - 전에는 bias를 int8 단위로 먼저 반올림했다. b × scale 비가 .5인 채널에서 출력의 25 %가 1씩 달랐다.
+- `NESTC_LN_INT=2`는 1/√ 표를 16비트로 하고 하위 8비트로 선형 보간한다(LUT 두 번, MUL, ADD). 정확도는 8비트 표와 같아서, **하드웨어 LUT는 8비트 출력이면 된다.**
+- scale 자유 번들(9,000장)에서의 정확도:
+
+| 설정 | top-1 |
+|---|---|
+| LayerNorm float | 60.41 % |
+| 정수 LayerNorm 8비트 표 (이제 기본, `NESTC_LN_INT=0`이면 Glow int8 체인 59.71 %) | **60.29 %** |
+| 정수 LayerNorm 16비트 보간 표 | 60.30 % |
+| 정수 LayerNorm + 정수 softmax 16비트 exp | 60.13 % |
+
+- CPU에서는 NEON int32로 짰다. 1코어 8.0 ms로, Glow 체인 20.2 ms보다 빠르다.
 
 ### 8.5 일의 양과 순서 (추정)
 
