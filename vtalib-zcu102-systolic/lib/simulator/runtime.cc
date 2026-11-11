@@ -1046,7 +1046,11 @@ class InsnQueue : public BaseQueue<VTAGenericInsn> {
  protected:
   /*! \return Add new instruction to the buffer. */
   VTAGenericInsn* NextInsn() {
+    //#### JO changed (2026-11-11): zeroed as the zcu102 queue (dat_queue.h, 2026-11-04): the pad bits now carry rq_*,
+    //#### alu_op_ext and lut_en, and the simulator runs an instruction with any of them through the ALU reference model
+    // VTAGenericInsn insn;
     VTAGenericInsn insn;
+    memset(&insn, 0, sizeof(insn));
     dram_buffer_.push_back(insn);
     return &dram_buffer_.back();
   }

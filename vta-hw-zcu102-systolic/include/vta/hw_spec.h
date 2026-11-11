@@ -153,6 +153,18 @@ extern "C" {
 #define VTA_ALU_OPCODE_SHR 3
 /*! ALU opcode: binary mul op */
 #define VTA_ALU_OPCODE_MUL 4
+//#### JO added (2026-11-11, ALU extension, docs/evta_isa_ext.md 8.2): the extended operation numbers
+//#### (alu_op_ext << 2 | alu_opcode, 4 bits); 0-3 are MIN / MAX / ADD / SHR as above. src = imm or acc[src].
+#define VTA_ALU_OP_EXT_BIT_WIDTH 2
+#define VTA_ALUX_MUL 4     /* dst = dst * (int16) src                                         */
+#define VTA_ALUX_SUB 5     /* dst = dst - src                                                  */
+#define VTA_ALUX_CPY 6     /* dst = src                                                        */
+#define VTA_ALUX_LUT 7     /* dst = T[dst & 255], imm bit 0: 1 sign-extends the 8-bit entry    */
+#define VTA_ALUX_LUTSET 8  /* T[16 * (imm + step) + lane] = src[lane] & 255                    */
+#define VTA_ALUX_RSUM 9    /* dst[every lane] = sum of the lanes of src                        */
+#define VTA_ALUX_RMAX 10   /* dst[every lane] = max of the lanes of src                        */
+#define VTA_ALUX_CLZ 11    /* dst = leading zeros of (uint32) dst, 32 for 0                    */
+#define VTA_ALU_FULL_OP(insn) ((int)((insn).alu_op_ext << VTA_ALU_OPCODE_BIT_WIDTH | (insn).alu_opcode))
 
 
 /*! Memory type field bitwidth */
@@ -358,7 +370,10 @@ typedef struct {
   uint64_t rq_shift       : 5;
   int64_t  rq_lo          : 8;
   int64_t  rq_hi          : 8;
-  uint64_t pad_0          : 7;
+  //#### JO changed (2026-11-11, ALU extension): lut_en as VTAAluInsn (GELU on the GEMM output; "alux" bitstreams)
+  //uint64_t pad_0          : 7;
+  uint64_t lut_en         : 1;
+  uint64_t pad_0          : 6;
   uint64_t pad_1          : 64;
 } VTAGemInsn;
 
@@ -472,7 +487,13 @@ typedef struct {
   uint64_t rq_shift       : 5;
   int64_t  rq_lo          : 8;
   int64_t  rq_hi          : 8;
-  uint64_t pad_0          : 8;
+  //#### JO changed (2026-11-11, ALU extension, docs/evta_isa_ext.md 8): the operation is alu_op_ext << 2 | alu_opcode
+  //#### (VTA_ALUX_*; 0 = alu_opcode as before, so old instructions with zeroed pads are unchanged); lut_en: the int8
+  //#### written to out goes through the LUT (after rq). Only bitstreams with "alux" in the name read these bits.
+  //uint64_t pad_0          : 8;
+  uint64_t alu_op_ext     : 2;
+  uint64_t lut_en         : 1;
+  uint64_t pad_0          : 5;
   uint64_t pad_1          : 64;
 } VTAAluInsn;
 

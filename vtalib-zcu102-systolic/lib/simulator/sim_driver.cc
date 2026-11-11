@@ -36,6 +36,9 @@
 #include <sstream>
 
 #include <virtual_memory.h>
+#include <vector>
+//#### JO added (2026-11-11): the ALU extension reference model (the zcu102 header dir is not on the simulator include path)
+#include "../../include/zcu102/vta/alu_ext_ref.h"
 
 namespace vta {
 namespace sim {
@@ -412,7 +415,33 @@ class Device {
     }
   }
 
+  //#### JO added (2026-11-11, ALU extension, docs/evta_isa_ext.md 8): the extended operations (VTA_ALUX_*), rq_* and lut_en
+  //#### through the reference model (include/zcu102/vta/alu_ext_ref.h). The simulator has no out buffer (STORE truncates
+  //#### acc): an instruction with rq_en / lut_en writes its int8 out value into acc sign-extended, so a STORE after it gives
+  //#### the hardware's out (the hardware keeps the 32-bit acc; programs only requantize in their last instruction).
+  uint8_t lut_[256] = {0};
+  void RunALUExt(const VTAAluInsn* op) {
+    prof_->alu_counter += op->iter_out * op->iter_in * (op->uop_end - op->uop_bgn);
+    if (prof_->SkipExec()) return;
+    static_assert(VTA_ACC_WIDTH == 32, "the reference model takes int32 acc entries");
+    int32_t (*acc)[vta_alu_ref::kLanes] = reinterpret_cast<int32_t (*)[vta_alu_ref::kLanes]>(acc_.BeginPtr(0));
+    std::vector<int8_t> outv((size_t)VTA_ACC_BUFF_DEPTH * vta_alu_ref::kLanes);
+    int8_t (*out)[vta_alu_ref::kLanes] = reinterpret_cast<int8_t (*)[vta_alu_ref::kLanes]>(outv.data());
+    vta_alu_ref::run(*op, static_cast<VTAUop*>(uop_.BeginPtr(0)), acc, out, lut_);
+    if (!op->rq_en && !op->lut_en) return;
+    for (uint32_t y = 0; y < op->iter_out; ++y)
+      for (uint32_t x = 0; x < op->iter_in; ++x)
+        for (uint32_t k = op->uop_bgn; k < op->uop_end; ++k) {
+          const uint32_t d = static_cast<VTAUop*>(uop_.BeginPtr(k))->dst_idx + y * op->dst_factor_out + x * op->dst_factor_in;
+          for (int b = 0; b < vta_alu_ref::kLanes; ++b) acc[d][b] = out[d][b];
+        }
+  }
+
   void RunALU(const VTAAluInsn* op) {
+    if (VTA_ALU_FULL_OP(*op) > VTA_ALU_OPCODE_SHR || op->rq_en || op->lut_en) {
+      RunALUExt(op);
+      return;
+    }
     if (op->use_imm) {
       RunALU_<true>(op);
     } else {

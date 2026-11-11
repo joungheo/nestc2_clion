@@ -395,7 +395,7 @@ bitstream과 vtalib의 짝이 한 번만 바뀌게 하려는 것이다.
 | 단계 | 내용 | 기간 |
 |---|---|---|
 | 1 | 정수 LayerNorm / softmax 식을 CPU에서 정하고 ImageNet 확인 (소프트웨어, `deit_optimization.md` §6.1) | **11-10 끝남 (§8.6)** |
-| 2 | `hw_spec.h` 세 곳, C 모델(`systolic_model.cc`), vtalib 시뮬레이터 `sim_driver.cc`에 연산 12개 | 2–3일 |
+| 2 | `hw_spec.h` 세 곳, C 모델(`systolic_model.cc`), vtalib 시뮬레이터 `sim_driver.cc`에 연산 12개 | **11-11 끝남 (§8.7)** |
 | 3 | HLS `vta.cc` `alu()` / `alu_lane()`, `sa_rmw.v` 출력 LUT, `vta_test.cc` `alu_test`에 새 연산, RTL testbench, CSim | 1–1.5주 |
 | 4 | single `_alux` bitstream(합성 약 1시간 × 몇 번), 보드 probe, golden, dump 비교 | 2–4일 |
 | 5 | multi4 bitstream (Y219 flow) | 1–3일 |
@@ -407,3 +407,54 @@ bitstream과 vtalib의 짝이 한 번만 바뀌게 하려는 것이다.
   - GELU 5.2, LayerNorm 5.6, softmax 3.9 ms가 EVTA로 가고, 그 앞뒤 배치 변환 5.4 ms도 없어진다(CPU를 오가지 않음).
   - 합해서 약 −15–20 ms다. EVTA 쪽은 ALU 시간만큼 는다.
 - CNN 쪽 효과는 작다: avgpool 0.2–1 ms, 2^n이 아닌 scale 때문에 CPU에 남던 층. 대신 YOLO(SiLU, upsample, concat)와 MobileNetV3 / EfficientNet(hard-swish, SE)은 이 확장이 있어야 EVTA에 올라간다.
+
+### 8.7 2단계: ISA 헤더, 기준 모델, 명령열 검증 (2026-11-11)
+
+하드웨어(HLS / RTL)는 아직 그대로다. 비트스트림을 만들기 전에, 확장한 명령만으로 정수 LayerNorm / softmax를 정확히 계산할 수 있는지를 PC에서 확인했다.
+
+**바꾼 것**
+
+| 파일 | 내용 |
+|---|---|
+| `vta-hw-zcu102-systolic/include/vta/hw_spec.h`, `vta-hw-zcu102-multi4/include/vta/hw_spec.h`, `vtalib-zcu102-systolic/include/zcu102/vta/hw_spec.h` | ALU `alu_op_ext`(비트 168–169), `lut_en`(170). GEMM `lut_en`(165). 연산 번호 `VTA_ALUX_*`(4–11)와 `VTA_ALU_FULL_OP()`. 세 곳의 비트 위치는 작은 프로그램으로 확인했다(single 설정) |
+| `vtalib-zcu102-systolic/include/simulator/hw_spec.h` | 시뮬레이터용 ALU 명령에 `rq_*`, `alu_op_ext`, `lut_en`(그전에는 `rq_*`도 없었음) |
+| `vtalib-zcu102-systolic/include/zcu102/vta/alu_ext_ref.h` | **기준 모델**: ALU 명령 하나를 VTA의 ALU 루프 그대로 실행한다(기존 연산, 새 연산 8개, requantize, 출력 LUT). 하드웨어 ALU는 이 모델과 같은 acc / out을 내야 한다 |
+| `vtalib-zcu102-systolic/lib/simulator/sim_driver.cc` | 확장 연산, `rq_en`, `lut_en`이 있는 ALU 명령을 기준 모델로 실행. 시뮬레이터에는 out buffer가 없어서, `rq_en` / `lut_en` 명령은 out 값을 acc에 부호 확장해 쓴다(STORE 직전 명령에서만 쓰면 하드웨어와 같음) |
+| `vtalib-zcu102-systolic/lib/simulator/runtime.cc` | `NextInsn`이 명령을 0으로 채움(zcu102 쪽은 11-04에 고침). 안 그러면 pad의 쓰레기 값이 새 필드로 읽힌다 |
+| `vtalib-zcu102-systolic/tests/alu_ext_test.cc`, `run_alu_ext_test.sh` | 정수 LayerNorm / softmax를 ALU 명령열로 짜서 기준 모델로 실행하고, 번들의 CPU 함수(`VTASave.cpp`에서 뽑음)와 바이트 단위로 비교한다. 한 코어, 몇 초 |
+
+**결과** (`vtalib-zcu102-systolic/tests/run_alu_ext_test.sh <rows> <seed>`)
+
+| 명령열 | 명령 수 | step (16 lane 한 entry) | 비교 |
+|---|---|---|---|
+| 정수 LayerNorm (C = 192, 32 token씩) | 61 | token당 245.5 | 8 시드 × 1,000행, 192,000개 모두 같음 |
+| 정수 softmax (197 key, 8비트 exp 표, 32행씩) | 29 | 행당 134 | 3 시드 × 591행, 116,427개 모두 같음 |
+
+§8.2의 연산(ADD, SUB, MUL, SHR, MIN / MAX, CPY, LUT / LUTSET, RSUM / RMAX, CLZ, `rq`)으로 충분했다.
+
+**짜면서 정한 것**
+- **데이터에 따른 shift:** 행마다 다른 shift(t ≤ 30)는 SHR 한 번의 범위(−16…15)를 넘을 수 있다.
+  - 그래서 SHR 두 번으로 나눈다: k1 = t >> 1, k2 = t − k1. 바닥 나눗셈 두 번은 한 번과 같다.
+  - LayerNorm은 이렇게 했다. softmax는 t가 −1…7이라 한 번이면 된다.
+- **반올림 상수:** 2^(t−1)은 SHR로 만든다. 1을 (1 − t)만큼 shift하면, t ≤ 0일 때 0이 된다.
+- **같은 dst에 누적하는 순서:** 블록을 바깥, token을 안쪽 루프로 둔다.
+  - 이렇게 하면 같은 dst를 쓰는 step 사이가 n step 벌어진다.
+  - HLS ALU 루프에는 step 사이 forwarding이 없어서(`DEPENDENCE inter false`) 바로 이웃한 step이 같은 dst를 쓰면 안 된다.
+- **broadcast:** token마다 하나인 값을 블록에 퍼뜨리는 것은 `src_factor_in = 0`, 블록별 상수는 `src_factor_out = 0`으로 한다. 새 명령이 필요 없다.
+- **표 교체:** softmax는 exp 표와 역수 표를 차례로 쓴다. 그 사이에 LUTSET(16 step)을 한 번 더 한다.
+- **padding:** 197 key는 13블록 = 208 lane이다. 남는 lane에는 아주 작은 score(−2^20)를 넣어 exp가 E[255] = 0이 되게 한다.
+
+**DeiT에서의 EVTA 시간 (추정)**
+- LayerNorm: 25번 × 197 token × 245.5 step = 1.21 M step
+- softmax: 12층 × 3 head × 197행 × 134 step = 0.95 M step
+- 대부분 vector 연산(II = 2)이다. step당 평균 1.5 cycle이면 400 MHz에서 약 8 ms다.
+- 대신 없어지는 CPU 시간(`deit_optimization.md` §6.6.3 뒤의 측정):
+  - 1코어: LayerNorm 8.0 + softmax 12.4 + 그 앞뒤 배치 변환과 quantize 일부 ≈ 30 ms
+  - 4코어: ≈ 12 ms
+- 원소별 연산이 step의 대부분이다(LayerNorm은 원소당 약 18 연산). "곱한 뒤 shift" 같은 연산을 합치면 더 줄일 수 있다. 3단계에서 HLS 비용과 함께 정한다.
+
+**다음 (3단계):**
+- HLS `vta.cc` `alu()` / `alu_lane()`에 같은 연산을 넣는다.
+- `vta_test.cc`의 `alu_test`가 기준 모델(`alu_ext_ref.h`)과 같은 결과를 내는지 CSim으로 확인한다.
+- 비트스트림 합성(4단계)은 PC 냉각을 고친 뒤에 한다.
+
