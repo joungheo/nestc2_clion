@@ -6581,7 +6581,9 @@ static void layerNormI8(int8_t *out, const int8_t *x, size_t rows, size_t cols, 
   //#### the outputs by 1). G / B are made once per call when every row has the same gamma / beta (DeiT), else per row:
   //#### at each element they cost 6x the float layer norm (20 -> 130 ms). Accuracy (DeiT free scales, ImageNetV2 9,000):
   //#### float 60.41 %, 1: 60.29 %, 2: 60.30 % (docs/deit_optimization.md 6.6).
-  static const int lnInt = getenv("NESTC_LN_INT") ? atoi(getenv("NESTC_LN_INT")) : 0;
+  //#### JO changed (2026-11-11): the integer path is the default (more accurate than the int8 chain below with
+  //#### non-power-of-two scales, and faster: DeiT 1 core 20.2 -> 8.0 ms); NESTC_LN_INT=0 runs the int8 chain
+  static const int lnInt = getenv("NESTC_LN_INT") ? atoi(getenv("NESTC_LN_INT")) : 1;
   if (lnInt) {
     const bool i16 = lnInt > 1;
     int32_t T[258];

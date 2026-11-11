@@ -20,7 +20,8 @@ export TVM_HOME=$B/../tvm PYTHONPATH=$B/../tvm/python TVM_LIBRARY_PATH=$B/tvm
 O=$B/vta/bundles/DeiTTest
 I=$B/../glow/tests/images/imagenet
 #### JO changed (2026-11-10): QSCHEMA=symmetric for free scales (VTA.cpp -vta-pow2-ratio keeps the EVTA ratios power-of-two)
-Q=-quantization-schema=${QSCHEMA:-symmetric_with_power2_scale}
+#### JO changed (2026-11-11): symmetric by default (ImageNetV2 top-1 56.17 -> 59.71 %, same speed; docs/deit_optimization.md 6.6)
+Q=-quantization-schema=${QSCHEMA:-symmetric}
 PRE="-image-layout=NCHW -image-mode=0to1 -image-channel-order=RGB -mean=0.485,0.456,0.406 -stddev=0.229,0.224,0.225"
 mkdir -p $O && cd $O || exit 1
 if [ ! -s deit_fold.onnx ]; then
