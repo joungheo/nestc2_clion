@@ -54,6 +54,34 @@ static VTAAluInsn &I(int op, int io, int ii, int d, int dfo, int dfi, int s, int
   return prog.back();
 }
 
+// #### JO added (2026-11-11, docs/evta_isa_ext.md 8.8): the program runs on the reference model, or with -DALU_EXT_HLS on the
+// HLS ALU in C simulation (vta-hw-zcu102-systolic/hardware/xilinx/sim/alux_prog_hls.cc, which also returns acc)
+#ifdef ALU_EXT_HLS
+void hlsRunProgram(const VTAAluInsn *p, int np, const VTAUop *u, int nu, int32_t *acc, int8_t *out, int depth);
+#endif
+// steps that read an entry written by one of the 17 steps before them in the same instruction (HLS ALUX vector loop)
+static void reportHazards(const char *name) {
+  long h = 0;
+  for (const VTAAluInsn &a : prog) {
+    const long k = vta_alu_ref::hazards(a, uops.data(), 17);
+    if (k && h == 0)
+      printf("%s: hazard in instruction %d (op %d), %ld steps\n", name, (int)(&a - prog.data()), VTA_ALU_FULL_OP(a), k);
+    h += k;
+  }
+  printf("%s: %ld steps read an entry written within the last 17 steps\n", name, h);
+}
+
+static void runProg(int32_t (*acc)[kLanes], int8_t (*out)[kLanes], uint8_t T[256], int depth) {
+#ifdef ALU_EXT_HLS
+  (void)T;
+  hlsRunProgram(prog.data(), (int)prog.size(), uops.data(), (int)uops.size(), &acc[0][0], &out[0][0], depth);
+#else
+  (void)depth;
+  for (const VTAAluInsn &a : prog)
+    vta_alu_ref::run(a, uops.data(), acc, out, T);
+#endif
+}
+
 // the integer softmax (VTASave softmaxInt, NESTC_SM_INT=1: 8-bit exp LUT, CLZ + 8-bit reciprocal LUT, a probability with
 // 16 fraction bits) as an ALU program over rows of COLS int8 scores (DeiT attention: 197 keys, padded to 13 blocks with a
 // very negative score so that their exp is E[255] = 0), compared with the CPU function (its float output * 2^16)
@@ -113,6 +141,7 @@ static int softmaxTest(int seed) {
   I(VTA_ALUX_MUL, n, NB, D, NB, 1, RV, 1, 0);
   I(VTA_ALU_OPCODE_ADD, n, NB, D, NB, 1, H, 1, 0);
   I(VTA_ALU_OPCODE_SHR, n, NB, D, NB, 1, TT, 1, 0);
+  reportHazards("softmax");
   const long progSteps = steps;
   std::vector<int32_t> accv(DEPTH * kLanes);
   std::vector<int8_t> outv(DEPTH * kLanes);
@@ -127,8 +156,7 @@ static int softmaxTest(int seed) {
         acc[X + t * NB + c / 16][c % 16] = r0 + t < R && c < COLS ? x[(r0 + t) * COLS + c] : -(1 << 20);
     for (int k = 0; k < 256; k++)
       acc[TE + k / 16][k % 16] = E[k], acc[TR + k / 16][k % 16] = RT[k];
-    for (const VTAAluInsn &a : prog)
-      vta_alu_ref::run(a, uops.data(), acc, out, T);
+    runProg(acc, out, T, DEPTH);
     for (int t = 0; t < n && r0 + t < R; t++)
       for (int c = 0; c < COLS; c++) {
         const long e = std::lround(ref[(r0 + t) * COLS + c] * 65536.0), o = acc[D + t * NB + c / 16][c % 16];
@@ -253,6 +281,7 @@ int main(int argc, char **argv) {
   I(VTA_ALU_OPCODE_ADD, n, NB, D, NB, 1, E, NB, 1);
   I(VTA_ALU_OPCODE_ADD, n, NB, D, NB, 1, H, 1, 0);
   vshr(D, NB, 1, n, NB, TT, true);
+  reportHazards("layer norm");
   const long progSteps = steps;
 
   // run it over the rows, n tokens at a time
@@ -271,8 +300,7 @@ int main(int argc, char **argv) {
       acc[GB + l / 16][l % 16] = G[l], acc[BB + l / 16][l % 16] = B[l];
     for (int k = 0; k < 256; k++)
       acc[TB + k / 16][k % 16] = T8[k];
-    for (const VTAAluInsn &a : prog)
-      vta_alu_ref::run(a, uops.data(), acc, out, T);
+    runProg(acc, out, T, DEPTH);
     for (int t = 0; t < n && r0 + t < R; t++)
       for (int l = 0; l < C; l++) {
         const int8_t e = ref[(r0 + t) * C + l], o = out[D + t * NB + l / 16][l % 16];

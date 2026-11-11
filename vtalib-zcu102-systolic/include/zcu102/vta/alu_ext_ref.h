@@ -24,6 +24,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <vector>
 
 namespace vta_alu_ref {
 
@@ -109,6 +110,41 @@ void run(const Insn &insn, const Uop *uops, int32_t (*acc)[kLanes], int8_t (*out
     dst_out += insn.dst_factor_out;
     src_out += insn.src_factor_out;
   }
+}
+
+// #### JO added (2026-11-11, docs/evta_isa_ext.md 8.8): steps of one instruction that read an acc entry (dst, or src unless
+// use_imm) written by one of the `window` steps before it. The HLS ALU loop has no forwarding (DEPENDENCE inter false on
+// acc_mem): with ALUX the vector loop is II 2, depth 33, so up to 17 steps are in flight and such a read gets the old value.
+// The imm loop (II 1, depth 12, MIN / MAX / ADD / SHR only) has up to 12. Returns the number of such steps.
+template <typename Insn, typename Uop>
+long hazards(const Insn &insn, const Uop *uops, int window) {
+  const int op = (int)(insn.alu_op_ext << VTA_ALU_OPCODE_BIT_WIDTH | insn.alu_opcode);
+  std::vector<long> wr;  // dst written by each step (-1: none)
+  long bad = 0;
+  uint32_t dst_out = 0, src_out = 0;
+  for (uint32_t io = 0; io < insn.iter_out; io++) {
+    uint32_t dst_in = dst_out, src_in = src_out;
+    for (uint32_t ii = 0; ii < insn.iter_in; ii++) {
+      for (uint32_t u = insn.uop_bgn; u < insn.uop_end; u++) {
+        const long d = uops[u].dst_idx + dst_in, s = uops[u].src_idx + src_in;
+        const bool rs = !insn.use_imm || op == VTA_ALUX_LUTSET;
+        const bool rd = op != VTA_ALUX_LUTSET;
+        for (int k = 1; k <= window && k <= (int)wr.size(); k++) {
+          const long w = wr[wr.size() - k];
+          if (w >= 0 && ((rd && w == d) || (rs && w == s))) {
+            bad++;
+            break;
+          }
+        }
+        wr.push_back(op == VTA_ALUX_LUTSET ? -1 : d);
+      }
+      dst_in += insn.dst_factor_in;
+      src_in += insn.src_factor_in;
+    }
+    dst_out += insn.dst_factor_out;
+    src_out += insn.src_factor_out;
+  }
+  return bad;
 }
 
 } // namespace vta_alu_ref

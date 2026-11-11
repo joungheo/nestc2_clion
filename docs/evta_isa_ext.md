@@ -537,9 +537,31 @@ bitstream과 vtalib의 짝이 한 번만 바뀌게 하려는 것이다.
 - 줄일 곳(4단계 전): vector 루프의 `alu_reg`, MUL 단수, `lut_d`와 `lut_o`를 한 벌로 합치기(한 명령에서 LUT 연산과 `lut_en`을 같이 쓰지 않는다고 정하면).
 - 확장 연산은 모두 II = 2다. §8.7의 시간 추정(step당 평균 1.5 cycle)은 2 cycle로 고쳐 봐야 한다. 그러면 DeiT에서 약 11 ms다.
 
+**LayerNorm / softmax 명령열을 HLS ALU로** (`sim/run_csim.sh PROG=1 [rows] [seed]`, 6초)
+- §8.7의 명령열을 그대로 HLS `vta()`에 넣었다(`sim/alux_prog_hls.cc`). `alu_ext_test.cc`를 `-DALU_EXT_HLS`로 빌드하면 기준 모델 대신 이 함수를 부른다.
+- 명령열 뒤에 CPY와 SHR 8 세 번을 붙여 acc 32비트도 돌려받는다.
+- 결과:
+  - LayerNorm 200행: 38,400개 모두 같음
+  - softmax 591행: 116,427개 모두 같음
+- 이 경로가 정말 HLS를 탔는지도 확인했다. HLS의 SUB를 ADD로 바꾸면 softmax 116,427개 중 104,455개가 틀린다.
+
+**pipeline 겹침 규칙과 검사기**
+- HLS ALU 루프에는 step 사이 forwarding이 없다(`DEPENDENCE inter false`).
+- ALUX의 vector 루프는 II 2, depth 33이다. 그래서 한 명령 안에서 최대 17 step이 동시에 돈다. 지금 `_sa`는 depth 14라 7 step이었다.
+- 따라서 **한 명령 안에서, 어떤 step이 쓴 acc entry를 그 뒤 17 step 안에 읽으면(dst든 src든) 옛 값을 읽는다.** 17은 depth로 잡은 보수적인 값이다.
+- 검사기 `vta_alu_ref::hazards(insn, uops, window)`(`alu_ext_ref.h`)를 넣었다. `alu_ext_test.cc`가 두 명령열을 window 17로 검사한다.
+  - LayerNorm: 0 step
+  - softmax: 0 step
+  - token / 행 32개를 안쪽 루프에 두어 같은 entry 사이가 32 step이기 때문이다.
+- **지금 vtalib이 내는 vector ALU 명령도 ALUX bitstream에서는 이 루프를 탄다.** depthwise의 채널별 SHR, pool MAX, residual 등이다. 7 step에서는 괜찮던 명령열이 17 step에서는 깨질 수 있다.
+  - 4단계에서 보드의 `EVTA_REPLAY_DUMP`로 모든 모델의 명령을 뽑아 검사기로 확인한다.
+  - 문제가 있으면 vector 루프의 depth를 줄이거나(`alu_reg`를 빼고 MUL 단수를 줄임), 기존 연산 0–3은 옛 vector 루프로 보낸다.
+
 **남은 3단계**
-- 3b: GEMM `lut_en`. RTL `sa_rmw.v`에 표 사본을 둔다. LUTSET 값을 HLS compute에서 gemm_sa로 넘기는 포트가 필요하다.
-- §8.7의 LayerNorm / softmax 명령열을 HLS CSim으로도 돌린다(지금은 vtalib 시뮬레이터에서만).
-- RTL testbench. cosim에서 pipeline 겹침을 확인한다.
+- 3b: GEMM `lut_en`. RTL `sa_rmw.v`에 표 사본을 두고, HLS compute에서 gemm_sa로 LUTSET 값을 넘기는 포트를 내야 한다. block design(`gen_gemm_sa_bd.py`)과 RTL testbench까지 바뀐다.
+  - 대안: GEMM 뒤에 ALU 한 번(CPY + `rq_*` + `lut_en`, II 2)을 더 돈다.
+  - DeiT fc1 출력(197 × 768 = 9,456 entry)이면 층당 약 19k cycle = 47 µs, 12층 0.6 ms다.
+  - 하드웨어 일에 비해 이득이 작아서, **GEMM `lut_en`은 비트만 예약해 두고 ALU 경로로 하자고 제안한다**(결정 필요).
+- 비트스트림(4단계)은 PC 냉각을 고친 뒤에 한다.
 - PC 온도: 감시 스크립트(`~/templog/thermal_guard.sh`: 85 °C에서 docker 정지, 95 °C 두 번이면 `systemctl poweroff`)를 켜고 돌렸다. CSim과 C 합성(한 코어, 약 7분) 동안 최고 58 °C였다.
 
