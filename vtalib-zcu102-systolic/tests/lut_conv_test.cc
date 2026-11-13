@@ -12,7 +12,11 @@
 #include <vector>
 
 #include "Bundle/VTABundle.h"
+#if NESTC_USE_VTASIM
 #include "simulator/vta/runtime.h"
+#else
+#include "vta/runtime.h"   // board (run_alux_board_tests.sh): include/zcu102 is on the path
+#endif
 
 static int run(const char *name, int H, int W, int C, int KN, int K, int pad, bool relu, int shift, int nvt, int tile,
                const int8_t *T, unsigned seed) {
