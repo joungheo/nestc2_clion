@@ -173,6 +173,12 @@ host's Ubuntu 20.04, so it lives in the docker container **`vivado2020-build`** 
 `ubuntu`, `/tools/Xilinx` and the nest-compiler tree mounted at the same paths). Vivado is installed at
 **`/tools/Xilinx/v2020.1/`** (Y2K22 HLS patch applied); `/tools/Xilinx/Vivado/2018.3` and `2020.2` on the host
 are other versions (2020.2 has no `vivado_hls`). `pynq24-build`/`pynq27-build` do not have 2020.1.
+Second host PC **`ubuntu2`** (2026-11-13; Ryzen 9 5950X 32 threads, 125 GB, user `jerry`, tree at `/home/jerry/npuprg/nestc2_clion/nest-compiler`,
+so the `/home/ubuntu/...` paths in the docs become `/home/jerry/...`): the same container made by
+[utils/docker_vivado2020/](utils/docker_vivado2020/) (`setup.sh` builds the image and runs the container with `/tools/Xilinx` and `$HOME`
+mounted, `--network host`, TZ KST; `install_vivado.sh <tar.gz> <y2k22_patch-1.2.zip>` checks the MD5, batch-installs Zynq UltraScale+ only
+and applies the Y2K22 patch with the container's `python3`). Only 2020.1 is installed there; the license `~/.Xilinx/xilinx.lic` is `HOSTID=ANY`
+(System Edition + HLS). Checked: HLS export and `synth_design` on xczu9eg. Passwordless sudo for `jerry`.
 
 ```bash
 docker exec -it -u ubuntu vivado2020-build bash
