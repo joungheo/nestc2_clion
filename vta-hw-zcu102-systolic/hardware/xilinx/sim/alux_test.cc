@@ -21,6 +21,10 @@
 
 using vta_alu_ref::kLanes;
 
+#ifdef ALUX_COSIM
+void alux_cosim_run(int ninsn, const VTAGenericInsn *insns, const VTAUop *uops, const uint32_t *acc, int8_t *out);
+#endif
+
 namespace {
 
 const int N = 128;   // acc entries the random instructions use; [N, 2N) is the scratch of the final acc check
@@ -75,8 +79,12 @@ VTAAluInsn blank(int op) {
   return a;
 }
 
-// a random instruction over [0, N)
+// a random instruction over [0, N); for the RTL (ALUX_COSIM) only instructions with no step reading or writing an entry
+// written in the 17 steps before it (the vector loop's II 2 / depth 33; docs/evta_isa_ext.md 8.8)
 void addRandom(Prog &p) {
+#ifdef ALUX_COSIM
+ for (;;) {
+#endif
   int op = rnd(p, 12);
   VTAAluInsn a = blank(op);
   a.iter_out = 1 + rnd(p, 4);
@@ -101,7 +109,25 @@ void addRandom(Prog &p) {
   std::vector<std::pair<int, int>> us;
   for (int u = 0; u < nu; u++)
     us.push_back({rnd(p, N - dmax), rnd(p, N - smax)});
+#ifdef ALUX_COSIM
+  std::vector<VTAUop> uv(us.size());
+  memset(uv.data(), 0, uv.size() * sizeof(VTAUop));
+  for (size_t u = 0; u < us.size(); u++) {
+    uv[u].dst_idx = us[u].first;
+    uv[u].src_idx = us[u].second;
+  }
+  VTAAluInsn h = a;
+  h.uop_bgn = 0;
+  h.uop_end = us.size();
+  // VTA_ALUX_HAZARD_OK=1 keeps them (the RTL must then differ: shows the cosim compares the RTL's results)
+  static const bool hazardOk = getenv("VTA_ALUX_HAZARD_OK") && atoi(getenv("VTA_ALUX_HAZARD_OK"));
+  if (!hazardOk && vta_alu_ref::hazards(h, uv.data(), 17) != 0) continue;
+#endif
   addAlu(p, a, us);
+#ifdef ALUX_COSIM
+  return;
+ }
+#endif
 }
 
 void ppack(const int32_t (*acc)[kLanes], int n, uint32_t *buf) {
@@ -200,8 +226,13 @@ int alux_test(unsigned seed, int ninsn) {
   memcpy(uopBuf, p.uops.data(), sizeof(VTAUop) * p.uops.size());
   int8_t *outBuf = static_cast<int8_t *>(allocBuffer(ref.size()));
   memset(outBuf, 0x5a, ref.size());
+#ifdef ALUX_COSIM
+  // compute() alone (C/RTL cosim, sim/alux_cosim_tb.cc): one call per instruction, the STOREs done by the testbench
+  alux_cosim_run(p.insns.size(), insnBuf, uopBuf, accBuf, outBuf);
+#else
   vta(p.insns.size(), (volatile insn_T *) insnBuf, (volatile uop_T *) uopBuf, (volatile bus_T *) NULL,
       (volatile bus_T *) NULL, (volatile bus_T *) accBuf, (volatile bus_T *) outBuf);
+#endif
 
   int err = 0;
   for (size_t k = 0; k < p.storeOff.size(); k++) {

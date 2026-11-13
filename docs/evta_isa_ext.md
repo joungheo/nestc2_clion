@@ -704,3 +704,28 @@ bitstream과 vtalib의 짝이 한 번만 바뀌게 하려는 것이다.
   - LayerNorm / softmax는 지금 token을 CPU에서 int32로 넓혀 LOAD한다(한 번에 0.1–0.2 ms 추정). 입력이 EVTA 출력이면 identity GEMM으로 acc에 올리거나 EVTA 배치로 바로 쓰면 이 복사와 앞뒤 transpose가 없어진다. 그다음 일이다.
 - softmax를 기본으로 켤지: 위 정확도(−0.35 %p)와 `_alux` 보드의 시간으로 정한다.
 - CNN 쪽 7단계 항목(avgpool, 2^n이 아닌 residual scale, SiLU)은 지금 모델에서 이득이 작다(avgpool 0.2–1 ms; residual은 모두 2^n으로 묶였다). SiLU 같은 표는 `findOutLutConvs`가 그대로 쓰지만, CNN activation은 EVTA 배치로 남아 있어(`-vta-keep-layout`) 표 region이 생기지 않는다. YOLO류 모델을 올릴 때 한다.
+
+### 8.11 compute C/RTL cosim (2026-11-13, 두 번째 PC `ubuntu2`)
+
+§8.8의 CSim은 C 코드만 봤다. HLS가 만든 compute RTL이 같은 결과를 내는지 C/RTL cosim으로 확인했다.
+
+**방법** (`vta-hw-zcu102-systolic/hardware/xilinx/sim/run_cosim.sh [seeds] [명령 수]`, docker `vivado2020-build`)
+- HLS 프로젝트의 top은 `compute`다. cflags와 compute directive는 `hls.tcl`의 `SYSTOLIC=1 ALUX=1`과 같다(`sim/cosim_compute.tcl`).
+  m_axi depth(uops 1024, biases 4096)는 cosim에만 쓰는 값이고 RTL은 바뀌지 않는다.
+- testbench(`sim/alux_cosim_tb.cc`)는 `alux_test.cc`의 무작위 명령열(`-DALUX_COSIM`)을 명령 하나씩 `compute()`에 넣는다.
+  pop할 dependence token을 넣어 주고, push된 token은 버리고, STORE는 직접 한다(`store()`와 같은 복사). SRAM은 testbench 배열이라
+  호출 사이에 내용이 이어지고, `uop_mem`과 ALU 표는 compute 안의 static이라 역시 이어진다.
+- RTL에서는 vector 루프가 겹쳐 돈다(II 2, depth 33). 그래서 cosim용 명령열은 `hazards(…, 17)`가 0인 무작위 명령만 쓴다(§8.8의 규칙).
+  `VTA_ALUX_HAZARD_OK=1`이면 이 필터를 끈다(대조 시험).
+- 결과: `build/hardware/xilinx/cosim_alux/cosim.log`. seed 1개에 약 4분, 20개에 약 25분(합성 포함).
+
+**결과**
+
+| 시험 | C (cosim 전 실행) | RTL |
+|---|---|---|
+| seed 20개 × 명령 54개(연산 0–11, rq, `lut_en`, LUTSET), seed마다 110,592바이트 비교 | 20 / 20 | **20 / 20, `C/RTL co-simulation finished: PASS`** |
+| 대조: hazard 필터 끔, seed 3개 | 3 / 3 | 3 / 3 실패(216, 463, 676바이트 다름) |
+
+- 대조 시험이 RTL에서만 틀리므로, testbench가 C가 아니라 RTL 결과를 비교하고 있다.
+- 명령 하나의 latency는 73–1,113 cycle이었다(cosim 보고서).
+- 아직 안 본 것: GEMM(`gemm_sa`)과 함께 도는 경로, 보드. 4단계에서 본다.
