@@ -594,11 +594,25 @@ inline void alux_step(AluxFields f, ap_uint<4> op, ap_uint<4> lut_entry,
       const acc_T y = f.use_imm ? imm : S[i][b];
       acc_T r = x;
       out_T o0;
+      //#### JO changed (2026-11-15, docs/evta_isa_ext.md 8.14): MUL / MADD / MULSHR share one multiplier per lane, SHRV / SHRR
+      //#### one shifter; MADD and MULSHR always take S (imm is their multiplier / shift amount)
+      const acc_T sv = S[i][b];
+      const ap_int<16> m = op == VTA_ALUX_MADD ? (ap_int<16>) imm.range(15, 0) : (ap_int<16>) (op == VTA_ALUX_MULSHR ? sv : y).range(15, 0);
+      const acc_T p = (acc_T) (x * m);
+      const ap_int<7> kk = y > 31 ? (ap_int<7>) 31 : y < -32 ? (ap_int<7>) -32 : (ap_int<7>) y.range(6, 0);
+      const ap_uint<6> kr = kk > 0 ? (ap_uint<6>) kk : (ap_uint<6>) 0, kl = kk < 0 ? (ap_uint<6>) (-kk) : (ap_uint<6>) 0;
+      const acc_T xr = op == VTA_ALUX_SHRR && kk > 0 ? (acc_T) ((ap_uint<32>) x.range(31, 0) + ((ap_uint<32>) 1 << (kr - 1))) : x;
+      const acc_T sh = kk == -32 ? (acc_T) 0 : kk >= 0 ? (acc_T) (xr >> kr) : (acc_T) ((ap_uint<32>) x.range(31, 0) << kl);
       if (op < 4) {
         alu_lane((uint32_t) op, x, y, r, o0);
       } else if (op == VTA_ALUX_MUL) {
-        ap_int<16> m = y.range(15, 0);
-        r = (acc_T) (x * m);
+        r = p;
+      } else if (op == VTA_ALUX_MADD) {
+        r = (acc_T) (p + sv);
+      } else if (op == VTA_ALUX_MULSHR) {
+        r = (acc_T) (p >> (ap_uint<5>) imm.range(4, 0));
+      } else if (op == VTA_ALUX_SHRV || op == VTA_ALUX_SHRR) {
+        r = sh;
       } else if (op == VTA_ALUX_SUB) {
         r = (acc_T) (x - y);
       } else if (op == VTA_ALUX_CPY) {
@@ -707,6 +721,99 @@ void alu(
   }
 #endif
 
+#if defined(VTA_ALUX) && !defined(VTA_ALUX_II2)
+  //#### JO added (2026-11-15, docs/evta_isa_ext.md 8.14): one loop at II 1 over slots, one acc read per slot (acc_mem has two
+  //#### ports: one read, one write). A step takes one slot when its operation reads one operand (an imm, CPY / RSUM / RMAX /
+  //#### LUTSET: src only, CLZ / LUT: dst only), two (src, then dst) when it reads both, and with a single uop and
+  //#### src_factor_in 0 (src the same for the whole inner loop: a per-row operand) the src is read once per inner loop
+  //#### ("broadcast": iter_in + 1 slots). VTA_ALUX_II2 keeps the old loop (II 2, every step reads src and dst).
+  {
+    const bool rd_src = op == VTA_ALUX_LUTSET || op == VTA_ALUX_MADD || op == VTA_ALUX_MULSHR ||
+                        (!insn.use_imm && op != VTA_ALUX_LUT && op != VTA_ALUX_CLZ);
+    const bool rd_dst = !(op == VTA_ALUX_CPY || op == VTA_ALUX_RSUM || op == VTA_ALUX_RMAX || op == VTA_ALUX_LUTSET);
+    const bool two = rd_src && rd_dst;
+    const int nu = insn.uop_end - insn.uop_bgn;
+    const bool bc = two && nu == 1 && insn.src_factor_in == 0;
+    const int per_out = bc ? insn.iter_in + 1 : (two ? 2 : 1) * insn.iter_in * nu;
+    const int total = insn.iter_out * per_out;
+    int upc = insn.uop_bgn, ii = 0;
+    bool ph = false;   // two (no bc): the dst slot of a step
+    bool first = true; // bc: the src slot of an inner loop
+    acc_idx_T doff_out = 0, soff_out = 0, doff_in = 0, soff_in = 0;
+    acc_T s_reg[VTA_BATCH][VTA_BLOCK_OUT];
+#pragma HLS ARRAY_PARTITION variable = s_reg complete dim = 0
+    ALU_SLOT: for (int t = 0; t < total; t++) {
+#pragma HLS PIPELINE II = 1
+#pragma HLS DEPENDENCE variable = s_reg inter false
+      uop_T uop = alu_reg(uop_mem[upc]);
+      const bool fetch = bc ? first : (two && !ph);
+      const bool at_src = fetch || (!two && rd_src);
+      acc_idx_T a = alu_reg((acc_idx_T) (at_src ? (acc_idx_T) (uop.range(VTA_UOP_ALU_1_1, VTA_UOP_ALU_1_0) + soff_in)
+                                                : (acc_idx_T) (uop.range(VTA_UOP_ALU_0_1, VTA_UOP_ALU_0_0) + doff_in)));
+      acc_idx_T dst_idx = alu_reg((acc_idx_T) (uop.range(VTA_UOP_ALU_0_1, VTA_UOP_ALU_0_0) + doff_in));
+      acc_T rd_tensor[VTA_BATCH][VTA_BLOCK_OUT];
+      read_tensor<bus_T, acc_T, acc_idx_T, VTA_BUS_WIDTH, VTA_ACC_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(a, acc_mem, rd_tensor);
+      acc_T src_tensor[VTA_BATCH][VTA_BLOCK_OUT], dst_tensor[VTA_BATCH][VTA_BLOCK_OUT];
+      out_T o_tensor[VTA_BATCH][VTA_BLOCK_OUT];
+      for (int i = 0; i < VTA_BATCH; i++) {
+        for (int b = 0; b < VTA_BLOCK_OUT; b++) {
+          const acc_T v = alu_reg(rd_tensor[i][b]);
+          if (fetch)
+            s_reg[i][b] = v;
+          src_tensor[i][b] = two ? s_reg[i][b] : v;
+          dst_tensor[i][b] = v;
+        }
+      }
+      if (!fetch) {
+        alux_step(af, op, lut_entry, dst_tensor, src_tensor, o_tensor);
+        lut_entry++;
+        for (int i = 0; i < VTA_BATCH; i++) {
+          for (int b = 0; b < VTA_BLOCK_OUT; b++) {
+            dst_tensor[i][b] = alu_reg(dst_tensor[i][b]);
+            o_tensor[i][b] = alu_reg(o_tensor[i][b]);
+          }
+        }
+        if (op != VTA_ALUX_LUTSET) {
+          write_tensor<bus_T, acc_T, acc_idx_T, VTA_BUS_WIDTH, VTA_ACC_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, dst_tensor, acc_mem);
+          write_tensor<bus_T, out_T, acc_idx_T, VTA_BUS_WIDTH, VTA_OUT_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, o_tensor, out_mem);
+        }
+      }
+      // next slot
+      bool next_in = false;
+      if (bc) {
+        if (first) {
+          first = false;
+        } else {
+          next_in = true;
+        }
+      } else if (two && !ph) {
+        ph = true;
+      } else {
+        ph = false;
+        if (upc == insn.uop_end - 1) {
+          upc = insn.uop_bgn;
+          next_in = true;
+        } else {
+          upc++;
+        }
+      }
+      if (next_in) {
+        if (ii == insn.iter_in - 1) {
+          ii = 0;
+          doff_out += insn.dst_factor_out;
+          soff_out += insn.src_factor_out;
+          doff_in = doff_out;
+          soff_in = soff_out;
+          first = true;
+        } else {
+          ii++;
+          doff_in += insn.dst_factor_in;
+          soff_in += insn.src_factor_in;
+        }
+      }
+    }
+  }
+#else
   // Loop offset
   acc_idx_T dst_offset_out = 0;
   inp_idx_T src_offset_out = 0;
@@ -822,6 +929,7 @@ void alu(
     dst_offset_out += insn.dst_factor_out;
     src_offset_out += insn.src_factor_out;
   }
+#endif
 }
 
 void compute(

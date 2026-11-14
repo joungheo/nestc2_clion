@@ -1,0 +1,339 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1480" height="820" viewBox="0 0 1480 820" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif">
+<title>그림 A3. ALU 루프 세 가지와 acc_mem 포트 사용</title>
+<defs><marker id="ark" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#333333"/></marker><marker id="arb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f5f98"/></marker><marker id="aro" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c06a10"/></marker><marker id="arg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3c8a35"/></marker><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker><marker id="arp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6d4596"/></marker><marker id="ary" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9a7b00"/></marker><marker id="argr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#888888"/></marker></defs>
+<rect x="0" y="0" width="1480" height="820" fill="#ffffff"/>
+<text x="740" y="34" font-size="19" fill="#333333" text-anchor="middle" font-weight="bold">그림 A3. ALU 루프와 acc_mem 포트 (포트 2개: 읽기 1 + 쓰기 1) — 칸 하나 = 1 cycle</text>
+<text x="332.0" y="78" font-size="11" fill="#888888" text-anchor="middle" font-weight="normal">0</text>
+<text x="396.0" y="78" font-size="11" fill="#888888" text-anchor="middle" font-weight="normal">1</text>
+<text x="460.0" y="78" font-size="11" fill="#888888" text-anchor="middle" font-weight="normal">2</text>
+<text x="524.0" y="78" font-size="11" fill="#888888" text-anchor="middle" font-weight="normal">3</text>
+<text x="588.0" y="78" font-size="11" fill="#888888" text-anchor="middle" font-weight="normal">4</text>
+<text x="652.0" y="78" font-size="11" fill="#888888" text-anchor="middle" font-weight="normal">5</text>
+<text x="716.0" y="78" font-size="11" fill="#888888" text-anchor="middle" font-weight="normal">6</text>
+<text x="780.0" y="78" font-size="11" fill="#888888" text-anchor="middle" font-weight="normal">7</text>
+<text x="844.0" y="78" font-size="11" fill="#888888" text-anchor="middle" font-weight="normal">8</text>
+<text x="908.0" y="78" font-size="11" fill="#888888" text-anchor="middle" font-weight="normal">9</text>
+<text x="972.0" y="78" font-size="11" fill="#888888" text-anchor="middle" font-weight="normal">10</text>
+<text x="1036.0" y="78" font-size="11" fill="#888888" text-anchor="middle" font-weight="normal">11</text>
+<text x="1100.0" y="78" font-size="11" fill="#888888" text-anchor="middle" font-weight="normal">12</text>
+<text x="1164.0" y="78" font-size="11" fill="#888888" text-anchor="middle" font-weight="normal">13</text>
+<text x="1228.0" y="78" font-size="11" fill="#888888" text-anchor="middle" font-weight="normal">14</text>
+<text x="1292.0" y="78" font-size="11" fill="#888888" text-anchor="middle" font-weight="normal">15</text>
+<text x="290" y="78" font-size="11" fill="#888888" text-anchor="end" font-weight="normal">cycle</text>
+<text x="30" y="117" font-size="15" fill="#333333" text-anchor="start" font-weight="bold">(a) imm 루프 (원래)</text>
+<text x="30" y="137" font-size="12" fill="#888888" text-anchor="start" font-weight="normal">MIN/MAX/ADD/SHR + imm, II 1</text>
+<rect x="300" y="95" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="364" y="95" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="428" y="95" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="492" y="95" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="556" y="95" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="620" y="95" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="684" y="95" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="748" y="95" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="812" y="95" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="876" y="95" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="940" y="95" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="1004" y="95" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="1068" y="95" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="1132" y="95" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="1196" y="95" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="1260" y="95" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="302" y="97" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="332.0" y="115" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d0</text>
+<rect x="366" y="97" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="396.0" y="115" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d1</text>
+<rect x="430" y="97" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="460.0" y="115" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d2</text>
+<rect x="494" y="97" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="524.0" y="115" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d3</text>
+<rect x="558" y="97" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="588.0" y="115" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d4</text>
+<rect x="622" y="97" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="652.0" y="115" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d5</text>
+<rect x="686" y="97" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="716.0" y="115" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d6</text>
+<rect x="750" y="97" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="780.0" y="115" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d7</text>
+<rect x="814" y="97" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="844.0" y="115" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d8</text>
+<rect x="878" y="97" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="908.0" y="115" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d9</text>
+<rect x="942" y="97" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="972.0" y="115" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d10</text>
+<rect x="1006" y="97" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="1036.0" y="115" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d11</text>
+<rect x="1070" y="97" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="1100.0" y="115" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d12</text>
+<rect x="1134" y="97" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="1164.0" y="115" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d13</text>
+<rect x="1198" y="97" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="1228.0" y="115" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d14</text>
+<rect x="1262" y="97" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="1292.0" y="115" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d15</text>
+<text x="290" y="115" font-size="12" fill="#888888" text-anchor="end" font-weight="normal">읽기</text>
+<rect x="300" y="127" width="64" height="22" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="364" y="127" width="64" height="22" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="428" y="127" width="64" height="22" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="492" y="127" width="64" height="22" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="556" y="127" width="64" height="22" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="620" y="127" width="64" height="22" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="684" y="127" width="64" height="22" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="748" y="127" width="64" height="22" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="812" y="127" width="64" height="22" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="876" y="127" width="64" height="22" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="940" y="127" width="64" height="22" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="1004" y="127" width="64" height="22" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="1068" y="127" width="64" height="22" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="1132" y="127" width="64" height="22" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="1196" y="127" width="64" height="22" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="1260" y="127" width="64" height="22" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="1070" y="129" width="60" height="18" rx="3" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.0"/>
+<text x="1100.0" y="143" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">d0</text>
+<rect x="1134" y="129" width="60" height="18" rx="3" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.0"/>
+<text x="1164.0" y="143" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">d1</text>
+<rect x="1198" y="129" width="60" height="18" rx="3" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.0"/>
+<text x="1228.0" y="143" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">d2</text>
+<rect x="1262" y="129" width="60" height="18" rx="3" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.0"/>
+<text x="1292.0" y="143" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">d3</text>
+<text x="290" y="143" font-size="12" fill="#888888" text-anchor="end" font-weight="normal">쓰기</text>
+<text x="812" y="175" font-size="12" fill="#888888" text-anchor="middle" font-weight="normal">쓰기는 depth 12 뒤 (step 0의 쓰기가 cycle 12)</text>
+<text x="30" y="222" font-size="15" fill="#333333" text-anchor="start" font-weight="bold">(b) 이전 vector 루프</text>
+<text x="30" y="242" font-size="12" fill="#888888" text-anchor="start" font-weight="normal">확장 연산 전부, II 2 (step당 src + dst 읽기 + 쓰기)</text>
+<rect x="300" y="200" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="364" y="200" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="428" y="200" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="492" y="200" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="556" y="200" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="620" y="200" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="684" y="200" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="748" y="200" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="812" y="200" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="876" y="200" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="940" y="200" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="1004" y="200" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="1068" y="200" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="1132" y="200" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="1196" y="200" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="1260" y="200" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="302" y="202" width="60" height="26" rx="4" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.0"/>
+<text x="332.0" y="220" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">s0</text>
+<rect x="430" y="202" width="60" height="26" rx="4" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.0"/>
+<text x="460.0" y="220" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">s1</text>
+<rect x="558" y="202" width="60" height="26" rx="4" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.0"/>
+<text x="588.0" y="220" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">s2</text>
+<rect x="686" y="202" width="60" height="26" rx="4" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.0"/>
+<text x="716.0" y="220" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">s3</text>
+<rect x="814" y="202" width="60" height="26" rx="4" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.0"/>
+<text x="844.0" y="220" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">s4</text>
+<rect x="942" y="202" width="60" height="26" rx="4" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.0"/>
+<text x="972.0" y="220" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">s5</text>
+<rect x="1070" y="202" width="60" height="26" rx="4" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.0"/>
+<text x="1100.0" y="220" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">s6</text>
+<rect x="1198" y="202" width="60" height="26" rx="4" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.0"/>
+<text x="1228.0" y="220" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">s7</text>
+<rect x="366" y="202" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="396.0" y="220" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d0</text>
+<rect x="494" y="202" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="524.0" y="220" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d1</text>
+<rect x="622" y="202" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="652.0" y="220" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d2</text>
+<rect x="750" y="202" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="780.0" y="220" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d3</text>
+<rect x="878" y="202" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="908.0" y="220" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d4</text>
+<rect x="1006" y="202" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="1036.0" y="220" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d5</text>
+<rect x="1134" y="202" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="1164.0" y="220" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d6</text>
+<rect x="1262" y="202" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="1292.0" y="220" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d7</text>
+<text x="290" y="220" font-size="12" fill="#888888" text-anchor="end" font-weight="normal">읽기</text>
+<text x="812" y="262" font-size="12" fill="#c0392b" text-anchor="middle" font-weight="normal">3번 접근 / step, 포트 2개 → 2 cycle / step</text>
+<text x="30" y="322" font-size="15" fill="#333333" text-anchor="start" font-weight="bold">(c) slot 루프: 1-read</text>
+<text x="30" y="342" font-size="12" fill="#888888" text-anchor="start" font-weight="normal">CPY · RSUM · RMAX · LUTSET(src) / LUT · CLZ · imm 연산(dst)</text>
+<rect x="300" y="300" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="364" y="300" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="428" y="300" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="492" y="300" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="556" y="300" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="620" y="300" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="684" y="300" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="748" y="300" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="812" y="300" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="876" y="300" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="940" y="300" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="1004" y="300" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="1068" y="300" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="1132" y="300" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="1196" y="300" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="1260" y="300" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="302" y="302" width="60" height="26" rx="4" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.0"/>
+<text x="332.0" y="320" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">x0</text>
+<rect x="366" y="302" width="60" height="26" rx="4" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.0"/>
+<text x="396.0" y="320" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">x1</text>
+<rect x="430" y="302" width="60" height="26" rx="4" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.0"/>
+<text x="460.0" y="320" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">x2</text>
+<rect x="494" y="302" width="60" height="26" rx="4" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.0"/>
+<text x="524.0" y="320" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">x3</text>
+<rect x="558" y="302" width="60" height="26" rx="4" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.0"/>
+<text x="588.0" y="320" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">x4</text>
+<rect x="622" y="302" width="60" height="26" rx="4" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.0"/>
+<text x="652.0" y="320" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">x5</text>
+<rect x="686" y="302" width="60" height="26" rx="4" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.0"/>
+<text x="716.0" y="320" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">x6</text>
+<rect x="750" y="302" width="60" height="26" rx="4" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.0"/>
+<text x="780.0" y="320" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">x7</text>
+<rect x="814" y="302" width="60" height="26" rx="4" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.0"/>
+<text x="844.0" y="320" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">x8</text>
+<rect x="878" y="302" width="60" height="26" rx="4" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.0"/>
+<text x="908.0" y="320" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">x9</text>
+<rect x="942" y="302" width="60" height="26" rx="4" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.0"/>
+<text x="972.0" y="320" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">x10</text>
+<rect x="1006" y="302" width="60" height="26" rx="4" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.0"/>
+<text x="1036.0" y="320" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">x11</text>
+<rect x="1070" y="302" width="60" height="26" rx="4" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.0"/>
+<text x="1100.0" y="320" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">x12</text>
+<rect x="1134" y="302" width="60" height="26" rx="4" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.0"/>
+<text x="1164.0" y="320" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">x13</text>
+<rect x="1198" y="302" width="60" height="26" rx="4" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.0"/>
+<text x="1228.0" y="320" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">x14</text>
+<rect x="1262" y="302" width="60" height="26" rx="4" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.0"/>
+<text x="1292.0" y="320" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">x15</text>
+<text x="290" y="320" font-size="12" fill="#888888" text-anchor="end" font-weight="normal">읽기</text>
+<text x="30" y="402" font-size="15" fill="#333333" text-anchor="start" font-weight="bold">(c) slot 루프: 2-read</text>
+<text x="30" y="422" font-size="12" fill="#888888" text-anchor="start" font-weight="normal">둘 다 읽고 src가 step마다 바뀜 (예: ADD x + E)</text>
+<rect x="300" y="380" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="364" y="380" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="428" y="380" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="492" y="380" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="556" y="380" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="620" y="380" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="684" y="380" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="748" y="380" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="812" y="380" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="876" y="380" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="940" y="380" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="1004" y="380" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="1068" y="380" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="1132" y="380" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="1196" y="380" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="1260" y="380" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="302" y="382" width="60" height="26" rx="4" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.0"/>
+<text x="332.0" y="400" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">s0</text>
+<rect x="430" y="382" width="60" height="26" rx="4" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.0"/>
+<text x="460.0" y="400" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">s1</text>
+<rect x="558" y="382" width="60" height="26" rx="4" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.0"/>
+<text x="588.0" y="400" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">s2</text>
+<rect x="686" y="382" width="60" height="26" rx="4" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.0"/>
+<text x="716.0" y="400" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">s3</text>
+<rect x="814" y="382" width="60" height="26" rx="4" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.0"/>
+<text x="844.0" y="400" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">s4</text>
+<rect x="942" y="382" width="60" height="26" rx="4" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.0"/>
+<text x="972.0" y="400" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">s5</text>
+<rect x="1070" y="382" width="60" height="26" rx="4" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.0"/>
+<text x="1100.0" y="400" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">s6</text>
+<rect x="1198" y="382" width="60" height="26" rx="4" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.0"/>
+<text x="1228.0" y="400" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">s7</text>
+<rect x="366" y="382" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="396.0" y="400" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d0</text>
+<rect x="494" y="382" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="524.0" y="400" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d1</text>
+<rect x="622" y="382" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="652.0" y="400" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d2</text>
+<rect x="750" y="382" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="780.0" y="400" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d3</text>
+<rect x="878" y="382" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="908.0" y="400" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d4</text>
+<rect x="1006" y="382" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="1036.0" y="400" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d5</text>
+<rect x="1134" y="382" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="1164.0" y="400" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d6</text>
+<rect x="1262" y="382" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="1292.0" y="400" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d7</text>
+<text x="290" y="400" font-size="12" fill="#888888" text-anchor="end" font-weight="normal">읽기</text>
+<text x="30" y="482" font-size="15" fill="#333333" text-anchor="start" font-weight="bold">(c) slot 루프: broadcast</text>
+<text x="30" y="502" font-size="12" fill="#888888" text-anchor="start" font-weight="normal">uop 1개, src_factor_in 0 (행마다 같은 S, TV, t …)</text>
+<rect x="300" y="460" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="364" y="460" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="428" y="460" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="492" y="460" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="556" y="460" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="620" y="460" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="684" y="460" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="748" y="460" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="812" y="460" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="876" y="460" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="940" y="460" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="1004" y="460" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="1068" y="460" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="1132" y="460" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="1196" y="460" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="1260" y="460" width="64" height="30" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<rect x="302" y="462" width="60" height="26" rx="4" fill="#f1eaf8" stroke="#6d4596" stroke-width="1.0"/>
+<text x="332.0" y="480" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">S행0</text>
+<rect x="366" y="462" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="396.0" y="480" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d0</text>
+<rect x="430" y="462" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="460.0" y="480" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d1</text>
+<rect x="494" y="462" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="524.0" y="480" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d2</text>
+<rect x="558" y="462" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="588.0" y="480" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d3</text>
+<rect x="622" y="462" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="652.0" y="480" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d4</text>
+<rect x="686" y="462" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="716.0" y="480" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d5</text>
+<rect x="750" y="462" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="780.0" y="480" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d6</text>
+<rect x="814" y="462" width="60" height="26" rx="4" fill="#f1eaf8" stroke="#6d4596" stroke-width="1.0"/>
+<text x="844.0" y="480" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">S행1</text>
+<rect x="878" y="462" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="908.0" y="480" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d0</text>
+<rect x="942" y="462" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="972.0" y="480" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d1</text>
+<rect x="1006" y="462" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="1036.0" y="480" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d2</text>
+<rect x="1070" y="462" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="1100.0" y="480" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d3</text>
+<rect x="1134" y="462" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="1164.0" y="480" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d4</text>
+<rect x="1198" y="462" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="1228.0" y="480" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d5</text>
+<rect x="1262" y="462" width="60" height="26" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.0"/>
+<text x="1292.0" y="480" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d6</text>
+<text x="290" y="480" font-size="12" fill="#888888" text-anchor="end" font-weight="normal">읽기</text>
+<text x="812" y="522" font-size="12" fill="#6d4596" text-anchor="middle" font-weight="normal">행 시작에서 src를 한 번 읽어 s_reg에 두고, 그 행의 step은 dst만 읽는다 → iter_in + 1 slot</text>
+<rect x="40" y="560" width="260" height="70" rx="6" fill="#f2f2f2" stroke="#888888" stroke-width="1.4"/>
+<text x="170.0" y="591.05" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">slot 카운터</text>
+<text x="170.0" y="608.05" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">ph · first · upc · ii · io + offset</text>
+<path d="M340,550 L400,566.2 L400,623.8 L340,640 Z" fill="#f1eaf8" stroke="#6d4596" stroke-width="1.4"/>
+<text x="370.0" y="592.0" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">mux⑧</text>
+<text x="370.0" y="608.0" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">주소</text>
+<rect x="440" y="565" width="150" height="60" rx="6" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.4"/>
+<text x="515.0" y="591.05" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">acc_mem BRAM</text>
+<text x="515.0" y="608.05" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">읽기 1포트</text>
+<rect x="630" y="545" width="120" height="44" rx="6" fill="#fbeaea" stroke="#c0392b" stroke-width="1.4"/>
+<text x="690.0" y="563.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="bold">s_reg</text>
+<text x="690.0" y="579.2" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">16 × 32비트</text>
+<path d="M790,550 L850,566.2 L850,623.8 L790,640 Z" fill="#f1eaf8" stroke="#6d4596" stroke-width="1.4"/>
+<text x="820.0" y="592.0" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">mux⑩</text>
+<text x="820.0" y="608.0" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">src</text>
+<rect x="890" y="560" width="200" height="70" rx="6" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.4"/>
+<text x="990.0" y="590.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">alux_step</text>
+<text x="990.0" y="608.9" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">(그림 A1)</text>
+<rect x="1130" y="565" width="160" height="60" rx="6" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.4"/>
+<text x="1210.0" y="591.05" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">acc / out 쓰기</text>
+<text x="1210.0" y="608.05" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">쓰기 1포트</text>
+<polyline points="300,595 340,595" fill="none" stroke="#333333" stroke-width="1.5" marker-end="url(#ark)"/>
+<polyline points="400,595 440,595" fill="none" stroke="#333333" stroke-width="1.5" marker-end="url(#ark)"/>
+<polyline points="590,595 610,595 610,567 630,567" fill="none" stroke="#333333" stroke-width="1.5" marker-end="url(#ark)"/>
+<polyline points="610,595 610,615 790,615" fill="none" stroke="#333333" stroke-width="1.5" marker-end="url(#ark)"/>
+<polyline points="750,567 770,567 770,575 790,575" fill="none" stroke="#c0392b" stroke-width="1.5" marker-end="url(#arr)"/>
+<polyline points="850,595 890,595" fill="none" stroke="#333333" stroke-width="1.5" marker-end="url(#ark)"/>
+<polyline points="1090,595 1130,595" fill="none" stroke="#333333" stroke-width="1.5" marker-end="url(#ark)"/>
+<polyline points="610,615 610,650 990,650 990,630" fill="none" stroke="#2f5f98" stroke-width="1.5" marker-end="url(#arb)"/>
+<text x="800" y="668" font-size="12" fill="#2f5f98" text-anchor="middle" font-weight="normal">dst 값은 읽은 값 그대로, src는 2-read / broadcast면 s_reg에서</text>
+<text x="740" y="720" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">연산기(alux_step)는 slot 루프 안에 하나뿐이다. imm 루프에 확장 연산기를 넣지 않은 것은, 넣으면 연산기가 루프마다 복제되어 LUT가 2배가 되기 때문이다 (11-11 C 합성).</text>
+<text x="740" y="744" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">acc_mem은 GEMM(gemm_sa)과 같이 쓴다: 포트 앞의 mux는 RTL gemm_sa_bd.v에 있다 (ALU와 GEMM은 명령 단위로 번갈아 쓴다).</text>
+<text x="740" y="778" font-size="12" fill="#888888" text-anchor="middle" font-weight="normal">II = 다음 반복을 시작하는 간격(cycle) · depth = 한 반복의 첫 단계에서 끝 단계까지 cycle 수 · slot = slot 루프의 1 cycle (acc 읽기 1번)</text>
+</svg>

@@ -18,7 +18,7 @@ D=""
 [ "$ALUX" = 1 ] && D="$D -DVTA_ALUX"
 HI=-I/tools/Xilinx/v2020.1/Vivado/2020.1/include
 W=$X/sim/.csim_$$          # inside the tree: the container mounts it at the same path
-mkdir -p $W
+mkdir -p $W && chmod 777 $W   # (run with sudo: the container user must write it)
 trap 'rm -rf $W' EXIT
 docker start vivado2020-build >/dev/null
 if [ "$PROG" = 1 ]; then

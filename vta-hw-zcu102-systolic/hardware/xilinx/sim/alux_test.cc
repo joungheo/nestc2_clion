@@ -83,10 +83,10 @@ VTAAluInsn blank(int op) {
 // written in the 17 steps before it (the vector loop's II 2 / depth 33; docs/evta_isa_ext.md 8.8; depth 39 since 2026-11-14,
 // real window 16, see alu_ext_ref.h hazards())
 void addRandom(Prog &p) {
-#ifdef ALUX_COSIM
+ //#### JO changed (2026-11-15): the C simulation too drops instructions whose broadcast src (II 1 slot loop) is written in
+ //#### its own inner loop (hazard_slots(..., 0)); the cosim drops those with a stale read in VTA_ALUX_WSLOTS slots
  for (;;) {
-#endif
-  int op = rnd(p, 12);
+  int op = rnd(p, 16);   // #### JO: 16 since 2026-11-15 (MADD, MULSHR, SHRV, SHRR)
   VTAAluInsn a = blank(op);
   a.iter_out = 1 + rnd(p, 4);
   a.iter_in = 1 + rnd(p, 4);
@@ -110,7 +110,6 @@ void addRandom(Prog &p) {
   std::vector<std::pair<int, int>> us;
   for (int u = 0; u < nu; u++)
     us.push_back({rnd(p, N - dmax), rnd(p, N - smax)});
-#ifdef ALUX_COSIM
   std::vector<VTAUop> uv(us.size());
   memset(uv.data(), 0, uv.size() * sizeof(VTAUop));
   for (size_t u = 0; u < us.size(); u++) {
@@ -123,14 +122,22 @@ void addRandom(Prog &p) {
   // VTA_ALUX_HAZARD_OK=1 keeps them (the RTL must then differ: shows the cosim compares the RTL's results)
   static const bool hazardOk = getenv("VTA_ALUX_HAZARD_OK") && atoi(getenv("VTA_ALUX_HAZARD_OK"));
   //#### JO added (2026-11-14): VTA_ALUX_WINDOW=<steps> (default 17) to find the RTL's real window (16 since the 400 MHz registers)
+#ifdef ALUX_COSIM
+#ifdef VTA_ALUX_II2
   static const int window = getenv("VTA_ALUX_WINDOW") ? atoi(getenv("VTA_ALUX_WINDOW")) : 17;
   if (!hazardOk && vta_alu_ref::hazards(h, uv.data(), window) != 0) continue;
+#else
+  static const int wslots = getenv("VTA_ALUX_WSLOTS") ? atoi(getenv("VTA_ALUX_WSLOTS")) : 34;
+  if (!hazardOk && vta_alu_ref::hazard_slots(h, uv.data(), wslots) != 0) continue;
+#endif
+#else
+#ifndef VTA_ALUX_II2
+  if (vta_alu_ref::hazard_slots(h, uv.data(), 0) != 0) continue;
+#endif
 #endif
   addAlu(p, a, us);
-#ifdef ALUX_COSIM
   return;
  }
-#endif
 }
 
 void ppack(const int32_t (*acc)[kLanes], int n, uint32_t *buf) {
@@ -195,12 +202,16 @@ int alux_test(unsigned seed, int ninsn) {
       while (*c && *c != ',') c++;
       if (*c) c++;
     }
+    //#### JO added (2026-11-15): VTA_ALUX_DIST_OP=muli: a MUL by the imm 3 instead (one read per step: one slot on the II 1
+    //#### slot loop; the ADD reads src and dst: two slots), so the window in slots is found for both
+    const bool muli = getenv("VTA_ALUX_DIST_OP") && !strcmp(getenv("VTA_ALUX_DIST_OP"), "muli");
     for (int d : ds) {
-      VTAAluInsn a = blank(VTA_ALU_OPCODE_ADD);
+      VTAAluInsn a = blank(muli ? VTA_ALUX_MUL : VTA_ALU_OPCODE_ADD);
       a.iter_in = 4;
+      if (muli) a.use_imm = 1, a.imm = 3;
       std::vector<std::pair<int, int>> us;
       for (int j = 0; j < d; j++) us.push_back({j, 100});
-      printf("INFO - directed: store %d = vector ADD with reuse distance %d\n", (int) p.storeOff.size(), d);
+      printf("INFO - directed: store %d = vector %s with reuse distance %d\n", (int) p.storeOff.size(), muli ? "MUL imm" : "ADD", d);
       addAlu(p, a, us);
     }
     ninsn = 0;

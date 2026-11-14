@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1480" height="640" viewBox="0 0 1480 640" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif">
+<title>그림 A4. 파이프라인 depth와 hazard window</title>
+<defs><marker id="ark" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#333333"/></marker><marker id="arb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f5f98"/></marker><marker id="aro" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c06a10"/></marker><marker id="arg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3c8a35"/></marker><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker><marker id="arp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6d4596"/></marker><marker id="ary" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9a7b00"/></marker><marker id="argr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#888888"/></marker></defs>
+<rect x="0" y="0" width="1480" height="640" fill="#ffffff"/>
+<text x="740" y="34" font-size="19" fill="#333333" text-anchor="middle" font-weight="bold">그림 A4. 파이프라인이 깊으면 앞 step의 쓰기가 늦게 끝난다 — 읽기 직전 31 slot 안에 쓴 값은 못 본다 (cosim으로 잼)</text>
+<text x="158.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">0</text>
+<text x="194.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">1</text>
+<text x="230.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">2</text>
+<text x="266.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">3</text>
+<text x="302.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">4</text>
+<text x="338.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">5</text>
+<text x="374.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">6</text>
+<text x="410.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">7</text>
+<text x="446.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">8</text>
+<text x="482.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">9</text>
+<text x="518.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">10</text>
+<text x="554.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">11</text>
+<text x="590.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">12</text>
+<text x="626.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">13</text>
+<text x="662.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">14</text>
+<text x="698.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">15</text>
+<text x="734.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">16</text>
+<text x="770.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">17</text>
+<text x="806.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">18</text>
+<text x="842.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">19</text>
+<text x="878.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">20</text>
+<text x="914.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">21</text>
+<text x="950.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">22</text>
+<text x="986.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">23</text>
+<text x="1022.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">24</text>
+<text x="1058.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">25</text>
+<text x="1094.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">26</text>
+<text x="1130.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">27</text>
+<text x="1166.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">28</text>
+<text x="1202.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">29</text>
+<text x="1238.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">30</text>
+<text x="1274.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">31</text>
+<text x="1310.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">32</text>
+<text x="1346.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">33</text>
+<text x="1382.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">34</text>
+<text x="1418.0" y="78" font-size="10" fill="#888888" text-anchor="middle" font-weight="normal">35</text>
+<text x="130" y="78" font-size="11" fill="#888888" text-anchor="end" font-weight="normal">cycle</text>
+<rect x="140" y="100" width="1188" height="30" rx="4" fill="#f2f2f2" stroke="#888888" stroke-width="1.0"/>
+<text x="130" y="120" font-size="13" fill="#333333" text-anchor="end" font-weight="bold">slot w</text>
+<rect x="179" y="103" width="30" height="24" rx="3" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.2"/>
+<text x="194.0" y="120" font-size="10" fill="#2f5f98" text-anchor="middle" font-weight="normal">읽기</text>
+<rect x="1295" y="103" width="30" height="24" rx="3" fill="#fbeaea" stroke="#c0392b" stroke-width="1.2"/>
+<text x="1310.0" y="120" font-size="10" fill="#c0392b" text-anchor="middle" font-weight="normal">쓰기</text>
+<text x="218" y="120" font-size="12" fill="#333333" text-anchor="start" font-weight="normal">uop → 주소 → BRAM → 연산 → requant → LUT … (레지스터 여러 단)</text>
+<rect x="1256" y="150" width="180" height="30" rx="4" fill="#f2f2f2" stroke="#888888" stroke-width="1.0"/>
+<text x="130" y="170" font-size="13" fill="#333333" text-anchor="end" font-weight="bold">slot w+31</text>
+<rect x="1295" y="153" width="30" height="24" rx="3" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.2"/>
+<text x="1310.0" y="170" font-size="10" fill="#2f5f98" text-anchor="middle" font-weight="normal">읽기</text>
+<text x="1248" y="170" font-size="12" fill="#c0392b" text-anchor="end" font-weight="normal">w가 쓰는 cycle에 읽음 → 옛 값</text>
+<rect x="1292" y="200" width="144" height="30" rx="4" fill="#f2f2f2" stroke="#888888" stroke-width="1.0"/>
+<text x="130" y="220" font-size="13" fill="#333333" text-anchor="end" font-weight="bold">slot w+32</text>
+<rect x="1331" y="203" width="30" height="24" rx="3" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.2"/>
+<text x="1346.0" y="220" font-size="10" fill="#2f5f98" text-anchor="middle" font-weight="normal">읽기</text>
+<text x="1284" y="220" font-size="12" fill="#3c8a35" text-anchor="end" font-weight="normal">쓴 뒤에 읽음 → 새 값</text>
+<polyline points="1310.0,132 1310.0,148" fill="none" stroke="#c0392b" stroke-width="1.6" marker-end="url(#arr)"/>
+<text x="740" y="300" font-size="13" fill="#888888" text-anchor="middle" font-weight="normal">그림의 cycle 위치는 설명용이다. 실제로 잰 것은 &quot;거리 31 slot까지 틀리고 32부터 맞다&quot;는 결과다 (HLS 보고서: ALU_SLOT II 1, depth 35).</text>
+<rect x="30" y="340" width="1420" height="44" rx="0" fill="#f2f2f2" stroke="#888888" stroke-width="0.6"/>
+<text x="40" y="368" font-size="13" fill="#333333" text-anchor="start" font-weight="bold">루프</text>
+<text x="470" y="368" font-size="13" fill="#333333" text-anchor="start" font-weight="bold">II</text>
+<text x="530" y="368" font-size="13" fill="#333333" text-anchor="start" font-weight="bold">depth</text>
+<text x="610" y="368" font-size="13" fill="#333333" text-anchor="start" font-weight="bold">잰 window</text>
+<text x="1010" y="368" font-size="13" fill="#333333" text-anchor="start" font-weight="bold">규칙 (프로그램이 지킬 것)</text>
+<rect x="30" y="384" width="1420" height="44" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<text x="40" y="412" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">이전 vector 루프 (11-11)</text>
+<text x="470" y="412" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">2</text>
+<text x="530" y="412" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">33</text>
+<text x="610" y="412" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">—</text>
+<text x="1010" y="412" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">같은 명령 안에서 17 step 안에 다시 읽지 않기</text>
+<rect x="30" y="428" width="1420" height="44" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<text x="40" y="456" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">이전 vector 루프 + 400 MHz 레지스터 (11-14)</text>
+<text x="470" y="456" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">2</text>
+<text x="530" y="456" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">39</text>
+<text x="610" y="456" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">16 step (cosim d = 14–16 틀림, 17 맞음)</text>
+<text x="1010" y="456" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">17 step 그대로 (1 step 여유)</text>
+<rect x="30" y="472" width="1420" height="44" rx="0" fill="#ffffff" stroke="#888888" stroke-width="0.6"/>
+<text x="40" y="500" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">slot 루프 (11-15)</text>
+<text x="470" y="500" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">1</text>
+<text x="530" y="500" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">35</text>
+<text x="610" y="500" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">31 slot (MUL imm d ≤ 31 틀림, ADD d ≤ 15 틀림)</text>
+<text x="1010" y="500" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">34 slot (2 slot 여유) + broadcast src를 그 행에서 쓰지 않기</text>
+<text x="740" y="545" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">step과 slot: 1-read 연산은 1 step = 1 slot이라 34 slot = 34 step; 2-read 연산은 1 step = 2 slot이라 34 slot = 17 step (예전 규칙과 같음).</text>
+<text x="740" y="570" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">broadcast는 src를 행 시작에서 한 번만 읽으므로, 같은 행의 앞 step이 그 src entry를 바꾸면 거리와 상관없이 옛 값을 쓴다.</text>
+<text x="740" y="600" font-size="13" fill="#888888" text-anchor="middle" font-weight="normal">검사기: alu_ext_ref.h hazard_slots() · 시뮬레이터 EVTA_ALU_SLOTS=34 · 보드 dump는 tests/hazard_dump.py (SLOTS=34)</text>
+</svg>

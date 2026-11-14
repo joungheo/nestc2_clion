@@ -886,3 +886,30 @@ compute 안의 shift(`ashr`) 등. 400 MHz는 RTL / HLS 쪽 레지스터(LUT RAM 
 | 참고: 확장 없음(CPU LN) | 76.05 | 53.29 | 8.0 / 2.95 |
 
 남은 340 us는 EVTA ALU가 실행하는 시간이다. 다음은 하드웨어 쪽 두 가지다: imm 확장 연산을 II 1로 돌리고, 결합 연산으로 원소당 연산 수를 줄인다.
+
+### 8.14 II 1 slot 루프와 결합 연산 (`_alux2`, 2026-11-15)
+
+코드와 회로(그림 4개): [evta_alux_hw.md](evta_alux_hw.md).
+
+**하드웨어 (HLS `vta.cc`)**
+- 확장 연산의 vector 루프(II 2)를 II 1 slot 루프로 바꿨다. slot 하나에서 acc를 한 번 읽는다.
+  - 1-read 연산: step당 1 slot
+  - 2-read 연산: step당 2 slot
+  - src가 행마다 같으면(uop 1개, `src_factor_in` 0) 행 시작에서 src를 한 번 읽는다(broadcast). 행당 `iter_in + 1` slot이다.
+- 결합 연산을 넣었다: 12 MADD, 13 MULSHR, 14 SHRV, 15 SHRR. 곱셈기와 shifter는 기존 것을 같이 쓴다.
+- `-DVTA_ALUX_II2`면 이전 루프를 쓴다.
+- HLS 결과: ALU_SLOT II 1, depth 35.
+
+**검증**
+- C-sim: 무작위 명령열 60 seed가 기준 모델과 같다.
+- cosim:
+  - 거리 시험: MUL imm은 d ≤ 31 틀림·32 맞음, ADD는 d ≤ 15 틀림·16 맞음. 즉 window는 31 slot이다.
+  - 규칙은 34 slot이다(`hazard_slots`). 이 규칙을 지키는 무작위 명령열은 6 seed 모두 PASS다.
+
+**vtalib-systolic**
+- `VTAHasAluExt2()`: 비트스트림 이름에 `_alux2`가 있으면 켜진다. 시뮬레이터에서는 항상 켜지고, `EVTA_ALUX2=0|1`로 바꿀 수 있다.
+- `layernorm_evta`가 결합 연산 프로그램을 쓴다. replay key가 프로그램마다 다르다.
+- PC 시뮬레이터(`EVTA_ALU_SLOTS=34`): LayerNorm 테스트 전체가 지금 하드웨어(II 2) 약 248k cycle에서 121k slot이 된다. 명령 수는 690 → 438개다. 0 differ다.
+- epilogue / softmax 테스트도 34 slot 규칙 위반이 0이다.
+
+비트스트림 `..._sa_alux_400mhz_rq_alux2`와 보드 결과는 아래에 이어 적는다.

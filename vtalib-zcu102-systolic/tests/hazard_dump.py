@@ -17,6 +17,42 @@ def check(ins, uopmap, W):
                 if d in wr or (not use_imm and s in wr): bad += 1
                 wr.append(d)
     return bad
+# #### JO added (2026-11-15, docs/evta_isa_ext.md 8.14): SLOTS=<wslots> (default 34) also checks the II 1 slot loop of an
+# _alux2 bitstream as alu_ext_ref.h hazard_slots (one slot per read; a broadcast src is read once per inner loop). The
+# dump has no lut_en, so imm MIN / MAX / ADD / SHR are checked with it too (conservative: they run in the imm loop then).
+def reads(op, use_imm):
+    rs = op in (8, 12, 13) or (not use_imm and op not in (7, 11))
+    rd = op not in (6, 9, 10, 8)
+    return rs, rd
+def check_slots(ins, op, uopmap, W):
+    bgn, end, io, ii, dfo, dfi, sfo, sfi, use_imm = ins
+    rs, rd = reads(op, use_imm); two = rs and rd
+    bc = two and end - bgn == 1 and sfi == 0
+    wr = collections.deque(); bad = 0; slot = 0
+    def stale(e, r, use):
+        for (we, ws) in reversed(wr):
+            if ws <= r - W: break
+            if we == e and ws < use: return True
+        return False
+    for a in range(io):
+        bslot = -1
+        if bc: bslot = slot; slot += 1
+        for b in range(ii):
+            for u in range(bgn, end):
+                d0, s0 = uopmap.get(u, (None, None))
+                if d0 is None: return -1, 0
+                d = d0 + a * dfo + b * dfi; s = s0 + a * sfo + b * sfi
+                sr = dr = -1
+                if bc: sr = bslot
+                elif two: sr = slot; slot += 1
+                elif rs: sr = slot
+                if rd: dr = slot
+                use = slot; slot += 1
+                if (sr >= 0 and stale(s, sr, use)) or (dr >= 0 and stale(d, dr, use)): bad += 1
+                if op != 8: wr.append((d, use))
+                while wr and wr[0][1] <= use - W - 64: wr.popleft()
+    return bad, slot
+SLOTS = int(os.environ.get('SLOTS', '34'))
 STEPS = [0]
 WS = [int(w) for w in os.environ.get('WS', '7,12,17').split(',')]
 for model in sys.argv[1:]:
@@ -50,6 +86,12 @@ for model in sys.argv[1:]:
                 ins = (bgn, end, io, ii, dfo, dfi, sfo, sfi, use_imm)
                 kind = 'imm' if use_imm else 'vec'
                 tot[kind + '_insn'] += 1
+                h, ns = check_slots(ins, op, sram, SLOTS)
+                if h >= 0:
+                    tot['slots'] += ns
+                    if h:
+                        tot['slot_W%d_insn' % SLOTS] += 1; tot['slot_W%d_steps' % SLOTS] += h
+                        first.setdefault('slot_W%d' % SLOTS, '%s: %s' % (os.path.basename(f), l.strip()))
                 for W in WS:
                     if kind == 'imm' and W == 7: continue
                     h = check(ins, sram, W)

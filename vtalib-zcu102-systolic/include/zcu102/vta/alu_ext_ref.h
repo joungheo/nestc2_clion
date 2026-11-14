@@ -16,6 +16,11 @@
  *                                  writes neither acc nor out
  *   9 RSUM / 10 RMAX               dst[every lane] = sum (wraps) / max of the lanes of acc[src] (of imm: imm)
  *   11 CLZ                         dst = leading zeros of (uint32) dst, 32 for 0
+ * #### JO added (2026-11-15, docs/evta_isa_ext.md 8.14): fused operations
+ *   12 MADD                        dst = dst * (int16) imm + acc[src][b] (low 32 bits; src always read, use_imm 0)
+ *   13 MULSHR                      dst = (dst * (int16) acc[src][b], low 32 bits) >> (imm & 31) (arithmetic)
+ *   14 SHRV                        dst = shift(dst, k), k = s clamped to -32..31: k >= 0 dst >> k, k < 0 dst << -k (-32: 0)
+ *   15 SHRR                        as SHRV, but k > 0: (dst + 2^(k-1)) >> k (the add wraps)
  * then out[dst][b] = the low 8 bits of the new dst, or rq: clip((dst + round) >> rq_shift, rq_lo, rq_hi) as vta.cc
  * requant(); with lut_en, out = (int8) T[out & 255]. MIN / MAX / ADD / SHR are the existing HLS operations.
  */
@@ -49,6 +54,16 @@ inline int8_t requant(int32_t v, int8_t o, bool en, int rnd, int shift, int lo, 
 }
 
 inline int clz32(uint32_t v) { return v ? __builtin_clz(v) : 32; }
+
+// #### JO added (2026-11-15): SHRV / SHRR
+inline int32_t shv(int32_t v, int32_t s, bool round) {
+  const int k = s < -32 ? -32 : s > 31 ? 31 : (int)s;
+  if (k > 0)
+    return (int32_t)((round ? (uint32_t)v + ((uint32_t)1 << (k - 1)) : (uint32_t)v)) >> k;
+  if (k == -32)
+    return 0;
+  return (int32_t)((uint32_t)v << -k);
+}
 
 // acc[depth][kLanes], out[depth][kLanes], uops as VTAUop, T the 256-entry LUT; Insn = VTAAluInsn
 template <typename Insn, typename Uop>
@@ -94,6 +109,10 @@ void run(const Insn &insn, const Uop *uops, int32_t (*acc)[kLanes], int8_t (*out
           case VTA_ALUX_RSUM:
           case VTA_ALUX_RMAX: r = red; break;
           case VTA_ALUX_CLZ: r = clz32((uint32_t)x); break;
+          case VTA_ALUX_MADD: r = (int32_t)((uint32_t)((int64_t)x * (int16_t)(imm & 0xffff)) + (uint32_t)S[b]); break;
+          case VTA_ALUX_MULSHR: r = (int32_t)(uint32_t)((int64_t)x * (int16_t)(S[b] & 0xffff)) >> (imm & 31); break;
+          case VTA_ALUX_SHRV: r = shv(x, y, false); break;
+          case VTA_ALUX_SHRR: r = shv(x, y, true); break;
           default: break;
           }
           D[b] = r;
@@ -130,7 +149,7 @@ long hazards(const Insn &insn, const Uop *uops, int window) {
     for (uint32_t ii = 0; ii < insn.iter_in; ii++) {
       for (uint32_t u = insn.uop_bgn; u < insn.uop_end; u++) {
         const long d = uops[u].dst_idx + dst_in, s = uops[u].src_idx + src_in;
-        const bool rs = !insn.use_imm || op == VTA_ALUX_LUTSET;
+        const bool rs = !insn.use_imm || op == VTA_ALUX_LUTSET || op == VTA_ALUX_MADD || op == VTA_ALUX_MULSHR;
         const bool rd = op != VTA_ALUX_LUTSET;
         for (int k = 1; k <= window && k <= (int)wr.size(); k++) {
           const long w = wr[wr.size() - k];
@@ -147,6 +166,64 @@ long hazards(const Insn &insn, const Uop *uops, int window) {
     dst_out += insn.dst_factor_out;
     src_out += insn.src_factor_out;
   }
+  return bad;
+}
+
+// #### JO added (2026-11-15, docs/evta_isa_ext.md 8.14): the slot loop of the II 1 ALU (vta.cc ALU_SLOT). Each slot is one
+// cycle and one acc read. A step takes 1 slot when its operation reads one operand, 2 (src, then dst) when it reads both,
+// and in broadcast mode (both, one uop, src_factor_in 0) the src is read once in an extra slot at the start of each inner
+// loop. A read at slot r gets the value written before slot r - wslots + 1 (the writes of the wslots - 1 slots before r are
+// still in the pipeline); a broadcast src read serves every step of its inner loop, so a write to it by an earlier step of
+// that inner loop is missed too. Returns the steps that read a stale value (wslots 0: only the broadcast rule).
+// The HLS loop (II 1, depth 35) misses the writes of the 31 slots before a read (directed C/RTL cosim 2026-11-15: a MUL by
+// imm (1 slot per step) wrong up to reuse distance 31, right from 32; a vector ADD (2 slots) wrong up to 15, right from 16).
+// The rule is wslots = 34 (2 slots of margin; = the old 17 steps for two-read operations, 34 steps for one-read ones).
+inline bool reads_src(int op, bool use_imm) {
+  return op == VTA_ALUX_LUTSET || op == VTA_ALUX_MADD || op == VTA_ALUX_MULSHR ||
+         (!use_imm && op != VTA_ALUX_LUT && op != VTA_ALUX_CLZ);
+}
+inline bool reads_dst(int op) {
+  return !(op == VTA_ALUX_CPY || op == VTA_ALUX_RSUM || op == VTA_ALUX_RMAX || op == VTA_ALUX_LUTSET);
+}
+template <typename Insn, typename Uop>
+long hazard_slots(const Insn &insn, const Uop *uops, int wslots, long *nslots = nullptr) {
+  const int op = (int)(insn.alu_op_ext << VTA_ALU_OPCODE_BIT_WIDTH | insn.alu_opcode);
+  const bool rs = reads_src(op, insn.use_imm), rd = reads_dst(op), two = rs && rd;
+  const bool bc = two && insn.uop_end - insn.uop_bgn == 1 && insn.src_factor_in == 0;
+  std::vector<std::pair<long, long>> wr;  // (entry, slot) of each write
+  auto stale = [&](long e, long r, long use) {
+    for (size_t k = wr.size(); k-- > 0;) {
+      if (wr[k].second <= r - wslots) break;
+      if (wr[k].first == e && wr[k].second < use) return true;
+    }
+    return false;
+  };
+  long bad = 0, slot = 0;
+  uint32_t dst_out = 0, src_out = 0;
+  for (uint32_t io = 0; io < insn.iter_out; io++) {
+    uint32_t dst_in = dst_out, src_in = src_out;
+    long bslot = -1;
+    if (bc) bslot = slot++;
+    for (uint32_t ii = 0; ii < insn.iter_in; ii++) {
+      for (uint32_t u = insn.uop_bgn; u < insn.uop_end; u++) {
+        const long d = uops[u].dst_idx + dst_in, s = uops[u].src_idx + src_in;
+        long sr = -1, dr = -1;
+        if (bc) sr = bslot;
+        else if (two) sr = slot++;
+        else if (rs) sr = slot;
+        if (rd) dr = slot;
+        const long use = slot++;
+        bool b = (sr >= 0 && stale(s, sr, use)) || (dr >= 0 && stale(d, dr, use));
+        if (b) bad++;
+        if (op != VTA_ALUX_LUTSET) wr.push_back({d, use});
+      }
+      dst_in += insn.dst_factor_in;
+      src_in += insn.src_factor_in;
+    }
+    dst_out += insn.dst_factor_out;
+    src_out += insn.src_factor_out;
+  }
+  if (nslots) *nslots = slot;
   return bad;
 }
 

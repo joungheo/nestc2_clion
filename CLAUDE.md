@@ -331,6 +331,11 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   each command queue above 380 MHz (`VTA_QUEUE_RS`). ALU vector loop depth 33 -> 39: a step misses writes up to 16 steps back (cosim
   `VTA_ALUX_DIST`), the 17-step rule holds. `..._sa_alux_400mhz_rq.bin` (Explore, WNS +0.014 ns): ALU tests and dumps identical to 380 MHz,
   MobileNetV2 18.05 -> 17.56, Resnet18 24.10 -> 23.05, Resnet50 71.28 -> 68.82 ms.
+  DeiT (2026-11-14/15): the EVTA layer norm was slower than the CPU (19.0 vs 8.0 ms); `layernorm_evta` replay + NEON input
+  (`EVTA_LN_TIME=1` breakdown) 19.0 -> 9.65 ms, DeiT 84.84 -> 75.07 ms (no-ext CPU LN 76.05). `_alux2` (§8.14, code and circuits with
+  figures: [docs/evta_alux_hw.md](docs/evta_alux_hw.md)): the extended ALU loop at II 1 over slots (one acc read per slot, broadcast src),
+  fused MADD / MULSHR / SHRV / SHRR (ops 12-15), hazard rule 34 slots (`hazard_slots`, simulator `EVTA_ALU_SLOTS=34`); vtalib
+  `VTAHasAluExt2` (`_alux2` in the name) uses the fused layer norm program (simulator: ~0.5x the ALU cycles).
 - Other models (2026-11-05, `docs/evta_runtime_compare.md` §7.19): Resnet50 res2_0 residual fused (relu to a 2^q smaller scale), schedules of the
   Resnet50 / VGG16 shapes in `VTASchedules.h` (found with vtalib-systolic `EVTA_SCHED`), conv tiles below 7 x 7: the dummy-padded store
   used the wrong channel block with nVirtualThread 2 (fixed in both vtalibs) and the systolic vtalib's minimum tile is 1 on an `_sa_` bitstream

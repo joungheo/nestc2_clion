@@ -173,3 +173,17 @@ pgrep -af thermal_guard
 - 비트스트림 합성(ALU 확장 4단계, `evta_isa_ext.md` §8.5)은 쿨러를 고친 뒤로 미뤘다.
 - HLS CSim과 compute C 합성(3단계)은 한 코어 작업이다. 11-11 저녁에 감시 스크립트를 켜고 돌렸을 때 최고 58 °C였다.
 - 11-11 16:07 꺼짐 때 바꾸던 파일은 없었다. 코드 상태는 tag `alux-step2-261111`과 `~/npuprg/archive/alux_step2_before_hls_261111/`에 남아 있다.
+
+## 6. 두 번째 PC `ubuntu2`의 온도 감시 (2026-11-15)
+
+- 2026-11-15 01:10에 Tctl 62 °C였다. 이때 load는 35였다(cosim 17개 + 합성 2개, 32스레드를 다 씀). 수랭 쿨러는 정상으로 보인다.
+- 팬 / 펌프 RPM은 읽지 못한다. `nct6775`는 올라오지만 ASUS 보드의 장치를 잡지 못한다.
+- `~/templog/tctl_log.sh`: 위 스크립트와 같다. 5초마다 `~/templog/tctl.log`에 적는다.
+- `~/templog/thermal_guard.sh`: 2초마다 Tctl을 본다.
+  - 90 °C 이상이면 기록만 한다.
+  - 95 °C 이상이 두 번 연속이면 `sudo systemctl poweroff`로 정상 종료한다.
+  - 이 PC에서는 85 °C에 docker를 멈추는 동작을 뺐다. 쿨러가 정상인 5950X도 전 코어 부하에서 90 °C 가까이 갈 수 있어서, 합성이 괜히 끊기지 않게 했다.
+- 두 스크립트 모두 `crontab`의 `@reboot`로 부팅 때 켜진다.
+- 확인:
+  - 돌고 있는지: `pgrep -af "tctl_log|thermal_guard"`
+  - 기록: `tail ~/templog/tctl.log ~/templog/thermal_guard.log`

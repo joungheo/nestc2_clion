@@ -1,0 +1,131 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1480" height="900" viewBox="0 0 1480 900" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif">
+<title>그림 A1. ALU 레인 하나의 데이터 경로 (alux_step, 16 lane마다 복제)</title>
+<defs><marker id="ark" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#333333"/></marker><marker id="arb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f5f98"/></marker><marker id="aro" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c06a10"/></marker><marker id="arg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3c8a35"/></marker><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker><marker id="arp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6d4596"/></marker><marker id="ary" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9a7b00"/></marker><marker id="argr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#888888"/></marker></defs>
+<rect x="0" y="0" width="1480" height="900" fill="#ffffff"/>
+<text x="740" y="34" font-size="20" fill="#333333" text-anchor="middle" font-weight="bold">그림 A1. ALU 레인 하나의 데이터 경로 — alux_step() (vta.cc), 16 lane마다 복제</text>
+<text x="740" y="58" font-size="13" fill="#888888" text-anchor="middle" font-weight="normal">모든 연산의 결과를 동시에 만들고 op(4비트)로 하나를 고른다. 보라 = mux, 주황 = 연산기, 초록 = 메모리(LUT RAM), 빨강 = 파이프라인 레지스터</text>
+<rect x="30" y="110" width="170" height="54" rx="6" fill="#f2f2f2" stroke="#888888" stroke-width="1.4"/>
+<text x="115.0" y="132.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">imm (명령)</text>
+<text x="115.0" y="150.9" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">16비트, 명령마다 고정</text>
+<rect x="30" y="250" width="170" height="54" rx="6" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.4"/>
+<text x="115.0" y="272.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">acc[src] lane b</text>
+<text x="115.0" y="290.9" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">32비트 (S)</text>
+<rect x="30" y="420" width="170" height="54" rx="6" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.4"/>
+<text x="115.0" y="442.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">acc[dst] lane b</text>
+<text x="115.0" y="460.9" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">32비트 (x = D)</text>
+<path d="M250,150 L320,171.6 L320,248.4 L250,270 Z" fill="#f1eaf8" stroke="#6d4596" stroke-width="1.4"/>
+<text x="285.0" y="207.0" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">mux①</text>
+<text x="285.0" y="223.0" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">use_imm</text>
+<polyline points="200,137 225,137 225,175 250,175" fill="none" stroke="#333333" stroke-width="1.5" marker-end="url(#ark)"/>
+<polyline points="200,277 225,277 225,245 250,245" fill="none" stroke="#333333" stroke-width="1.5" marker-end="url(#ark)"/>
+<text x="345" y="205" font-size="15" fill="#6d4596" text-anchor="middle" font-weight="bold">y</text>
+<polyline points="320,210 380,210 380,840" fill="none" stroke="#6d4596" stroke-width="2"/>
+<polyline points="200,447 395,447" fill="none" stroke="#2f5f98" stroke-width="2"/>
+<polyline points="395,120 395,840" fill="none" stroke="#2f5f98" stroke-width="2"/>
+<polyline points="200,290 230,290 230,320 365,320 365,840" fill="none" stroke="#333333" stroke-width="2" stroke-dasharray="6 3"/>
+<text x="399" y="112" font-size="13" fill="#2f5f98" text-anchor="start" font-weight="bold">x</text>
+<text x="376" y="202" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal"></text>
+<text x="359" y="852" font-size="12" fill="#333333" text-anchor="end" font-weight="normal">src</text>
+<text x="380" y="858" font-size="12" fill="#6d4596" text-anchor="middle" font-weight="normal">y</text>
+<text x="401" y="852" font-size="12" fill="#2f5f98" text-anchor="start" font-weight="normal">x</text>
+<rect x="440" y="100" width="300" height="84" rx="6" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.4"/>
+<text x="590.0" y="138.05" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">곱셈 입력 mux② → × DSP 1개</text>
+<text x="590.0" y="155.05" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">MADD: imm · MULSHR: src · MUL: y</text>
+<polyline points="395,118 440,118" fill="none" stroke="#2f5f98" stroke-width="1.2" marker-end="url(#arb)"/>
+<polyline points="380,168 440,168" fill="none" stroke="#6d4596" stroke-width="1.2" marker-end="url(#arp)"/>
+<polyline points="365,142.0 440,142.0" fill="none" stroke="#333333" stroke-width="1.2" marker-end="url(#ark)" stroke-dasharray="5 3"/>
+<polyline points="740,118.0 930,118.0" fill="none" stroke="#333333" stroke-width="1.2" marker-end="url(#ark)"/>
+<text x="752" y="113.0" font-size="12" fill="#333333" text-anchor="start" font-weight="normal">MUL: p</text>
+<polyline points="740,142.0 930,142.0" fill="none" stroke="#333333" stroke-width="1.2" marker-end="url(#ark)"/>
+<text x="752" y="137.0" font-size="12" fill="#333333" text-anchor="start" font-weight="normal">MADD: p + src</text>
+<polyline points="740,166.0 930,166.0" fill="none" stroke="#333333" stroke-width="1.2" marker-end="url(#ark)"/>
+<text x="752" y="161.0" font-size="12" fill="#333333" text-anchor="start" font-weight="normal">MULSHR: p &gt;&gt; imm</text>
+<rect x="440" y="205" width="300" height="60" rx="6" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.4"/>
+<text x="590.0" y="231.05" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">alu_lane (원래 VTA 회로)</text>
+<text x="590.0" y="248.05" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">MIN / MAX (비교) · ADD · SHR</text>
+<polyline points="395,223 440,223" fill="none" stroke="#2f5f98" stroke-width="1.2" marker-end="url(#arb)"/>
+<polyline points="380,249 440,249" fill="none" stroke="#6d4596" stroke-width="1.2" marker-end="url(#arp)"/>
+<polyline points="740,235.0 930,235.0" fill="none" stroke="#333333" stroke-width="1.2" marker-end="url(#ark)"/>
+<text x="752" y="230.0" font-size="12" fill="#333333" text-anchor="start" font-weight="normal">0–3</text>
+<rect x="440" y="285" width="300" height="60" rx="6" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.4"/>
+<text x="590.0" y="311.05" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">뺄셈기</text>
+<text x="590.0" y="328.05" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">x − y</text>
+<polyline points="395,303 440,303" fill="none" stroke="#2f5f98" stroke-width="1.2" marker-end="url(#arb)"/>
+<polyline points="380,329 440,329" fill="none" stroke="#6d4596" stroke-width="1.2" marker-end="url(#arp)"/>
+<polyline points="740,315.0 930,315.0" fill="none" stroke="#333333" stroke-width="1.2" marker-end="url(#ark)"/>
+<text x="752" y="310.0" font-size="12" fill="#333333" text-anchor="start" font-weight="normal">SUB</text>
+<rect x="440" y="355" width="300" height="60" rx="6" fill="#f2f2f2" stroke="#888888" stroke-width="1.4"/>
+<text x="590.0" y="381.05" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">선 (연산 없음)</text>
+<text x="590.0" y="398.05" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">y 그대로</text>
+<polyline points="395,373 440,373" fill="none" stroke="#2f5f98" stroke-width="1.2" marker-end="url(#arb)"/>
+<polyline points="380,399 440,399" fill="none" stroke="#6d4596" stroke-width="1.2" marker-end="url(#arp)"/>
+<polyline points="740,385.0 930,385.0" fill="none" stroke="#333333" stroke-width="1.2" marker-end="url(#ark)"/>
+<text x="752" y="380.0" font-size="12" fill="#333333" text-anchor="start" font-weight="normal">CPY</text>
+<rect x="440" y="425" width="300" height="60" rx="6" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.4"/>
+<text x="590.0" y="451.05" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">반올림 덧셈 + 양방향 barrel shifter</text>
+<text x="590.0" y="468.05" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">k = clamp(y, −32..31), SHRR이면 + 2^(k−1)</text>
+<polyline points="395,443 440,443" fill="none" stroke="#2f5f98" stroke-width="1.2" marker-end="url(#arb)"/>
+<polyline points="380,469 440,469" fill="none" stroke="#6d4596" stroke-width="1.2" marker-end="url(#arp)"/>
+<polyline points="740,455.0 930,455.0" fill="none" stroke="#333333" stroke-width="1.2" marker-end="url(#ark)"/>
+<text x="752" y="450.0" font-size="12" fill="#333333" text-anchor="start" font-weight="normal">SHRV / SHRR</text>
+<rect x="440" y="515" width="300" height="60" rx="6" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.4"/>
+<text x="590.0" y="541.05" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">LUT RAM d (이 lane의 복사본)</text>
+<text x="590.0" y="558.05" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">주소 x &amp; 255 → 8비트</text>
+<polyline points="395,533 440,533" fill="none" stroke="#2f5f98" stroke-width="1.2" marker-end="url(#arb)"/>
+<polyline points="380,559 440,559" fill="none" stroke="#6d4596" stroke-width="1.2" marker-end="url(#arp)"/>
+<polyline points="740,545.0 930,545.0" fill="none" stroke="#333333" stroke-width="1.2" marker-end="url(#ark)"/>
+<text x="752" y="540.0" font-size="12" fill="#333333" text-anchor="start" font-weight="normal">LUT</text>
+<rect x="440" y="595" width="300" height="60" rx="6" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.4"/>
+<text x="590.0" y="621.05" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">CLZ (priority encoder)</text>
+<text x="590.0" y="638.05" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">앞쪽 0비트 개수 0..32</text>
+<polyline points="395,613 440,613" fill="none" stroke="#2f5f98" stroke-width="1.2" marker-end="url(#arb)"/>
+<polyline points="380,639 440,639" fill="none" stroke="#6d4596" stroke-width="1.2" marker-end="url(#arp)"/>
+<polyline points="740,625.0 930,625.0" fill="none" stroke="#333333" stroke-width="1.2" marker-end="url(#ark)"/>
+<text x="752" y="620.0" font-size="12" fill="#333333" text-anchor="start" font-weight="normal">CLZ</text>
+<rect x="440" y="675" width="300" height="60" rx="6" fill="#fbf6dc" stroke="#9a7b00" stroke-width="1.4"/>
+<text x="590.0" y="701.05" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">16 lane 합 / 최댓값 트리</text>
+<text x="590.0" y="718.05" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">lane 공용 1개 → 모든 lane에</text>
+<polyline points="395,693 440,693" fill="none" stroke="#2f5f98" stroke-width="1.2" marker-end="url(#arb)"/>
+<polyline points="380,719 440,719" fill="none" stroke="#6d4596" stroke-width="1.2" marker-end="url(#arp)"/>
+<polyline points="365,705.0 440,705.0" fill="none" stroke="#333333" stroke-width="1.2" marker-end="url(#ark)" stroke-dasharray="5 3"/>
+<polyline points="740,705.0 930,705.0" fill="none" stroke="#333333" stroke-width="1.2" marker-end="url(#ark)"/>
+<text x="752" y="700.0" font-size="12" fill="#333333" text-anchor="start" font-weight="normal">RSUM / RMAX</text>
+<text x="590.0" y="778" font-size="12" fill="#9a7b00" text-anchor="middle" font-weight="normal">↑ 다른 15 lane의 src도 이 트리로 들어온다</text>
+<path d="M930,95 L1010,217.39999999999998 L1010,652.6 L930,775 Z" fill="#f1eaf8" stroke="#6d4596" stroke-width="1.4"/>
+<text x="970.0" y="416.0" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">mux④</text>
+<text x="970.0" y="432.0" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">결과</text>
+<text x="970.0" y="448.0" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">op</text>
+<text x="970.0" y="464.0" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">4비트</text>
+<rect x="1045" y="410" width="40" height="60" rx="6" fill="#fbeaea" stroke="#c0392b" stroke-width="1.4"/>
+<text x="1065.0" y="444.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">R</text>
+<polyline points="1010,440 1045,440" fill="none" stroke="#333333" stroke-width="1.5" marker-end="url(#ark)"/>
+<text x="1065" y="400" font-size="11" fill="#c0392b" text-anchor="middle" font-weight="normal">alu_reg</text>
+<rect x="1300" y="250" width="160" height="56" rx="6" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.4"/>
+<text x="1380.0" y="273.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">acc[dst] 쓰기</text>
+<text x="1380.0" y="291.9" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">32비트 r</text>
+<polyline points="1085,440 1110,440 1110,278 1300,278" fill="none" stroke="#2f5f98" stroke-width="1.5" marker-end="url(#arb)"/>
+<rect x="1130" y="470" width="150" height="84" rx="6" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.4"/>
+<text x="1205.0" y="499.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">requant ⑥</text>
+<text x="1205.0" y="516.55" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">(r + round) &gt;&gt; shift</text>
+<text x="1205.0" y="533.55" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">clip(lo, hi)</text>
+<polyline points="1110,440 1110,512 1130,512" fill="none" stroke="#333333" stroke-width="1.5" marker-end="url(#ark)"/>
+<rect x="1130" y="580" width="40" height="50" rx="6" fill="#fbeaea" stroke="#c0392b" stroke-width="1.4"/>
+<text x="1150.0" y="609.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">R</text>
+<polyline points="1205,554 1205,568 1150,568 1150,580" fill="none" stroke="#333333" stroke-width="1.5" marker-end="url(#ark)"/>
+<rect x="1190" y="650" width="170" height="60" rx="6" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.4"/>
+<text x="1275.0" y="676.05" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">LUT RAM o ⑦</text>
+<text x="1275.0" y="693.05" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">출력용 복사본</text>
+<path d="M1390,600 L1440,623.4 L1440,706.6 L1390,730 Z" fill="#f1eaf8" stroke="#6d4596" stroke-width="1.4"/>
+<text x="1415.0" y="654.0" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">mux</text>
+<text x="1415.0" y="670.0" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">lut</text>
+<text x="1415.0" y="686.0" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">_en</text>
+<polyline points="1150,630 1150,680 1190,680" fill="none" stroke="#333333" stroke-width="1.5" marker-end="url(#ark)"/>
+<polyline points="1150,630 1150,618 1390,618" fill="none" stroke="#333333" stroke-width="1.5" marker-end="url(#ark)"/>
+<polyline points="1360,680 1390,680" fill="none" stroke="#333333" stroke-width="1.5" marker-end="url(#ark)"/>
+<rect x="1300" y="790" width="160" height="56" rx="6" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.4"/>
+<text x="1380.0" y="813.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">out[dst] 쓰기</text>
+<text x="1380.0" y="831.9" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">8비트 o</text>
+<polyline points="1440,665 1465,665 1465,770 1380,770 1380,790" fill="none" stroke="#2f5f98" stroke-width="1.5" marker-end="url(#arb)"/>
+<text x="1010" y="860" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">곱셈기는 lane당 1개 (DSP 16개 = 16 lane). 11-15에 넣은 MADD / MULSHR는 이 곱셈기를 같이 쓰고 입력 mux②만 늘었다.</text>
+<text x="1010" y="882" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">SHRV / SHRR도 shifter 하나를 같이 쓴다. LUTSET은 이 경로 대신 LUT RAM 쓰기(그림 A2)로 간다.</text>
+</svg>

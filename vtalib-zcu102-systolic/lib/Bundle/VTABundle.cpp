@@ -657,6 +657,28 @@ bool VTAHasAluExt() {
   }
   return on;
 }
+
+//#### JO added (2026-11-15, docs/evta_isa_ext.md 8.14): the fused ALU operations MADD / MULSHR / SHRV / SHRR and the II 1
+//#### slot loop: "_alux2" in /tmp/evta_bitstream (always in the simulator), EVTA_ALUX2=0|1 overrides
+bool VTAHasAluExt2() {
+  static int on = -1;
+  if (on < 0) {
+    const char *e = getenv("EVTA_ALUX2");
+    if (e && *e) on = atoi(e) > 0;
+    else {
+#if (NESTC_USE_VTASIM)
+      on = 1;
+#else
+      char name[256] = {0};
+      FILE *f = fopen("/tmp/evta_bitstream", "r");
+      on = f && fgets(name, sizeof(name), f) && strstr(name, "_alux2") && strncmp(name, "FAILED", 6);
+      if (f) fclose(f);
+#endif
+    }
+    on = on && VTAHasAluExt();
+  }
+  return on;
+}
 static void *outLutBuffer(const int8_t *T) {
   static std::mutex m;
   static std::map<const int8_t *, std::pair<void *, std::vector<int8_t>>> bufs;
@@ -5574,6 +5596,12 @@ int xp_convolution_wo_tr_scale(int8_t* input, int8_t *kernel, int32_t *bias, int
 #define VTA_ALUX_RMAX 10
 #define VTA_ALUX_CLZ 11
 #endif
+#ifndef VTA_ALUX_MADD
+#define VTA_ALUX_MADD 12
+#define VTA_ALUX_MULSHR 13
+#define VTA_ALUX_SHRV 14
+#define VTA_ALUX_SHRR 15
+#endif
 struct Alu2Context {
   int32_t op, io, ii, d, dfo, dfi, s, sfo, sfi, useImm, imm;
   bool operator==(const Alu2Context &o) const { return !memcmp(this, &o, sizeof(o)); }
@@ -5725,6 +5753,9 @@ int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float
   int32_t *xi = (int32_t *)VTABufferGetVirtAddr(xin);
   {
     const size_t e = (size_t)rows * cols;   // cols % 16 == 0
+#if !defined(__ARM_NEON)
+    for (size_t i = 0; i < e; i++) xi[i] = x[i];
+#else
     for (size_t i = 0; i < e; i += 16) {
       const int8x16_t v = vld1q_s8(x + i);
       const int16x8_t lo = vmovl_s8(vget_low_s8(v)), hi = vmovl_s8(vget_high_s8(v));
@@ -5733,6 +5764,7 @@ int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float
       vst1q_s32(xi + i + 8, vmovl_s16(vget_low_s16(hi)));
       vst1q_s32(xi + i + 12, vmovl_s16(vget_high_s16(hi)));
     }
+#endif
   }
   // VTABufferFlush(xin, 0, (size_t)R * cols * sizeof(int32_t));
   VTABufferFlush(xin, 0, (size_t)rows * cols * sizeof(int32_t));
@@ -5754,7 +5786,8 @@ int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float
     I(RES_ALU_SHR, io, ii, dst, dfo, dfi, K, 1, 0);
     if (last) VTARequant(cmd, 0, 0, 0, 0, 0);
   };
-  int32_t replayKey[] = {5, rows, cols, n, k->gs, (int32_t)idEVTA};
+  const bool fused = VTAHasAluExt2();
+  int32_t replayKey[] = {5, rows, cols, n, k->gs, (int32_t)idEVTA, fused};
   void *replayBufs[] = {k->buf, xin, xo};
   const int replayed = VTAReplayBegin(cmd, replayKey, sizeof(replayKey), replayBufs, 3);
   if (!replayed) {
@@ -5800,6 +5833,21 @@ int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float
     I(RES_ALU_ADD, n, 1, TT, 1, 0, 0, 0, 0, true, gs);
     I(VTA_ALUX_CPY, n, 1, A2, 1, 0, 0, 0, 0, true, 16);
     I(VTA_ALUX_SUB, n, 1, A2, 1, 0, TT, 1, 0);
+    if (fused) {
+      //#### JO added (2026-11-15): the fused program (bitstream _alux2, docs/evta_isa_ext.md 8.14): H is SHRR's rounding;
+      //#### x * C - S as one MADD (src -S per row), * TV >> 8 one MULSHR, E = B >> (16 - t) one SHRV, the rounding shift
+      //#### one SHRR. The per-row operands (-S, TV, A2, TT) are broadcast srcs: one slot per step on the II 1 loop.
+      I(VTA_ALUX_MUL, n, 1, S, 1, 0, 0, 0, 0, true, -1);
+      I(VTA_ALUX_MADD, n, NB, X, NB, 1, S, 1, 0, false, C);
+      I(VTA_ALUX_MULSHR, n, NB, X, NB, 1, TV, 1, 0, false, 8);
+      I(VTA_ALUX_MUL, n, NB, X, NB, 1, GB, 0, 1);
+      I(VTA_ALUX_CPY, n, NB, E, NB, 1, GB + NB, 0, 1);
+      I(VTA_ALUX_SHRV, n, NB, E, NB, 1, A2, 1, 0);
+      I(RES_ALU_ADD, n, NB, X, NB, 1, E, NB, 1);
+      VTARequant(cmd, 1, 0, 0, -128, 127);
+      I(VTA_ALUX_SHRR, n, NB, X, NB, 1, TT, 1, 0);
+      VTARequant(cmd, 0, 0, 0, 0, 0);
+    } else {
     I(VTA_ALUX_CPY, n, 1, H, 1, 0, 0, 0, 0, true, 1);
     I(VTA_ALUX_CPY, n, 1, A, 1, 0, 0, 0, 0, true, 1);
     I(VTA_ALUX_SUB, n, 1, A, 1, 0, TT, 1, 0);
@@ -5816,10 +5864,11 @@ int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float
     I(RES_ALU_ADD, n, NB, D, NB, 1, E, NB, 1);
     I(RES_ALU_ADD, n, NB, D, NB, 1, H, 1, 0);
     vshr(D, NB, 1, n, NB, TT, true);
+    }
     VTADepPush(cmd, 2, 3);
     VTADepPop(cmd, 2, 3);
     const int nr = std::min(n, rows - r0);
-    VTAStoreBuffer2D(cmd, D, 4, xo, r0 * NB, nr * NB, 1, nr * NB);
+    VTAStoreBuffer2D(cmd, fused ? X : D, 4, xo, r0 * NB, nr * NB, 1, nr * NB);
     VTADepPush(cmd, 3, 2);
   }
   VTADepPop(cmd, 3, 2);

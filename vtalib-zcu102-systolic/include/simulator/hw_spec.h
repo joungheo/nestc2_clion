@@ -166,6 +166,11 @@ extern "C" {
 #define VTA_ALUX_RSUM 9    /* dst[every lane] = sum of the lanes of src                        */
 #define VTA_ALUX_RMAX 10   /* dst[every lane] = max of the lanes of src                        */
 #define VTA_ALUX_CLZ 11    /* dst = leading zeros of (uint32) dst, 32 for 0                    */
+//#### JO added (2026-11-15, docs/evta_isa_ext.md 8.14): fused operations (LayerNorm / softmax per-element chains)
+#define VTA_ALUX_MADD 12   /* dst = dst * (int16) imm + acc[src] (src always read)             */
+#define VTA_ALUX_MULSHR 13 /* dst = (dst * (int16) acc[src], low 32 bits) >> (imm & 31)        */
+#define VTA_ALUX_SHRV 14   /* dst = dst >> k, k = src clamped to -32..31 (negative = left)     */
+#define VTA_ALUX_SHRR 15   /* as SHRV, rounding: k > 0: (dst + 2^(k-1)) >> k                   */
 #define VTA_ALU_FULL_OP(insn) ((int)((insn).alu_op_ext << VTA_ALU_OPCODE_BIT_WIDTH | (insn).alu_opcode))
 
 /*! Memory type field bitwidth */

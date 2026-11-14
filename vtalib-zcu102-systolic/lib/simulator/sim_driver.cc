@@ -445,8 +445,25 @@ class Device {
       fprintf(stderr, "EVTA_ALU_HAZARD: first at ALU op %d, %u x %u steps, %ld hazards\n", VTA_ALU_FULL_OP(*op), op->iter_out, op->iter_in, h);
     c.insns++, c.steps += (long)op->iter_out * op->iter_in * (op->uop_end - op->uop_bgn), c.bad += h;
   }
+  //#### JO added (2026-11-15, docs/evta_isa_ext.md 8.14): EVTA_ALU_SLOTS=<wslots> for the II 1 slot loop (_alux2): counts the
+  //#### slots (cycles) of the extended-loop instructions and the steps with a stale read (vta_alu_ref::hazard_slots); at exit
+  void SlotCheck(const VTAAluInsn* op) {
+    static const int w = getenv("EVTA_ALU_SLOTS") ? atoi(getenv("EVTA_ALU_SLOTS")) : -1;
+    if (w < 0 || (op->use_imm && VTA_ALU_FULL_OP(*op) < 4 && !op->lut_en)) return;
+    struct Count {
+      long insns = 0, steps = 0, slots = 0, bad = 0;
+      ~Count() { fprintf(stderr, "EVTA_ALU_SLOTS: %ld slot-loop instructions, %ld steps, %ld slots, %ld steps with a stale read (window %d slots)\n", insns, steps, slots, bad, w); }
+    };
+    static Count c;
+    long ns = 0;
+    const long h = vta_alu_ref::hazard_slots(*op, static_cast<VTAUop*>(uop_.BeginPtr(0)), w, &ns);
+    if (h && !c.bad)
+      fprintf(stderr, "EVTA_ALU_SLOTS: first at ALU op %d, %u x %u steps, %ld stale\n", VTA_ALU_FULL_OP(*op), op->iter_out, op->iter_in, h);
+    c.insns++, c.steps += (long)op->iter_out * op->iter_in * (op->uop_end - op->uop_bgn), c.slots += ns, c.bad += h;
+  }
   void RunALUExt(const VTAAluInsn* op) {
     HazardCheck(op);
+    SlotCheck(op);
     prof_->alu_counter += op->iter_out * op->iter_in * (op->uop_end - op->uop_bgn);
     if (prof_->SkipExec()) return;
     static_assert(VTA_ACC_WIDTH == 32, "the reference model takes int32 acc entries");
@@ -466,6 +483,7 @@ class Device {
       return;
     }
     HazardCheck(op);
+    SlotCheck(op);
     if (op->use_imm) {
       RunALU_<true>(op);
     } else {
