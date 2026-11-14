@@ -365,7 +365,15 @@ typedef struct {
   //#### JO changed to make instruction width = 256bit
   //uint64_t pad_0          : 32;
   //uint64_t pad_1          : 64;
-  uint64_t pad_0          : 32;
+  //#### JO changed (2026-11-14): the GEMM requantize on the out write (VTARequant) in the simulator too (sim_driver.cc out_);
+  //#### the bit positions need not match the zcu102 header (simulator instructions never reach hardware)
+  // uint64_t pad_0          : 32;
+  uint64_t rq_en          : 1;
+  uint64_t rq_round       : 2;
+  uint64_t rq_shift       : 5;
+  int64_t  rq_lo          : 8;
+  int64_t  rq_hi          : 8;
+  uint64_t pad_0          : 8;
   uint64_t pad_1          : 64;
 } VTAGemInsn;
 

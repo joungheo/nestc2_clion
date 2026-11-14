@@ -1135,8 +1135,8 @@ class InsnQueue : public BaseQueue<VTAGenericInsn> {
  */
 class CommandQueue {
  public:
-  //#### JO added (2026-11-11, ALU extension): ALU rq_* / lut_en of the instructions pushed from now on. GEMM rq_* is not
-  //#### simulated (the simulator GEMM has no out buffer), so bundles keep EVTA_REQUANT off here.
+  //#### JO added (2026-11-11, ALU extension): ALU rq_* / lut_en of the instructions pushed from now on.
+  //#### JO changed (2026-11-14): GEMM rq_* too (sim_driver.cc keeps an out buffer as the hardware; was: not simulated)
   bool alu_lut_ = false, rq_en_ = false;
   int rq_round_ = 0, rq_shift_ = 0, rq_lo_ = 0, rq_hi_ = 0;
   void SetAluLut(int en) { alu_lut_ = en != 0; }
@@ -1434,6 +1434,12 @@ class CommandQueue {
     VTAGemInsn* insn = insn_queue_.CreateGemInsn();
     insn->opcode = VTA_OPCODE_GEMM;
     insn->reset_reg = kernel->reset_out_;
+    //#### JO added (2026-11-14): rq_* (VTARequant) on the GEMM too, as the zcu102 queue
+    insn->rq_en = rq_en_;
+    insn->rq_round = rq_en_ ? rq_round_ : 0;
+    insn->rq_shift = rq_en_ ? rq_shift_ : 0;
+    insn->rq_lo = rq_en_ ? rq_lo_ : 0;
+    insn->rq_hi = rq_en_ ? rq_hi_ : 0;
     insn->uop_bgn = kernel->sram_begin_;
     insn->uop_end = kernel->sram_end_;
     const std::vector<UopKernel::LoopEntry> &loop = kernel->loop();

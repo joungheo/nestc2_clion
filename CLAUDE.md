@@ -179,7 +179,7 @@ so the `/home/ubuntu/...` paths in the docs become `/home/jerry/...`): the same 
 mounted, `--network host`, `--init` (with `sleep` as PID 1 Vivado synthesis hangs after `synth_design`: its worker processes stay zombies), TZ KST; `install_vivado.sh <tar.gz> <y2k22_patch-1.2.zip>` checks the MD5, batch-installs Zynq UltraScale+ only
 and applies the Y2K22 patch with the container's `python3`). Only 2020.1 is installed there; the license `~/.Xilinx/xilinx.lic` is `HOSTID=ANY`
 (System Edition + HLS). Checked: HLS export and `synth_design` on xczu9eg. Passwordless sudo for `jerry`.
-NEST-C simulator build on `ubuntu2` (2026-11-14): container **`nestc-build`** from [utils/docker_nestc/](utils/docker_nestc/) (ubuntu:18.04 with the
+NEST-C simulator build on `ubuntu2` (2026-11-14; how it was done and what is left: [docs/host_pc_build.md](docs/host_pc_build.md)): container **`nestc-build`** from [utils/docker_nestc/](utils/docker_nestc/) (ubuntu:18.04 with the
 board's versions, checked on the board: clang-8 8.0.0-3~ubuntu18.04.2, cmake 3.10.2, protobuf 3.0.0, glog 0.3.5, fmt 7.0.3 from source, python 3.6
 numpy 1.19.5 / onnx 1.11.0); `configure.sh` configures `<tree>/Debug2_remote` with the board's options and makes model-compiler / image-classifier
 (about 10 min at -j16; `make` of a bundle target 4-7 s against 106 s on the board). The model files come from the board's `Debug2_remote`
@@ -312,10 +312,20 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
 - CNN uses of the ALU extension (2026-11-14, `docs/evta_isa_ext.md` §8.12): VTASave `-vta-fuse-residual-norelu` (default on; MobileNetV2's
   10 residual adds without relu fused into the conv, the rq round 2 makes the sum exact, no rq: conv + CPU add) and `-vta-evta-avgpool`
   (default on; vtalib-systolic `avgpool_evta`: global pool by identity GEMM + one ALU ADD + one MUL with rq, `_alux` only, bit-exact).
-  On `..._sa_alux_380mhz_rq.bin` (WNS -0.012 ns, one path), OMP 1: MobileNetV2 19.22 -> 18.00, Resnet50 72.04 -> 71.20, Resnet18
+  On `..._sa_alux_380mhz_rq.bin` (WNS +0.002 ns), OMP 1: MobileNetV2 19.22 -> 18.00, Resnet50 72.04 -> 71.20, Resnet18
   24.37 -> 24.16 ms, VGG16 unchanged; `EVTA_RES_CHECK` 0 differ. A NEON CPU avgpool is as fast but only for comparison
-  (`NESTC_AVGPOOL_NEON=1`; CPU work goes to the EVTA). Next: a general conv epilogue (add / requantize / activation / pool as one ALU
-  program) instead of fixed fusion patterns.
+  (`NESTC_AVGPOOL_NEON=1`; CPU work goes to the EVTA).
+- Conv epilogue (2026-11-14, [docs/evta_alux_epilogue.md](docs/evta_alux_epilogue.md)): VTASave `-vta-conv-epilogue` (default on) emits the
+  elementwise chain after an EVTA conv (`findResidualFusions`, now a chain walker: one add, relus, in any order) as a program
+  (`VTAEpilogue`: ADD / RQ / CLIP / SHL / LUT steps, `VTASetConvEpilogue` + `convolution_wo_tr`; both vtalibs have the API). vtalib-systolic
+  `lowerEpilogue` reduces it to f1 -> add -> rq -> f2 (each unary part a clip, a shift + clip or one table) and runs it per tile before
+  the STORE on what the bitstream has (GEMM / ALU rq, ALU LUT / CPY + lut_en), else the plain conv + `VTAEpilogueRef` on the CPU;
+  `convolution_wo_tr_res` and `VTASetOutputLut` are programs too. `EVTA_EPI_CHECK=1` compares every fused call. The vtalib simulator now
+  has the hardware's out buffer and GEMM `rq_*` (the `_rq` paths can be checked on the PC): `vtalib-zcu102-systolic/tests/run_epi_test.sh`.
+  Board (alux 380 `_rq`): epi_conv_test 39/39 in all three modes, EVTA conv dumps of MobileNetV2 / Resnet18 / 50 / VGG16 byte-identical to
+  the old executables (compare dumps without the `_CHECK` variables: their reference convs are dumped too), times unchanged.
+  400 MHz `_alux`: `vivado.tcl` puts a multicycle 2 on the reset paths (`reset_multicycle.xdc`, `VTA_RESET_MC=0` off); still WNS -0.055 ns
+  (ETO) from compute -> ALU LUT RAM / acc_mem BRAM paths, needs RTL / HLS registers (`docs/evta_isa_ext.md` end of §8.12).
 - Other models (2026-11-05, `docs/evta_runtime_compare.md` §7.19): Resnet50 res2_0 residual fused (relu to a 2^q smaller scale), schedules of the
   Resnet50 / VGG16 shapes in `VTASchedules.h` (found with vtalib-systolic `EVTA_SCHED`), conv tiles below 7 x 7: the dummy-padded store
   used the wrong channel block with nVirtualThread 2 (fixed in both vtalibs) and the systolic vtalib's minimum tile is 1 on an `_sa_` bitstream

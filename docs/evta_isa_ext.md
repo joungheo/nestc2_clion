@@ -616,7 +616,7 @@ bitstream과 vtalib의 짝이 한 번만 바뀌게 하려는 것이다.
 |---|---|
 | `lib/Bundle/VTABundle.cpp`, `include/Bundle/VTABundle.h` | `VTASetOutputLut(T)` … `VTASetOutputLut(nullptr)`로 conv를 감싼다. conv_kernel이 하는 일: (1) 시작할 때 T를 acc 0–15에 LOAD하고 LUTSET(16 step) 한 번. (2) thread마다 STORE 직전에 tile 전체에 ALU CPY(dst = src) 한 번, conv의 `rq_*`(켜져 있으면) + `lut_en`. 그래서 out = T[(uint8) conv 출력]이 된다. 일반 conv만 해당한다(residual / pool / depthwise 제외). T는 표 포인터마다 VTA 버퍼에 한 번 복사한다(replay가 주소를 그대로 씀) |
 | `include/zcu102/cmd_queue.h`, `lib/zcu102/api.cc`, `include/zcu102/vta/runtime.h` | `VTAAluLut(cmd, en)`: 이후 ALU 명령의 `lut_en`. uop의 opcode 4–11을 `alu_op_ext`로 나눠 넣는다(전에는 2비트로 잘렸음). replay dump는 연산 번호 전체와 ` lut`를 적는다 |
-| `lib/simulator/runtime.cc`, `include/simulator/vta/runtime.h` | 시뮬레이터에도 `VTARequant`, `VTAAluLut`, `alu_op_ext`. 시뮬레이터 GEMM은 out buffer가 없어서 GEMM `rq_*`는 흉내 내지 않는다(번들은 시뮬레이터에서 `EVTA_REQUANT`를 끈 채로 돈다) |
+| `lib/simulator/runtime.cc`, `include/simulator/vta/runtime.h` | 시뮬레이터에도 `VTARequant`, `VTAAluLut`, `alu_op_ext`. 시뮬레이터 GEMM은 out buffer가 없어서 GEMM `rq_*`는 흉내 내지 않는다(번들은 시뮬레이터에서 `EVTA_REQUANT`를 끈 채로 돈다). **11-14부터는 out buffer와 GEMM `rq_*`가 있다**([evta_alux_epilogue.md](evta_alux_epilogue.md) §6.1) |
 | `tests/lut_conv_test.cc`, `tests/run_lut_conv_test.sh` | 시뮬레이터용 vtalib을 임시 dir에 빌드하고(cmake, `make -j2`) 시험을 돌린다. 1–2코어, 약 1분 |
 
 **결과** (`vtalib-zcu102-systolic/tests/run_lut_conv_test.sh`)
@@ -754,7 +754,7 @@ bitstream과 vtalib의 짝이 한 번만 바뀌게 하려는 것이다.
 - 비교용 NEON CPU avgpool (vtalib-systolic `CPUBundle_generic.cpp`, C % 16 == 0, 출력 offset 0). 기본은 꺼져 있다(`NESTC_AVGPOOL_NEON=1`로 켠다;
   CPU 일은 EVTA로 보낸다는 방향). 아래 측정의 "NEON" 열은 켜고 잰 것이고, "CPU" 열은 이전 루프다.
 
-검증 (보드, `..._sa_alux_380mhz_rq.bin`, WNS −0.012 ns 한 경로): `EVTA_RES_CHECK=1`로 융합 residual과 avgpool의 모든 호출이
+검증 (보드, `..._sa_alux_380mhz_rq.bin`, 최종 WNS +0.002 ns; −0.012 ns는 route 단계 값이었다): `EVTA_RES_CHECK=1`로 융합 residual과 avgpool의 모든 호출이
 CPU와 0 differ(MobileNetV2 100회 실행 중 2,900번 비교), 분류와 confidence는 그대로(MobileNetV2 282 / 0.944157, Resnet18 281 / 0.655530,
 Resnet50 281 / 0.581379, VGG16 0 / 0.453709).
 
@@ -770,3 +770,15 @@ Resnet50 281 / 0.581379, VGG16 0 / 0.453709).
 - MobileNetV2 residual 융합: CPU elemadd 1.03 ms가 없어지고 그 10개 conv가 0.43 ms 늘어(add를 위한 LOAD / GEMM / ALU) 전체 −0.66 ms.
 - avgpool: EVTA는 CPU 루프보다 훨씬 빠르지만, 채널을 연속으로 읽는 NEON이 그보다 더 빠르다(EVTA는 LOAD, 동기화, 복사가
   붙는다). 전체 시간으로는 둘이 같다(Resnet50 −0.85 ms, MobileNetV2 −0.55 ms, Resnet18 −0.21 ms). 기본은 EVTA(`avgpool_evta`)로 두고 NEON은 비교용으로만 남긴다.
+
+다음 (2026-11-14): 패턴별 융합(`convolution_wo_tr_res`, `VTASetOutputLut`) 대신 conv 뒤의 원소별 연산을 명령열(epilogue 프로그램)로
+내는 일반 구조. ALU 확장을 모델에 쓴 곳의 정리, 구조, 검증, 남은 일: [evta_alux_epilogue.md](evta_alux_epilogue.md).
+
+`_alux` `_rq`를 400 MHz로 (2026-11-14): 처음 합성(Explore WNS −0.118 ns, ETO −0.055 ns)에서 가장 긴 경로가 reset → fetch m_axi의
+CE였다(`proc_sys_reset` 출력 fanout 5,344; HLS 블록의 `DONT_TOUCH`로 복제가 안 된다). reset 해제 때 EVTA는 쉬고 있으므로
+`vivado.tcl`이 reset FF(`proc_sys_reset*/ACTIVE_LOW_PR_OUT_DFF*`, `axi_smc*/*areset_reg*`)에서 나가는 경로에 multicycle setup 2 / hold 1을
+건다(`reset_multicycle.xdc`, 기본 on, `VTA_RESET_MC=0`이면 끔). 다시 합성: Explore(`BUILD_TAG=rq_mc`)는 post-route phys_opt 뒤 route
+충돌 DRC(load_0의 net 5개)로 비트스트림이 없고, ETO(`rq_mc_eto`)는 WNS −0.055 ns, 192 endpoint. reset 경로는 없어졌고 남은 것은 모두 HLS
+compute 쪽 데이터 경로다: 비교 레지스터 → ALU LUT RAM(`alux_lut_o`, 57), acc_mem BRAM → gemm_sa(20), compute select → acc_mem BRAM 주소(20),
+compute 안의 shift(`ashr`) 등. 400 MHz는 RTL / HLS 쪽 레지스터(LUT RAM 쓰기 앞, acc_mem 출력 레지스터, sa RMW 한 단계)가 필요하고, 그때까지
+`_alux`는 380 MHz `_rq`를 쓴다.

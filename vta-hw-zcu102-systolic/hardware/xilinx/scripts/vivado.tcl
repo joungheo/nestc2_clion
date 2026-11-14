@@ -646,6 +646,23 @@ vta_i/load_queue vta_i/gemm_queue vta_i/store_queue vta_i/l2g_queue vta_i/g2l_qu
 close $f
 add_files -fileset constrs_1 $dt_xdc
 set_property used_in_synthesis false [get_files $dt_xdc]
+
+#### JO added (2026-11-14): the resets as 2-cycle paths (setup 2, hold 1) from their reset flops. The proc_sys_reset output
+#### drives every HLS block's ap_rst_n (fanout 5,344 in fetch; DONT_TOUCH above keeps Vivado from replicating it across the
+#### IP boundaries) and was the worst path of the 400 MHz _rq build (143 failing endpoints, -0.118 ns: reset -> fetch m_axi
+#### rs_rdata CE). The resets change only while the EVTA is idle (the CPU starts it thousands of cycles after the release),
+#### so a flop seeing the release one cycle later does not matter. Also the smartconnect's internal areset flops.
+#### VTA_RESET_MC=0 leaves it out.
+if {![info exists ::env(VTA_RESET_MC)] || $::env(VTA_RESET_MC) ne "0"} {
+  set mc_xdc $proj_path/$proj_name.srcs/constrs_1/new/reset_multicycle.xdc
+  set f [open $mc_xdc w]
+  puts $f {set rst_ffs [get_cells -quiet -hier -filter {IS_SEQUENTIAL && (NAME =~ vta_i/proc_sys_reset*/U0/ACTIVE_LOW_PR_OUT_DFF* || NAME =~ vta_i/axi_smc*/*areset_reg*)}]}
+  puts $f {if {[llength $rst_ffs]} { set_multicycle_path -setup 2 -from $rst_ffs; set_multicycle_path -hold 1 -from $rst_ffs }}
+  close $f
+  add_files -fileset constrs_1 $mc_xdc
+  set_property used_in_synthesis false [get_files $mc_xdc]
+  puts "reset multicycle: $mc_xdc"
+}
 #### JO added (2026-10-23): fence for the lab ZCU102 (192.168.20.2), environment VTA_BRAM_FENCE (zcu102 only):
 ####   y219 (default): its PL has one defective configuration row (JTAG readback, hwtest/brambist/cfgdiff.py):
 ####          clock-region row 3, frame words 61/62 = tile row SLICE Y219 / RAMB36 Y43 / DSP Y86-87, 8 cells per

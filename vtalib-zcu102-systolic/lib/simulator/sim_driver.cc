@@ -352,7 +352,12 @@ class Device {
       prof_->out_store_nbytes += (
           op->x_size * op->y_size * VTA_BATCH * VTA_BLOCK_OUT * VTA_OUT_WIDTH / 8);
       if (!prof_->SkipExec()) {
-        acc_.TruncStore<VTA_OUT_WIDTH>(op, dram_);
+        //#### JO changed (2026-11-14): from the out buffer (out_), as the hardware (was: acc truncated)
+        // acc_.TruncStore<VTA_OUT_WIDTH>(op, dram_);
+        int8_t *d = static_cast<int8_t *>(dram_->GetAddr(op->dram_base * kOutLanes));
+        for (uint32_t y = 0; y < op->y_size; ++y)
+          for (uint32_t x = 0; x < op->x_size; ++x)
+            memcpy(d + (size_t)(y * op->x_stride + x) * kOutLanes, out_[op->sram_base + y * op->x_size + x], kOutLanes);
       }
     } else {
       //LOG(FATAL) << "Store do not support memory_type="
@@ -391,6 +396,9 @@ class Device {
                       wgt.GetSigned(j * VTA_BLOCK_IN + k);
                 }
                 acc.SetSigned(acc_offset, sum);
+                //#### JO added (2026-11-14): out = the low 8 bits, or the requantize (rq_*)
+                out_[acc_idx][acc_offset] = vta_alu_ref::requant(sum, (int8_t)(sum & 255), op->rq_en, (int)op->rq_round,
+                                                                  (int)op->rq_shift, (int)op->rq_lo, (int)op->rq_hi);
               }
             }
           }
@@ -408,6 +416,7 @@ class Device {
             BitPacker<VTA_ACC_WIDTH> acc(acc_.BeginPtr(acc_idx));
             for (uint32_t i = 0; i < VTA_BATCH * VTA_BLOCK_OUT; ++i) {
               acc.SetSigned(i, 0);
+              out_[acc_idx][i] = 0;   //#### JO added (2026-11-14)
             }
           }
         }
@@ -416,9 +425,9 @@ class Device {
   }
 
   //#### JO added (2026-11-11, ALU extension, docs/evta_isa_ext.md 8): the extended operations (VTA_ALUX_*), rq_* and lut_en
-  //#### through the reference model (include/zcu102/vta/alu_ext_ref.h). The simulator has no out buffer (STORE truncates
-  //#### acc): an instruction with rq_en / lut_en writes its int8 out value into acc sign-extended, so a STORE after it gives
-  //#### the hardware's out (the hardware keeps the 32-bit acc; programs only requantize in their last instruction).
+  //#### through the reference model (include/zcu102/vta/alu_ext_ref.h).
+  //#### JO changed (2026-11-14): the out values go to out_ (STORE reads it), acc keeps the 32-bit result as the hardware.
+  //#### Was: no out buffer, an instruction with rq_en / lut_en wrote its int8 out value into acc sign-extended.
   uint8_t lut_[256] = {0};
   //#### JO added (2026-11-12, ALU extension): EVTA_ALU_HAZARD=<window> (17 for the HLS ALUX vector loop): count the steps of
   //#### each ALU instruction that read an acc entry written by one of the <window> steps before them (vta_alu_ref::hazards;
@@ -444,14 +453,11 @@ class Device {
     int32_t (*acc)[vta_alu_ref::kLanes] = reinterpret_cast<int32_t (*)[vta_alu_ref::kLanes]>(acc_.BeginPtr(0));
     std::vector<int8_t> outv((size_t)VTA_ACC_BUFF_DEPTH * vta_alu_ref::kLanes);
     int8_t (*out)[vta_alu_ref::kLanes] = reinterpret_cast<int8_t (*)[vta_alu_ref::kLanes]>(outv.data());
+    //#### JO changed (2026-11-14): the out values into out_ (the STORE reads it), acc keeps the 32-bit result as the hardware
+    //#### (was: with rq_en / lut_en the out value written into acc)
+    memcpy(outv.data(), out_, sizeof(out_));
     vta_alu_ref::run(*op, static_cast<VTAUop*>(uop_.BeginPtr(0)), acc, out, lut_);
-    if (!op->rq_en && !op->lut_en) return;
-    for (uint32_t y = 0; y < op->iter_out; ++y)
-      for (uint32_t x = 0; x < op->iter_in; ++x)
-        for (uint32_t k = op->uop_bgn; k < op->uop_end; ++k) {
-          const uint32_t d = static_cast<VTAUop*>(uop_.BeginPtr(k))->dst_idx + y * op->dst_factor_out + x * op->dst_factor_in;
-          for (int b = 0; b < vta_alu_ref::kLanes; ++b) acc[d][b] = out[d][b];
-        }
+    memcpy(out_, outv.data(), sizeof(out_));
   }
 
   void RunALU(const VTAAluInsn* op) {
@@ -521,6 +527,7 @@ class Device {
             } else {
               dst.SetSigned(k, func(dst.GetSigned(k), src.GetSigned(k)));
             }
+            out_[dst_index][k] = (int8_t)(dst.GetSigned(k) & 255);   //#### JO added (2026-11-14)
           }
         }
       }
@@ -538,6 +545,10 @@ class Device {
   SRAM<VTA_WGT_WIDTH, VTA_BLOCK_IN * VTA_BLOCK_OUT, VTA_WGT_BUFF_DEPTH> wgt_;
   SRAM<VTA_ACC_WIDTH, VTA_BATCH * VTA_BLOCK_OUT, VTA_ACC_BUFF_DEPTH> acc_;
   SRAM<VTA_UOP_WIDTH, 1, VTA_UOP_BUFF_DEPTH> uop_;
+  //#### JO added (2026-11-14): the out buffer (int8, at the acc entries): GEMM / ALU write it (the low 8 bits, or rq_* /
+  //#### lut_en), STORE reads it; an acc LOAD does not touch it (as the hardware)
+  static const int kOutLanes = VTA_BATCH * VTA_BLOCK_OUT;
+  int8_t out_[VTA_ACC_BUFF_DEPTH][VTA_BATCH * VTA_BLOCK_OUT] = {};
 };
 
   /* //yikwon

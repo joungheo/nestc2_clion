@@ -26,6 +26,7 @@
 #include "glow/Optimizer/IROptimizer/IROptimizer.h"
 #include "llvm/Support/CommandLine.h"
 #include <algorithm>
+#include <array>   //#### JO added (2026-11-14): ResidualFusion::steps
 #include <cctype>
 #include <cstring>
 #include <cmath>
@@ -64,6 +65,15 @@ static llvm::cl::opt<bool> vtaFuseResidualNoRelu(
     "vta-fuse-residual-norelu",
     llvm::cl::desc("With -vta-fuse-residual: also fuse an elementadd that has "
                    "no relu after it (sumRelu 0)"),
+    llvm::cl::init(true));
+
+//#### JO added (2026-11-14, docs/evta_alux_epilogue.md): the elementwise chain after an EVTA conv as an epilogue program
+//#### (findResidualFusions: elementadd / relu in any order, one add) the vtalib runs before each tile's STORE
+//#### (VTASetConvEpilogue + convolution_wo_tr); off: only the residual forms, as convolution_wo_tr_res
+static llvm::cl::opt<bool> vtaConvEpilogue(
+    "vta-conv-epilogue",
+    llvm::cl::desc("Emit the fused elementwise chain after an EVTA conv as an epilogue program (VTASetConvEpilogue); "
+                   "off: convolution_wo_tr_res for the residual + relu forms only"),
     llvm::cl::init(true));
 
 //#### JO added (2026-10-31): max pool on the EVTA (maxpool_evta) when its input is >= 0 (findEvtaMaxPools)
@@ -142,6 +152,11 @@ struct ResidualFusion {
   int reluShl;           //#### JO added (2026-11-05): relu dest scale = elementadd dest scale / 2^reluShl
   bool hoistOut;         // out is allocated after the conv: its allocation is emitted before the conv
   bool relu;             //#### JO added (2026-11-14): false: no relu after the elementadd, out is its dest
+                         //#### JO changed (2026-11-14): true: out >= 0 (the program ends in a clip at 0 or above)
+  //#### JO added (2026-11-14, -vta-conv-epilogue): the program (VTAEpiStep {op, a, b, c, d}, VTABundle.h); residual may
+  //#### be null (no add); convShl ... reluShl are set when it is one of the convolution_wo_tr_res forms (classic)
+  std::vector<std::array<int, 5>> steps;
+  bool classic = false;
 };
 
 //#### JO added (2026-11-02): a max pool done by the first conv's call (findPoolFusions)
@@ -2850,7 +2865,22 @@ void generateVTAConvolutionCall(const glow::ConvolutionInst *Inst,
   //#### JO changed (2026-10-31): conv + elementadd + relu (findResidualFusions)
   // bundle->append("  convolution_wo_tr(");
   auto *fu = ctx->getFusion(Inst);
-  bundle->append(fu ? "  convolution_wo_tr_res(" : "  convolution_wo_tr(");
+  //#### JO added (2026-11-14, -vta-conv-epilogue): the program, then the plain conv call (vtalib runs the program on it)
+  const bool epi = fu && vtaConvEpilogue;
+  if (epi) {
+    const std::string e = Inst->getName().str() + "_epi";
+    std::string init = "  VTAEpilogue " + e + " = {" + std::to_string(fu->steps.size()) + ", {";
+    for (size_t k = 0; k < fu->steps.size(); k++) {
+      auto &st = fu->steps[k];
+      init += std::string(k ? ", " : "") + "{" + std::to_string(st[0]) + ", " + std::to_string(st[1]) + ", " +
+              std::to_string(st[2]) + ", " + std::to_string(st[3]) + ", " + std::to_string(st[4]) + "}";
+    }
+    bundle->append(init + "}};   // conv epilogue (-vta-conv-epilogue)\n");
+    if (fu->residual)
+      bundle->append("  " + e + ".t[0] = " + fu->residual->getName().str() + "_vbuf;\n");
+    bundle->append("  VTASetConvEpilogue(&" + e + ");\n");
+  }
+  bundle->append(fu && !epi ? "  convolution_wo_tr_res(" : "  convolution_wo_tr(");
   bundle->append(Inst->getName());
   bundle->append("_input_transpose, ");
   bundle->append(filterSte.name);
@@ -2891,7 +2921,7 @@ void generateVTAConvolutionCall(const glow::ConvolutionInst *Inst,
   bundle->append(std::to_string(dest->dims()[1]));
   bundle->append(", ");
   bundle->append(std::to_string(dest->dims()[2]));
-  if (fu) {
+  if (fu && !epi) {
     bundle->append(", ");
     bundle->append(fu->residual->getName());
     bundle->append("_vbuf, ");
@@ -2938,6 +2968,8 @@ void generateVTAConvolutionCall(const glow::ConvolutionInst *Inst,
   }
 #endif
   bundle->append(");\n");
+  if (epi)
+    bundle->append("  VTASetConvEpilogue(nullptr);\n");   //#### JO added (2026-11-14)
 }
 
 void generateEVTAConvolutionCall(const glow::VTAConvolutionInst *Inst,
@@ -4108,6 +4140,123 @@ void findResidualFusions(const IRFunction *IR, VTASaveContext *ctx) {
         return i;
     return ins.size();
   };
+  //#### JO changed (2026-11-14, -vta-conv-epilogue, docs/evta_alux_epilogue.md): the chain after the conv, instruction by
+  //#### instruction (deallocs / allocs between them skipped): an elementadd of the current value and a packed residual
+  //#### (one; power-of-two scale ratios: ADD shlV shlT, RQ round 2 by m), a relu of it (sV / sO = 2^q, q = 0..7: CLIP 0..127
+  //#### [, SHL q, CLIP]); each value of the chain read by nothing else, the last one (out) allocated before the conv or
+  //#### hoisted (as before). Without -vta-conv-epilogue only the convolution_wo_tr_res forms (add, then at most one relu).
+  //#### Was: the conv, the elementadd, the relu (or none) right after each other.
+  enum { ADD = 1, RQ = 2, CLIP = 3, SHL = 4 };
+  for (size_t i = 0; i < ins.size(); i++) {
+    auto *C = llvm::dyn_cast<ConvolutionInst>(ins[i]);
+    if (!C || getConvPath(C) != ConvPath::VTA || !ctx->isPacked(C->getDest()))
+      continue;
+    const Value *D = C->getDest(), *V = D, *R = nullptr;
+    ResidualFusion f = {};
+    std::vector<const Instruction *> chain = {C};
+    std::vector<const Value *> vals = {D};
+    size_t k = i;
+    int nRelu = 0;
+    for (size_t j = next(k); j < ins.size() && f.steps.size() + 3 <= 8; j = next(k)) {
+      const Instruction *J = ins[j];
+      const Value *O = nullptr;
+      if (auto *E = llvm::dyn_cast<ElementAddInst>(J)) {
+        const Value *Rx = E->getLHS() == V ? E->getRHS() : E->getRHS() == V ? E->getLHS() : nullptr;
+        O = E->getDest();
+        if (R || !Rx || Rx == V || std::find(vals.begin(), vals.end(), Rx) != vals.end() || !ctx->isPacked(Rx) ||
+            !ctx->isPacked(O) || Rx->dims() != D->dims() || O->dims() != D->dims())
+          break;
+        if (nRelu && !vtaConvEpilogue)
+          break;
+        auto tV = V->getType(), tR = Rx->getType(), tO = O->getType();
+        int eV, eR; // sV / sO = 2^eV, sR / sO = 2^eR
+        if (tV->getOffset() || tR->getOffset() || tO->getOffset() ||
+            !powerOfTwoExp(tV->getScale() / tO->getScale(), &eV) || !powerOfTwoExp(tR->getScale() / tO->getScale(), &eR))
+          break;
+        const int m = std::max(0, std::max(-eV, -eR));
+        if (m + eV > 8 || m + eR > 6 || m > 15)
+          break;
+        f.steps.push_back({ADD, 0, m + eV, m + eR, 0});
+        f.steps.push_back({RQ, 2, m, -128, 127});
+        f.convShl = m + eV, f.resShl = m + eR, f.sumShr = m;
+        R = Rx;
+      } else if (auto *Rl = llvm::dyn_cast<ReluInst>(J)) {
+        O = Rl->getDest();
+        if (Rl->getSrc() != V || !ctx->isPacked(O) || O->dims() != D->dims())
+          break;
+        if (!vtaConvEpilogue && (!R || nRelu))
+          break;
+        int q = 0; // sV / sO = 2^q
+        if (V->getType()->getOffset() || O->getType()->getOffset() ||
+            !powerOfTwoExp(V->getType()->getScale() / O->getType()->getScale(), &q) || q < 0 || q > 7)
+          break;
+        f.steps.push_back({CLIP, 0, 127, 0, 0});
+        if (q) {
+          f.steps.push_back({SHL, q, 0, 0, 0});
+          f.steps.push_back({CLIP, -128, 127, 0, 0});
+        }
+        f.reluShl = q;
+        nRelu++;
+      } else {
+        break;
+      }
+      chain.push_back(J);
+      if (std::find(vals.begin(), vals.end(), O) == vals.end())
+        vals.push_back(O);
+      V = O;
+      k = j;
+    }
+    if (chain.size() == 1)
+      continue;
+    // an add without a relu after it only with -vta-fuse-residual-norelu (as before)
+    if (R && !nRelu && !vtaFuseResidualNoRelu)
+      continue;
+    // the forms convolution_wo_tr_res takes: add, at most one relu (else, without -vta-conv-epilogue, not fused)
+    f.classic = R && nRelu <= 1 && chain.size() == 2 + (size_t)nRelu &&
+                llvm::isa<ElementAddInst>(chain[1]);
+    if (!vtaConvEpilogue && !f.classic)
+      continue;
+    const Value *O2 = V;
+    if (O2 == C->getSrc() || (O2 != D && O2 != R && !allocAt.count(O2)))
+      continue;
+    const bool hoist = O2 != D && O2 != R && allocAt[O2] > i;
+    if (hoist && allocAt[O2] > k)
+      continue;
+    // every value of the chain but out is read only by the chain
+    bool alone = true;
+    for (const Value *v : vals) {
+      if (v == O2)
+        continue;
+      int n = 0;
+      for (const Instruction *J : chain) {
+        bool uses = false;
+        for (const auto &op : J->getOperands())
+          uses = uses || op.first == v;
+        n += uses;
+      }
+      alone = alone && users[v] == n;
+    }
+    if (!alone)
+      continue;
+    // out >= 0: the range through the program from the conv's own clip
+    int lo = convRelu(C) ? 0 : -128;
+    for (auto &st : f.steps) {
+      if (st[0] == ADD) lo = INT32_MIN / 4;
+      else if (st[0] == RQ) lo = std::max(st[3], std::min(lo, st[4]));
+      else if (st[0] == CLIP) lo = std::max(lo, st[1]);
+      else if (st[0] == SHL) lo = lo * (1 << st[1]);
+    }
+    f.residual = R;
+    f.out = O2;
+    f.hoistOut = hoist;
+    f.relu = lo >= 0;
+    (*ctx->getFusions())[C] = f;
+    for (size_t q = 1; q < chain.size(); q++)
+      ctx->getFusedAway()->insert(chain[q]);
+  }
+}
+
+#if 0 //#### JO: the pattern finder before -vta-conv-epilogue (2026-11-14)
   for (size_t i = 0; i < ins.size(); i++) {
     auto *C = llvm::dyn_cast<ConvolutionInst>(ins[i]);
     if (!C || getConvPath(C) != ConvPath::VTA || !ctx->isPacked(C->getDest()))
@@ -4177,6 +4326,7 @@ void findResidualFusions(const IRFunction *IR, VTASaveContext *ctx) {
       ctx->getFusedAway()->insert(Rl);
   }
 }
+#endif
 
 //#### JO added (2026-11-02): the EVTA max pool (findEvtaMaxPools) 3x3 / stride 2 / pad 1 that is the next instruction after a
 //#### packed first conv (getConv0Pack) with relu and the only other user of its output, when the conv's schedule tiles are
@@ -8436,7 +8586,7 @@ static std::string matMulCallTail(VTASaveContext *ctx, const std::string &sched)
 
 static std::string vtaOptionsComment() {
   static const char *const names[] = {
-      "vta-keep-layout",   "vta-fuse-residual", "vta-fuse-residual-norelu", "vta-evta-maxpool", "vta-evta-fc",
+      "vta-keep-layout",   "vta-fuse-residual", "vta-fuse-residual-norelu", "vta-conv-epilogue", "vta-evta-maxpool", "vta-evta-fc",
       "vta-fuse-preprocess", "vta-conv0-pack",  "vta-fuse-pool",    "vta-evta-depthwise",
       "vta-round-shift",   "vta-pad-channels",  "vta-matmul-conv", "vta-fold-matmul-bias", "vta-evta-matmul", "vta-lut-elementwise", "vta-fuse-layernorm",
       "vta-matmul-heads", "vta-attn-keep-layout", "vta-cpu-approx", "vta-alu-output-lut", "vta-alu-layernorm", "vta-alu-softmax", "vta-evta-avgpool",

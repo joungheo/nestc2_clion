@@ -196,6 +196,29 @@ void VTASetActivationClip(int hi);
 #define VTA_OUTPUT_LUT 1
 void VTASetOutputLut(const int8_t *T);
 bool VTAHasAluExt();
+//#### JO added (2026-11-14): conv epilogue (docs/evta_alux_epilogue.md): steps applied in order to every output value v of the
+//#### next convolution_wo_tr calls, after the conv's own requantize (v starts as its int8 output); VTASetConvEpilogue(nullptr)
+//#### turns it off. The EVTA does what it can on the loaded bitstream (ALU / GEMM passes per tile before the STORE), the rest
+//#### is done on the CPU with the same arithmetic (VTAEpilogueRef). Every value ends as int8.
+//####   ADD  a = tensor index, b, c:   v = (v << b) + (t_a << c)    t_a: VTA buffer in the EVTA layout of the conv output
+//####   RQ   a = round, b = shift, c = lo, d = hi:  v = clip((v + r) >> b, c, d), r = 0 (round 0), 2^(b-1) (1),
+//####        2^(b-1) - (v < 0) (2, half away from zero)
+//####   CLIP a = lo, b = hi;   SHL a = k: v = v << k;   LUT a = table index: v = lut_a[(uint8_t) v]
+#define VTA_CONV_EPILOGUE 1
+enum { VTA_EPI_ADD = 1, VTA_EPI_RQ = 2, VTA_EPI_CLIP = 3, VTA_EPI_SHL = 4, VTA_EPI_LUT = 5 };
+#define VTA_EPI_MAX_STEPS 8
+struct VTAEpiStep {
+  int32_t op, a, b, c, d;
+};
+struct VTAEpilogue {
+  int32_t n;
+  VTAEpiStep s[VTA_EPI_MAX_STEPS];
+  void *t[2];           // ADD tensors
+  const int8_t *lut[2]; // LUT tables, indexed by the byte
+};
+void VTASetConvEpilogue(const VTAEpilogue *e);
+// the value of one output on the CPU: x = the conv's int8 output, tv[i] = tensor i's value at the same place
+int8_t VTAEpilogueRef(const VTAEpilogue *e, int8_t x, const int8_t *tv);
 //#### JO added (2026-11-12, ALU extension): the integer layer norm (nestc_cpu::layerNormI8, NESTC_LN_INT=1) as an EVTA ALU
 //#### program; 0 = not run (no extended ALU, unsupported shape): the caller runs the CPU function. See VTABundle.cpp
 int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float *w, const int8_t *b, float a2b, float a2d,
