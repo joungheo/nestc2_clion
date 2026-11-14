@@ -5,7 +5,7 @@
 FROM ubuntu:18.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      build-essential clang-8 llvm-8 llvm-8-dev cmake ninja-build make git wget ca-certificates pkg-config \
+      build-essential binutils-aarch64-linux-gnu rsync clang-8 llvm-8 llvm-8-dev cmake ninja-build make git wget ca-certificates pkg-config \
       graphviz libpng-dev libprotobuf-dev protobuf-compiler libgoogle-glog-dev libgflags-dev \
       libboost-all-dev libdouble-conversion-dev libevent-dev libssl-dev libjemalloc-dev libpthread-stubs0-dev \
       opencl-headers libtinfo-dev zlib1g-dev libedit-dev libxml2-dev \

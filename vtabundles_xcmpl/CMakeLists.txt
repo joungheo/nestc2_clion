@@ -67,7 +67,9 @@ set(NESTC_USE_VTASIM OFF)
 #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fopenmp=libgomp -w")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fopenmp -w")
 link_directories(/usr/lib/llvm-8/lib)
-include_directories(SYSTEM /usr/lib/llvm-8/include)
+#### JO changed (2026-11-14): under the sysroot of a cross build (utils/docker_nestc/zcu102_toolchain.cmake); the same on the board
+# include_directories(SYSTEM /usr/lib/llvm-8/include)
+include_directories(SYSTEM ${CMAKE_SYSROOT}/usr/lib/llvm-8/include)
 # vtalib sources include "vta/vtalib/include/..." relative to the NEST-C root
 include_directories(${NESTC_ROOT})
 

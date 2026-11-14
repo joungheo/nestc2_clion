@@ -2,6 +2,12 @@
 
 Location: `nest-compiler/vtabundles_xcmpl/` (the NEST-C root is the parent directory; no absolute paths).
 Build directories are not kept in git (`.gitignore`): create them with the `cmake` lines below.
+#### JO added (2026-11-14): cross build on the host PC (container `nestc-build`, `utils/docker_nestc/`): the same cmake lines plus
+`-DCMAKE_TOOLCHAIN_FILE=<NEST-C root>/utils/docker_nestc/zcu102_toolchain.cmake` (clang-8 `--target aarch64-linux-gnu` against a copy of the
+board's rootfs, `utils/docker_nestc/sync_sysroot.sh` -> `~/zcu102_sysroot`), e.g. in `build_systimed/` on the PC
+`cmake -DCMAKE_TOOLCHAIN_FILE=... -DBUNDLE_TIMED=ON -DBUNDLE_EXE_SUFFIX=_systimed -DVTALIB=$PWD/../../vtalib-zcu102-systolic .. && make -j16 <target>`,
+then scp `hw/<Dir>/<exe>` to the board's `hw/<Dir>/` and run it there (`run_prof.sh` as usual). Checked with MobileNetV2: the
+objects' machine code is identical to the board build's, shared libraries the same, `EVTA_RES_CHECK` 0 differ, 18.00 ms both.
 `build_timed/`: `cmake -DBUNDLE_TIMED=ON -DBUNDLE_EXE_SUFFIX=_timed ..` (per-statement timing, `hw/script/run_prof.sh -s _timed`).
 #### JO added (2026-10-29): systolic bitstreams (`SYS_BIN` of run_all.sh, picked by `run_prof.sh -s _sys*`), vtalib `vtalib-zcu102-systolic`:
 `build_sysprof/` (`-DNESTC_EVTA_PROFILE=ON -DBUNDLE_EXE_SUFFIX=_sysprof`), `build_systimed/` (`-DBUNDLE_TIMED=ON -DBUNDLE_EXE_SUFFIX=_systimed`),

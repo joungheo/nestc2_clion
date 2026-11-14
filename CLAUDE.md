@@ -185,6 +185,12 @@ numpy 1.19.5 / onnx 1.11.0); `configure.sh` configures `<tree>/Debug2_remote` wi
 (about 10 min at -j16; `make` of a bundle target 4-7 s against 106 s on the board). The model files come from the board's `Debug2_remote`
 (the S3 download needs `aws`). Bundles generated there are byte-identical to the board's (cpp and weights of Resnet18 / 50, VGG16, MobileNetV2);
 the vtalib simulator tests (`run_lut_conv_test.sh`) run there. EVTA timing still only on the board. `docker exec -it -u ubuntu nestc-build bash`.
+The board executables are cross-built there too (2026-11-14): `utils/docker_nestc/sync_sysroot.sh` copies the board's headers / libraries
+(`/usr/include`, `/usr/lib/aarch64-linux-gnu`, `/usr/lib/llvm-8`, gcc 7.3, `/usr/local`, `libcma.so`; 2.1 GB) to `~/zcu102_sysroot` (absolute
+symlinks made relative), `zcu102_toolchain.cmake` = clang-8 `--target aarch64-linux-gnu` + binutils-aarch64-linux-gnu, llvm-8/lib searched after the
+system dirs (else `-lgomp` is LLVM's libomp alias), `--hash-style=both` as the board's ld; then `vtabundles_xcmpl` cmake as usual
+(`vtabundles_xcmpl/README.md`), scp the executable to the board. Same machine code as the board build (MobileNetV2: objects' `.text` identical,
+same `NEEDED`, 0 differ, 18.00 ms both). A fresh build dir after a toolchain change (`cmake .` keeps the old `*_INIT` flags).
 
 ```bash
 docker exec -it -u ubuntu vivado2020-build bash
