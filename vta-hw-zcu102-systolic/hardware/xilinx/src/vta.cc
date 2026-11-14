@@ -372,6 +372,20 @@ inline out_T requant(acc_T v, out_T o, bool en, ap_uint<2> rnd, ap_uint<5> shift
   return en ? c : o;
 }
 
+#ifdef VTA_ALUX
+//#### JO added (2026-11-14, 400 MHz: v < 0 -> round - 1 -> 32-bit add -> shift was -0.052 ns in the ALUX vector loop): requant
+//#### with a register after the add (one more cycle between the acc read and the out write)
+inline out_T requant_p(acc_T v, out_T o, bool en, ap_uint<2> rnd, ap_uint<5> shift, ap_int<8> lo, ap_int<8> hi) {
+#pragma HLS INLINE
+  ap_uint<32> h = (rnd != 0 && shift != 0) ? (ap_uint<32>) ((ap_uint<32>) 1 << (shift - 1)) : (ap_uint<32>) 0;
+  if (rnd == 2 && shift != 0 && v < 0) h = h - 1;
+  acc_T t = alu_reg((acc_T) ((ap_uint<32>) v.range(VTA_ACC_WIDTH - 1, 0) + h));
+  acc_T q = t >> shift;
+  out_T c = q < lo ? (out_T) lo : q > hi ? (out_T) hi : (out_T) q.range(VTA_OUT_WIDTH - 1, 0);
+  return en ? c : alu_reg(o);
+}
+#endif
+
 #ifdef VTA_SYSTOLIC
 //#### JO added (2026-10-27, systolic Phase D, docs/evta_systolic_design.md §3): the GEMM loop of gemm() with the
 //#### computation replaced by one uop to gemm_sa per step (final addresses, last on the instruction's final step).
@@ -597,8 +611,12 @@ inline void alux_step(AluxFields f, ap_uint<4> op, ap_uint<4> lut_entry,
       } else if (op == VTA_ALUX_CLZ) {
         r = alux_clz(x);
       }
+      //#### JO added (2026-11-14, 400 MHz): registers after the operation (op decode -> result select was -0.041 ns), after
+      //#### the requantize add (requant_p) and before the lut_en read (clip compare -> LUTRAM address -> q0 was -0.053 ns)
+      r = alu_reg(r);
       D[i][b] = r;
-      out_T o = requant(r, (out_T) r.range(VTA_OUT_WIDTH - 1, 0), f.rq_en, f.rq_round, f.rq_shift, f.rq_lo, f.rq_hi);
+      out_T o = requant_p(r, (out_T) r.range(VTA_OUT_WIDTH - 1, 0), f.rq_en, f.rq_round, f.rq_shift, f.rq_lo, f.rq_hi);
+      o = alu_reg(o);
       if (f.lut_en) {
         ap_uint<8> ob = o.range(7, 0);
         o = (out_T) alux_lut_o[c][ob.range(3, 0)][ob.range(7, 4)];
@@ -703,6 +721,13 @@ void alu(
       // Iterate over micro op
       READ_ALU_UOP: for (int upc = insn.uop_bgn; upc < insn.uop_end; upc++) {
 #pragma HLS PIPELINE II = 2
+#ifdef VTA_ALUX
+        //#### JO added (2026-11-14, 400 MHz: offset select -> add -> acc_mem address was -0.055 ns): registers after the uop
+        //#### read and the address add, as the imm loop (both the read and the write move: the hazard window stays)
+        uop_T uop = alu_reg(uop_mem[upc]);
+        acc_idx_T dst_idx = alu_reg((acc_idx_T) (uop.range(VTA_UOP_ALU_0_1, VTA_UOP_ALU_0_0) + dst_offset_in));
+        acc_idx_T src_idx = alu_reg((acc_idx_T) (uop.range(VTA_UOP_ALU_1_1, VTA_UOP_ALU_1_0) + src_offset_in));
+#else
         // Read micro-op fields
         uop_T uop = uop_mem[upc];
 
@@ -711,6 +736,7 @@ void alu(
             uop.range(VTA_UOP_ALU_0_1, VTA_UOP_ALU_0_0) + dst_offset_in;
         acc_idx_T src_idx =
             uop.range(VTA_UOP_ALU_1_1, VTA_UOP_ALU_1_0) + src_offset_in;
+#endif
 
         // Read in src tensor
         acc_T src_tensor[VTA_BATCH][VTA_BLOCK_OUT];
@@ -722,6 +748,14 @@ void alu(
         out_T o_tensor[VTA_BATCH][VTA_BLOCK_OUT];
 
 #ifdef VTA_ALUX
+        //#### JO added (2026-11-14, 400 MHz: acc_mem -> ADD -> result and acc_mem -> LUTSET data (to 32 LUTRAM copies) were
+        //#### -0.029 / -0.027 ns): a register on the two tensors read
+        for (int i = 0; i < VTA_BATCH; i++) {
+          for (int b = 0; b < VTA_BLOCK_OUT; b++) {
+            src_tensor[i][b] = alu_reg(src_tensor[i][b]);
+            dst_tensor[i][b] = alu_reg(dst_tensor[i][b]);
+          }
+        }
         //#### JO added (2026-11-11, ALU extension): every operation through alux_step, no acc / out write for LUTSET
         alux_step(af, op, lut_entry, dst_tensor, src_tensor, o_tensor);
         lut_entry++;

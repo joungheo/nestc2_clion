@@ -115,6 +115,9 @@ void run(const Insn &insn, const Uop *uops, int32_t (*acc)[kLanes], int8_t (*out
 // #### JO added (2026-11-11, docs/evta_isa_ext.md 8.8): steps of one instruction that read an acc entry (dst, or src unless
 // use_imm) written by one of the `window` steps before it. The HLS ALU loop has no forwarding (DEPENDENCE inter false on
 // acc_mem): with ALUX the vector loop is II 2, depth 33, so up to 17 steps are in flight and such a read gets the old value.
+// #### JO (2026-11-14): with the 400 MHz registers the loop is depth 39; acc read at stage 5 (src) / 6 (dst), write at 38, so a
+// step sees the write of the step d before it iff d >= 17 (2d + 5 > 38): the real window is 16 (directed C/RTL cosim, d = 14..16
+// wrong, 17 / 18 right). The rule stays window 17 (one step of margin; the vtalib programs and checks keep using it).
 // The imm loop (II 1, depth 12, MIN / MAX / ADD / SHR only) has up to 12. Returns the number of such steps.
 template <typename Insn, typename Uop>
 long hazards(const Insn &insn, const Uop *uops, int window) {

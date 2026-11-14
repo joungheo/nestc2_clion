@@ -80,7 +80,8 @@ VTAAluInsn blank(int op) {
 }
 
 // a random instruction over [0, N); for the RTL (ALUX_COSIM) only instructions with no step reading or writing an entry
-// written in the 17 steps before it (the vector loop's II 2 / depth 33; docs/evta_isa_ext.md 8.8)
+// written in the 17 steps before it (the vector loop's II 2 / depth 33; docs/evta_isa_ext.md 8.8; depth 39 since 2026-11-14,
+// real window 16, see alu_ext_ref.h hazards())
 void addRandom(Prog &p) {
 #ifdef ALUX_COSIM
  for (;;) {
@@ -121,7 +122,9 @@ void addRandom(Prog &p) {
   h.uop_end = us.size();
   // VTA_ALUX_HAZARD_OK=1 keeps them (the RTL must then differ: shows the cosim compares the RTL's results)
   static const bool hazardOk = getenv("VTA_ALUX_HAZARD_OK") && atoi(getenv("VTA_ALUX_HAZARD_OK"));
-  if (!hazardOk && vta_alu_ref::hazards(h, uv.data(), 17) != 0) continue;
+  //#### JO added (2026-11-14): VTA_ALUX_WINDOW=<steps> (default 17) to find the RTL's real window (16 since the 400 MHz registers)
+  static const int window = getenv("VTA_ALUX_WINDOW") ? atoi(getenv("VTA_ALUX_WINDOW")) : 17;
+  if (!hazardOk && vta_alu_ref::hazards(h, uv.data(), window) != 0) continue;
 #endif
   addAlu(p, a, us);
 #ifdef ALUX_COSIM
@@ -181,6 +184,28 @@ int alux_test(unsigned seed, int ninsn) {
     a.imm = (int16_t) (16 * rnd(p, 100));   // multiples of 16: the start entry wraps to 0
     addAlu(p, a, {{0, rnd(p, N - 16)}});
   }
+#ifdef ALUX_COSIM
+  //#### JO added (2026-11-14): VTA_ALUX_DIST=<d>,<d>,... instead of the random instructions: one vector ADD per d whose
+  //#### steps add acc[100] to acc[0..d) four times over (uops dst j = 0..d-1, iter_in 4, factors 0), so every step reads the
+  //#### entry written exactly d steps before. Store k + 2 is the one of the k-th d: it differs iff d is inside the window.
+  if (getenv("VTA_ALUX_DIST")) {
+    std::vector<int> ds;
+    for (const char *c = getenv("VTA_ALUX_DIST"); *c;) {
+      ds.push_back(atoi(c));
+      while (*c && *c != ',') c++;
+      if (*c) c++;
+    }
+    for (int d : ds) {
+      VTAAluInsn a = blank(VTA_ALU_OPCODE_ADD);
+      a.iter_in = 4;
+      std::vector<std::pair<int, int>> us;
+      for (int j = 0; j < d; j++) us.push_back({j, 100});
+      printf("INFO - directed: store %d = vector ADD with reuse distance %d\n", (int) p.storeOff.size(), d);
+      addAlu(p, a, us);
+    }
+    ninsn = 0;
+  }
+#endif
   for (int k = 0; k < ninsn; k++) {
     if (rnd(p, 8) == 0) {
       VTAAluInsn a = blank(VTA_ALUX_LUTSET);

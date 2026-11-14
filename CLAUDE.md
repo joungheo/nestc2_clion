@@ -326,6 +326,11 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   the old executables (compare dumps without the `_CHECK` variables: their reference convs are dumped too), times unchanged.
   400 MHz `_alux`: `vivado.tcl` puts a multicycle 2 on the reset paths (`reset_multicycle.xdc`, `VTA_RESET_MC=0` off); still WNS -0.055 ns
   (ETO) from compute -> ALU LUT RAM / acc_mem BRAM paths, needs RTL / HLS registers (`docs/evta_isa_ext.md` end of §8.12).
+  Registers added (2026-11-14, §8.13): `vta.cc` `alu_reg` on the vector loop uop / indices, operands, op result, requant; `sa_rmw.v`
+  forward compare one stage earlier (RMW 3 -> 4 cycles, still forwards: no GEMM program rule); `vivado.tcl` an AXIS register slice after
+  each command queue above 380 MHz (`VTA_QUEUE_RS`). ALU vector loop depth 33 -> 39: a step misses writes up to 16 steps back (cosim
+  `VTA_ALUX_DIST`), the 17-step rule holds. `..._sa_alux_400mhz_rq.bin` (Explore, WNS +0.014 ns): ALU tests and dumps identical to 380 MHz,
+  MobileNetV2 18.05 -> 17.56, Resnet18 24.10 -> 23.05, Resnet50 71.28 -> 68.82 ms.
 - Other models (2026-11-05, `docs/evta_runtime_compare.md` §7.19): Resnet50 res2_0 residual fused (relu to a 2^q smaller scale), schedules of the
   Resnet50 / VGG16 shapes in `VTASchedules.h` (found with vtalib-systolic `EVTA_SCHED`), conv tiles below 7 x 7: the dummy-padded store
   used the wrong channel block with nVirtualThread 2 (fixed in both vtalibs) and the systolic vtalib's minimum tile is 1 on an `_sa_` bitstream

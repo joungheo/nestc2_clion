@@ -435,9 +435,24 @@ connect_bd_intf_net -intf_net compute_0_g2l_dep_queue_V [get_bd_intf_pins comput
 connect_bd_intf_net -intf_net compute_0_g2s_dep_queue_V [get_bd_intf_pins compute_0/g2s_dep_queue_V] [get_bd_intf_pins g2s_queue/S_AXIS]
 }
 connect_bd_intf_net -intf_net store_0_s2g_dep_queue_V [get_bd_intf_pins s2g_queue/S_AXIS] [get_bd_intf_pins store_0/s2g_dep_queue_V]
-connect_bd_intf_net -intf_net load_queue_M_AXIS [get_bd_intf_pins load_0/load_queue_V_V] [get_bd_intf_pins load_queue/M_AXIS]
-connect_bd_intf_net -intf_net gemm_queue_M_AXIS [get_bd_intf_pins compute_0/gemm_queue_V_V] [get_bd_intf_pins gemm_queue/M_AXIS]
-connect_bd_intf_net -intf_net store_queue_M_AXIS [get_bd_intf_pins store_0/store_queue_V_V] [get_bd_intf_pins store_queue/M_AXIS]
+#### JO changed (2026-11-14): above 380 MHz a fully registered AXIS register slice sits between each command queue and
+#### its consumer (VTA_QUEUE_RS=0|1 overrides). Without it the path FIFO EMPTY -> HLS regslice TREADY -> RDEN of the
+#### 8 cascaded FIFO36 (256-bit instructions) missed 400 MHz by 0.030 ns. Only one cycle more per instruction fetch.
+set queue_rs [expr {$clock_freq > 380}]
+if {[info exists ::env(VTA_QUEUE_RS)] && $::env(VTA_QUEUE_RS) ne ""} { set queue_rs [expr {$::env(VTA_QUEUE_RS) eq "1"}] }
+set queue_rs_cells {}
+foreach {q dst} {load_queue load_0/load_queue_V_V gemm_queue compute_0/gemm_queue_V_V store_queue store_0/store_queue_V_V} {
+  if {$queue_rs} {
+    set rs [ create_bd_cell -type ip -vlnv xilinx.com:ip:axis_register_slice:1.1 ${q}_rs ]
+    set_property -dict [ list CONFIG.REG_CONFIG {8} ] $rs
+    connect_bd_intf_net -intf_net ${q}_M_AXIS [get_bd_intf_pins ${q}/M_AXIS] [get_bd_intf_pins ${q}_rs/S_AXIS]
+    connect_bd_intf_net -intf_net ${q}_rs_M_AXIS [get_bd_intf_pins ${q}_rs/M_AXIS] [get_bd_intf_pins $dst]
+    lappend queue_rs_cells ${q}_rs
+  } else {
+    connect_bd_intf_net -intf_net ${q}_M_AXIS [get_bd_intf_pins $dst] [get_bd_intf_pins ${q}/M_AXIS]
+  }
+}
+if {$queue_rs} { puts "command queue register slices: $queue_rs_cells" }
 connect_bd_intf_net -intf_net l2g_queue_M_AXIS [get_bd_intf_pins compute_0/l2g_dep_queue_V] [get_bd_intf_pins l2g_queue/M_AXIS]
 connect_bd_intf_net -intf_net g2l_queue_M_AXIS [get_bd_intf_pins g2l_queue/M_AXIS] [get_bd_intf_pins load_0/g2l_dep_queue_V]
 connect_bd_intf_net -intf_net g2s_queue_M_AXIS [get_bd_intf_pins g2s_queue/M_AXIS] [get_bd_intf_pins store_0/g2s_dep_queue_V]
@@ -513,6 +528,10 @@ connect_bd_net -net processing_system_clk \
   [get_bd_pins g2l_queue/s_aclk] \
   [get_bd_pins g2s_queue/s_aclk] \
   [get_bd_pins s2g_queue/s_aclk]
+foreach c $queue_rs_cells {
+  connect_bd_net -net processing_system_clk [get_bd_pins $c/aclk]
+  connect_bd_net -net proc_sys_reset_peripheral_aresetn [get_bd_pins $c/aresetn]
+}
 #### JO changed (2026-10-28): the HP port clock is the EVTA clock up to 333 MHz, else hp_pll (hp_split above)
 if {!$hp_split} {
   connect_bd_net -net processing_system_clk $saxi_clk

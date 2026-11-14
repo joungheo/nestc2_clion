@@ -13,6 +13,13 @@
 // more stages: S4 sum + round (round 1: 2^(shift-1), 2: 2^(shift-1) - (sum < 0)), S5 arithmetic shift, S6 clip; out is
 // written in S6 (without rq_en the low 8 bits, also in S6). acc is written in S3 as before (the forwarding is unchanged);
 // done / tokens / busy come with the out write in S6, so nothing reads out (store) or uses the ports before it.
+// #### JO changed (2026-11-14, 400 MHz: acc_mem output register -> 4:1 select -> 32-bit add -> s3 was the worst GEMM path,
+// -0.050 ns): one more stage (the version before: git e1a7924). S2 registers the BRAM data already merged with the older
+// in-flight writes (p3 = the sum of the row 2 ahead (S4), 3 ahead (written 1 cycle ago) or 4 ahead (2 ago), else the BRAM
+// data), S3 takes the row 1 ahead (S4 now) or p3 and adds R, S4 writes acc. A read presented in S0 misses the writes of the
+// 4 rows ahead (the 4th writes on the same clock edge: READ_FIRST), so there are 4 forwarding sources instead of 3, all
+// compares in S1 / S2. rq / out stages S5..S7; done / tokens / busy with the out write in S7. No change for the programs
+// (forwarded: any dst order is right); the instruction ends one cycle later.
 `timescale 1ns / 1ps
 module sa_rmw #(
   parameter N = 16,
@@ -46,118 +53,101 @@ module sa_rmw #(
   output wire              busy
 );
   assign acc_rd_en   = tag_valid;
-  //#### JO changed (2026-11-04, bias reset): read address = src for a bias row
-  //assign acc_rd_addr = tag_dst;
+  // read address = src for a bias row
   wire [DW-1:0] ra = tag_bias ? tag_src : tag_dst;
   assign acc_rd_addr = ra;
 
-  reg [PW*N-1:0] r1, r2;
-  reg            v1, v2, v3, vw1, vw2;
-  reg [DW-1:0]   d1, d2, d3, dw1, dw2;
-  reg            z1, z2, z3, zw1, zw2;       // reset
-  reg            l1, l2, l3;
-  reg [1:0]      k1, k2, k3;               // tokens
-  reg [DW-1:0]   a1;                       // #### JO added (2026-11-04): address read (dst, or src for a bias row)
-  reg [32*N-1:0] s3, sw1, sw2;               // sums
-  //#### JO added (2026-11-04, requantize): rq with the row (q1..q3), the out stages S4..S6
-  reg [23:0]     q1, q2, q3;
-  reg            v4, v5, v6, l4, l5, l6, e4, e5;
-  reg [DW-1:0]   d4, d5, d6;
-  reg [1:0]      k4, k5, k6;
-  (* max_fanout = 64 *) reg [4:0] sh4;
-  reg [7:0]      lo4, lo5, hi4, hi5;
-  reg [31:0]     hb3, hm3;                   // 2^(shift-1) (0 without round / shift 0), and minus 1 for round 2
-  reg            m3;                         // round 2: a negative sum takes hm3
-  reg [32*N-1:0] t4, h5;
-  reg [8*N-1:0]  o6;
+  // row pipeline: S1 r1.., S2 r2.., S3 r3.. (add), S4 s4 (acc write), W1 / W2 the sums written 1 / 2 cycles ago
+  reg [PW*N-1:0] r1, r2, r3;
+  reg            v1, v2, v3, v4, vw1;
+  reg [DW-1:0]   d1, d2, d3, d4, dw1;
+  reg [DW-1:0]   a1, a2;                     // address read (dst, or src for a bias row)
+  reg            z1, z2, z3, z4, zw1, zw2;   // zero write (reset row that is not a bias row)
+  reg            l1, l2, l3, l4;
+  reg [1:0]      k1, k2, k3, k4;             // tokens
+  reg [32*N-1:0] p3, s4, sw1, sw2;
+  // rq with the row (q1..q4), the out stages S5..S7
+  reg [23:0]     q1, q2, q3, q4;
+  reg            v5, v6, v7, l5, l6, l7, e5, e6;
+  reg [DW-1:0]   d5, d6, d7;
+  reg [1:0]      k5, k6, k7;
+  (* max_fanout = 64 *) reg [4:0] sh5;
+  reg [7:0]      lo5, lo6, hi5, hi6;
+  reg [31:0]     hb4, hm4;                   // 2^(shift-1) (0 without round / shift 0), and minus 1 for round 2
+  reg            m4;                         // round 2: a negative sum takes hm4
+  reg [32*N-1:0] t5, h6;
+  reg [8*N-1:0]  o7;
 
-  //#### JO changed (2026-10-27, Phase D4): the dst compares are done one stage early (S1, against the rows that will be in
-  //#### S3 / written 1 / written 2 cycles ago when this row is in S2) and registered, so S2 is only the select and the add
-  //#### (at 400 MHz OOC the compare -> 512-bit select -> add path was the worst one).
-  //wire m3 = v3  && d3  == d2;
-  //wire m4 = vw1 && dw1 == d2;
-  //wire m5 = vw2 && dw2 == d2;
-  (* max_fanout = 32 *) reg f3, f4, f5;   // S2 takes: S3's sum, the sum written 1 / 2 cycles ago, the BRAM data
-  (* max_fanout = 32 *) reg f3z, f4z, f5z;   // that row was a reset row: the value is 0
-  wire [32*N-1:0] old = f3 ? (f3z ? {32*N{1'b0}} : s3) :
-                        f4 ? (f4z ? {32*N{1'b0}} : sw1) :
-                        f5 ? (f5z ? {32*N{1'b0}} : sw2) : acc_rd_data;
+  // forwarding flags. S1 (for p3 in S2): the rows 2 / 3 / 4 ahead are now in S3 / S4 / W1. S2 (for the add in S3): the row
+  // 1 ahead is now in S3. g*z / f1z: that row writes 0.
+  (* max_fanout = 32 *) reg g2, g3, g4, g2z, g3z, g4z;
+  (* max_fanout = 32 *) reg f1, f1z;
+  wire [32*N-1:0] pre = g2 ? (g2z ? {32*N{1'b0}} : s4) :
+                        g3 ? (g3z ? {32*N{1'b0}} : sw1) :
+                        g4 ? (g4z ? {32*N{1'b0}} : sw2) : acc_rd_data;
+  wire [32*N-1:0] old = f1 ? (f1z ? {32*N{1'b0}} : s4) : p3;
   wire [32*N-1:0] sum;
   genvar k;
   generate
     for (k = 0; k < N; k = k + 1) begin : lane
-      assign sum[32*k+31:32*k] = old[32*k+31:32*k] + {{(32-PW){r2[PW*k+PW-1]}}, r2[PW*k+PW-1:PW*k]};
-      //#### JO changed (2026-11-04, requantize): out from S6
-      //assign out_wr_data[8*k+7:8*k] = s3[32*k+7:32*k];
-      assign out_wr_data[8*k+7:8*k] = o6[8*k+7:8*k];
-      wire [31:0] sk = s3[32*k+31:32*k];
-      wire [31:0] tk = t4[32*k+31:32*k];
-      wire signed [31:0] hk = h5[32*k+31:32*k];
+      assign sum[32*k+31:32*k] = old[32*k+31:32*k] + {{(32-PW){r3[PW*k+PW-1]}}, r3[PW*k+PW-1:PW*k]};
+      assign out_wr_data[8*k+7:8*k] = o7[8*k+7:8*k];
+      wire [31:0] sk = s4[32*k+31:32*k];
+      wire [31:0] tk = t5[32*k+31:32*k];
+      wire signed [31:0] hk = h6[32*k+31:32*k];
       always @(posedge clk) begin
-        t4[32*k+31:32*k] <= sk + ((m3 && sk[31]) ? hm3 : hb3);
-        h5[32*k+31:32*k] <= $signed(tk) >>> sh4;
-        o6[8*k+7:8*k]    <= !e5 ? hk[7:0] :
-                            hk < $signed({{24{lo5[7]}}, lo5}) ? lo5 :
-                            hk > $signed({{24{hi5[7]}}, hi5}) ? hi5 : hk[7:0];
+        t5[32*k+31:32*k] <= sk + ((m4 && sk[31]) ? hm4 : hb4);
+        h6[32*k+31:32*k] <= $signed(tk) >>> sh5;
+        o7[8*k+7:8*k]    <= !e6 ? hk[7:0] :
+                            hk < $signed({{24{lo6[7]}}, lo6}) ? lo6 :
+                            hk > $signed({{24{hi6[7]}}, hi6}) ? hi6 : hk[7:0];
       end
     end
   endgenerate
 
   // rq fields: en q[0], round q[2:1], shift q[7:3], lo q[15:8], hi q[23:16]
-  wire       qe = q2[0];
-  wire [1:0] qr = q2[2:1];
-  wire [4:0] qs = q2[7:3];
+  wire       qe = q3[0];
+  wire [1:0] qr = q3[2:1];
+  wire [4:0] qs = q3[7:3];
   always @(posedge clk) begin
-    q1 <= tag_rq; q2 <= q1; q3 <= q2;
-    // S3 (with s3): the round constants of the row now in S2
-    hb3 <= (qe && qr != 2'd0 && qs != 5'd0) ? (32'd1 << (qs - 5'd1)) : 32'd0;
-    hm3 <= (qe && qr != 2'd0 && qs != 5'd0) ? (32'd1 << (qs - 5'd1)) - 32'd1 : 32'd0;
-    m3  <= qe && qr == 2'd2 && qs != 5'd0;
-    // S4
-    sh4 <= q3[0] ? q3[7:3] : 5'd0; e4 <= q3[0]; lo4 <= q3[15:8]; hi4 <= q3[23:16];
-    d4 <= d3; l4 <= l3; k4 <= k3;
+    q1 <= tag_rq; q2 <= q1; q3 <= q2; q4 <= q3;
+    // S4 (with s4): the round constants of the row now in S3
+    hb4 <= (qe && qr != 2'd0 && qs != 5'd0) ? (32'd1 << (qs - 5'd1)) : 32'd0;
+    hm4 <= (qe && qr != 2'd0 && qs != 5'd0) ? (32'd1 << (qs - 5'd1)) - 32'd1 : 32'd0;
+    m4  <= qe && qr == 2'd2 && qs != 5'd0;
     // S5
-    e5 <= e4; lo5 <= lo4; hi5 <= hi4; d5 <= d4; l5 <= l4; k5 <= k4;
+    sh5 <= q4[0] ? q4[7:3] : 5'd0; e5 <= q4[0]; lo5 <= q4[15:8]; hi5 <= q4[23:16];
+    d5 <= d4; l5 <= l4; k5 <= k4;
     // S6
-    d6 <= d5; l6 <= l5; k6 <= k5;
-    if (rst) begin v4 <= 0; v5 <= 0; v6 <= 0; end
-    else begin v4 <= v3; v5 <= v4; v6 <= v5; end
+    e6 <= e5; lo6 <= lo5; hi6 <= hi5; d6 <= d5; l6 <= l5; k6 <= k5;
+    // S7
+    d7 <= d6; l7 <= l6; k7 <= k6;
+    if (rst) begin v5 <= 0; v6 <= 0; v7 <= 0; end
+    else begin v5 <= v4; v6 <= v5; v7 <= v6; end
   end
 
   always @(posedge clk) begin
-    // compare in S1: when this row (d1) is in S2, S3 holds the row now in S2 (d2), written-1 the row now in S3 (d3),
-    // written-2 the row written last cycle (dw1)
-    //#### JO changed (2026-11-04, bias reset): compared with the address read (a1), a bias row adds nothing (r2 = 0) and
-    //#### is not a zero write (z = reset && !bias)
-    //f3 <= v2 && d2 == d1;   f3z <= z2;
-    //f4 <= v3 && d3 == d1;   f4z <= z3;
-    //f5 <= vw1 && dw1 == d1; f5z <= zw1;
-    //r1 <= row; d1 <= tag_dst; z1 <= tag_reset; l1 <= tag_last; k1 <= tag_tok;
-    //r2 <= r1;  d2 <= d1;      z2 <= z1;        l2 <= l1;       k2 <= k1;
-    f3 <= v2 && d2 == a1;   f3z <= z2;
-    f4 <= v3 && d3 == a1;   f4z <= z3;
-    f5 <= vw1 && dw1 == a1; f5z <= zw1;
+    g2 <= v3  && d3  == a1;   g2z <= z3;
+    g3 <= v4  && d4  == a1;   g3z <= z4;
+    g4 <= vw1 && dw1 == a1;   g4z <= zw1;
+    f1 <= v3  && d3  == a2;   f1z <= z3;
+    p3 <= pre;
     r1 <= tag_bias ? {PW*N{1'b0}} : row; d1 <= tag_dst; a1 <= ra; z1 <= tag_reset && !tag_bias; l1 <= tag_last; k1 <= tag_tok;
-    r2 <= r1;  d2 <= d1;      z2 <= z1;        l2 <= l1;       k2 <= k1;
-    s3 <= sum; d3 <= d2;      z3 <= z2;        l3 <= l2;       k3 <= k2;
-    sw1 <= s3; dw1 <= d3;     zw1 <= z3;
-    sw2 <= sw1; dw2 <= dw1;   zw2 <= zw1;
-    if (rst) begin v1 <= 0; v2 <= 0; v3 <= 0; vw1 <= 0; vw2 <= 0; end
-    else begin v1 <= tag_valid; v2 <= v1; v3 <= v2; vw1 <= v3; vw2 <= vw1; end
+    r2 <= r1;  d2 <= d1;  a2 <= a1;  z2 <= z1;  l2 <= l1;  k2 <= k1;
+    r3 <= r2;  d3 <= d2;             z3 <= z2;  l3 <= l2;  k3 <= k2;
+    s4 <= sum; d4 <= d3;             z4 <= z3;  l4 <= l3;  k4 <= k3;
+    sw1 <= s4; dw1 <= d4;            zw1 <= z4;
+    sw2 <= sw1;                      zw2 <= zw1;
+    if (rst) begin v1 <= 0; v2 <= 0; v3 <= 0; v4 <= 0; vw1 <= 0; end
+    else begin v1 <= tag_valid; v2 <= v1; v3 <= v2; v4 <= v3; vw1 <= v4; end
   end
 
-  assign acc_wr_en   = v3;
-  assign acc_wr_addr = d3;
-  assign acc_wr_data = z3 ? {32*N{1'b0}} : s3;
-  //#### JO changed (2026-11-04, requantize): out, done, tokens in S6
-  //assign out_wr_en   = v3;
-  //assign out_wr_addr = d3;
-  //assign done        = v3 && l3;
-  //assign done_tok    = (v3 && l3) ? k3 : 2'b00;
-  //assign busy        = v1 || v2 || v3;
-  assign out_wr_en   = v6;
-  assign out_wr_addr = d6;
-  assign done        = v6 && l6;
-  assign done_tok    = (v6 && l6) ? k6 : 2'b00;
-  assign busy        = v1 || v2 || v3 || v4 || v5 || v6;
+  assign acc_wr_en   = v4;
+  assign acc_wr_addr = d4;
+  assign acc_wr_data = z4 ? {32*N{1'b0}} : s4;
+  assign out_wr_en   = v7;
+  assign out_wr_addr = d7;
+  assign done        = v7 && l7;
+  assign done_tok    = (v7 && l7) ? k7 : 2'b00;
+  assign busy        = v1 || v2 || v3 || v4 || v5 || v6 || v7;
 endmodule

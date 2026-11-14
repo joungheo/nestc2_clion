@@ -573,6 +573,7 @@ bitstream과 vtalib의 짝이 한 번만 바뀌게 하려는 것이다.
 - HLS ALU 루프에는 step 사이 forwarding이 없다(`DEPENDENCE inter false`).
 - ALUX의 vector 루프는 II 2, depth 33이다. 그래서 한 명령 안에서 최대 17 step이 동시에 돈다. 지금 `_sa`는 depth 14라 7 step이었다.
 - 따라서 **한 명령 안에서, 어떤 step이 쓴 acc entry를 그 뒤 17 step 안에 읽으면(dst든 src든) 옛 값을 읽는다.** 17은 depth로 잡은 보수적인 값이다.
+- 2026-11-14 400 MHz용 레지스터를 넣은 뒤 depth는 39다. 실제로 틀리는 거리는 16 step까지이고 규칙 17은 그대로 맞다(§8.13).
 - 검사기 `vta_alu_ref::hazards(insn, uops, window)`(`alu_ext_ref.h`)를 넣었다. `alu_ext_test.cc`가 두 명령열을 window 17로 검사한다.
   - LayerNorm: 0 step
   - softmax: 0 step
@@ -782,3 +783,60 @@ CE였다(`proc_sys_reset` 출력 fanout 5,344; HLS 블록의 `DONT_TOUCH`로 복
 compute 쪽 데이터 경로다: 비교 레지스터 → ALU LUT RAM(`alux_lut_o`, 57), acc_mem BRAM → gemm_sa(20), compute select → acc_mem BRAM 주소(20),
 compute 안의 shift(`ashr`) 등. 400 MHz는 RTL / HLS 쪽 레지스터(LUT RAM 쓰기 앞, acc_mem 출력 레지스터, sa RMW 한 단계)가 필요하고, 그때까지
 `_alux`는 380 MHz `_rq`를 쓴다.
+
+### 8.13 400 MHz용 RTL / HLS 레지스터와 겹침 window (2026-11-14)
+
+§8.12 끝의 ETO 합성(WNS −0.055 ns, 192 endpoint)에서 남은 경로에 레지스터를 넣었다.
+
+| 경로 (개수, 최악 slack) | 바꾼 곳 |
+|---|---|
+| requant clip → `lut_en` LUT RAM 읽기(57, −0.053) | `vta.cc` `alux_step`: op 결과 `r`, requant 출력 `o`를 `alu_reg`로 한 단계씩 |
+| requant v<0 → round−1 → add → shift(6–7, −0.052) | `vta.cc` `requant_p()`: add 뒤 `t`에 레지스터 |
+| compute select → acc_mem 주소(16 + 4, −0.055) | vector 루프의 uop, `dst_idx`, `src_idx`를 `alu_reg`로 |
+| op decode → dst 결과, acc_mem → LUTSET / ADD(−0.041 / −0.027 / −0.029) | `alux_step` 앞에 `src_tensor` / `dst_tensor` 레지스터 |
+| acc_mem BRAM → gemm_sa RMW 4:1 forward mux + 32비트 add(20, −0.050) | `sa_rmw.v`: forward 비교를 S1에서 미리, mux를 S2, add를 S3, 쓰기 S4(RMW 3 → 4 cycle; 이전 판 git `e1a7924`) |
+
+모두 `#ifdef VTA_ALUX` 안이라 `_alux`가 아닌 HLS 빌드는 그대로다(`sa_rmw.v`는 모든 `_sa` 빌드에 들어간다).
+
+**겹침 window를 다시 쟀다.** 단계가 늘면 한 명령 안에서 동시에 도는 step이 많아진다.
+
+- GEMM(`sa_rmw.v`): forward 대상이 하나 늘었고(S3 / S4 / W1 / W2), 쓰기 직전 entry를 같은 cycle에 다시 읽어도 forward된다. 그래서 프로그램 규칙은 생기지 않는다.
+  - xsim `gemm_sa` 벡터 21개(plain, hazard, same, conv, reload, bias, biashazard, seed 1–3) × GAP/BP 6가지(0/0, 30/20, 10/0, 50/50, 3/0, 1/0) 모두 PASS
+  - `systolic_model.cc` `RMW_LAT = 4`
+- ALU vector 루프(HLS, forwarding 없음): II 2, depth 33 → 39. imm 루프(II 1, depth 12)는 그대로다.
+  - `compute.verbose.sched.rpt`(Pipeline-0, state 18–56)에서 src 읽기 주소는 stage 5, dst는 stage 6, acc 쓰기는 stage 38이다.
+  - step d개 뒤의 step이 앞 step의 쓰기를 보려면 2d + 5 > 38, 즉 d ≥ 17이다. **실제로 틀리는 거리는 16 step까지다.**
+  - 규칙 "한 명령 안에서 쓴 entry를 17 step 안에 읽지 않는다"는 그대로 맞고 1 step 여유가 남는다. vtalib 상수(layernorm / softmax `n < 17`, avgpool `kHazard = 18`)와 `hazards(…, 17)` 검사도 그대로다.
+  - cosim(`sim/run_cosim.sh`, `VTA_ALUX_DIST=<d>`: uop {j, 100}(j < d), iter_in 4인 vector ADD 하나): d = 14, 15, 16은 틀리고(196 / 210 / 224 byte) d = 17, 18은 맞다.
+  - 무작위 명령열 cosim: window 17 / 16 / 15(`VTA_ALUX_WINDOW`)로 거른 명령열은 3 seed 모두 PASS, 거르지 않은 명령열(`VTA_ALUX_HAZARD_OK=1`)은 FAIL(예상대로).
+
+
+**합성 결과.** 위 레지스터만 넣은 첫 합성은 Explore(`BUILD_TAG=rq_pipe`) WNS −0.030 ns였고, 3 endpoint만 남았다.
+
+- 그중 둘은 명령 FIFO의 경로였다: `load_queue` FIFO EMPTY → HLS regslice TREADY → 256비트 명령을 담는 FIFO36 8개 cascade의 RDEN.
+- 나머지 하나는 acc_mem → `dst_tensor`, −0.002 ns였다.
+- ETO(`rq_pipe_eto`)는 route 충돌 DRC(RTSTAT-6, load_0 net 2개)로 비트스트림이 없었다.
+
+그래서 `vivado.tcl`이 380 MHz를 넘으면 세 명령 큐(load / gemm / store)와 소비자 사이에 fully registered `axis_register_slice`를 넣는다. `VTA_QUEUE_RS=0|1`로 바꿀 수 있다. 명령 하나당 1 cycle이 늦어질 뿐이다.
+
+| 빌드 | WNS (ns) | LUT | FF | BRAM | DSP |
+|---|---|---|---|---|---|
+| 380 MHz `_alux` `_rq` (이전) | +0.002 | 53,558 | 68,535 | 258 | 305 |
+| 400 MHz Explore `rq_qrs` | **+0.014** | 55,727 | 72,952 | 258 | 305 |
+| 400 MHz ETO `rq_qrs_eto` | +0.000 | | | | |
+
+보드에는 Explore 빌드를 `vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_alux_400mhz_rq.bin`으로 올렸다.
+
+보드 (2026-11-14). 380 MHz `_alux` `_rq`와 같은 실행 파일(`_pcsystimed`)로 돌렸다. 시간은 OMP 1, 25회 중 2–25회의 중앙값이다.
+
+- ALU 테스트(`lut_conv_test`, `ln_evta_test`, `softmax_evta_test`, `epi_conv_test` 39개)는 380 MHz와 결과가 같다.
+  - 기본 설정과 `EVTA_REQUANT=0`에서는 모두 맞다.
+  - `EVTA_ALUX=0`에서는 ln / softmax 테스트가 FAILED로 끝난다. 확장 ALU가 없을 때 380 MHz에서도 같다.
+- conv dump(`EVTA_DUMP_CONV`)는 380 MHz와 byte 단위로 같고, 분류 결과도 같다.
+
+| 모델 | dump (같음 / 개수) | 380 MHz (ms) | 400 MHz (ms) |
+|---|---|---|---|
+| MobileNetV2 | 5200 / 5200 | 18.05 | 17.56 |
+| Resnet18 | 40 / 40 | 24.10 | 23.05 |
+| Resnet50 | 106 / 106 | 71.28 | 68.82 |
+| VGG16 CIFAR-10 | 34 / 34 | 7.17 | 7.02 |

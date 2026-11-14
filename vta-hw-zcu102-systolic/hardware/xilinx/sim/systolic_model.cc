@@ -26,7 +26,7 @@
 static const int N = 16;          // VTA_BLOCK_IN = VTA_BLOCK_OUT
 static const int L_INP = 2;       // issue -> inp row at the skew input (BRAM with output register)
 static const int L_WGT = 3;       // weight address known -> PISO loadable (BRAM read + register)
-static const int RMW_LAT = 3;     // acc read -> acc write (BRAM 2 + add 1)
+static const int RMW_LAT = 4;     // acc read -> acc write (BRAM 2 + select 1 + add 1; #### JO 2026-11-14: was 3)
 static const int A_OFS = L_INP + 1;
 static const int OUT_OFS = A_OFS + 31;   // issue -> row at the RMW stage
 static const int FILL = 16;              // weight period
