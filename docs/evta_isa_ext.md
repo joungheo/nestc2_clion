@@ -913,3 +913,35 @@ compute 안의 shift(`ashr`) 등. 400 MHz는 RTL / HLS 쪽 레지스터(LUT RAM 
 - epilogue / softmax 테스트도 34 slot 규칙 위반이 0이다.
 
 비트스트림 `..._sa_alux_400mhz_rq_alux2`와 보드 결과는 아래에 이어 적는다.
+
+**비트스트림 (2026-11-15).** 이름은 `vtahw_..._sa_alux_400mhz_rq_alux2`이고, 보드에는 `..._sa_alux2_400mhz_rq.bin`으로 올렸다.
+
+| 빌드 | WNS (ns) | LUT | FF | BRAM | DSP |
+|---|---|---|---|---|---|
+| Explore | +0.006 | | | | |
+| ETO (보드에 올림) | **+0.026** | 68,207 | 89,434 | 258 | 305 |
+| 참고: 400 MHz `_alux` | +0.014 | 55,727 | 72,952 | 258 | 305 |
+
+- slot 루프 때문에 LUT가 +12.5k, FF가 +16.4k 늘었다.
+- 이유로 보는 것: II 1이라 파이프라인 단마다 16 lane × 32비트 값이 두 배로 떠 있고, `s_reg`와 slot 카운터도 생겼다.
+
+**보드 (같은 실행 파일, `_alux` 400 MHz 대비)**
+- ALU 테스트: `lut_conv_test`, `ln_evta_test`, `softmax_evta_test`, `epi_conv_test` 39개가 기본 설정, `EVTA_ALUX2=0`(이전 LayerNorm 프로그램), `EVTA_REQUANT=0`에서 모두 맞는다. `EVTA_ALUX=0`의 FAILED는 `_alux`에서와 같다.
+- DeiT: 세 이미지 281 (0.788097) / 207 / 340. `EVTA_LN_CHECK`로 LayerNorm을 이미지마다 2,400번 비교했고 모두 0 differ다.
+- CNN conv dump는 `_alux`와 byte 단위로 같다: MobileNetV2 5,200 / Resnet18 40 / Resnet50 106 / VGG16 34개, 모두 0 differ.
+- 보드 replay dump를 `hazard_dump.py SLOTS=34`로 검사했다. 5개 모델 모두 위반이 0이다(Resnet50 133만 slot 등).
+- LayerNorm 호출 하나의 EVTA 실행이 340 us → 196–221 us다. 입력 38 us와 출력 18 us는 그대로다.
+
+| 모델 (ms) | `_alux` OMP 1 | `_alux2` OMP 1 | `_alux` OMP 4 | `_alux2` OMP 4 |
+|---|---|---|---|---|
+| DeiT-tiny | 76.14 (LN 9.66) | **71.73 (LN 6.15)** | 57.40 | **53.82** |
+| 참고: 확장 없음(CPU LN) | 76.05 (LN 8.0) | | 53.29 (LN 2.95) | |
+| MobileNetV2 | 17.59 | 17.38 | | |
+| Resnet18 | 23.08 | 23.07 | | |
+| Resnet50 | 68.82 | 68.81 | | |
+| VGG16 CIFAR-10 | 7.02 | 7.02 | | |
+
+- DeiT는 OMP 1에서 확장 없는 비트스트림(CPU LayerNorm)보다 빠르다: 76.05 → 71.73 ms. OMP 4에서는 거의 같다: 53.29 → 53.82 ms.
+- 남은 것:
+  - LayerNorm EVTA 실행 약 200 us. Q = Σx²에 CPY + MUL + ADD를 쓰는데, 제곱 누적 연산 하나로 바꿀 수 있다(`pad_0`에 opcode 비트가 남아 있다).
+  - softmax는 아직 CPU 12.4 ms다. `-vta-alu-softmax` 프로그램을 결합 연산으로 바꾸면 다음 목표가 된다.

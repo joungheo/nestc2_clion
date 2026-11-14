@@ -335,7 +335,9 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   (`EVTA_LN_TIME=1` breakdown) 19.0 -> 9.65 ms, DeiT 84.84 -> 75.07 ms (no-ext CPU LN 76.05). `_alux2` (§8.14, code and circuits with
   figures: [docs/evta_alux_hw.md](docs/evta_alux_hw.md)): the extended ALU loop at II 1 over slots (one acc read per slot, broadcast src),
   fused MADD / MULSHR / SHRV / SHRR (ops 12-15), hazard rule 34 slots (`hazard_slots`, simulator `EVTA_ALU_SLOTS=34`); vtalib
-  `VTAHasAluExt2` (`_alux2` in the name) uses the fused layer norm program (simulator: ~0.5x the ALU cycles).
+  `VTAHasAluExt2` (`_alux2` in the name) uses the fused layer norm program (simulator: ~0.5x the ALU cycles). Board
+  `..._sa_alux2_400mhz_rq.bin` (ETO WNS +0.026 ns, LUT +12.5k, FF +16.4k): ALU tests pass, CNN dumps identical, replay dumps 0
+  hazards at 34 slots, DeiT 281/207/340, LN 340 -> ~200 us per call, DeiT OMP 1 76.14 -> 71.73 ms (CPU-LN bitstream 76.05), OMP 4 53.82.
 - Other models (2026-11-05, `docs/evta_runtime_compare.md` §7.19): Resnet50 res2_0 residual fused (relu to a 2^q smaller scale), schedules of the
   Resnet50 / VGG16 shapes in `VTASchedules.h` (found with vtalib-systolic `EVTA_SCHED`), conv tiles below 7 x 7: the dummy-padded store
   used the wrong channel block with nVirtualThread 2 (fixed in both vtalibs) and the systolic vtalib's minimum tile is 1 on an `_sa_` bitstream

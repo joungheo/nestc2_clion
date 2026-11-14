@@ -219,7 +219,7 @@ template <typename T> T alu_reg(T in) {
 
 - HLS 추정치는 실제보다 크게 나온다. 배치·배선 단계에서 상수 전파와 공유가 일어나기 때문이다.
 - DSP 16개 증가는 lane마다 곱셈기 하나씩이다.
-- `_alux2`(slot 루프)의 배치·배선 결과는 비트스트림이 나오면 [evta_isa_ext.md](evta_isa_ext.md) §8.14에 적는다.
+- `_alux2`(slot 루프), 설계 전체, 배치·배선 후(ETO, WNS +0.026 ns): LUT 68.2k, FF 89.4k, DSP 305, BRAM 258 tile. 400 MHz `_alux`보다 LUT +12.5k, FF +16.4k다. II 1이라 파이프라인 단마다 lane 값이 두 배로 떠 있고, `s_reg`와 카운터도 더해졌다. 보드 결과는 [evta_isa_ext.md](evta_isa_ext.md) §8.14에 있다.
 
 ## 8. 관련 파일
 
