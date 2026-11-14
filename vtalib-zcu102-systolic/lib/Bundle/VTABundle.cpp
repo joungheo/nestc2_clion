@@ -15,6 +15,7 @@
 #include <cassert>
 #include <cstring>
 #include <map>
+#include <tuple>
 #include <mutex>
 #include "llvm/ADT/ArrayRef.h"
 
@@ -5704,11 +5705,37 @@ int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float
   if (lnTime) clock_gettime(CLOCK_MONOTONIC, &lt[0]);
   VTACommandHandle cmd = (VTACommandHandle)vtaCmdH;
   const int R = (rows + n - 1) / n * n;
-  void *xin = VTABufferAlloc((size_t)R * cols * sizeof(int32_t)), *xo = VTABufferAlloc((size_t)rows * cols);
+  //#### JO changed (2026-11-14): the input / output buffers are kept per (EVTA, rows, cols) (the pad rows stay 0), the
+  //#### int8 -> int32 copy is NEON, and the program is recorded once and replayed (VTAReplayBegin; key: the shape and gs,
+  //#### the constants / input / output buffers relocated). Before: 108 us copy + 311 us emission per DeiT call.
+  // void *xin = VTABufferAlloc((size_t)R * cols * sizeof(int32_t)), *xo = VTABufferAlloc((size_t)rows * cols);
+  void *xin, *xo;
+  {
+    static std::map<std::tuple<uint32_t, int, int>, std::pair<void *, void *>> lnBufs;
+    std::lock_guard<std::mutex> g(m);
+    auto &bb = lnBufs[std::make_tuple(idEVTA, rows, cols)];
+    if (!bb.first) {
+      bb.first = VTABufferAlloc((size_t)R * cols * sizeof(int32_t));
+      bb.second = VTABufferAlloc((size_t)rows * cols);
+      memset(VTABufferGetVirtAddr(bb.first), 0, (size_t)R * cols * sizeof(int32_t));
+      VTABufferFlush(bb.first, 0, (size_t)R * cols * sizeof(int32_t));
+    }
+    xin = bb.first, xo = bb.second;
+  }
   int32_t *xi = (int32_t *)VTABufferGetVirtAddr(xin);
-  for (size_t i = 0, e = (size_t)rows * cols; i < e; i++) xi[i] = x[i];
-  memset(xi + (size_t)rows * cols, 0, (size_t)(R - rows) * cols * sizeof(int32_t));
-  VTABufferFlush(xin, 0, (size_t)R * cols * sizeof(int32_t));
+  {
+    const size_t e = (size_t)rows * cols;   // cols % 16 == 0
+    for (size_t i = 0; i < e; i += 16) {
+      const int8x16_t v = vld1q_s8(x + i);
+      const int16x8_t lo = vmovl_s8(vget_low_s8(v)), hi = vmovl_s8(vget_high_s8(v));
+      vst1q_s32(xi + i, vmovl_s16(vget_low_s16(lo)));
+      vst1q_s32(xi + i + 4, vmovl_s16(vget_high_s16(lo)));
+      vst1q_s32(xi + i + 8, vmovl_s16(vget_low_s16(hi)));
+      vst1q_s32(xi + i + 12, vmovl_s16(vget_high_s16(hi)));
+    }
+  }
+  // VTABufferFlush(xin, 0, (size_t)R * cols * sizeof(int32_t));
+  VTABufferFlush(xin, 0, (size_t)rows * cols * sizeof(int32_t));
   if (lnTime) clock_gettime(CLOCK_MONOTONIC, &lt[1]);
   // acc layout (alu_ext_test.cc main)
   const int X = 0, D = X + n * NB, E = D + n * NB, S = E + n * NB, Q = S + n, Wv = Q + n, A = Wv + n, SH = A + n,
@@ -5727,6 +5754,10 @@ int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float
     I(RES_ALU_SHR, io, ii, dst, dfo, dfi, K, 1, 0);
     if (last) VTARequant(cmd, 0, 0, 0, 0, 0);
   };
+  int32_t replayKey[] = {5, rows, cols, n, k->gs, (int32_t)idEVTA};
+  void *replayBufs[] = {k->buf, xin, xo};
+  const int replayed = VTAReplayBegin(cmd, replayKey, sizeof(replayKey), replayBufs, 3);
+  if (!replayed) {
   // the constants and the table (acc GB .. TB + 16)
   VTALoadBuffer2D(cmd, k->buf, 0, 2 * NB + 16, 1, 2 * NB + 16, 0, 0, 0, 0, GB, 3);
   I(VTA_ALUX_LUTSET, 1, 16, 0, 0, 0, TB, 0, 1, true, 0);
@@ -5794,15 +5825,18 @@ int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float
   VTADepPop(cmd, 3, 2);
   if (lnTime) clock_gettime(CLOCK_MONOTONIC, &lt[2]);
   VTASynchronize(cmd, 1 << 31);
+  VTAReplayEnd(cmd, 1);
+  } else if (lnTime)
+    lt[2] = lt[1];
   if (lnTime) clock_gettime(CLOCK_MONOTONIC, &lt[3]);
   VTABufferInvalidate(xo, 0, (size_t)rows * cols);
   memcpy(out, VTABufferGetVirtAddr(xo), (size_t)rows * cols);
-  VTABufferFree(xin);
-  VTABufferFree(xo);
+  // VTABufferFree(xin);
+  // VTABufferFree(xo);
   if (lnTime) {
     clock_gettime(CLOCK_MONOTONIC, &lt[4]);
     auto us = [&](int i) { return (lt[i + 1].tv_sec - lt[i].tv_sec) * 1e6 + (lt[i + 1].tv_nsec - lt[i].tv_nsec) / 1e3; };
-    fprintf(stderr, "EVTA_LN_TIME %d x %d n %d: in %.1f emit %.1f run %.1f out %.1f us\n", rows, cols, n, us(0), us(1), us(2),
+    fprintf(stderr, "EVTA_LN_TIME %d x %d n %d%s: in %.1f emit %.1f run %.1f out %.1f us\n", rows, cols, n, replayed ? " replay" : "", us(0), us(1), us(2),
             us(3));
   }
   static const bool check = getenv("EVTA_LN_CHECK") && atoi(getenv("EVTA_LN_CHECK")) > 0;

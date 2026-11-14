@@ -868,3 +868,21 @@ compute 안의 shift(`ashr`) 등. 400 MHz는 RTL / HLS 쪽 레지스터(LUT RAM 
 - LayerNorm이 이기려면 하드웨어 쪽이 필요하다:
   - 확장 연산을 II 1로 돌리기. imm 연산은 acc 읽기가 하나뿐이다.
   - 원소마다 하는 연산 수 줄이기. 지금은 원소마다 약 14개다. 예: multiply-add, imm 곱 뒤 빼기를 한 연산으로.
+
+**LayerNorm replay (2026-11-15).** vtalib-systolic `layernorm_evta`을 세 가지로 바꿨다.
+
+- 입력 / 출력 buffer를 (EVTA, rows, cols)마다 하나씩 두고 다시 쓴다. pad 행은 처음에 0으로 채워 두면 그대로 남는다.
+- int8 → int32 복사를 NEON으로 한다.
+- 프로그램을 한 번 기록하고 그 뒤로는 replay한다(`VTAReplayBegin`).
+  - key는 shape와 `gs`다.
+  - 상수 / 입력 / 출력 buffer는 relocation으로 바꿔 끼운다. 그래서 gamma가 다른 25개 LayerNorm이 기록 하나를 같이 쓴다.
+
+호출 하나가 780 us → 400 us가 됐다: 입력 108 → 38 us, 명령 생성 311 → 0 us, EVTA 340 us, 출력 19 us. 세 이미지의 분류와 `EVTA_LN_CHECK`(0 differ)는 그대로다.
+
+| `_alux` 400 MHz | OMP 1 (ms) | OMP 4 (ms) | LayerNorm (ms) |
+|---|---|---|---|
+| 전 | 84.84 | 67.07 | 19.04 |
+| 후 | **75.07** | 57.31 | 9.65 |
+| 참고: 확장 없음(CPU LN) | 76.05 | 53.29 | 8.0 / 2.95 |
+
+남은 340 us는 EVTA ALU가 실행하는 시간이다. 다음은 하드웨어 쪽 두 가지다: imm 확장 연산을 II 1로 돌리고, 결합 연산으로 원소당 연산 수를 줄인다.
