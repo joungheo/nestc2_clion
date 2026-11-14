@@ -10,7 +10,11 @@ import sys
 from datetime import datetime, timedelta
 
 MARK = '[daily-report-auto]'   # prompt marker of daily_report.sh: its own sessions are skipped
-D = os.path.expanduser('~/.claude/projects/-home-ubuntu-npuprg-nestc2-clion-nest-compiler/')
+#### JO changed (2026-11-14): the project dir of this checkout (Claude Code names it after the path, '/' and '_' -> '-'),
+#### so it works on the second host PC (ubuntu2, /home/jerry) too; was the fixed /home/ubuntu path
+# D = os.path.expanduser('~/.claude/projects/-home-ubuntu-npuprg-nestc2-clion-nest-compiler/')
+_root = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../..'))
+D = os.path.expanduser('~/.claude/projects/' + re.sub(r'[/_]', '-', _root) + '/')
 day = datetime.strptime(sys.argv[1], '%y%m%d')
 only = sys.argv[2:]
 lo = (day + timedelta(hours=7 - 9)).strftime('%Y-%m-%dT%H:%M')   # transcript timestamps are UTC

@@ -26,8 +26,11 @@ a = s.index('NESTC_CPU_OPS = R"~(') + len('NESTC_CPU_OPS = R"~(')
 open(sys.argv[2], 'w').write(s[a:s.index(')~"', a)])
 PY
   for t in lut_conv_test ln_evta_test softmax_evta_test; do
-    g++ -std=c++14 -O2 -w -fopenmp $DEFS $INCS -I"$O" "$H/$t.cc" -o "$O/$t" \
-      "$B/vtalib/libVTABundle.a" "$B/vtalib/libvta_runtime.a" -lcma -lpthread -lgomp
+    # the compiler and libraries of build_sys's bundle executables (clang++-8, its OpenMP, ACL, LLVMSupport)
+    clang++-8 -std=c++14 -O2 -w -fopenmp $DEFS $INCS -I"$O" "$H/$t.cc" -o "$O/$t" \
+      "$B/vtalib/libVTABundle.a" -lpng -ltinfo -ldl -lz "$B/vtalib/libvta_runtime.a" \
+      $V/lib/acl/libarm_compute-static.a $V/lib/acl/libarm_compute_core-static.a $V/lib/acl/libarm_compute_graph-static.a \
+      -lLLVMSupport -lpthread -lglog -lgflags -lgomp -lcma
   done
   echo "built in $O"
 fi

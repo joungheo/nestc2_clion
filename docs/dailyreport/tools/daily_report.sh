@@ -7,7 +7,9 @@
 # Report set: SET=vta_systolic (default, all sessions) or SET=vta_synth (the bitstream-synthesis session only)
 # e.g.: SET=vta_synth CLAUDE=/home/ubuntu/.local/bin/claude docs/dailyreport/tools/daily_report.sh 261027 261028
 set -u
-N=/home/ubuntu/npuprg/nestc2_clion/nest-compiler
+#### JO changed (2026-11-14): the checkout this script is in, and claude in its $HOME (host ubuntu2: /home/jerry)
+# N=/home/ubuntu/npuprg/nestc2_clion/nest-compiler
+N=$(cd "$(dirname "$(readlink -f "$0")")/../../.." && pwd)
 T=$N/docs/dailyreport/tools
 SET=${SET:-vta_systolic}
 case $SET in
@@ -16,7 +18,8 @@ case $SET in
   *) echo "unknown SET $SET"; exit 1 ;;
 esac
 R=$N/docs/dailyreport/$SET; mkdir -p "$R"
-CLAUDE=${CLAUDE:-/home/ubuntu/.local/bin/claude}
+# CLAUDE=${CLAUDE:-/home/ubuntu/.local/bin/claude}
+CLAUDE=${CLAUDE:-$HOME/.local/bin/claude}
 #### JO changed (2026-10-29): cron has no $USER (set -u stopped the 07:00 run of 10-29)
 # W=${TMPDIR:-/tmp}/daily_report_$USER; mkdir -p "$W"
 W=${TMPDIR:-/tmp}/daily_report_${USER:-$(id -un)}; mkdir -p "$W"

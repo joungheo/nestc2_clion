@@ -297,6 +297,13 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   `#ifdef VTA_OUTPUT_LUT`; emit conditionals as one statement per line: `timed_bundle.py` wraps every statement line). The whole DeiT
   bundle links against the PC simulator vtalib (same result with and without the ALU paths; `EVTA_LN_CHECK` / `EVTA_SM_CHECK` /
   simulator `EVTA_ALU_HAZARD=17`); on today's `_rq` bitstream unchanged (281, 76.1 ms).
+- CNN uses of the ALU extension (2026-11-14, `docs/evta_isa_ext.md` §8.12): VTASave `-vta-fuse-residual-norelu` (default on; MobileNetV2's
+  10 residual adds without relu fused into the conv, the rq round 2 makes the sum exact, no rq: conv + CPU add) and `-vta-evta-avgpool`
+  (default on; vtalib-systolic `avgpool_evta`: global pool by identity GEMM + one ALU ADD + one MUL with rq, `_alux` only, bit-exact).
+  On `..._sa_alux_380mhz_rq.bin` (WNS -0.012 ns, one path), OMP 1: MobileNetV2 19.22 -> 18.00, Resnet50 72.04 -> 71.20, Resnet18
+  24.37 -> 24.16 ms, VGG16 unchanged; `EVTA_RES_CHECK` 0 differ. A NEON CPU avgpool is as fast but only for comparison
+  (`NESTC_AVGPOOL_NEON=1`; CPU work goes to the EVTA). Next: a general conv epilogue (add / requantize / activation / pool as one ALU
+  program) instead of fixed fusion patterns.
 - Other models (2026-11-05, `docs/evta_runtime_compare.md` §7.19): Resnet50 res2_0 residual fused (relu to a 2^q smaller scale), schedules of the
   Resnet50 / VGG16 shapes in `VTASchedules.h` (found with vtalib-systolic `EVTA_SCHED`), conv tiles below 7 x 7: the dummy-padded store
   used the wrong channel block with nVirtualThread 2 (fixed in both vtalibs) and the systolic vtalib's minimum tile is 1 on an `_sa_` bitstream

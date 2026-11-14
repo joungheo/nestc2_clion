@@ -944,6 +944,40 @@ int avgpool(int8_t* input, float inputScale, int32_t inputOffset, int8_t *output
     dim_t OH = (H+2*pad_size-KH)/stride_size + 1;
     dim_t OW = (W+2*pad_size-KW)/stride_size + 1;
     float filterArea = KH* KW;
+#if defined(__aarch64__)
+    //#### JO added (2026-11-14): NEON, 16 channels at a time over contiguous pixels (the loop below reads one channel with
+    //#### a stride of C bytes); the same float arithmetic (float(sum) * r, round half away from zero), output offset 0
+    //#### (no fused multiply-add question). For comparison only, off by default (the work goes to the EVTA,
+    //#### avgpool_evta): NESTC_AVGPOOL_NEON=1 turns it on.
+    static const int neon = getenv("NESTC_AVGPOOL_NEON") ? atoi(getenv("NESTC_AVGPOOL_NEON")) : 0;
+    if (neon && C % 16 == 0 && outputOffset == 0 && KH * KW <= 256) {
+      const float r = inputScale / outputScale / filterArea;
+      const float32x4_t vr = vdupq_n_f32(r);
+      for (dim_t n = 0; n < N; n++)
+        for (dim_t ax = 0; ax < OH; ax++)
+          for (dim_t ay = 0; ay < OW; ay++) {
+            const ssize_t x = (ssize_t)(ax * stride_size) - (ssize_t)pad_size;
+            const ssize_t y = (ssize_t)(ay * stride_size) - (ssize_t)pad_size;
+            for (dim_t c = 0; c < C; c += 16) {
+              int16x8_t s0 = vdupq_n_s16(0), s1 = vdupq_n_s16(0);   // |sum| <= 256 * 128
+              for (ssize_t ox = std::max<ssize_t>(x, 0); ox < std::min<ssize_t>(x + KH, H); ox++)
+                for (ssize_t oy = std::max<ssize_t>(y, 0); oy < std::min<ssize_t>(y + KW, W); oy++) {
+                  const int8x16_t v = vld1q_s8(input + ((n * H + ox) * W + oy) * C + c);
+                  s0 = vaddw_s8(s0, vget_low_s8(v));
+                  s1 = vaddw_s8(s1, vget_high_s8(v));
+                }
+              int32x4_t q[4] = {vmovl_s16(vget_low_s16(s0)), vmovl_s16(vget_high_s16(s0)), vmovl_s16(vget_low_s16(s1)),
+                                vmovl_s16(vget_high_s16(s1))};
+              for (int j = 0; j < 4; j++)
+                q[j] = vcvtaq_s32_f32(vmulq_f32(vcvtq_f32_s32(q[j]), vr));
+              const int16x8_t h0 = vcombine_s16(vqmovn_s32(q[0]), vqmovn_s32(q[1]));
+              const int16x8_t h1 = vcombine_s16(vqmovn_s32(q[2]), vqmovn_s32(q[3]));
+              vst1q_s8(output + ((n * OH + ax) * OW + ay) * C + c, vcombine_s8(vqmovn_s16(h0), vqmovn_s16(h1)));
+            }
+          }
+      return 0;
+    }
+#endif
     // For each input in the batch:
     for (dim_t n = 0; n < N; n++) {
 

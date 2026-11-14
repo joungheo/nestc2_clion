@@ -729,3 +729,44 @@ bitstream과 vtalib의 짝이 한 번만 바뀌게 하려는 것이다.
 - 대조 시험이 RTL에서만 틀리므로, testbench가 C가 아니라 RTL 결과를 비교하고 있다.
 - 명령 하나의 latency는 73–1,113 cycle이었다(cosim 보고서).
 - 아직 안 본 것: GEMM(`gemm_sa`)과 함께 도는 경로, 보드. 4단계에서 본다.
+
+### 8.12 CNN 네 모델에 쓸 곳: avgpool on EVTA, relu 없는 residual 융합 (2026-11-14)
+
+어디에 쓸 수 있나 (Resnet18 / Resnet50 / VGG16 / MobileNetV2, 11-11 보드 측정 기준):
+- 확장 연산이 필요한 곳은 global avgpool의 ÷49 하나뿐이다(MUL + rq). LUT / RSUM / RMAX / CLZ는 이 CNN들에 쓸 곳이 없다.
+  depthwise를 ALU MAC으로 하는 것은 대각 GEMM보다 느리고, 2의 거듭제곱이 아닌 scale은 시간이 아니라 정확도 문제다.
+- MobileNetV2의 residual add 10개(CPU `elemadd` 1.03 ms)는 scale이 모두 2의 거듭제곱이라 확장 없이 기존 conv 융합으로 된다.
+  융합이 relu가 뒤따르는 add만 받던 것이 걸림돌이었다. Resnet18 / 50의 residual은 이미 모두 융합돼 있다(§7.2, §7.19).
+
+바꾼 것:
+- VTASave `-vta-fuse-residual-norelu` (기본 on): relu 없는 elemadd도 앞 conv에 합친다(`sumRelu` 0). 같이 고친 것:
+  융합된 conv를 모두 relu로 보던 maxpool 입력 판정, 그리고 `-vta-round-shift`를 residual 융합 conv에도 적용(vtalib는 add 전에
+  conv를 보통 conv처럼 requantize하므로 맞다; MobileNetV2가 이 반올림을 쓴다).
+- 반올림: ALU ADD + SHR는 .5를 올리고 CPU elemadd는 0에서 먼 쪽으로 반올림해 음수 .5에서 다르다(relu가 있으면 0이 되어 같았다).
+  vtalib-systolic은 relu가 없으면 residual GEMM의 rq를 round 2(half away from zero)로 쓴다. rq가 없는 비트스트림과 vta/vtalib는
+  보통 conv 뒤에 CPU에서 더한다(`convResidualCpuAdd`, 이전과 같은 결과).
+- vtalib-systolic `avgpool_evta` + VTASave `-vta-evta-avgpool` (기본 on, `#ifdef VTA_OUTPUT_LUT`, 한 줄 조건문): EVTA 배치 입력의
+  global pool. tile당 블록 nb개를 한 번에 LOAD, identity GEMM, (창 위치, 블록) 2단 루프의 ALU ADD 한 명령(같은 합 항목이 nb >= 18
+  step마다 돌아와 hazard 없음; 안 되면 위치마다 한 명령), MUL 한 번에 rq round 2 / shift k / clip, STORE 후 CPU 메모리로 복사.
+  M, k는 (scale, 면적)마다 처음 한 번 모든 합에 대해 CPU의 float 식과 같은지 확인해서 고른다(`avgMulPlan`).
+  결과: 세 모델 모두 MUL 하나, M 2675 (MobileNetV2 1/49: k 17, Resnet18 / 50 4/49: k 15). 처음에 두 MUL이 필요하다고 본 것은 틀렸다.
+  `_alux`와 rq가 없거나 global pool이 아니면 0을 돌려주고 CPU avgpool이 돈다. `EVTA_AVGPOOL=0`으로 끈다.
+- 비교용 NEON CPU avgpool (vtalib-systolic `CPUBundle_generic.cpp`, C % 16 == 0, 출력 offset 0). 기본은 꺼져 있다(`NESTC_AVGPOOL_NEON=1`로 켠다;
+  CPU 일은 EVTA로 보낸다는 방향). 아래 측정의 "NEON" 열은 켜고 잰 것이고, "CPU" 열은 이전 루프다.
+
+검증 (보드, `..._sa_alux_380mhz_rq.bin`, WNS −0.012 ns 한 경로): `EVTA_RES_CHECK=1`로 융합 residual과 avgpool의 모든 호출이
+CPU와 0 differ(MobileNetV2 100회 실행 중 2,900번 비교), 분류와 confidence는 그대로(MobileNetV2 282 / 0.944157, Resnet18 281 / 0.655530,
+Resnet50 281 / 0.581379, VGG16 0 / 0.453709).
+
+시간 (`_systimed`, OMP 1, 25회 중 2~25회 중앙값, ms; 380 MHz라 400 MHz `_rq`보다 전체가 약간 느리다):
+
+| 모델 | 이전 실행 파일 | 새: CPU avgpool | 새: NEON avgpool | 새: EVTA avgpool | avgpool 한 호출 (CPU → NEON / EVTA) |
+|---|---|---|---|---|---|
+| Resnet18 | 24.37 | 24.36 | 24.15 | 24.16 | 0.235 → 0.013 / 0.030 |
+| Resnet50 | 72.04 | 72.03 | 71.18 | 71.20 | 0.935 → 0.048 / 0.100 |
+| VGG16 | 7.17 | 7.18 | 7.18 | 7.17 | (없음) |
+| MobileNetV2 | 19.22 | 18.56 | 18.01 | 18.00 | 0.585 → 0.030 / 0.061 |
+
+- MobileNetV2 residual 융합: CPU elemadd 1.03 ms가 없어지고 그 10개 conv가 0.43 ms 늘어(add를 위한 LOAD / GEMM / ALU) 전체 −0.66 ms.
+- avgpool: EVTA는 CPU 루프보다 훨씬 빠르지만, 채널을 연속으로 읽는 NEON이 그보다 더 빠르다(EVTA는 LOAD, 동기화, 복사가
+  붙는다). 전체 시간으로는 둘이 같다(Resnet50 −0.85 ms, MobileNetV2 −0.55 ms, Resnet18 −0.21 ms). 기본은 EVTA(`avgpool_evta`)로 두고 NEON은 비교용으로만 남긴다.

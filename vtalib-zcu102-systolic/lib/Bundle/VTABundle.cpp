@@ -1390,7 +1390,10 @@ void conv_kernel(uint32_t sizeOutTileH,
         VTADepPop(vtaCmdH, 1, 2);
         //#### JO added (2026-11-04, requantize): rqRes: the residual GEMM writes round / shift / clip of the sum to out
         if (rqRes) {
-          VTARequant(vtaCmdH, 1, res->sumShr ? 1 : 0, res->sumShr, res->relu ? 0 : -128, 127);
+          //#### JO changed (2026-11-14): no relu: round 2 (half away from zero, as the CPU elemadd's std::round; with the
+          //#### relu half up and half away give the same clipped result, so round 1 stays there)
+          // VTARequant(vtaCmdH, 1, res->sumShr ? 1 : 0, res->sumShr, res->relu ? 0 : -128, 127);
+          VTARequant(vtaCmdH, 1, res->sumShr ? (res->relu ? 1 : 2) : 0, res->sumShr, res->relu ? 0 : -128, 127);
           pushResGemm(vtaCmdH, idEVTA, outputSramBaseAddr, resSramBaseAddr, size);
           VTARequant(vtaCmdH, 0, 0, 0, 0, 0);
         } else {
@@ -4233,6 +4236,33 @@ int convolution_wo_tr_pool(int8_t* input, int8_t *kernel, int32_t *bias, int8_t 
   return rc;
 }
 
+//#### JO added (2026-11-14): convolution_wo_tr_res without relu on a bitstream without the requantize: the plain conv
+//#### into a scratch buffer, then round((c << convShl) + (r << resShl)) >> sumShr) half away from zero, clipped (= elemadd)
+static int convResidualCpuAdd(int8_t *input, int8_t *kernel, int32_t *bias, int8_t *output, int N, int H, int W, int C,
+                              int KN, int KH, int KW, int pad_size, int stride_size, bool doRelu, bool doBias,
+                              uint8_t shift, int out_h, int out_w, int8_t *residual, int convShl, int resShl,
+                              int sumShr, void *vtaCmdH, int nVirtualThread, int tileHSize, int tileWSize,
+                              uint32_t idEVTA) {
+  size_t n = (size_t)out_h * out_w * KN;
+  void *tmp = VTABufferAlloc(n);
+  int rc = convolution_wo_tr_impl(input, kernel, bias, (int8_t *)tmp, N, H, W, C, KN, KH, KW, pad_size, stride_size,
+                                  doRelu, doBias, shift, out_h, out_w, vtaCmdH, nVirtualThread, tileHSize, tileWSize,
+                                  idEVTA, nullptr);
+  VTABufferInvalidate(tmp, 0, n);
+  VTABufferInvalidate(residual, 0, n);
+  const int8_t *c = (const int8_t *)VTABufferGetVirtAddr(tmp), *r = (const int8_t *)VTABufferGetVirtAddr(residual);
+  int8_t *o = (int8_t *)VTABufferGetVirtAddr(output);
+  const int32_t h = sumShr ? 1 << (sumShr - 1) : 0;
+  for (size_t i = 0; i < n; i++) {
+    int32_t v = ((int32_t)c[i] << convShl) + ((int32_t)r[i] << resShl);
+    v = (v + h - (v < 0 && sumShr ? 1 : 0)) >> sumShr;
+    o[i] = (int8_t)(v > 127 ? 127 : (v < -128 ? -128 : v));
+  }
+  VTABufferFlush(output, 0, n);
+  VTABufferFree(tmp);
+  return rc;
+}
+
 int convolution_wo_tr_res(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *output, int N, int H, int W, int C, int KN, int KH, int KW, int pad_size,
                           int stride_size, bool doRelu, bool doBias, uint8_t shift, int out_h, int out_w,
                           int8_t *residual, int convShl, int resShl, int sumShr, int sumRelu,
@@ -4246,6 +4276,13 @@ int convolution_wo_tr_res(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *
   }
   ConvResidual res = {residual, getIdentityWeights(idEVTA), (uint32_t)resShl, (uint32_t)convShl, (uint32_t)sumShr,
                       sumRelu > 0, sumRelu > 1 ? (uint32_t)sumRelu - 1 : 0};
+  //#### JO added (2026-11-14): no relu (VTASave -vta-fuse-residual-norelu) without the requantize: the ALU rounds the
+  //#### sum half up, the CPU elemadd half away from zero (they differ at negative halves), so run the plain conv and
+  //#### add on the CPU (what the bundle did before the fusion)
+  if (!sumRelu && !evtaRequant())
+    return convResidualCpuAdd(input, kernel, bias, output, N, H, W, C, KN, KH, KW, pad_size, stride_size, doRelu,
+                              doBias, shift, out_h, out_w, residual, convShl, resShl, sumShr, vtaCmdH, nVirtualThread,
+                              tileHSize, tileWSize, idEVTA);
   //#### EVTA_RES_CHECK=1: also run the plain conv into a scratch buffer and the CPU elemadd + relu on it
   //#### (std::round as CPUBundle elemadd), compare with the fused output and print the mismatches
   static int check = -1;
@@ -5596,6 +5633,207 @@ int softmax_evta(int8_t *out, const int8_t *x, int rows, int cols, float s, floa
         bad += ref[c] != out[(size_t)r * cols + c];
     }
     printf("EVTA_SM_CHECK softmax %d x %d: %ld differ\n", rows, cols, bad);
+  }
+  return 1;
+}
+
+//#### JO added (2026-11-14, ALU extension, docs/evta_isa_ext.md 8.12): global average pool on the EVTA (Resnet18 / 50,
+//#### MobileNetV2: 7 x 7 -> 1 x 1), bit-exact with the CPU avgpool: out = clip(std::round(float(sum) * (inputScale /
+//#### outputScale / area))). Input in the EVTA layout (NB blocks of H x W pixels x 16 channels, a VTA buffer), output NB x 16
+//#### bytes to CPU memory (copied from a scratch VTA buffer). Per tile of nb blocks: one contiguous LOAD of nb * H * W inp
+//#### entries, identity-weight GEMM into acc, one ALU ADD over (window position, block) (the same sum entry comes back
+//#### every nb >= 18 steps: no ALU pipeline hazard, alu_ext_ref.h hazards(); else one ADD per window position), then
+//#### sum * M (one or two ALU MULs, int16 immediates) with the requantize on the last one: (x + 2^(k-1) - (x < 0)) >> k
+//#### (round 2), clip -128..127; STORE. M and k are searched once per (scales, area) over every possible sum so the result
+//#### equals the CPU's float arithmetic for all of them (avgMulPlan). Two tiles at a time in the two halves of inp / acc.
+//#### Returns 0 (not run; the caller runs the CPU avgpool) without the extended ALU / requantize, offsets, a window that
+//#### is not the whole image, or no exact M. EVTA_AVGPOOL=0 turns it off; EVTA_RES_CHECK=1 compares with the CPU avgpool.
+#ifndef VTA_ALUX_MUL
+#define VTA_ALUX_MUL 4
+#endif
+namespace {
+struct AvgMulPlan {
+  bool ok = false;
+  int k = 0, nm = 0, m[2] = {1, 1};
+};
+// M = m[0] (* m[1]), |m[i]| <= 32767, |sum * M| < 2^31, such that for every sum in [-128 area, 127 area]
+// rq(sum * M, k) = clip(std::round(float(sum) * r)) with r = inputScale / outputScale / area as the CPU computes it
+AvgMulPlan avgMulPlan(float inputScale, float outputScale, int area) {
+  static std::mutex mu;
+  static std::map<std::vector<float>, AvgMulPlan> plans;
+  std::lock_guard<std::mutex> g(mu);
+  auto key = std::vector<float>{inputScale, outputScale, (float)area};
+  auto it = plans.find(key);
+  if (it != plans.end())
+    return it->second;
+  const float filterArea = (float)area;
+  const float r = inputScale / outputScale / filterArea;
+  const int lo = -128 * area, hi = 127 * area;
+  std::vector<int8_t> ref(hi - lo + 1);
+  for (int s = lo; s <= hi; s++) {
+    int32_t o = (int32_t)std::round(float(s) * r);
+    ref[s - lo] = (int8_t)(o > 127 ? 127 : o < -128 ? -128 : o);
+  }
+  auto exact = [&](int64_t M, int k) {
+    if (M <= 0 || M * (int64_t)128 * area >= ((int64_t)1 << 31))
+      return false;
+    for (int s = lo; s <= hi; s++) {
+      int64_t v = s * M;
+      v = k ? (v + ((int64_t)1 << (k - 1)) - (v < 0)) >> k : v;
+      v = v > 127 ? 127 : v < -128 ? -128 : v;
+      if ((int8_t)v != ref[s - lo])
+        return false;
+    }
+    return true;
+  };
+  AvgMulPlan p;
+  for (int nm = 1; nm <= 2 && !p.ok; nm++)
+    for (int k = 0; k <= 31 && !p.ok; k++) {
+      const int64_t c = (int64_t)std::floor((double)r * std::ldexp(1.0, k));
+      for (int64_t M = c - 1; M <= c + 2 && !p.ok; M++) {
+        if (M <= 0)
+          continue;
+        int f0 = 0, f1 = 1;
+        if (nm == 1) {
+          if (M > 32767)
+            continue;
+          f0 = (int)M;
+        } else {
+          if (M <= 32767)
+            continue;
+          for (int64_t d = (M + 32766) / 32767; d <= 32767 && d * d <= M * 32767; d++)
+            if (M % d == 0 && M / d <= 32767) {
+              f0 = (int)(M / d), f1 = (int)d;
+              break;
+            }
+          if (!f0)
+            continue;
+        }
+        if (exact(M, k)) {
+          p.ok = true, p.k = k, p.nm = nm, p.m[0] = f0, p.m[1] = f1;
+        }
+      }
+    }
+  plans[key] = p;
+  return p;
+}
+
+int avgpool_evta_run(void *input, void *output, int NB, int HW, const AvgMulPlan &mp, VTACommandHandle vtaCmdH,
+                     uint32_t idEVTA) {
+  const int INP_ALL = 2048, ACC_ALL = 2048, kHazard = 18;   // as maxpool_evta_run (conv_kernel's buffer sizes)
+  const int maxHalf = std::min(INP_ALL / 2 / HW, ACC_ALL / 2 / (HW + 1));
+  const int maxFull = std::min(INP_ALL / HW, ACC_ALL / (HW + 1));
+  int nt = maxHalf > 0 ? (NB + maxHalf - 1) / maxHalf : 0;
+  bool half = nt > 0;
+  if (!half || (NB / nt < kHazard && NB <= maxFull)) {   // one tile over the whole buffers
+    if (NB > maxFull)
+      return -1;
+    nt = 1, half = false;
+  }
+  struct Tile { int b0, nb; };
+  std::vector<Tile> tiles;
+  for (int t = 0, b0 = 0; t < nt; t++) {
+    int nb = NB / nt + (t < NB % nt ? 1 : 0);
+    tiles.push_back({b0, nb});
+    b0 += nb;
+  }
+  const uint32_t INP_HALF = INP_ALL / 2, ACC_HALF = ACC_ALL / 2;
+  VTASetDebugMode(vtaCmdH, 0);
+  VTALoadBuffer2D(vtaCmdH, getIdentityWeights(idEVTA), 0, 1, 1, 1, 0, 0, 0, 0, RES_WGT_ENTRY, 1);
+  for (size_t g = 0; g < tiles.size(); g += 2) {
+    size_t n = std::min<size_t>(2, tiles.size() - g);
+    for (size_t t = 0; t < n; t++)
+      VTADepPush(vtaCmdH, 2, 1);
+    for (size_t t = 0; t < n; t++) {
+      const Tile &T = tiles[g + t];
+      VTADepPop(vtaCmdH, 2, 1);
+      VTALoadBuffer2D(vtaCmdH, input, (uint32_t)(T.b0 * HW), T.nb * HW, 1, T.nb * HW, 0, 0, 0, 0,
+                      half ? t * INP_HALF : 0, 2);
+      VTADepPush(vtaCmdH, 1, 2);
+    }
+    for (size_t t = 0; t < n; t++) {
+      const Tile &T = tiles[g + t];
+      const int aIn = half ? t * ACC_HALF : 0, aOut = aIn + T.nb * HW, inp = half ? t * INP_HALF : 0;
+      VTADepPop(vtaCmdH, 1, 2);
+      pushReset(vtaCmdH, idEVTA, aIn, T.nb * (HW + 1));
+      pushResGemm(vtaCmdH, idEVTA, aIn, inp, T.nb * HW);
+      if (T.nb >= kHazard)
+        pushAlu2(vtaCmdH, idEVTA, RES_ALU_ADD, HW, T.nb, aOut, 0, 1, aIn, 1, HW);
+      else
+        for (int p = 0; p < HW; p++)
+          pushAlu2(vtaCmdH, idEVTA, RES_ALU_ADD, 1, T.nb, aOut, 0, 1, aIn + p, 0, HW);
+      for (int i = 0; i < mp.nm; i++) {
+        if (i == mp.nm - 1)
+          VTARequant(vtaCmdH, 1, mp.k ? 2 : 0, mp.k, -128, 127);
+        pushAlu2(vtaCmdH, idEVTA, VTA_ALUX_MUL, 1, T.nb, aOut, 0, 1, aOut, 0, 1, true, mp.m[i]);
+      }
+      VTARequant(vtaCmdH, 0, 0, 0, 0, 0);
+      VTADepPush(vtaCmdH, 2, 3);
+    }
+    for (size_t t = 0; t < n; t++) {
+      const Tile &T = tiles[g + t];
+      const int aOut = (half ? t * ACC_HALF : 0) + T.nb * HW;
+      VTADepPop(vtaCmdH, 2, 3);
+      VTAStoreBuffer2D(vtaCmdH, aOut, 4, output, (uint32_t)T.b0, T.nb, 1, T.nb);
+      VTADepPush(vtaCmdH, 3, 2);
+    }
+    for (size_t t = 0; t < n; t++)
+      VTADepPop(vtaCmdH, 3, 2);
+  }
+  VTASynchronize(vtaCmdH, 1 << 31);
+  return 0;
+}
+} // namespace
+
+int avgpool_evta(void *input, float inputScale, int8_t *output, float outputScale, int NB, int H, int W, int KH, int KW,
+                 int pad_size, int stride_size, void *vtaCmdH, uint32_t idEVTA) {
+  static const int on = getenv("EVTA_AVGPOOL") ? atoi(getenv("EVTA_AVGPOOL")) : 1;
+  if (!on || !VTAHasAluExt() || !evtaRequant() || KH != H || KW != W || pad_size || NB < 1)
+    return 0;
+  const int HW = H * W;
+  const AvgMulPlan mp = avgMulPlan(inputScale, outputScale, HW);
+  if (!mp.ok)
+    return 0;
+  static void *scratch[4] = {nullptr, nullptr, nullptr, nullptr};
+  static size_t scratchSize[4] = {0, 0, 0, 0};
+  const size_t no = (size_t)NB * 16;
+  if (scratchSize[idEVTA] < no) {
+    if (scratch[idEVTA])
+      VTABufferFree(scratch[idEVTA]);
+    scratch[idEVTA] = VTABufferAlloc(no);
+    scratchSize[idEVTA] = no;
+  }
+  void *ob = scratch[idEVTA];
+  int32_t replayKey[] = {5, NB, H, W, mp.k, mp.nm, mp.m[0], mp.m[1], (int32_t)idEVTA};
+  void *replayBufs[] = {input, ob};
+  int rc = 0;
+  if (!VTAReplayBegin(vtaCmdH, replayKey, sizeof(replayKey), replayBufs, 2)) {
+    rc = avgpool_evta_run(input, ob, NB, HW, mp, (VTACommandHandle)vtaCmdH, idEVTA);
+    VTAReplayEnd(vtaCmdH, rc == 0);
+  }
+  if (rc)
+    return 0;
+  VTABufferInvalidate(ob, 0, no);
+  memcpy(output, VTABufferGetVirtAddr(ob), no);
+  static const bool check = getenv("EVTA_RES_CHECK") && atoi(getenv("EVTA_RES_CHECK")) > 0;
+  if (check) {
+    const size_t ni = (size_t)NB * HW * 16;
+    VTABufferInvalidate(input, 0, ni);
+    std::vector<int8_t> ref(no);
+    avgpool((int8_t *)VTABufferGetVirtAddr(input), inputScale, 0, ref.data(), outputScale, 0, NB, H, W, 16, NB, 1, 1,
+            16, KH, KW, 0, 1);
+    size_t bad = 0, first = no;
+    for (size_t i = 0; i < no; i++)
+      if (output[i] != ref[i]) {
+        if (!bad)
+          first = i;
+        bad++;
+      }
+    printf("EVTA_RES_CHECK avgpool %d x %dx%dx16 (k %d, M %d x %d): %zu of %zu differ", NB, H, W, mp.k, mp.m[0],
+           mp.nm > 1 ? mp.m[1] : 1, bad, no);
+    if (bad)
+      printf(" (first at %zu: evta %d, cpu %d)", first, output[first], ref[first]);
+    printf("\n");
   }
   return 1;
 }

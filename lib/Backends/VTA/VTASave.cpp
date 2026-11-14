@@ -58,6 +58,14 @@ static llvm::cl::opt<bool> vtaFuseResidual(
     //#### default on since the board check (2026-10-31: bit-exact, docs/evta_runtime_compare.md 7.2)
     llvm::cl::init(true));
 
+//#### JO added (2026-11-14): also an elementadd with no relu after it (MobileNetV2 inverted residuals); the vtalib rounds
+//#### the sum half away from zero by the rq round 2 of an _rq bitstream, else (no rq) runs the conv and adds on the CPU
+static llvm::cl::opt<bool> vtaFuseResidualNoRelu(
+    "vta-fuse-residual-norelu",
+    llvm::cl::desc("With -vta-fuse-residual: also fuse an elementadd that has "
+                   "no relu after it (sumRelu 0)"),
+    llvm::cl::init(true));
+
 //#### JO added (2026-10-31): max pool on the EVTA (maxpool_evta) when its input is >= 0 (findEvtaMaxPools)
 static llvm::cl::opt<bool> vtaEvtaMaxPool(
     "vta-evta-maxpool",
@@ -133,6 +141,7 @@ struct ResidualFusion {
   int convShl, resShl, sumShr;
   int reluShl;           //#### JO added (2026-11-05): relu dest scale = elementadd dest scale / 2^reluShl
   bool hoistOut;         // out is allocated after the conv: its allocation is emitted before the conv
+  bool relu;             //#### JO added (2026-11-14): false: no relu after the elementadd, out is its dest
 };
 
 //#### JO added (2026-11-02): a max pool done by the first conv's call (findPoolFusions)
@@ -1256,7 +1265,10 @@ static llvm::cl::opt<bool> vtaRoundShift(
     llvm::cl::init(false));
 
 static int32_t convRoundHalf(const glow::ConvolutionInst *Inst, VTASaveContext *ctx) {
-  if (!vtaRoundShift || ctx->getFusion(Inst) || ctx->getPoolFusion(Inst))
+  //#### JO changed (2026-11-14): also for a residual-fused conv (vtalib requantizes the conv, bias and shift, before the
+  //#### add, as a plain conv; MobileNetV2's residual convs with -vta-fuse-residual-norelu)
+  // if (!vtaRoundShift || ctx->getFusion(Inst) || ctx->getPoolFusion(Inst))
+  if (!vtaRoundShift || ctx->getPoolFusion(Inst))
     return 0;
   float scale = (1 / Inst->getSrc()->getType()->getScale()) * (1 / Inst->getFilter()->getType()->getScale()) /
                 (1 / Inst->getDest()->getType()->getScale());
@@ -2891,7 +2903,8 @@ void generateVTAConvolutionCall(const glow::ConvolutionInst *Inst,
     //#### JO changed (2026-11-05): 1 + reluShl (vtalib sumRelu: 1 = relu, 1 + q = relu, << q, clip 127)
     // bundle->append(", 1");
     bundle->append(", ");
-    bundle->append(std::to_string(1 + fu->reluShl));
+    //#### JO changed (2026-11-14): 0 without a relu (-vta-fuse-residual-norelu)
+    bundle->append(std::to_string(fu->relu ? 1 + fu->reluShl : 0));
   }
   bundle->append(", vtaCmdH");
   uint32_t idxMultiEVTA = ctx->getIdxMultiEVTA();
@@ -4110,13 +4123,24 @@ void findResidualFusions(const IRFunction *IR, VTASaveContext *ctx) {
     const Value *O = E->getDest();
     if (!R || R == D)
       continue;
+    //#### JO changed (2026-11-14): no relu after the elementadd (-vta-fuse-residual-norelu): O' = O, k = j
+    // size_t k = next(j);
+    // if (k >= ins.size())
+    //   continue;
+    // auto *Rl = llvm::dyn_cast<ReluInst>(ins[k]);
+    // if (!Rl || Rl->getSrc() != O)
+    //   continue;
+    // const Value *O2 = Rl->getDest();
     size_t k = next(j);
-    if (k >= ins.size())
-      continue;
-    auto *Rl = llvm::dyn_cast<ReluInst>(ins[k]);
-    if (!Rl || Rl->getSrc() != O)
-      continue;
-    const Value *O2 = Rl->getDest();
+    auto *Rl = k < ins.size() ? llvm::dyn_cast<ReluInst>(ins[k]) : nullptr;
+    if (Rl && Rl->getSrc() != O)
+      Rl = nullptr;
+    if (!Rl) {
+      if (!vtaFuseResidualNoRelu)
+        continue;
+      k = j;
+    }
+    const Value *O2 = Rl ? Rl->getDest() : O;
     if (!ctx->isPacked(R) || !ctx->isPacked(O) || !ctx->isPacked(O2) || O2 == C->getSrc() ||
         O->dims() != D->dims() || O2->dims() != D->dims() || R->dims() != D->dims())
       continue;
@@ -4144,12 +4168,13 @@ void findResidualFusions(const IRFunction *IR, VTASaveContext *ctx) {
         !powerOfTwoExp(tR->getScale() / tO->getScale(), &eR))
       continue;
     int m = std::max(0, std::max(-eD, -eR));
-    ResidualFusion f = {R, O2, m + eD, m + eR, m, q, hoist};
+    ResidualFusion f = {R, O2, m + eD, m + eR, m, q, hoist, Rl != nullptr};
     if (f.convShl > 8 || f.resShl > 6 || f.sumShr > 15)
       continue;
     (*ctx->getFusions())[C] = f;
     ctx->getFusedAway()->insert(E);
-    ctx->getFusedAway()->insert(Rl);
+    if (Rl)
+      ctx->getFusedAway()->insert(Rl);
   }
 }
 
@@ -4374,7 +4399,7 @@ void findEvtaMaxPools(const IRFunction *IR, VTASaveContext *ctx) {
         if (auto *C = llvm::dyn_cast<ConvolutionInst>(W))
           //#### FirstBNN: the zero-filled image conv0 (also an EVTA conv, convolution_wo_tr)
           nonneg = (getConvPath(C) == ConvPath::VTA || getConvPath(C) == ConvPath::FirstBNN) &&
-                   (convRelu(C) || ctx->getFusion(C));   //#### JO changed (2026-11-06): == RELU -> convRelu
+                   (convRelu(C) || (ctx->getFusion(C) && ctx->getFusion(C)->relu));   //#### JO changed (2026-11-06): == RELU -> convRelu; 2026-11-14: fused with a relu
         else if (llvm::isa<ReluInst>(W))
           nonneg = true;
       }
@@ -4731,8 +4756,20 @@ void saveFullyConnectedInst(const glow::FullyConnectedInst *Inst,
   bundle->append(" );\n");
 }
 
+//#### JO added (2026-11-14, ALU extension, docs/evta_isa_ext.md 8.12): a global average pool of a packed activation on the
+//#### EVTA ALU (vtalib-systolic avgpool_evta: sum, MUL, requantize; bit-exact) when the EVTA has the extended operations,
+//#### else the CPU avgpool (also without VTA_OUTPUT_LUT, i.e. with vta/vtalib)
+static llvm::cl::opt<bool> vtaEvtaAvgPool(
+    "vta-evta-avgpool",
+    llvm::cl::desc("Run a global average pool of an EVTA-layout activation on the EVTA ALU (avgpool_evta) when the EVTA "
+                   "has the extended operations; else on the CPU as before"),
+    llvm::cl::init(true));
+
 void saveAvgPoolInst(const glow::AvgPoolInst *Inst, std::string *bundle,
                      VTASaveContext *ctx) {
+  //#### JO changed (2026-11-14): the call is made in `call`, then appended (as is, or behind avgpool_evta)
+  std::string *const out = bundle;
+  std::string callBuf;
   auto src = Inst->getSrc();
   auto srcDims = src->dims();
   auto dest = Inst->getDest();
@@ -4766,31 +4803,31 @@ void saveAvgPoolInst(const glow::AvgPoolInst *Inst, std::string *bundle,
     addSymbolEntryGenBundle(destWeight, bundle, ctx);
   }
 
-  bundle->append("  avgpool(");
+  callBuf.append("  avgpool(");
 
   if (srcWeight->getMutability() == glow::WeightVar::MutabilityKind::Mutable) {
     auto ste = addSymbolEntry(srcWeight, ctx);
-    bundle->append(ste.name);
-    bundle->append(", ");
+    callBuf.append(ste.name);
+    callBuf.append(", ");
   } else {
-    bundle->append(src->getName());
-    bundle->append(", ");
+    callBuf.append(src->getName());
+    callBuf.append(", ");
   }
-  bundle->append("1.0/");
-  bundle->append(std::to_string(inScale));
-  bundle->append(", 0, ");
+  callBuf.append("1.0/");
+  callBuf.append(std::to_string(inScale));
+  callBuf.append(", 0, ");
 
   if (destWeight->getMutability() == glow::WeightVar::MutabilityKind::Mutable) {
     auto ste = addSymbolEntry(destWeight, ctx);
-    bundle->append(ste.name);
-    bundle->append(", ");
+    callBuf.append(ste.name);
+    callBuf.append(", ");
   } else {
-    bundle->append(dest->getName());
-    bundle->append(", ");
+    callBuf.append(dest->getName());
+    callBuf.append(", ");
   }
-  bundle->append("1.0/");
-  bundle->append(std::to_string(outScale));
-  bundle->append(", 0, ");
+  callBuf.append("1.0/");
+  callBuf.append(std::to_string(outScale));
+  callBuf.append(", 0, ");
 
   //#### JO added (2026-10-31): EVTA layout N{C/16}HW16 = NHWC with the 16-channel blocks as the batch
   //#### (a 1x1 output is then plain NHWC)
@@ -4801,30 +4838,49 @@ void saveAvgPoolInst(const glow::AvgPoolInst *Inst, std::string *bundle,
     outN = outN * outC / 16;
     outC = 16;
   }
-  bundle->append(std::to_string(inN));
-  bundle->append(", ");
-  bundle->append(std::to_string(srcDims[1]));
-  bundle->append(", ");
-  bundle->append(std::to_string(srcDims[2]));
-  bundle->append(", ");
-  bundle->append(std::to_string(inC));
-  bundle->append(", ");
-  bundle->append(std::to_string(outN));
-  bundle->append(", ");
-  bundle->append(std::to_string(destDims[1]));
-  bundle->append(", ");
-  bundle->append(std::to_string(destDims[2]));
-  bundle->append(", ");
-  bundle->append(std::to_string(outC));
-  bundle->append(", ");
-  bundle->append(std::to_string(KH));
-  bundle->append(", ");
-  bundle->append(std::to_string(KW));
-  bundle->append(", ");
-  bundle->append(std::to_string(pad_size));
-  bundle->append(", ");
-  bundle->append(std::to_string(stride_size));
-  bundle->append(" );\n");
+  callBuf.append(std::to_string(inN));
+  callBuf.append(", ");
+  callBuf.append(std::to_string(srcDims[1]));
+  callBuf.append(", ");
+  callBuf.append(std::to_string(srcDims[2]));
+  callBuf.append(", ");
+  callBuf.append(std::to_string(inC));
+  callBuf.append(", ");
+  callBuf.append(std::to_string(outN));
+  callBuf.append(", ");
+  callBuf.append(std::to_string(destDims[1]));
+  callBuf.append(", ");
+  callBuf.append(std::to_string(destDims[2]));
+  callBuf.append(", ");
+  callBuf.append(std::to_string(outC));
+  callBuf.append(", ");
+  callBuf.append(std::to_string(KH));
+  callBuf.append(", ");
+  callBuf.append(std::to_string(KW));
+  callBuf.append(", ");
+  callBuf.append(std::to_string(pad_size));
+  callBuf.append(", ");
+  callBuf.append(std::to_string(stride_size));
+  callBuf.append(" );\n");
+  const bool global = KH == (int)srcDims[1] && KW == (int)srcDims[2] && pad_size == 0 && destDims[1] == 1 &&
+                      destDims[2] == 1;
+  if (vtaEvtaAvgPool && global && ctx->isPacked(src) && srcDims[0] == 1 && srcDims[3] % 16 == 0 &&
+      !src->getType()->getOffset() && !dest->getType()->getOffset()) {
+    const uint32_t idx = ctx->getIdxMultiEVTA();
+    std::string evta = "avgpool_evta(" + src->getName().str() + "_vbuf, 1.0/" + std::to_string(inScale) + ", " +
+                       (destWeight->getMutability() == glow::WeightVar::MutabilityKind::Mutable
+                            ? addSymbolEntry(destWeight, ctx).name
+                            : dest->getName().str()) +
+                       ", 1.0/" + std::to_string(outScale) + ", " + std::to_string(srcDims[3] / 16) + ", " +
+                       std::to_string(srcDims[1]) + ", " + std::to_string(srcDims[2]) + ", " + std::to_string(KH) +
+                       ", " + std::to_string(KW) + ", 0, " + std::to_string(stride_size) + ", vtaCmdH" +
+                       (idx ? std::to_string(idx) + ", " + std::to_string(idx) : "") + ")";
+    // one line (timed_bundle.py wraps each statement line)
+    out->append("#ifdef VTA_OUTPUT_LUT\n  if (!" + evta + ") " + callBuf.substr(2) + "#else\n" + callBuf +
+                "#endif\n");
+    return;
+  }
+  out->append(callBuf);
 }
 
 void saveTensorViewInst(const glow::TensorViewInst *Inst, std::string *bundle,
@@ -8380,10 +8436,10 @@ static std::string matMulCallTail(VTASaveContext *ctx, const std::string &sched)
 
 static std::string vtaOptionsComment() {
   static const char *const names[] = {
-      "vta-keep-layout",   "vta-fuse-residual", "vta-evta-maxpool", "vta-evta-fc",
+      "vta-keep-layout",   "vta-fuse-residual", "vta-fuse-residual-norelu", "vta-evta-maxpool", "vta-evta-fc",
       "vta-fuse-preprocess", "vta-conv0-pack",  "vta-fuse-pool",    "vta-evta-depthwise",
       "vta-round-shift",   "vta-pad-channels",  "vta-matmul-conv", "vta-fold-matmul-bias", "vta-evta-matmul", "vta-lut-elementwise", "vta-fuse-layernorm",
-      "vta-matmul-heads", "vta-attn-keep-layout", "vta-cpu-approx", "vta-alu-output-lut", "vta-alu-layernorm", "vta-alu-softmax",
+      "vta-matmul-heads", "vta-attn-keep-layout", "vta-cpu-approx", "vta-alu-output-lut", "vta-alu-layernorm", "vta-alu-softmax", "vta-evta-avgpool",
       "enable-channelwise-depthwise", "enable-channelwise"};
   auto &opts = llvm::cl::getRegisteredOptions();
   std::string s = "// Generated by the NEST-C VTA backend with:";
