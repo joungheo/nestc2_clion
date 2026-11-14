@@ -179,6 +179,12 @@ so the `/home/ubuntu/...` paths in the docs become `/home/jerry/...`): the same 
 mounted, `--network host`, `--init` (with `sleep` as PID 1 Vivado synthesis hangs after `synth_design`: its worker processes stay zombies), TZ KST; `install_vivado.sh <tar.gz> <y2k22_patch-1.2.zip>` checks the MD5, batch-installs Zynq UltraScale+ only
 and applies the Y2K22 patch with the container's `python3`). Only 2020.1 is installed there; the license `~/.Xilinx/xilinx.lic` is `HOSTID=ANY`
 (System Edition + HLS). Checked: HLS export and `synth_design` on xczu9eg. Passwordless sudo for `jerry`.
+NEST-C simulator build on `ubuntu2` (2026-11-14): container **`nestc-build`** from [utils/docker_nestc/](utils/docker_nestc/) (ubuntu:18.04 with the
+board's versions, checked on the board: clang-8 8.0.0-3~ubuntu18.04.2, cmake 3.10.2, protobuf 3.0.0, glog 0.3.5, fmt 7.0.3 from source, python 3.6
+numpy 1.19.5 / onnx 1.11.0); `configure.sh` configures `<tree>/Debug2_remote` with the board's options and makes model-compiler / image-classifier
+(about 10 min at -j16; `make` of a bundle target 4-7 s against 106 s on the board). The model files come from the board's `Debug2_remote`
+(the S3 download needs `aws`). Bundles generated there are byte-identical to the board's (cpp and weights of Resnet18 / 50, VGG16, MobileNetV2);
+the vtalib simulator tests (`run_lut_conv_test.sh`) run there. EVTA timing still only on the board. `docker exec -it -u ubuntu nestc-build bash`.
 
 ```bash
 docker exec -it -u ubuntu vivado2020-build bash
