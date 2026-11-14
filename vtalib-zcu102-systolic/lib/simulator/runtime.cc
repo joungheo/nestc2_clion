@@ -1522,6 +1522,7 @@ class CommandQueue {
     insn->alu_opcode = kernel->opcode_;
     //#### JO added (2026-11-11, ALU extension): operations 4-11, rq_* (VTARequant) and lut_en (VTAAluLut) as the zcu102 queue
     insn->alu_op_ext = kernel->opcode_ >> VTA_ALU_OPCODE_BIT_WIDTH;
+    insn->alu_op_ext2 = (kernel->opcode_ >> 4) & 1;   //#### JO (2026-11-15): operations 16-31
     insn->lut_en = alu_lut_;
     insn->rq_en = rq_en_;
     insn->rq_round = rq_en_ ? rq_round_ : 0;

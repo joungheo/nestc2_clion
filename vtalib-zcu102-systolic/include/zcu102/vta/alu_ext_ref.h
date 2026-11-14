@@ -68,7 +68,7 @@ inline int32_t shv(int32_t v, int32_t s, bool round) {
 // acc[depth][kLanes], out[depth][kLanes], uops as VTAUop, T the 256-entry LUT; Insn = VTAAluInsn
 template <typename Insn, typename Uop>
 void run(const Insn &insn, const Uop *uops, int32_t (*acc)[kLanes], int8_t (*out)[kLanes], uint8_t T[256]) {
-  const int op = (int)(insn.alu_op_ext << VTA_ALU_OPCODE_BIT_WIDTH | insn.alu_opcode);
+  const int op = (int)(insn.alu_op_ext2 << 4 | insn.alu_op_ext << VTA_ALU_OPCODE_BIT_WIDTH | insn.alu_opcode);
   const int32_t imm = (int32_t)insn.imm;
   int step = 0;
   uint32_t dst_out = 0, src_out = 0;
@@ -113,6 +113,8 @@ void run(const Insn &insn, const Uop *uops, int32_t (*acc)[kLanes], int8_t (*out
           case VTA_ALUX_MULSHR: r = (int32_t)(uint32_t)((int64_t)x * (int16_t)(S[b] & 0xffff)) >> (imm & 31); break;
           case VTA_ALUX_SHRV: r = shv(x, y, false); break;
           case VTA_ALUX_SHRR: r = shv(x, y, true); break;
+          case VTA_ALUX_SQACC: r = (int32_t)((uint32_t)x + (uint32_t)((int32_t)(int16_t)(S[b] & 0xffff) * (int16_t)(S[b] & 0xffff))); break;
+          case VTA_ALUX_LUTC: { const int i = x < 0 ? 0 : x > 255 ? 255 : x; r = (imm & 1) ? (int32_t)(int8_t)T[i] : (int32_t)T[i]; } break;
           default: break;
           }
           D[b] = r;
@@ -140,7 +142,7 @@ void run(const Insn &insn, const Uop *uops, int32_t (*acc)[kLanes], int8_t (*out
 // The imm loop (II 1, depth 12, MIN / MAX / ADD / SHR only) has up to 12. Returns the number of such steps.
 template <typename Insn, typename Uop>
 long hazards(const Insn &insn, const Uop *uops, int window) {
-  const int op = (int)(insn.alu_op_ext << VTA_ALU_OPCODE_BIT_WIDTH | insn.alu_opcode);
+  const int op = (int)(insn.alu_op_ext2 << 4 | insn.alu_op_ext << VTA_ALU_OPCODE_BIT_WIDTH | insn.alu_opcode);
   std::vector<long> wr;  // dst written by each step (-1: none)
   long bad = 0;
   uint32_t dst_out = 0, src_out = 0;
@@ -149,7 +151,7 @@ long hazards(const Insn &insn, const Uop *uops, int window) {
     for (uint32_t ii = 0; ii < insn.iter_in; ii++) {
       for (uint32_t u = insn.uop_bgn; u < insn.uop_end; u++) {
         const long d = uops[u].dst_idx + dst_in, s = uops[u].src_idx + src_in;
-        const bool rs = !insn.use_imm || op == VTA_ALUX_LUTSET || op == VTA_ALUX_MADD || op == VTA_ALUX_MULSHR;
+        const bool rs = !insn.use_imm || op == VTA_ALUX_LUTSET || op == VTA_ALUX_MADD || op == VTA_ALUX_MULSHR || op == VTA_ALUX_SQACC;
         const bool rd = op != VTA_ALUX_LUTSET;
         for (int k = 1; k <= window && k <= (int)wr.size(); k++) {
           const long w = wr[wr.size() - k];
@@ -179,15 +181,15 @@ long hazards(const Insn &insn, const Uop *uops, int window) {
 // imm (1 slot per step) wrong up to reuse distance 31, right from 32; a vector ADD (2 slots) wrong up to 15, right from 16).
 // The rule is wslots = 34 (2 slots of margin; = the old 17 steps for two-read operations, 34 steps for one-read ones).
 inline bool reads_src(int op, bool use_imm) {
-  return op == VTA_ALUX_LUTSET || op == VTA_ALUX_MADD || op == VTA_ALUX_MULSHR ||
-         (!use_imm && op != VTA_ALUX_LUT && op != VTA_ALUX_CLZ);
+  return op == VTA_ALUX_LUTSET || op == VTA_ALUX_MADD || op == VTA_ALUX_MULSHR || op == VTA_ALUX_SQACC ||
+         (!use_imm && op != VTA_ALUX_LUT && op != VTA_ALUX_LUTC && op != VTA_ALUX_CLZ);
 }
 inline bool reads_dst(int op) {
   return !(op == VTA_ALUX_CPY || op == VTA_ALUX_RSUM || op == VTA_ALUX_RMAX || op == VTA_ALUX_LUTSET);
 }
 template <typename Insn, typename Uop>
 long hazard_slots(const Insn &insn, const Uop *uops, int wslots, long *nslots = nullptr) {
-  const int op = (int)(insn.alu_op_ext << VTA_ALU_OPCODE_BIT_WIDTH | insn.alu_opcode);
+  const int op = (int)(insn.alu_op_ext2 << 4 | insn.alu_op_ext << VTA_ALU_OPCODE_BIT_WIDTH | insn.alu_opcode);
   const bool rs = reads_src(op, insn.use_imm), rd = reads_dst(op), two = rs && rd;
   const bool bc = two && insn.uop_end - insn.uop_bgn == 1 && insn.src_factor_in == 0;
   std::vector<std::pair<long, long>> wr;  // (entry, slot) of each write

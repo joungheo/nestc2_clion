@@ -21,7 +21,7 @@ def check(ins, uopmap, W):
 # _alux2 bitstream as alu_ext_ref.h hazard_slots (one slot per read; a broadcast src is read once per inner loop). The
 # dump has no lut_en, so imm MIN / MAX / ADD / SHR are checked with it too (conservative: they run in the imm loop then).
 def reads(op, use_imm):
-    rs = op in (8, 12, 13) or (not use_imm and op not in (7, 11))
+    rs = op in (8, 12, 13, 16) or (not use_imm and op not in (7, 11, 17))   # 16 SQACC, 17 LUTC (2026-11-15)
     rd = op not in (6, 9, 10, 8)
     return rs, rd
 def check_slots(ins, op, uopmap, W):

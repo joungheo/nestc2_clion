@@ -561,7 +561,7 @@ struct AluxFields {
   ap_int<8> rq_lo, rq_hi;
 };
 
-inline void alux_step(AluxFields f, ap_uint<4> op, ap_uint<4> lut_entry,
+inline void alux_step(AluxFields f, ap_uint<5> op, ap_uint<4> lut_entry,
                       acc_T D[VTA_BATCH][VTA_BLOCK_OUT], acc_T S[VTA_BATCH][VTA_BLOCK_OUT],
                       out_T O[VTA_BATCH][VTA_BLOCK_OUT]) {
 #pragma HLS INLINE
@@ -597,8 +597,14 @@ inline void alux_step(AluxFields f, ap_uint<4> op, ap_uint<4> lut_entry,
       //#### JO changed (2026-11-15, docs/evta_isa_ext.md 8.14): MUL / MADD / MULSHR share one multiplier per lane, SHRV / SHRR
       //#### one shifter; MADD and MULSHR always take S (imm is their multiplier / shift amount)
       const acc_T sv = S[i][b];
-      const ap_int<16> m = op == VTA_ALUX_MADD ? (ap_int<16>) imm.range(15, 0) : (ap_int<16>) (op == VTA_ALUX_MULSHR ? sv : y).range(15, 0);
-      const acc_T p = (acc_T) (x * m);
+      //#### JO changed (2026-11-15, 8.15): SQACC multiplies src by itself (a mux before the multiplier) and adds dst
+      // const ap_int<16> m = op == VTA_ALUX_MADD ? (ap_int<16>) imm.range(15, 0) : (ap_int<16>) (op == VTA_ALUX_MULSHR ? sv : y).range(15, 0);
+      // const acc_T p = (acc_T) (x * m);
+      const bool sq = op == VTA_ALUX_SQACC;
+      const ap_int<16> m = op == VTA_ALUX_MADD ? (ap_int<16>) imm.range(15, 0)
+                                               : (ap_int<16>) (op == VTA_ALUX_MULSHR || sq ? sv : y).range(15, 0);
+      const acc_T xa = sq ? (acc_T) (ap_int<16>) sv.range(15, 0) : x;
+      const acc_T p = (acc_T) (xa * m);
       const ap_int<7> kk = y > 31 ? (ap_int<7>) 31 : y < -32 ? (ap_int<7>) -32 : (ap_int<7>) y.range(6, 0);
       const ap_uint<6> kr = kk > 0 ? (ap_uint<6>) kk : (ap_uint<6>) 0, kl = kk < 0 ? (ap_uint<6>) (-kk) : (ap_uint<6>) 0;
       const acc_T xr = op == VTA_ALUX_SHRR && kk > 0 ? (acc_T) ((ap_uint<32>) x.range(31, 0) + ((ap_uint<32>) 1 << (kr - 1))) : x;
@@ -607,8 +613,8 @@ inline void alux_step(AluxFields f, ap_uint<4> op, ap_uint<4> lut_entry,
         alu_lane((uint32_t) op, x, y, r, o0);
       } else if (op == VTA_ALUX_MUL) {
         r = p;
-      } else if (op == VTA_ALUX_MADD) {
-        r = (acc_T) (p + sv);
+      } else if (op == VTA_ALUX_MADD || sq) {
+        r = (acc_T) (p + (sq ? x : sv));
       } else if (op == VTA_ALUX_MULSHR) {
         r = (acc_T) (p >> (ap_uint<5>) imm.range(4, 0));
       } else if (op == VTA_ALUX_SHRV || op == VTA_ALUX_SHRR) {
@@ -617,8 +623,11 @@ inline void alux_step(AluxFields f, ap_uint<4> op, ap_uint<4> lut_entry,
         r = (acc_T) (x - y);
       } else if (op == VTA_ALUX_CPY) {
         r = y;
-      } else if (op == VTA_ALUX_LUT) {
-        ap_uint<8> v = alux_lut_d[c][x.range(3, 0)][x.range(7, 4)];
+      } else if (op == VTA_ALUX_LUT || op == VTA_ALUX_LUTC) {
+        //#### JO changed (2026-11-15): LUTC clamps the index to 0..255 (LUT: the low 8 bits)
+        const ap_uint<8> li = op == VTA_ALUX_LUTC && x < 0 ? (ap_uint<8>) 0 : op == VTA_ALUX_LUTC && x > 255 ? (ap_uint<8>) 255
+                                                                                                           : (ap_uint<8>) x.range(7, 0);
+        ap_uint<8> v = alux_lut_d[c][li.range(3, 0)][li.range(7, 4)];
         r = f.sign ? (acc_T) (ap_int<8>) v : (acc_T) v;
       } else if (op == VTA_ALUX_RSUM || op == VTA_ALUX_RMAX) {
         r = red;
@@ -659,7 +668,7 @@ void alu(
 #pragma HLS ARRAY_PARTITION variable = alux_lut_o complete dim = 2
 #pragma HLS RESOURCE variable = alux_lut_d core = RAM_1P_LUTRAM
 #pragma HLS RESOURCE variable = alux_lut_o core = RAM_1P_LUTRAM
-  const ap_uint<4> op = (ap_uint<4>) VTA_ALU_FULL_OP(insn);
+  const ap_uint<5> op = (ap_uint<5>) VTA_ALU_FULL_OP(insn);   //#### JO (2026-11-15): 5 bits (16 SQACC, 17 LUTC)
   ap_uint<4> lut_entry = (ap_uint<4>) insn.imm;   // (imm + step) & 15, step in loop order
   AluxFields af;
   af.use_imm = insn.use_imm;
@@ -728,8 +737,8 @@ void alu(
   //#### src_factor_in 0 (src the same for the whole inner loop: a per-row operand) the src is read once per inner loop
   //#### ("broadcast": iter_in + 1 slots). VTA_ALUX_II2 keeps the old loop (II 2, every step reads src and dst).
   {
-    const bool rd_src = op == VTA_ALUX_LUTSET || op == VTA_ALUX_MADD || op == VTA_ALUX_MULSHR ||
-                        (!insn.use_imm && op != VTA_ALUX_LUT && op != VTA_ALUX_CLZ);
+    const bool rd_src = op == VTA_ALUX_LUTSET || op == VTA_ALUX_MADD || op == VTA_ALUX_MULSHR || op == VTA_ALUX_SQACC ||
+                        (!insn.use_imm && op != VTA_ALUX_LUT && op != VTA_ALUX_LUTC && op != VTA_ALUX_CLZ);
     const bool rd_dst = !(op == VTA_ALUX_CPY || op == VTA_ALUX_RSUM || op == VTA_ALUX_RMAX || op == VTA_ALUX_LUTSET);
     const bool two = rd_src && rd_dst;
     const int nu = insn.uop_end - insn.uop_bgn;

@@ -34,6 +34,7 @@ static VTAAluInsn &I(int op, int io, int ii, int d, int dfo, int dfi, int s, int
   a.opcode = VTA_OPCODE_ALU;
   a.alu_opcode = op & 3;
   a.alu_op_ext = op >> 2;
+  a.alu_op_ext2 = (op >> 4) & 1;   //#### JO (2026-11-15): operations 16-31
   a.use_imm = useImm;
   a.imm = imm;
   a.iter_out = io;

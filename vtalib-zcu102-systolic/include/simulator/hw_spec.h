@@ -171,7 +171,12 @@ extern "C" {
 #define VTA_ALUX_MULSHR 13 /* dst = (dst * (int16) acc[src], low 32 bits) >> (imm & 31)        */
 #define VTA_ALUX_SHRV 14   /* dst = dst >> k, k = src clamped to -32..31 (negative = left)     */
 #define VTA_ALUX_SHRR 15   /* as SHRV, rounding: k > 0: (dst + 2^(k-1)) >> k                   */
-#define VTA_ALU_FULL_OP(insn) ((int)((insn).alu_op_ext << VTA_ALU_OPCODE_BIT_WIDTH | (insn).alu_opcode))
+//#### JO added (2026-11-15, docs/evta_isa_ext.md 8.15): operations 16-31 set alu_op_ext2 (a pad bit; bitstreams "_alux3")
+#define VTA_ALUX_SQACC 16  /* dst = dst + (int16) acc[src] * (int16) acc[src] (src always read)   */
+#define VTA_ALUX_LUTC 17   /* dst = T[dst clamped to 0..255], imm bit 0 sign-extends            */
+//#define VTA_ALU_FULL_OP(insn) ((int)((insn).alu_op_ext << VTA_ALU_OPCODE_BIT_WIDTH | (insn).alu_opcode))
+#define VTA_ALU_FULL_OP(insn) \
+  ((int)((insn).alu_op_ext2 << 4 | (insn).alu_op_ext << VTA_ALU_OPCODE_BIT_WIDTH | (insn).alu_opcode))
 
 /*! Memory type field bitwidth */
 //#### JO change to 3 
@@ -493,7 +498,10 @@ typedef struct {
   int64_t  rq_hi          : 8;
   uint64_t alu_op_ext     : 2;
   uint64_t lut_en         : 1;
-  uint64_t pad_0          : 5;
+  //#### JO changed (2026-11-15): bit 4 of the operation (16-31; 0 on older bitstreams' instructions)
+  //uint64_t pad_0          : 5;
+  uint64_t alu_op_ext2    : 1;
+  uint64_t pad_0          : 4;
   uint64_t pad_1          : 64;
 } VTAAluInsn;
 

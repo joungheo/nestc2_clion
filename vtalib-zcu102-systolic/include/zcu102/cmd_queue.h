@@ -911,6 +911,7 @@ class CommandQueue {
     insn->alu_opcode = kernel->opcode_;
     //#### JO added (2026-11-11, ALU extension): operations 4-11 (VTA_ALUX_*) as alu_op_ext << 2 | alu_opcode, and lut_en
     insn->alu_op_ext = kernel->opcode_ >> VTA_ALU_OPCODE_BIT_WIDTH;
+    insn->alu_op_ext2 = (kernel->opcode_ >> 4) & 1;   //#### JO (2026-11-15): operations 16-31
     insn->lut_en = alu_lut_;
     insn->use_imm = kernel->use_imm_;
     insn->imm = kernel->imm_val_;

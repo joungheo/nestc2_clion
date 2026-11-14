@@ -74,6 +74,7 @@ VTAAluInsn blank(int op) {
   memset(&a, 0, sizeof a);
   a.alu_opcode = op & 3;
   a.alu_op_ext = op >> 2;
+  a.alu_op_ext2 = (op >> 4) & 1;   //#### JO (2026-11-15): operations 16-31
   a.iter_out = 1;
   a.iter_in = 1;
   return a;
@@ -86,7 +87,7 @@ void addRandom(Prog &p) {
  //#### JO changed (2026-11-15): the C simulation too drops instructions whose broadcast src (II 1 slot loop) is written in
  //#### its own inner loop (hazard_slots(..., 0)); the cosim drops those with a stale read in VTA_ALUX_WSLOTS slots
  for (;;) {
-  int op = rnd(p, 16);   // #### JO: 16 since 2026-11-15 (MADD, MULSHR, SHRV, SHRR)
+  int op = rnd(p, 18);   // #### JO: 16 since 2026-11-15 (MADD, MULSHR, SHRV, SHRR), 18 (SQACC, LUTC)
   VTAAluInsn a = blank(op);
   a.iter_out = 1 + rnd(p, 4);
   a.iter_in = 1 + rnd(p, 4);
@@ -285,11 +286,11 @@ int alux_test(unsigned seed, int ninsn) {
       }
     err += e;
   }
-  int hist[16] = {0};
+  int hist[32] = {0};
   for (auto &a : p.alus)
     hist[VTA_ALU_FULL_OP(a)]++;
   printf("INFO - %zu ALU instructions (by op:", p.alus.size());
-  for (int o = 0; o < 12; o++)
+  for (int o = 0; o < 18; o++)
     printf(" %d", hist[o]);
   printf("), %zu uops, %zu bytes compared\n", p.uops.size(), ref.size());
 

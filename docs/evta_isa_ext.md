@@ -945,3 +945,41 @@ compute 안의 shift(`ashr`) 등. 400 MHz는 RTL / HLS 쪽 레지스터(LUT RAM 
 - 남은 것:
   - LayerNorm EVTA 실행 약 200 us. Q = Σx²에 CPY + MUL + ADD를 쓰는데, 제곱 누적 연산 하나로 바꿀 수 있다(`pad_0`에 opcode 비트가 남아 있다).
   - softmax는 아직 CPU 12.4 ms다. `-vta-alu-softmax` 프로그램을 결합 연산으로 바꾸면 다음 목표가 된다.
+
+### 8.15 제곱 누적 / clamp LUT (`_alux3`), softmax on EVTA, int8 입력 경로 (2026-11-15)
+
+**하드웨어 (HLS `vta.cc`, ISA)**
+- 연산 비트 하나 추가: `VTAAluInsn.alu_op_ext2`(`pad_0`에서 1비트). 연산 번호 = `alu_op_ext2 << 4 | alu_op_ext << 2 | alu_opcode` (`VTA_ALU_FULL_OP`). 옛 명령은 이 비트가 0이라 그대로다.
+- 16 `SQACC`: `dst = dst + (int16) src * (int16) src`. src와 dst를 읽는다(2 slot). 곱셈기 입력 앞에 mux 하나(`sq ? src : dst`), 덧셈은 MADD의 덧셈기를 같이 쓴다.
+- 17 `LUTC`: `dst = T[clamp(dst, 0, 255)]`(imm bit 0 = 부호 확장). dst만 읽는다(1 slot). softmax의 `MIN 255` + `LUT`를 하나로.
+- HLS: ALU_SLOT II 1, depth 35 → 34. 파이프라인이 짧아졌으므로 34 slot 규칙(§8.14)은 그대로 성립한다.
+- C-sim(`sim/run_csim.sh`, 무작위 op 0–17) 60 seed 통과. C/RTL cosim(`sim/run_cosim.sh 4`, 34 slot 규칙) 4 seed PASS.
+
+**vtalib-systolic**
+- `VTAHasAluExt3()`: 이름에 `_alux<k>`, k ≥ 3(시뮬레이터 항상, `EVTA_ALUX3=0|1`). `VTAHasAluExt2()`도 이제 k ≥ 2를 본다(`_alux3`에서도 켜짐).
+- `layernorm_evta`:
+  - Q = Σx²: `CPY Q ← 0`, `SQACC Q += X²`(블록이 바깥 루프: 같은 Q 항목이 n ≥ 17 step마다) — 이전 CPY + MUL + CPY + ADD 대신. `_alux3`에서만.
+  - `* G[b]`를 블록 바깥 루프로 바꿨다: G[b]가 broadcast src가 되어 블록당 n + 1 slot(전에는 2n). `_alux2`에서도.
+  - PC 시뮬레이터 LayerNorm 테스트 전체 slot: 121k(`_alux2` 프로그램) → 114k(G 루프) → 95.2k(SQACC), 34 slot 규칙 위반 0, 0 differ.
+- `softmax_evta`(VTASave `-vta-alu-softmax`일 때 쓰임):
+  - 버퍼를 (EVTA, rows, cols)마다 유지, replay(key: 모양, M, k, 프로그램), NEON 입력 변환(int32 경로), `EVTA_SM_TIME=1`.
+  - 결합 연산 프로그램(`_alux2`): `d = m − x`를 MADD 하나(`x * −1 + m`, m은 행마다 broadcast), `R`의 index를 SHRV 하나(`S >> (24 − clz S)`, S ≥ E[0] = 255라 `(S >> sh) >> 8`과 같다), `(e·R + 2^(t−1)) >> t`를 broadcast MUL + SHRR. `_alux3`이면 `MIN 255` + `LUT` → `LUTC`.
+  - 시뮬레이터 softmax 테스트: slot-loop slot 240k → 181k(+ imm 루프의 MIN이 빠짐), 0 differ.
+- int8 입력 경로(`AluInp`, `EVTA_ALU_INP=0`이면 이전 int32 경로):
+  - CPU는 int8 행을 VTA 버퍼에 memcpy만 한다(softmax는 행마다 W = 16·NB 폭으로). load 모듈이 run i를 inp 반쪽 i % 2에 LOAD, compute가 reset + identity GEMM으로 acc에 옮긴다.
+  - token: load → compute는 run마다 하나, compute → load는 run i + 2의 LOAD를 위해 하나(run i의 GEMM이 끝나면 그 반쪽이 빈다). 그래서 다음 run의 LOAD가 지금 run의 ALU 프로그램과 겹친다.
+  - softmax의 pad 열: int8로는 −2^20을 못 넣으므로 GEMM 뒤 마지막 블록에 PV(키 lane 0, pad lane −2^20)를 ADD 한 번(broadcast).
+  - DMA는 1/4(16 B/항목), CPU 변환이 없어진다.
+
+**보드 (`_alux2` 400 MHz, DeiT, 25회 중앙값, ms)**
+
+| 실행 파일 | OMP 1 | OMP 4 | softmax | LayerNorm |
+|---|---|---|---|---|
+| `_pcsys2`: CPU float softmax (`softmaxI8`) | 71.57 | 53.68 | 12.42 (CPU) | 6.14 |
+| `_pcsys3`: `-vta-alu-softmax`, EVTA softmax (int32 입력) | 63.90 | 54.97 | 8.15 | 5.95 |
+| `_pcsys4`: + int8 입력 경로 | **60.55** | **51.78** | **5.94** | **4.93** |
+| 참고: 확장 없음(CPU LN, CPU softmax) | 76.05 | 53.29 | | 8.0 / 2.95 |
+
+- 결과: 세 이미지 281 / 207 / 340. `EVTA_SM_CHECK` 이미지당 1,200번, `EVTA_LN_CHECK` 2,400번 모두 0 differ. ALU 테스트(`lut_conv_test`, `ln_evta_test`, `softmax_evta_test`, `epi_conv_test` 39개) 기본 / `EVTA_ALU_INP=0` / `EVTA_ALUX2=0` 모두 통과.
+- 호출 하나(µs, in / run / out): LayerNorm 38 / 189 / 18 → 11 / 173 / 18, softmax 191 / 418 / 65 → 69 / 358 / 64.
+- confidence는 0.788 → 0.773(정수 softmax). 정확도는 §8.10 표: `-vta-alu-softmax` 59.94 % 대 기본 60.29 %(−0.35 %p, 표준오차 ±0.5 %p 안). 기본으로 켤지는 아직 정하지 않았다(지금도 꺼짐).

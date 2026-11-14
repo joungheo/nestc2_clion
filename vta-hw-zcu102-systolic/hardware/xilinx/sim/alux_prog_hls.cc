@@ -53,6 +53,7 @@ void hlsRunProgram(const VTAAluInsn *p, int np, const VTAUop *u, int nu, int32_t
     const int op = s == 0 ? VTA_ALUX_CPY : VTA_ALU_OPCODE_SHR;
     a.alu_opcode = op & 3;
     a.alu_op_ext = op >> 2;
+    a.alu_op_ext2 = (op >> 4) & 1;   //#### JO (2026-11-15): operations 16-31
     a.iter_out = 1;
     a.iter_in = depth;
     a.dst_factor_in = 1;

@@ -671,11 +671,36 @@ bool VTAHasAluExt2() {
 #else
       char name[256] = {0};
       FILE *f = fopen("/tmp/evta_bitstream", "r");
-      on = f && fgets(name, sizeof(name), f) && strstr(name, "_alux2") && strncmp(name, "FAILED", 6);
+      //#### JO changed (2026-11-15): "_alux<k>" with k >= 2 (the _alux3 bitstream has the fused operations too)
+      // on = f && fgets(name, sizeof(name), f) && strstr(name, "_alux2") && strncmp(name, "FAILED", 6);
+      const char *q = f && fgets(name, sizeof(name), f) && strncmp(name, "FAILED", 6) ? strstr(name, "_alux") : nullptr;
+      on = q && q[5] >= '2' && q[5] <= '9';
       if (f) fclose(f);
 #endif
     }
     on = on && VTAHasAluExt();
+  }
+  return on;
+}
+//#### JO added (2026-11-15, docs/evta_isa_ext.md 8.15): operations 16 SQACC / 17 LUTC (alu_op_ext2): "_alux<k>" with k >= 3
+//#### in /tmp/evta_bitstream (always in the simulator), EVTA_ALUX3=0|1 overrides
+bool VTAHasAluExt3() {
+  static int on = -1;
+  if (on < 0) {
+    const char *e = getenv("EVTA_ALUX3");
+    if (e && *e) on = atoi(e) > 0;
+    else {
+#if (NESTC_USE_VTASIM)
+      on = 1;
+#else
+      char name[256] = {0};
+      FILE *f = fopen("/tmp/evta_bitstream", "r");
+      const char *q = f && fgets(name, sizeof(name), f) && strncmp(name, "FAILED", 6) ? strstr(name, "_alux") : nullptr;
+      on = q && q[5] >= '3' && q[5] <= '9';
+      if (f) fclose(f);
+#endif
+    }
+    on = on && VTAHasAluExt2();
   }
   return on;
 }
@@ -5602,6 +5627,10 @@ int xp_convolution_wo_tr_scale(int8_t* input, int8_t *kernel, int32_t *bias, int
 #define VTA_ALUX_SHRV 14
 #define VTA_ALUX_SHRR 15
 #endif
+#ifndef VTA_ALUX_SQACC
+#define VTA_ALUX_SQACC 16
+#define VTA_ALUX_LUTC 17
+#endif
 struct Alu2Context {
   int32_t op, io, ii, d, dfo, dfi, s, sfo, sfi, useImm, imm;
   bool operator==(const Alu2Context &o) const { return !memcmp(this, &o, sizeof(o)); }
@@ -5632,6 +5661,56 @@ static void pushAlu2(VTACommandHandle cmdh, uint32_t idEVTA, int op, int io, int
   }
   VTAPushALUOp(cmdh, h, &alu2_generic, &c, 0);
 }
+
+//#### JO added (2026-11-15, docs/evta_isa_ext.md 8.15): the input of an ALU program (layernorm_evta, softmax_evta) as int8:
+//#### run i (e entries) is LOADed into inp half i % 2 by the load module and moved into acc by a reset + identity GEMM.
+//#### Tokens: load -> compute one per run; compute -> load one per run i + 2 (its half is free once run i's GEMM ran).
+//#### Without it (on = false): the int32 entries LOADed into acc by the compute module, as before.
+static bool aluInpPath(int entries) {
+  static const int on = getenv("EVTA_ALU_INP") ? atoi(getenv("EVTA_ALU_INP")) : 1;
+  return on > 0 && entries <= 1024;   // one half of inp (2048 entries, conv_kernel's INP_MEM_ENTRY)
+}
+struct AluInp {
+  VTACommandHandle cmd;
+  uint32_t id;
+  void *buf;
+  int e, runs;
+  bool on;
+  AluInp(VTACommandHandle c, uint32_t i, void *b, int entries, int nr, bool o) : cmd(c), id(i), buf(b), e(entries), runs(nr), on(o) {
+    if (!on)
+      return;
+    VTALoadBuffer2D(cmd, getIdentityWeights(id), 0, 1, 1, 1, 0, 0, 0, 0, RES_WGT_ENTRY, 1);
+    load(0);
+    if (runs > 1)
+      load(1);
+  }
+  void load(int r) {
+    VTALoadBuffer2D(cmd, buf, (uint32_t)(r * e), e, 1, e, 0, 0, 0, 0, (r % 2) * 1024, 2);
+    VTADepPush(cmd, 1, 2);
+  }
+  void waitLoad(int r) {
+    if (on)
+      VTADepPop(cmd, 1, 2);
+  }
+  // acc[a .. a + e) = run r's entries
+  void toAcc(int r, int a) {
+    if (!on) {
+      VTALoadBuffer2D(cmd, buf, (uint32_t)(r * e), e, 1, e, 0, 0, 0, 0, a, 3);
+      return;
+    }
+    pushReset(cmd, id, a, e);
+    pushResGemm(cmd, id, a, (r % 2) * 1024, e);
+    if (r + 2 < runs)
+      VTADepPush(cmd, 2, 1);
+  }
+  // after run r's program: the LOAD of run r + 2
+  void next(int r) {
+    if (on && r + 2 < runs) {
+      VTADepPop(cmd, 2, 1);
+      load(r + 2);
+    }
+  }
+};
 
 namespace {
 struct LnConsts {
@@ -5737,21 +5816,30 @@ int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float
   //#### int8 -> int32 copy is NEON, and the program is recorded once and replayed (VTAReplayBegin; key: the shape and gs,
   //#### the constants / input / output buffers relocated). Before: 108 us copy + 311 us emission per DeiT call.
   // void *xin = VTABufferAlloc((size_t)R * cols * sizeof(int32_t)), *xo = VTABufferAlloc((size_t)rows * cols);
+  //#### JO added (2026-11-15, docs/evta_isa_ext.md 8.15): the int8 rows LOADed into inp (load module) and moved to acc by an
+  //#### identity GEMM (no int8 -> int32 copy on the CPU, a quarter of the DMA), the two halves of inp in turn, so that the
+  //#### LOAD of a run overlaps the ALU program of the run before. EVTA_ALU_INP=0: the int32 copy LOADed into acc as before.
+  const bool inp = aluInpPath(n * NB);
   void *xin, *xo;
   {
-    static std::map<std::tuple<uint32_t, int, int>, std::pair<void *, void *>> lnBufs;
+    // static std::map<std::tuple<uint32_t, int, int>, std::pair<void *, void *>> lnBufs;
+    static std::map<std::tuple<uint32_t, int, int, bool>, std::pair<void *, void *>> lnBufs;
     std::lock_guard<std::mutex> g(m);
-    auto &bb = lnBufs[std::make_tuple(idEVTA, rows, cols)];
+    auto &bb = lnBufs[std::make_tuple(idEVTA, rows, cols, inp)];
     if (!bb.first) {
-      bb.first = VTABufferAlloc((size_t)R * cols * sizeof(int32_t));
+      const size_t eb = inp ? 1 : sizeof(int32_t);
+      bb.first = VTABufferAlloc((size_t)R * cols * eb);
       bb.second = VTABufferAlloc((size_t)rows * cols);
-      memset(VTABufferGetVirtAddr(bb.first), 0, (size_t)R * cols * sizeof(int32_t));
-      VTABufferFlush(bb.first, 0, (size_t)R * cols * sizeof(int32_t));
+      memset(VTABufferGetVirtAddr(bb.first), 0, (size_t)R * cols * eb);
+      VTABufferFlush(bb.first, 0, (size_t)R * cols * eb);
     }
     xin = bb.first, xo = bb.second;
   }
   int32_t *xi = (int32_t *)VTABufferGetVirtAddr(xin);
-  {
+  if (inp) {
+    memcpy(xi, x, (size_t)rows * cols);
+    VTABufferFlush(xin, 0, (size_t)rows * cols);
+  } else {
     const size_t e = (size_t)rows * cols;   // cols % 16 == 0
 #if !defined(__ARM_NEON)
     for (size_t i = 0; i < e; i++) xi[i] = x[i];
@@ -5765,9 +5853,9 @@ int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float
       vst1q_s32(xi + i + 12, vmovl_s16(vget_high_s16(hi)));
     }
 #endif
-  }
   // VTABufferFlush(xin, 0, (size_t)R * cols * sizeof(int32_t));
   VTABufferFlush(xin, 0, (size_t)rows * cols * sizeof(int32_t));
+  }
   if (lnTime) clock_gettime(CLOCK_MONOTONIC, &lt[1]);
   // acc layout (alu_ext_test.cc main)
   const int X = 0, D = X + n * NB, E = D + n * NB, S = E + n * NB, Q = S + n, Wv = Q + n, A = Wv + n, SH = A + n,
@@ -5787,25 +5875,39 @@ int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float
     if (last) VTARequant(cmd, 0, 0, 0, 0, 0);
   };
   const bool fused = VTAHasAluExt2();
-  int32_t replayKey[] = {5, rows, cols, n, k->gs, (int32_t)idEVTA, fused};
-  void *replayBufs[] = {k->buf, xin, xo};
-  const int replayed = VTAReplayBegin(cmd, replayKey, sizeof(replayKey), replayBufs, 3);
+  //#### JO added (2026-11-15, docs/evta_isa_ext.md 8.15): Q = sum x^2 by one SQACC (_alux3) instead of CPY + MUL + CPY + ADD
+  const bool sqacc = fused && VTAHasAluExt3();
+  // int32_t replayKey[] = {5, rows, cols, n, k->gs, (int32_t)idEVTA, fused};
+  // int32_t replayKey[] = {5, rows, cols, n, k->gs, (int32_t)idEVTA, fused, sqacc};
+  int32_t replayKey[] = {5, rows, cols, n, k->gs, (int32_t)idEVTA, fused, sqacc, inp};
+  void *replayBufs[] = {k->buf, xin, xo, getIdentityWeights(idEVTA)};
+  const int replayed = VTAReplayBegin(cmd, replayKey, sizeof(replayKey), replayBufs, 4);
   if (!replayed) {
   // the constants and the table (acc GB .. TB + 16)
   VTALoadBuffer2D(cmd, k->buf, 0, 2 * NB + 16, 1, 2 * NB + 16, 0, 0, 0, 0, GB, 3);
   I(VTA_ALUX_LUTSET, 1, 16, 0, 0, 0, TB, 0, 1, true, 0);
+  const int runs = (rows + n - 1) / n;
+  AluInp in8(cmd, idEVTA, xin, n * NB, runs, inp);
   for (int r0 = 0; r0 < rows; r0 += n) {
+    in8.waitLoad(r0 / n);
     if (r0)
       VTADepPop(cmd, 3, 2);   // the STORE of the run before has read out
-    VTALoadBuffer2D(cmd, xin, r0 * NB, n * NB, 1, n * NB, 0, 0, 0, 0, X, 3);
+    // VTALoadBuffer2D(cmd, xin, r0 * NB, n * NB, 1, n * NB, 0, 0, 0, 0, X, 3);
+    in8.toAcc(r0 / n, X);
     // 1. S = sum x; 2. Q = sum x^2
     I(VTA_ALUX_CPY, n, 1, S, 1, 0, X, NB, 0);
     I(RES_ALU_ADD, NB - 1, n, S, 0, 1, X + 1, 1, NB);
     I(VTA_ALUX_RSUM, n, 1, S, 1, 0, S, 1, 0);
+    if (sqacc) {
+      // Q[r] = 0, then Q[r] += x[r][b]^2 with the blocks outside (the same Q entry every n >= 17 steps, 2n slots)
+      I(VTA_ALUX_CPY, n, 1, Q, 1, 0, 0, 0, 0, true, 0);
+      I(VTA_ALUX_SQACC, NB, n, Q, 0, 1, X, 1, NB);
+    } else {
     I(VTA_ALUX_CPY, n, NB, D, NB, 1, X, NB, 1);
     I(VTA_ALUX_MUL, n, NB, D, NB, 1, X, NB, 1);
     I(VTA_ALUX_CPY, n, 1, Q, 1, 0, D, NB, 0);
     I(RES_ALU_ADD, NB - 1, n, Q, 0, 1, D + 1, 1, NB);
+    }
     I(VTA_ALUX_RSUM, n, 1, Q, 1, 0, Q, 1, 0);
     // 3. W = max(C Q - S^2, 1)
     I(VTA_ALUX_CPY, n, 1, Wv, 1, 0, Q, 1, 0);
@@ -5840,7 +5942,9 @@ int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float
       I(VTA_ALUX_MUL, n, 1, S, 1, 0, 0, 0, 0, true, -1);
       I(VTA_ALUX_MADD, n, NB, X, NB, 1, S, 1, 0, false, C);
       I(VTA_ALUX_MULSHR, n, NB, X, NB, 1, TV, 1, 0, false, 8);
-      I(VTA_ALUX_MUL, n, NB, X, NB, 1, GB, 0, 1);
+      //#### JO changed (2026-11-15): * G[b] with the blocks outside: G[b] is then a broadcast src (n + 1 slots per block, not 2n)
+      // I(VTA_ALUX_MUL, n, NB, X, NB, 1, GB, 0, 1);
+      I(VTA_ALUX_MUL, NB, n, X, 1, NB, GB, 1, 0);
       I(VTA_ALUX_CPY, n, NB, E, NB, 1, GB + NB, 0, 1);
       I(VTA_ALUX_SHRV, n, NB, E, NB, 1, A2, 1, 0);
       I(RES_ALU_ADD, n, NB, X, NB, 1, E, NB, 1);
@@ -5870,6 +5974,7 @@ int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float
     const int nr = std::min(n, rows - r0);
     VTAStoreBuffer2D(cmd, fused ? X : D, 4, xo, r0 * NB, nr * NB, 1, nr * NB);
     VTADepPush(cmd, 3, 2);
+    in8.next(r0 / n);
   }
   VTADepPop(cmd, 3, 2);
   if (lnTime) clock_gettime(CLOCK_MONOTONIC, &lt[2]);
@@ -5946,7 +6051,8 @@ void softmaxIntQRef(int8_t *o, const int8_t *x, size_t cols, const int32_t *E, c
 
 int softmax_evta(int8_t *out, const int8_t *x, int rows, int cols, float s, float outInv, void *vtaCmdH, uint32_t idEVTA) {
   const int NB = (cols + 15) / 16, kAcc = 2048;
-  const int n = std::min(64, (kAcc - 32) / std::max(1, 2 * NB + 8));
+  // const int n = std::min(64, (kAcc - 32) / std::max(1, 2 * NB + 8));
+  const int n = std::min(64, (kAcc - 48) / std::max(1, 2 * NB + 8));   // + the pad entry PV (2026-11-15)
   int32_t M;
   int k;
   smParams(outInv, &M, &k);
@@ -5977,45 +6083,148 @@ int softmax_evta(int8_t *out, const int8_t *x, int rows, int cols, float s, floa
   }
   if (!VTAHasAluExt() || n < 17 || rows < 1 || cols < 1 || M < 1 || (cols % 16 && T->E[255] != 0))
     return 0;
+  //#### JO changed (2026-11-15, docs/evta_isa_ext.md 8.15): the input / output buffers are kept per (EVTA, rows, cols) (the pad
+  //#### columns and rows written once), the int8 -> int32 copy is NEON, the program is recorded once and replayed (key: the
+  //#### shape, M, k and the program; the tables / input / output buffers relocated), and with the fused operations (_alux2)
+  //#### d = m - x is one MADD (src m per row), (e * R + 2^(t-1)) >> t one broadcast MUL and one SHRR, R's index one SHRV,
+  //#### and with _alux3 the clamp to 255 and the exp table one LUTC. EVTA_SM_TIME=1 prints the times per call (us).
+  static const bool smTime = getenv("EVTA_SM_TIME") && atoi(getenv("EVTA_SM_TIME")) > 0;
+  struct timespec lt[5];
+  if (smTime) clock_gettime(CLOCK_MONOTONIC, &lt[0]);
   VTACommandHandle cmd = (VTACommandHandle)vtaCmdH;
   const int R = (rows + n - 1) / n * n, W = NB * 16;
-  void *xin = VTABufferAlloc((size_t)R * W * sizeof(int32_t)), *xo = VTABufferAlloc((size_t)R * W);
+  const int32_t kPad = -(1 << 20);
+  // void *xin = VTABufferAlloc((size_t)R * W * sizeof(int32_t)), *xo = VTABufferAlloc((size_t)R * W);
+  // int32_t *xi = (int32_t *)VTABufferGetVirtAddr(xin);
+  // for (int r = 0; r < R; r++)
+  //   for (int c = 0; c < W; c++)
+  //     xi[(size_t)r * W + c] = r < rows && c < cols ? x[(size_t)r * cols + c] : -(1 << 20);
+  // VTABufferFlush(xin, 0, (size_t)R * W * sizeof(int32_t));
+  //#### JO added (2026-11-15): with the int8 input path (AluInp, as layernorm_evta) the rows are copied as int8 (pad bytes 0)
+  //#### and one ALU ADD of PV (0 in the key lanes, kPad in the pad lanes) to the last block of every row makes the pads
+  //#### very negative after the GEMM
+  const bool inp = aluInpPath(n * NB);
+  void *xin, *xo, *pv;
+  {
+    // static std::map<std::tuple<uint32_t, int, int>, std::pair<void *, void *>> smBufs;
+    static std::map<std::tuple<uint32_t, int, int, bool>, std::tuple<void *, void *, void *>> smBufs;
+    std::lock_guard<std::mutex> g(mu);
+    auto &bb = smBufs[std::make_tuple(idEVTA, rows, cols, inp)];
+    if (!std::get<0>(bb)) {
+      const size_t eb = inp ? 1 : sizeof(int32_t);
+      void *b0 = VTABufferAlloc((size_t)R * W * eb);
+      if (inp) {
+        memset(VTABufferGetVirtAddr(b0), 0, (size_t)R * W);
+      } else {
+        int32_t *p = (int32_t *)VTABufferGetVirtAddr(b0);
+        for (size_t i = 0; i < (size_t)R * W; i++) p[i] = kPad;
+      }
+      VTABufferFlush(b0, 0, (size_t)R * W * eb);
+      void *b2 = VTABufferAlloc(16 * sizeof(int32_t));
+      int32_t *q = (int32_t *)VTABufferGetVirtAddr(b2);
+      for (int l = 0; l < 16; l++) q[l] = cols % 16 && l >= cols % 16 ? kPad : 0;
+      VTABufferFlush(b2, 0, 16 * sizeof(int32_t));
+      bb = std::make_tuple(b0, VTABufferAlloc((size_t)R * W), b2);
+    }
+    xin = std::get<0>(bb), xo = std::get<1>(bb), pv = std::get<2>(bb);
+  }
   int32_t *xi = (int32_t *)VTABufferGetVirtAddr(xin);
-  for (int r = 0; r < R; r++)
-    for (int c = 0; c < W; c++)
-      xi[(size_t)r * W + c] = r < rows && c < cols ? x[(size_t)r * cols + c] : -(1 << 20);
-  VTABufferFlush(xin, 0, (size_t)R * W * sizeof(int32_t));
+  if (inp) {
+    int8_t *x8 = (int8_t *)xi;
+    if (cols == W)
+      memcpy(x8, x, (size_t)rows * cols);
+    else
+      for (int r = 0; r < rows; r++)
+        memcpy(x8 + (size_t)r * W, x + (size_t)r * cols, cols);
+    VTABufferFlush(xin, 0, (size_t)rows * W);
+  } else {
+  for (int r = 0; r < rows; r++) {
+    const int8_t *xr = x + (size_t)r * cols;
+    int32_t *yr = xi + (size_t)r * W;
+    int c = 0;
+#if defined(__ARM_NEON)
+    for (; c + 16 <= cols; c += 16) {
+      const int8x16_t v = vld1q_s8(xr + c);
+      const int16x8_t lo = vmovl_s8(vget_low_s8(v)), hi = vmovl_s8(vget_high_s8(v));
+      vst1q_s32(yr + c, vmovl_s16(vget_low_s16(lo)));
+      vst1q_s32(yr + c + 4, vmovl_s16(vget_high_s16(lo)));
+      vst1q_s32(yr + c + 8, vmovl_s16(vget_low_s16(hi)));
+      vst1q_s32(yr + c + 12, vmovl_s16(vget_high_s16(hi)));
+    }
+#endif
+    for (; c < cols; c++) yr[c] = xr[c];
+  }
+  VTABufferFlush(xin, 0, (size_t)rows * W * sizeof(int32_t));
+  }
+  if (smTime) clock_gettime(CLOCK_MONOTONIC, &lt[1]);
   // acc layout (alu_ext_test.cc softmaxTest)
   const int X = 0, D = X + n * NB, Mx = D + n * NB, S = Mx + n, A = S + n, SH = A + n, RV = SH + n, TT = RV + n, H = TT + n,
-            K = H + n, TE = K + n, TR = TE + 16;
+            K = H + n, TE = K + n, TR = TE + 16, PV = TR + 16;
   auto I = [&](int op, int io, int ii, int d, int dfo, int dfi, int s_, int sfo, int sfi, bool useImm = false, int imm = 0) {
     pushAlu2(cmd, idEVTA, op, io, ii, d, dfo, dfi, s_, sfo, sfi, useImm, imm);
   };
+  const int fused = VTAHasAluExt2() ? (VTAHasAluExt3() ? 2 : 1) : 0;
+  int32_t replayKey[] = {6, rows, cols, n, M, k, (int32_t)idEVTA, fused, inp};
+  void *replayBufs[] = {T->buf, xin, xo, pv, getIdentityWeights(idEVTA)};
+  const int replayed = VTAReplayBegin(cmd, replayKey, sizeof(replayKey), replayBufs, 5);
+  if (!replayed) {
   VTALoadBuffer2D(cmd, T->buf, 0, 32, 1, 32, 0, 0, 0, 0, TE, 3);
+  if (inp && cols % 16)
+    VTALoadBuffer2D(cmd, pv, 0, 1, 1, 1, 0, 0, 0, 0, PV, 3);
+  AluInp in8(cmd, idEVTA, xin, n * NB, (rows + n - 1) / n, inp);
   for (int r0 = 0; r0 < rows; r0 += n) {
+    in8.waitLoad(r0 / n);
     if (r0)
       VTADepPop(cmd, 3, 2);
-    VTALoadBuffer2D(cmd, xin, r0 * NB, n * NB, 1, n * NB, 0, 0, 0, 0, X, 3);
+    // VTALoadBuffer2D(cmd, xin, r0 * NB, n * NB, 1, n * NB, 0, 0, 0, 0, X, 3);
+    in8.toAcc(r0 / n, X);
+    if (inp && cols % 16)
+      I(RES_ALU_ADD, 1, n, X + NB - 1, 0, NB, PV, 0, 0);
+    const int P = fused ? X : D;   // the entries of e and p
     // 1. m = max x, d = min(m - x, 255), e = E[d]
     I(VTA_ALUX_LUTSET, 1, 16, 0, 0, 0, TE, 0, 1, true, 0);
     I(VTA_ALUX_CPY, n, 1, Mx, 1, 0, X, NB, 0);
     if (NB > 1)
       I(RES_ALU_MAX, NB - 1, n, Mx, 0, 1, X + 1, 1, NB);
     I(VTA_ALUX_RMAX, n, 1, Mx, 1, 0, Mx, 1, 0);
+    if (fused) {
+      I(VTA_ALUX_MADD, n, NB, X, NB, 1, Mx, 1, 0, false, -1);   // x * -1 + m
+      if (fused > 1) {
+        I(VTA_ALUX_LUTC, n, NB, X, NB, 1, 0, 0, 0, true, 0);
+      } else {
+        I(RES_ALU_MIN, n, NB, X, NB, 1, 0, 0, 0, true, 255);
+        I(VTA_ALUX_LUT, n, NB, X, NB, 1, 0, 0, 0, true, 0);
+      }
+    } else {
     I(VTA_ALUX_CPY, n, NB, D, NB, 1, Mx, 1, 0);
     I(VTA_ALUX_SUB, n, NB, D, NB, 1, X, NB, 1);
     I(RES_ALU_MIN, n, NB, D, NB, 1, 0, 0, 0, true, 255);
     I(VTA_ALUX_LUT, n, NB, D, NB, 1, 0, 0, 0, true, 0);
+    }
     // 2. S = sum e; sh = 16 - clz(S); R = RT[(S >> sh) >> 8]
-    I(VTA_ALUX_CPY, n, 1, S, 1, 0, D, NB, 0);
+    I(VTA_ALUX_CPY, n, 1, S, 1, 0, P, NB, 0);
     if (NB > 1)
-      I(RES_ALU_ADD, NB - 1, n, S, 0, 1, D + 1, 1, NB);
+      I(RES_ALU_ADD, NB - 1, n, S, 0, 1, P + 1, 1, NB);
     I(VTA_ALUX_RSUM, n, 1, S, 1, 0, S, 1, 0);
     I(VTA_ALUX_CPY, n, 1, A, 1, 0, S, 1, 0);
     I(VTA_ALUX_CLZ, n, 1, A, 1, 0, 0, 0, 0);
+    I(VTA_ALUX_LUTSET, 1, 16, 0, 0, 0, TR, 0, 1, true, 0);
+    if (fused) {
+      // sh + 8 = 24 - clz(S): R = RT[S >> (sh + 8)] (the same as (S >> sh) >> 8: S >= E[0] = 255, so sh + 8 >= 1);
+      // t = 7 + sh = 23 - clz(S)
+      I(VTA_ALUX_CPY, n, 1, SH, 1, 0, 0, 0, 0, true, 24);
+      I(VTA_ALUX_SUB, n, 1, SH, 1, 0, A, 1, 0);
+      I(VTA_ALUX_CPY, n, 1, RV, 1, 0, S, 1, 0);
+      I(VTA_ALUX_SHRV, n, 1, RV, 1, 0, SH, 1, 0);
+      I(VTA_ALUX_LUT, n, 1, RV, 1, 0, 0, 0, 0, true, 0);
+      I(VTA_ALUX_CPY, n, 1, TT, 1, 0, 0, 0, 0, true, 23);
+      I(VTA_ALUX_SUB, n, 1, TT, 1, 0, A, 1, 0);
+      // 3. p = (e * R + 2^(t-1)) >> t
+      I(VTA_ALUX_MUL, n, NB, X, NB, 1, RV, 1, 0);
+      I(VTA_ALUX_SHRR, n, NB, X, NB, 1, TT, 1, 0);
+    } else {
     I(VTA_ALUX_CPY, n, 1, SH, 1, 0, 0, 0, 0, true, 16);
     I(VTA_ALUX_SUB, n, 1, SH, 1, 0, A, 1, 0);
-    I(VTA_ALUX_LUTSET, 1, 16, 0, 0, 0, TR, 0, 1, true, 0);
     I(VTA_ALUX_CPY, n, 1, RV, 1, 0, S, 1, 0);
     I(RES_ALU_SHR, n, 1, RV, 1, 0, SH, 1, 0);
     I(RES_ALU_SHR, n, 1, RV, 1, 0, 0, 0, 0, true, 8);
@@ -6030,23 +6239,42 @@ int softmax_evta(int8_t *out, const int8_t *x, int rows, int cols, float s, floa
     I(VTA_ALUX_MUL, n, NB, D, NB, 1, RV, 1, 0);
     I(RES_ALU_ADD, n, NB, D, NB, 1, H, 1, 0);
     I(RES_ALU_SHR, n, NB, D, NB, 1, TT, 1, 0);
+    }
     // 4. q = clip((p * M + 2^(k-1)) >> k) into out
     VTARequant(cmd, 1, 1, k, -128, 127);
-    I(VTA_ALUX_MUL, n, NB, D, NB, 1, 0, 0, 0, true, M);
+    I(VTA_ALUX_MUL, n, NB, P, NB, 1, 0, 0, 0, true, M);
     VTARequant(cmd, 0, 0, 0, 0, 0);
     VTADepPush(cmd, 2, 3);
     VTADepPop(cmd, 2, 3);
-    VTAStoreBuffer2D(cmd, D, 4, xo, r0 * NB, n * NB, 1, n * NB);
+    const int nr = std::min(n, rows - r0);
+    // VTAStoreBuffer2D(cmd, D, 4, xo, r0 * NB, n * NB, 1, n * NB);
+    VTAStoreBuffer2D(cmd, P, 4, xo, r0 * NB, nr * NB, 1, nr * NB);
     VTADepPush(cmd, 3, 2);
+    in8.next(r0 / n);
   }
   VTADepPop(cmd, 3, 2);
+  if (smTime) clock_gettime(CLOCK_MONOTONIC, &lt[2]);
   VTASynchronize(cmd, 1 << 31);
-  VTABufferInvalidate(xo, 0, (size_t)R * W);
+  VTAReplayEnd(cmd, 1);
+  } else if (smTime)
+    lt[2] = lt[1];
+  if (smTime) clock_gettime(CLOCK_MONOTONIC, &lt[3]);
+  // VTABufferInvalidate(xo, 0, (size_t)R * W);
+  VTABufferInvalidate(xo, 0, (size_t)rows * W);
   const int8_t *po = (const int8_t *)VTABufferGetVirtAddr(xo);
-  for (int r = 0; r < rows; r++)
-    memcpy(out + (size_t)r * cols, po + (size_t)r * W, cols);
-  VTABufferFree(xin);
-  VTABufferFree(xo);
+  if (cols == W)
+    memcpy(out, po, (size_t)rows * cols);
+  else
+    for (int r = 0; r < rows; r++)
+      memcpy(out + (size_t)r * cols, po + (size_t)r * W, cols);
+  // VTABufferFree(xin);
+  // VTABufferFree(xo);
+  if (smTime) {
+    clock_gettime(CLOCK_MONOTONIC, &lt[4]);
+    auto us = [&](int i) { return (lt[i + 1].tv_sec - lt[i].tv_sec) * 1e6 + (lt[i + 1].tv_nsec - lt[i].tv_nsec) / 1e3; };
+    fprintf(stderr, "EVTA_SM_TIME %d x %d n %d%s: in %.1f emit %.1f run %.1f out %.1f us\n", rows, cols, n, replayed ? " replay" : "",
+            us(0), us(1), us(2), us(3));
+  }
   static const bool check = getenv("EVTA_SM_CHECK") && atoi(getenv("EVTA_SM_CHECK")) > 0;
   if (check) {
     std::vector<int8_t> ref(cols);
