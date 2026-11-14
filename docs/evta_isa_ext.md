@@ -840,3 +840,31 @@ compute 안의 shift(`ashr`) 등. 400 MHz는 RTL / HLS 쪽 레지스터(LUT RAM 
 | Resnet18 | 40 / 40 | 24.10 | 23.05 |
 | Resnet50 | 106 / 106 | 71.28 | 68.82 |
 | VGG16 CIFAR-10 | 34 / 34 | 7.17 | 7.02 |
+
+**DeiT-tiny (보드, 2026-11-14).** ALU 확장을 넣은 가장 큰 이유가 DeiT다.
+
+- 번들은 PC에서 지금의 VTASave로 다시 만들었다(`gen_deit_bundle.sh`, `_pcsystimed`). weights는 11-12 번들과 같다.
+- 세 이미지 모두 모든 비트스트림에서 맞게 분류된다: 281 (0.788097) / 207 / 340.
+- `_alux`에서는 `EVTA_LN_CHECK`로 LayerNorm 2,400번을 CPU 결과와 비교했고 모두 0 differ다.
+
+| 비트스트림 | 실행 파일 | OMP 1 (ms) | LayerNorm | GELU 표 | OMP 4 (ms) |
+|---|---|---|---|---|---|
+| `_sa_400mhz_rq` (확장 없음) | 11-12 `_systimed` | 75.88 | CPU 8.07 | CPU 2.87 | 53.29 (LN 2.95) |
+| `_sa_400mhz_rq` | 11-14 `_pcsystimed` | 76.05 | CPU 8.01 | CPU 2.87 | |
+| `_sa_alux_380mhz_rq` | 11-14 | 85.57 | EVTA 19.31 | conv에 +1.0 | |
+| `_sa_alux_400mhz_rq` | 11-14 | 84.84 | EVTA 19.04 | conv에 +0.5 | 67.07 (LN 19.18) |
+
+**ALU 확장으로 DeiT가 느려진다.**
+
+- GELU 출력 LUT는 이득이다: CPU 2.87 ms가 conv의 ALU pass +0.5–1.0 ms로 줄었다.
+- LayerNorm은 손해다: CPU 8.0 ms(OMP 4면 3.0 ms)가 EVTA로 19.0 ms가 됐다. 25번 호출이고, 한 번(198 × 192, 40 token씩 5 run)에 약 780 us다.
+- `EVTA_LN_TIME=1`(vtalib-systolic `layernorm_evta`)로 한 번의 호출을 나눠 쟀다:
+  - 입력 int8 → int32 변환과 flush: 108 us
+  - 명령 생성: 311 us. ALU 명령 약 325개를 CPU가 매번 만든다. replay를 쓰지 않는다.
+  - EVTA 실행: 343 us
+  - 출력 복사: 19 us
+- EVTA 실행 343 us는 계산과 맞는다. run 하나에 vector step 약 9,500개 × II 2, 명령마다 pipeline drain 약 39 cycle, LOAD 152 KB다.
+- 그래서 명령 생성을 replay로 없애고 입력 변환을 NEON으로 해도 호출 하나에 약 0.4 ms, 전체 약 10 ms다. CPU(OMP 1 8.0 ms, OMP 4 3.0 ms)보다 느리다.
+- LayerNorm이 이기려면 하드웨어 쪽이 필요하다:
+  - 확장 연산을 II 1로 돌리기. imm 연산은 acc 읽기가 하나뿐이다.
+  - 원소마다 하는 연산 수 줄이기. 지금은 원소마다 약 14개다. 예: multiply-add, imm 곱 뒤 빼기를 한 연산으로.

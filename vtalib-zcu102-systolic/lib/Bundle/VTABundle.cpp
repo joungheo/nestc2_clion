@@ -5697,6 +5697,11 @@ int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float
   }
   if (!k->sameRows)
     return 0;
+  //#### JO added (2026-11-14): EVTA_LN_TIME=1 prints per call the time of the input copy, the instruction emission, the
+  //#### EVTA run (VTASynchronize) and the output copy (us)
+  static const bool lnTime = getenv("EVTA_LN_TIME") && atoi(getenv("EVTA_LN_TIME")) > 0;
+  struct timespec lt[5];
+  if (lnTime) clock_gettime(CLOCK_MONOTONIC, &lt[0]);
   VTACommandHandle cmd = (VTACommandHandle)vtaCmdH;
   const int R = (rows + n - 1) / n * n;
   void *xin = VTABufferAlloc((size_t)R * cols * sizeof(int32_t)), *xo = VTABufferAlloc((size_t)rows * cols);
@@ -5704,6 +5709,7 @@ int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float
   for (size_t i = 0, e = (size_t)rows * cols; i < e; i++) xi[i] = x[i];
   memset(xi + (size_t)rows * cols, 0, (size_t)(R - rows) * cols * sizeof(int32_t));
   VTABufferFlush(xin, 0, (size_t)R * cols * sizeof(int32_t));
+  if (lnTime) clock_gettime(CLOCK_MONOTONIC, &lt[1]);
   // acc layout (alu_ext_test.cc main)
   const int X = 0, D = X + n * NB, E = D + n * NB, S = E + n * NB, Q = S + n, Wv = Q + n, A = Wv + n, SH = A + n,
             TV = SH + n, TT = TV + n, A2 = TT + n, H = A2 + n, K = H + n, K1 = K + n, GB = K1 + n, TB = GB + 2 * NB;
@@ -5786,11 +5792,19 @@ int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float
     VTADepPush(cmd, 3, 2);
   }
   VTADepPop(cmd, 3, 2);
+  if (lnTime) clock_gettime(CLOCK_MONOTONIC, &lt[2]);
   VTASynchronize(cmd, 1 << 31);
+  if (lnTime) clock_gettime(CLOCK_MONOTONIC, &lt[3]);
   VTABufferInvalidate(xo, 0, (size_t)rows * cols);
   memcpy(out, VTABufferGetVirtAddr(xo), (size_t)rows * cols);
   VTABufferFree(xin);
   VTABufferFree(xo);
+  if (lnTime) {
+    clock_gettime(CLOCK_MONOTONIC, &lt[4]);
+    auto us = [&](int i) { return (lt[i + 1].tv_sec - lt[i].tv_sec) * 1e6 + (lt[i + 1].tv_nsec - lt[i].tv_nsec) / 1e3; };
+    fprintf(stderr, "EVTA_LN_TIME %d x %d n %d: in %.1f emit %.1f run %.1f out %.1f us\n", rows, cols, n, us(0), us(1), us(2),
+            us(3));
+  }
   static const bool check = getenv("EVTA_LN_CHECK") && atoi(getenv("EVTA_LN_CHECK")) > 0;
   if (check) {
     std::vector<int8_t> ref(cols);
