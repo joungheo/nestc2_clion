@@ -983,3 +983,28 @@ compute 안의 shift(`ashr`) 등. 400 MHz는 RTL / HLS 쪽 레지스터(LUT RAM 
 - 결과: 세 이미지 281 / 207 / 340. `EVTA_SM_CHECK` 이미지당 1,200번, `EVTA_LN_CHECK` 2,400번 모두 0 differ. ALU 테스트(`lut_conv_test`, `ln_evta_test`, `softmax_evta_test`, `epi_conv_test` 39개) 기본 / `EVTA_ALU_INP=0` / `EVTA_ALUX2=0` 모두 통과.
 - 호출 하나(µs, in / run / out): LayerNorm 38 / 189 / 18 → 11 / 173 / 18, softmax 191 / 418 / 65 → 69 / 358 / 64.
 - confidence는 0.788 → 0.773(정수 softmax). 정확도는 §8.10 표: `-vta-alu-softmax` 59.94 % 대 기본 60.29 %(−0.35 %p, 표준오차 ±0.5 %p 안). 기본으로 켤지는 아직 정하지 않았다(지금도 꺼짐).
+
+**비트스트림 `_alux3` (2026-11-15).** 이름 `vtahw_..._sa_alux_400mhz_rq_alux3`(Explore), 보드에는 `..._sa_alux3_400mhz_rq.bin`.
+
+| 빌드 | WNS (ns) | LUT | FF | BRAM |
+|---|---|---|---|---|
+| Explore (보드에 올림) | **+0.022** | 69,764 | 91,997 | 258 |
+| ETO | −0.019 | 70,839 | 92,076 | 258 |
+| 참고: `_alux2` ETO | +0.026 | 68,207 | 89,434 | 258 |
+
+**보드 (`_alux3`, 같은 실행 파일 `_pcsys4`)**
+- ALU 테스트 4종이 기본 / `EVTA_ALUX3=0` / `EVTA_ALUX2=0` / `EVTA_ALU_INP=0` / `EVTA_REQUANT=0` 모두 통과(`epi_conv_test` 39개 0 differ).
+- DeiT 281 / 207 / 340, LN 2,400번·softmax 1,200번 비교 모두 0 differ.
+- CNN conv dump가 `_alux2`와 byte 단위로 같다(MobileNetV2 5,200 / Resnet18 40 / Resnet50 106 / VGG16 34).
+- replay dump `hazard_dump.py SLOTS=34`: 다섯 모델 모두 위반 0. (`hazard_dump.py`의 옛 window 검사가 LUTSET을 acc 쓰기로 세던 것을 고쳤다: LUTSET은 acc를 쓰지 않는다.)
+- 호출 하나(µs, in / run / out): LayerNorm 11 / 173 / 18 → 11 / 154 / 17, softmax 69 / 358 / 64 → 70 / 334 / 68.
+
+| 모델 (ms, 25회 중앙값) | `_alux2` | `_alux3` |
+|---|---|---|
+| DeiT OMP 1 | 60.82 (LN 4.94, SM 5.97) | **60.14 (LN 4.48, SM 5.70)** |
+| DeiT OMP 4 | 51.77 | **51.12** |
+| MobileNetV2 / Resnet18 / Resnet50 / VGG16 | 17.28 / 23.04 / 68.79 / 7.02 | 17.26 / 23.08 / 68.81 / 7.02 |
+
+- 오늘 DeiT 전체 (OMP 1): 76.14(`_alux`, replay 전 LN 9.66) → 71.73(`_alux2`) → 60.55(EVTA softmax + int8 입력, `_alux2`) → **60.14**(`_alux3`). OMP 4: 57.40 → 53.82 → 51.78 → **51.12**; 확장 없는 비트스트림 53.29보다 빠르다.
+- softmax 숫자는 `-vta-alu-softmax`로 만든 번들이다(기본 꺼짐, 정확도 −0.35 %p, §8.10).
+- 남은 CPU 일(OMP 1, `_pcsys3`): transpose_vtaio2nhwc 6.3 ms(49회), transpose_nhwc2vtaio 5.9 ms(72회), elemadd 3.8 ms, lut8 2.2 ms. LayerNorm / residual add가 EVTA 배치를 바로 읽고 쓰면 대부분 없어진다(VTASave 쪽 일).

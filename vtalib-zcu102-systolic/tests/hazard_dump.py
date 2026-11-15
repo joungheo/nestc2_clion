@@ -4,8 +4,9 @@
 # reading an acc entry (dst or src) written within the last W steps of the same instruction. imm ALU instructions keep the
 # II 1 loop (unchanged, up to 12 in flight) and are reported separately.
 import sys, glob, os, collections
-def check(ins, uopmap, W):
+def check(ins, uopmap, W, op=-1):
     bgn, end, io, ii, dfo, dfi, sfo, sfi, use_imm = ins
+    if op == 8: return 0   # #### JO (2026-11-15): LUTSET writes no acc entry (its dst is not read either)
     wr = collections.deque(maxlen=W); bad = 0
     for a in range(io):
         for b in range(ii):
@@ -94,7 +95,7 @@ for model in sys.argv[1:]:
                         first.setdefault('slot_W%d' % SLOTS, '%s: %s' % (os.path.basename(f), l.strip()))
                 for W in WS:
                     if kind == 'imm' and W == 7: continue
-                    h = check(ins, sram, W)
+                    h = check(ins, sram, W, op)
                     if h < 0: tot['unmapped'] += 1; break
                     if h:
                         tot['%s_W%d_insn' % (kind, W)] += 1; tot['%s_W%d_steps' % (kind, W)] += h
