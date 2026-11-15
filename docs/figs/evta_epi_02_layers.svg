@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="930" viewBox="0 0 1400 930" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif">
+<title>그림 E2. 누가 무엇을 하나: VTASave(컴파일) → 번들 → vtalib(실행) → EVTA 하드웨어</title>
+<defs><marker id="ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#333333"/></marker><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f5f98"/></marker><marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c06a10"/></marker><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3c8a35"/></marker><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker><marker id="ap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6d4596"/></marker><marker id="ay" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9a7b00"/></marker><marker id="agr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#888888"/></marker></defs>
+<rect x="0" y="0" width="1400" height="930" fill="#ffffff"/>
+<text x="700.0" y="34" font-size="19" fill="#333333" text-anchor="middle" font-weight="bold">그림 E2. 누가 무엇을 하나: VTASave(컴파일) → 번들 → vtalib(실행) → EVTA 하드웨어</text>
+<rect x="40" y="70" width="1320" height="170" rx="6" fill="#f1eaf8" stroke="#6d4596" stroke-width="1.6"/>
+<text x="60" y="98" font-size="15" fill="#333333" text-anchor="start" font-weight="bold">컴파일 시 (PC, model-compiler)   lib/Backends/VTA/VTASave.cpp</text>
+<rect x="70" y="115" width="360" height="105" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="250.0" y="154.5" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">IR 명령열</text>
+<text x="250.0" y="172.05" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">conv → (view) → add → relu …</text>
+<text x="250.0" y="189.6" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">(alloc / dealloc은 건너뜀)</text>
+<rect x="520" y="115" width="360" height="105" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="700.0" y="154.5" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">chain walker</text>
+<text x="700.0" y="172.05" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">findResidualFusions (2^k scale)</text>
+<text x="700.0" y="189.6" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">findMulResidualFusions (임의 scale)</text>
+<rect x="970" y="115" width="360" height="105" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="1150.0" y="154.5" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">번들 .cpp에 쓰는 것</text>
+<text x="1150.0" y="172.05" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">VTAEpilogue 구조체 + 단계 목록</text>
+<text x="1150.0" y="189.6" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">VTASetConvEpilogue(&amp;e); conv 호출</text>
+<polyline points="430,167 520,167" fill="none" stroke="#6d4596" stroke-width="2" marker-end="url(#ap)"/>
+<polyline points="880,167 970,167" fill="none" stroke="#6d4596" stroke-width="2" marker-end="url(#ap)"/>
+<rect x="40" y="270" width="1320" height="120" rx="6" fill="#f2f2f2" stroke="#888888" stroke-width="1.6"/>
+<text x="60" y="297" font-size="15" fill="#333333" text-anchor="start" font-weight="bold">번들 코드 (DeiT out-proj 예)</text>
+<text x="70" y="325" font-size="13" fill="#333333" text-anchor="start" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">VTAEpilogue e = {3, {{6 /*MUL*/, 5762}, {1 /*ADD*/, 0, 0, 0, 20107}, {2 /*RQ*/, 2, 14, -128, 127}}};</text>
+<text x="70" y="345" font-size="13" fill="#333333" text-anchor="start" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">e.t[0] = residual_vbuf;  VTASetConvEpilogue(&amp;e);</text>
+<text x="70" y="365" font-size="13" fill="#333333" text-anchor="start" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">convolution_wo_tr(in, W, bias, out, …, nVirtualThread 2, tileH 9, tileW 11);  VTASetConvEpilogue(nullptr);</text>
+<polyline points="1150,240 1150,270" fill="none" stroke="#6d4596" stroke-width="2" marker-end="url(#ap)"/>
+<rect x="40" y="420" width="1320" height="250" rx="6" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="60" y="447" font-size="15" fill="#333333" text-anchor="start" font-weight="bold">실행 시 (보드 CPU)   vtalib-zcu102-systolic/lib/Bundle/VTABundle.cpp</text>
+<rect x="70" y="465" width="290" height="150" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="215.0" y="527.0" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">convolution_wo_tr</text>
+<text x="215.0" y="544.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">epilogue가 있으면</text>
+<text x="215.0" y="562.1" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">convEpilogue()로</text>
+<rect x="400" y="465" width="290" height="150" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="545.0" y="518.2249999999999" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">lowerEpilogue</text>
+<text x="545.0" y="535.7749999999999" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">목록 → 표준형</text>
+<text x="545.0" y="553.3249999999999" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">f1 → MUL → ADD → RQ → f2</text>
+<text x="545.0" y="570.8749999999999" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">이 비트스트림에서 되나?</text>
+<rect x="730" y="465" width="290" height="150" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="875.0" y="518.2249999999999" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">conv_kernel (타일마다)</text>
+<text x="875.0" y="535.7749999999999" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">LOAD / GEMM / ALU / STORE</text>
+<text x="875.0" y="553.3249999999999" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">명령 + uop + 의존 토큰</text>
+<text x="875.0" y="570.8749999999999" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">→ 명령 큐 (DRAM)</text>
+<rect x="1060" y="465" width="270" height="150" rx="6" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="1195.0" y="518.2249999999999" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">못 하면 (CPU 경로)</text>
+<text x="1195.0" y="535.7749999999999" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">보통 conv 실행 후</text>
+<text x="1195.0" y="553.3249999999999" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">VTAEpilogueRef를</text>
+<text x="1195.0" y="570.8749999999999" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">원소마다 CPU에서</text>
+<polyline points="360,540 400,540" fill="none" stroke="#3c8a35" stroke-width="2" marker-end="url(#ag)"/>
+<polyline points="690,520 730,520" fill="none" stroke="#3c8a35" stroke-width="2" marker-end="url(#ag)"/>
+<text x="710" y="510" font-size="12" fill="#3c8a35" text-anchor="middle" font-weight="normal">예</text>
+<polyline points="545,615 545,638 1195,638 1195,615" fill="none" stroke="#c06a10" stroke-width="1.8" marker-end="url(#ao)"/>
+<text x="870" y="658" font-size="12" fill="#c06a10" text-anchor="middle" font-weight="normal">아니오 (표 2개, ADD 2개, 확장 없는 비트스트림의 LUT / MUL …)</text>
+<polyline points="700,390 700,420" fill="none" stroke="#333333" stroke-width="2" marker-end="url(#ak)"/>
+<rect x="40" y="700" width="1320" height="200" rx="6" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.6"/>
+<text x="60" y="727" font-size="15" fill="#333333" text-anchor="start" font-weight="bold">EVTA (FPGA, 400 MHz)   — epilogue를 모른다. vtalib이 낸 명령만 실행</text>
+<rect x="70" y="750" width="220" height="120" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="180.0" y="797.0" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">fetch</text>
+<text x="180.0" y="814.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">DRAM 명령열을 읽어</text>
+<text x="180.0" y="832.1" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">모듈별 큐로 분배</text>
+<rect x="360" y="750" width="220" height="120" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="470.0" y="797.0" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">load</text>
+<text x="470.0" y="814.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">inp / wgt LOAD</text>
+<text x="470.0" y="832.1" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">(residual도 여기로)</text>
+<rect x="650" y="750" width="300" height="120" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="800.0" y="788.2249999999999" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">compute</text>
+<text x="800.0" y="805.7749999999999" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">GEMM (systolic 16×16)</text>
+<text x="800.0" y="823.3249999999999" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">ALU: MUL / MADD / LUT …</text>
+<text x="800.0" y="840.8749999999999" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">rq: 쓰면서 반올림·clip</text>
+<rect x="1020" y="750" width="220" height="120" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="1130.0" y="805.775" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">store</text>
+<text x="1130.0" y="823.3249999999999" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">out → DRAM</text>
+<polyline points="290,810 360,810" fill="none" stroke="#2f5f98" stroke-width="2" marker-end="url(#ab)"/>
+<polyline points="580,810 650,810" fill="none" stroke="#2f5f98" stroke-width="2" marker-end="url(#ab)"/>
+<polyline points="950,810 1020,810" fill="none" stroke="#2f5f98" stroke-width="2" marker-end="url(#ab)"/>
+<polyline points="875,670 875,700" fill="none" stroke="#333333" stroke-width="2" marker-end="url(#ak)"/>
+<text x="880" y="690" font-size="12" fill="#333333" text-anchor="start" font-weight="normal">RunStart: 명령 수·주소 레지스터, START</text>
+</svg>

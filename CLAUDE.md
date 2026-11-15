@@ -352,6 +352,7 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   `elemadd_evta` (inp + identity GEMM, MUL + MADD with rq; 22-bit: A = Ah 2^7 + Al in two parts; CPU path `nestc_cpu::elemaddInt`,
   same bytes, `EVTA_EA_CHECK=1`): DeiT's 24 residual adds 4.36 -> 1.44 ms, OMP 1 49.85 -> 47.01 ms, OMP 4 47.38 -> 44.41 ms;
   ImageNetV2 60.20 % (22-bit 60.10 %, float elemadd 59.94 %, all within noise); CNN bundles unchanged.
+  How the epilogue works end to end, for newcomers (7 figures): [docs/evta_epilogue_guide.md](docs/evta_epilogue_guide.md).
   `-vta-fuse-elemadd-mul` (2026-11-15, §8.18, default **off**): the same add as the out-proj / fc2 conv epilogue (new epilogue
   step MUL and the ADD multiplier d, `VTA_CONV_EPILOGUE 2`; vtalib-systolic residual GEMMed into acc Y above entry 2048, ALU MUL +
   MADD with rq): same bytes, `EVTA_EPI_CHECK` 0 differ, but DeiT OMP 1 47.04 -> 47.95 ms (the residual LOAD waits for the tile's

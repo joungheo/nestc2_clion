@@ -5,6 +5,7 @@
 연산을 **명령열(epilogue 프로그램)** 로 만들고, vtalib이 그것을 tile마다 ALU / GEMM 명령으로 바꿔 STORE 전에 실행한다.
 
 - ISA 비트, 연산 표, 하드웨어 비용, HLS / cosim: [evta_isa_ext.md](evta_isa_ext.md) §8
+- 처음 보는 사람용 설명(그림 7개: 왜, 세 층, lowering, SRAM 배치, 타일 명령, 하드웨어로 가는 길, 비트스트림별): [evta_epilogue_guide.md](evta_epilogue_guide.md)
 - 이 문서: ALU 확장을 모델에 쓴 곳(§1), epilogue 구조(§2–§5), 검증(§6), 남은 일(§7)
 
 ## 1. 지금까지 ALU 확장으로 EVTA에 옮긴 것

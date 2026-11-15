@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="640" viewBox="0 0 1400 640" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif">
+<title>그림 E4. EVTA 안 메모리 배치 (단일 EVTA): acc / inp를 thread 두 개가 반씩, residual 자리</title>
+<defs><marker id="ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#333333"/></marker><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f5f98"/></marker><marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c06a10"/></marker><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3c8a35"/></marker><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker><marker id="ap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6d4596"/></marker><marker id="ay" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9a7b00"/></marker><marker id="agr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#888888"/></marker></defs>
+<rect x="0" y="0" width="1400" height="640" fill="#ffffff"/>
+<text x="700.0" y="34" font-size="19" fill="#333333" text-anchor="middle" font-weight="bold">그림 E4. EVTA 안 메모리 배치 (단일 EVTA): acc / inp를 thread 두 개가 반씩, residual 자리</text>
+<text x="40" y="80" font-size="15" fill="#333333" text-anchor="start" font-weight="bold">acc (int32, 항목 = 16채널 × 4 B, 4096 항목)</text>
+<rect x="60.0" y="100" width="187.5" height="80" rx="2" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.6"/>
+<text x="153.75" y="135.775" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">thread 0: X 타일</text>
+<text x="153.75" y="153.32500000000002" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">(DeiT: 99 항목 × 6 블록)</text>
+<rect x="247.5" y="100" width="132.5" height="80" rx="2" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="313.75" y="144.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">(빈 곳)</text>
+<rect x="380.0" y="100" width="187.5" height="80" rx="2" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.6"/>
+<text x="473.75" y="144.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">thread 1: X 타일</text>
+<rect x="567.5" y="100" width="132.5" height="80" rx="2" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="633.75" y="144.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">(빈 곳)</text>
+<rect x="700.0" y="100" width="185.625" height="80" rx="2" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="792.8125" y="135.775" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">thread 0</text>
+<text x="792.8125" y="153.32500000000002" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">Y = residual</text>
+<rect x="885.625" y="100" width="134.375" height="80" rx="2" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<rect x="1020.0" y="100" width="185.625" height="80" rx="2" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="1112.8125" y="135.775" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">thread 1</text>
+<text x="1112.8125" y="153.32500000000002" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">Y = residual</text>
+<rect x="1205.625" y="100" width="134.375" height="80" rx="2" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="60.0" y="202" font-size="12" fill="#888888" text-anchor="middle" font-weight="normal">0</text>
+<text x="380.0" y="202" font-size="12" fill="#888888" text-anchor="middle" font-weight="normal">1024</text>
+<text x="700.0" y="202" font-size="12" fill="#888888" text-anchor="middle" font-weight="normal">2048</text>
+<text x="1020.0" y="202" font-size="12" fill="#888888" text-anchor="middle" font-weight="normal">3072</text>
+<text x="1340.0" y="202" font-size="12" fill="#888888" text-anchor="middle" font-weight="normal">4096</text>
+<rect x="60" y="225" width="640.0" height="40" rx="6" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.6" stroke-dasharray="6,4"/>
+<text x="380.0" y="249.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">conv가 쓰는 2048 항목 (ACC_MEM_ENTRY)</text>
+<rect x="700.0" y="225" width="640.0" height="40" rx="6" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6" stroke-dasharray="6,4"/>
+<text x="1020.0" y="249.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">MUL add의 Y (11-15: 위쪽 절반, multi-EVTA는 X 옆)</text>
+<text x="40" y="320" font-size="15" fill="#333333" text-anchor="start" font-weight="bold">inp (int8, 항목 = 16 B, 4096 항목)</text>
+<rect x="60.0" y="336" width="320.0" height="80" rx="2" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="220.0" y="371.77500000000003" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">thread 0: 입력 타일</text>
+<text x="220.0" y="389.32500000000005" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">(GEMM 뒤 residual LOAD 자리로 재사용)</text>
+<rect x="380.0" y="336" width="320.0" height="80" rx="2" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="540.0" y="380.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">thread 1: 입력 타일 / residual</text>
+<rect x="700.0" y="336" width="640.0" height="80" rx="2" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="1020.0" y="380.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">(conv가 안 씀: residual을 미리 LOAD할 수 있는 자리)</text>
+<text x="60.0" y="438" font-size="12" fill="#888888" text-anchor="middle" font-weight="normal">0</text>
+<text x="380.0" y="438" font-size="12" fill="#888888" text-anchor="middle" font-weight="normal">1024</text>
+<text x="700.0" y="438" font-size="12" fill="#888888" text-anchor="middle" font-weight="normal">2048</text>
+<text x="1340.0" y="438" font-size="12" fill="#888888" text-anchor="middle" font-weight="normal">4096</text>
+<text x="40" y="500" font-size="15" fill="#333333" text-anchor="start" font-weight="bold">왜 thread 두 개인가</text>
+<text x="60" y="530" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">• thread 0이 계산하는 동안 thread 1 자리에 다음 타일을 LOAD → LOAD와 계산이 겹친다 (virtual thread)</text>
+<text x="60" y="556" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">• residual은 inp의 입력 자리를 다시 쓰므로, 그 타일의 GEMM이 끝나야 LOAD할 수 있다 → MUL add가 느렸던 이유 하나</text>
+<text x="60" y="582" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">• Y를 X 옆에 두면 한 타일에 넣을 출력 블록 수(nFilterinLoop)가 6 → 3으로 줄어 입력을 두 번 읽었다 → 위쪽 절반으로 옮김</text>
+</svg>

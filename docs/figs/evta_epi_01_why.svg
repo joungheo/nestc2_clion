@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="560" viewBox="0 0 1400 560" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif">
+<title>그림 E1. epilogue가 없을 때와 있을 때: conv 뒤 원소별 연산의 DRAM 왕복</title>
+<defs><marker id="ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#333333"/></marker><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f5f98"/></marker><marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c06a10"/></marker><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3c8a35"/></marker><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker><marker id="ap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6d4596"/></marker><marker id="ay" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9a7b00"/></marker><marker id="agr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#888888"/></marker></defs>
+<rect x="0" y="0" width="1400" height="560" fill="#ffffff"/>
+<text x="700.0" y="34" font-size="19" fill="#333333" text-anchor="middle" font-weight="bold">그림 E1. epilogue가 없을 때와 있을 때: conv 뒤 원소별 연산의 DRAM 왕복</text>
+<text x="40" y="84" font-size="16" fill="#333333" text-anchor="start" font-weight="bold">① epilogue 없음 (원소별 연산마다 따로 호출)</text>
+<rect x="40" y="110" width="190" height="70" rx="6" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.6"/>
+<text x="135.0" y="140.45000000000002" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">EVTA conv</text>
+<text x="135.0" y="159.35000000000002" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">GEMM → acc → int8</text>
+<rect x="330" y="110" width="150" height="70" rx="6" fill="#f2f2f2" stroke="#888888" stroke-width="1.6"/>
+<text x="405.0" y="140.45000000000002" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">DRAM</text>
+<text x="405.0" y="159.35000000000002" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">conv 출력</text>
+<rect x="580" y="110" width="190" height="70" rx="6" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="675.0" y="140.45000000000002" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">add 호출</text>
+<text x="675.0" y="159.35000000000002" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">LOAD 2개 → 더함</text>
+<rect x="870" y="110" width="150" height="70" rx="6" fill="#f2f2f2" stroke="#888888" stroke-width="1.6"/>
+<text x="945.0" y="140.45000000000002" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">DRAM</text>
+<text x="945.0" y="159.35000000000002" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">add 출력</text>
+<rect x="1120" y="110" width="190" height="70" rx="6" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="1215.0" y="140.45000000000002" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">relu / 표 호출</text>
+<text x="1215.0" y="159.35000000000002" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">LOAD → 계산</text>
+<polyline points="230,145 330,145" fill="none" stroke="#c0392b" stroke-width="2.2" marker-end="url(#ar)"/>
+<polyline points="480,145 580,145" fill="none" stroke="#c0392b" stroke-width="2.2" marker-end="url(#ar)"/>
+<polyline points="770,145 870,145" fill="none" stroke="#c0392b" stroke-width="2.2" marker-end="url(#ar)"/>
+<polyline points="1020,145 1120,145" fill="none" stroke="#c0392b" stroke-width="2.2" marker-end="url(#ar)"/>
+<text x="280" y="136" font-size="12" fill="#c0392b" text-anchor="middle" font-weight="normal">STORE</text>
+<text x="530" y="136" font-size="12" fill="#c0392b" text-anchor="middle" font-weight="normal">LOAD</text>
+<text x="820" y="136" font-size="12" fill="#c0392b" text-anchor="middle" font-weight="normal">STORE</text>
+<text x="1070" y="136" font-size="12" fill="#c0392b" text-anchor="middle" font-weight="normal">LOAD</text>
+<text x="700" y="214" font-size="14" fill="#c0392b" text-anchor="middle" font-weight="normal">DRAM 왕복이 연산 수만큼 생기고, 호출마다 EVTA 시작·대기 비용이 든다</text>
+<text x="40" y="290" font-size="16" fill="#333333" text-anchor="start" font-weight="bold">② epilogue (conv 결과가 acc에 있는 동안 STORE 전에 처리)</text>
+<rect x="40" y="316" width="760" height="120" rx="6" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.6"/>
+<text x="60" y="344" font-size="15" fill="#333333" text-anchor="start" font-weight="bold">EVTA conv 한 번 (타일마다)</text>
+<rect x="60" y="362" width="110" height="56" rx="6" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.6"/>
+<text x="115.0" y="385.77500000000003" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">GEMM</text>
+<text x="115.0" y="403.32500000000005" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">acc = Σ x·w</text>
+<rect x="215" y="362" width="110" height="56" rx="6" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.6"/>
+<text x="270.0" y="385.77500000000003" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">conv rq</text>
+<text x="270.0" y="403.32500000000005" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">int8 값</text>
+<rect x="370" y="362" width="110" height="56" rx="6" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="425.0" y="385.77500000000003" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">ADD</text>
+<text x="425.0" y="403.32500000000005" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">+ residual</text>
+<rect x="525" y="362" width="110" height="56" rx="6" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="580.0" y="385.77500000000003" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">RQ / CLIP</text>
+<text x="580.0" y="403.32500000000005" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">relu, ReLU6</text>
+<rect x="680" y="362" width="110" height="56" rx="6" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="735.0" y="385.77500000000003" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">LUT</text>
+<text x="735.0" y="403.32500000000005" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">GELU 등</text>
+<polyline points="170,390 215,390" fill="none" stroke="#3c8a35" stroke-width="1.8" marker-end="url(#ag)"/>
+<polyline points="325,390 370,390" fill="none" stroke="#3c8a35" stroke-width="1.8" marker-end="url(#ag)"/>
+<polyline points="480,390 525,390" fill="none" stroke="#3c8a35" stroke-width="1.8" marker-end="url(#ag)"/>
+<polyline points="635,390 680,390" fill="none" stroke="#3c8a35" stroke-width="1.8" marker-end="url(#ag)"/>
+<rect x="900" y="341" width="150" height="70" rx="6" fill="#f2f2f2" stroke="#888888" stroke-width="1.6"/>
+<text x="975.0" y="371.45" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">DRAM</text>
+<text x="975.0" y="390.34999999999997" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">최종 출력</text>
+<polyline points="800,376 900,376" fill="none" stroke="#2f5f98" stroke-width="2.2" marker-end="url(#ab)"/>
+<text x="850" y="367" font-size="12" fill="#2f5f98" text-anchor="middle" font-weight="normal">STORE 1번</text>
+<rect x="1120" y="341" width="190" height="70" rx="6" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.6"/>
+<text x="1215.0" y="380.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">다음 conv</text>
+<polyline points="1050,376 1120,376" fill="none" stroke="#2f5f98" stroke-width="2.2" marker-end="url(#ab)"/>
+<text x="700" y="486" font-size="14" fill="#3c8a35" text-anchor="middle" font-weight="normal">원소별 연산은 EVTA 안(acc)에서 끝나고 DRAM에는 한 번만 쓴다. 녹색 = epilogue 단계</text>
+<text x="700" y="516" font-size="13" fill="#888888" text-anchor="middle" font-weight="normal">예전에는 정해진 패턴 함수(add+relu, 표 하나, ReLU6)만 됐다 → 지금은 단계 목록(프로그램) 하나로 순서 자유</text>
+</svg>

@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="740" viewBox="0 0 1400 740" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif">
+<title>그림 E6. 명령이 하드웨어에 가는 길: 명령 큐(DRAM) → 레지스터 → fetch 분배 → done, 그리고 replay</title>
+<defs><marker id="ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#333333"/></marker><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f5f98"/></marker><marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c06a10"/></marker><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3c8a35"/></marker><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker><marker id="ap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6d4596"/></marker><marker id="ay" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9a7b00"/></marker><marker id="agr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#888888"/></marker></defs>
+<rect x="0" y="0" width="1400" height="740" fill="#ffffff"/>
+<text x="700.0" y="34" font-size="19" fill="#333333" text-anchor="middle" font-weight="bold">그림 E6. 명령이 하드웨어에 가는 길: 명령 큐(DRAM) → 레지스터 → fetch 분배 → done, 그리고 replay</text>
+<rect x="40" y="80" width="400" height="250" rx="6" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="60" y="108" font-size="15" fill="#333333" text-anchor="start" font-weight="bold">보드 CPU (vtalib)</text>
+<text x="60" y="145" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">1. conv_kernel: 타일마다</text>
+<text x="60" y="170" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">   LOAD / GEMM / ALU / STORE + uop</text>
+<text x="60" y="195" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">   + VTADepPush / VTADepPop</text>
+<text x="60" y="220" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">2. VTASynchronize: cache flush</text>
+<text x="60" y="245" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">3. RunStart: 레지스터 쓰기</text>
+<text x="60" y="270" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">4. RunWait: compute done polling</text>
+<text x="60" y="295" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">5. 출력 VTABufferInvalidate</text>
+<rect x="520" y="80" width="360" height="250" rx="6" fill="#f2f2f2" stroke="#888888" stroke-width="1.6"/>
+<text x="540" y="108" font-size="15" fill="#333333" text-anchor="start" font-weight="bold">DRAM (CMA, 캐시 비일관)</text>
+<rect x="545" y="125" width="310" height="40" rx="6" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="700.0" y="149.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">입력 activation</text>
+<rect x="545" y="175" width="310" height="40" rx="6" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="700.0" y="199.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">weight / bias (시작 때 1번)</text>
+<rect x="545" y="225" width="310" height="40" rx="6" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="700.0" y="249.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">출력 / residual</text>
+<rect x="545" y="275" width="310" height="40" rx="6" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="700.0" y="299.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">명령열 + uop</text>
+<rect x="960" y="80" width="400" height="250" rx="6" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.6"/>
+<text x="980" y="108" font-size="15" fill="#333333" text-anchor="start" font-weight="bold">EVTA</text>
+<rect x="990" y="130" width="150" height="60" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="1065.0" y="164.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">fetch</text>
+<rect x="1200" y="125" width="140" height="50" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="1270.0" y="154.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">load 큐</text>
+<polyline points="1140,160 1200,150" fill="none" stroke="#2f5f98" stroke-width="1.5" marker-end="url(#ab)"/>
+<rect x="1200" y="190" width="140" height="50" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="1270.0" y="219.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">compute 큐</text>
+<polyline points="1140,160 1200,215" fill="none" stroke="#2f5f98" stroke-width="1.5" marker-end="url(#ab)"/>
+<rect x="1200" y="255" width="140" height="50" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="1270.0" y="284.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">store 큐</text>
+<polyline points="1140,160 1200,280" fill="none" stroke="#2f5f98" stroke-width="1.5" marker-end="url(#ab)"/>
+<polyline points="440,280 545,290" fill="none" stroke="#3c8a35" stroke-width="2" marker-end="url(#ag)"/>
+<text x="490" y="270" font-size="12" fill="#3c8a35" text-anchor="middle" font-weight="normal">쓰기</text>
+<polyline points="855,290 990,175" fill="none" stroke="#2f5f98" stroke-width="2" marker-end="url(#ab)"/>
+<text x="915" y="220" font-size="12" fill="#2f5f98" text-anchor="middle" font-weight="normal">DMA로 읽기</text>
+<polyline points="240,330 240,352 1065,352 1065,190" fill="none" stroke="#333333" stroke-width="1.5" stroke-dasharray="6,4" marker-end="url(#ak)"/>
+<text x="650" y="372" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">RunStart: INSN_COUNT, INSN_ADDR 레지스터 쓰기 → START (MMIO)</text>
+<text x="1160" y="320" font-size="11" fill="#888888" text-anchor="middle" font-weight="normal">명령 안: DRAM 주소 → SRAM 주소, 크기</text>
+<text x="40" y="430" font-size="15" fill="#333333" text-anchor="start" font-weight="bold">replay (AOT stage 0): 같은 인자의 conv를 두 번째 부를 때</text>
+<rect x="60" y="450" width="380" height="120" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="250.0" y="496.0" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">첫 호출</text>
+<text x="250.0" y="514.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">conv_kernel이 명령을 만들고</text>
+<text x="250.0" y="533.8" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">기록 (ReplayBegin / End)</text>
+<rect x="520" y="450" width="380" height="120" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="710.0" y="496.0" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">두 번째 호출부터</text>
+<text x="710.0" y="514.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">기록을 복사하고 버퍼 주소만 바꿈</text>
+<text x="710.0" y="533.8" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">(relocation) → 바로 RunStart</text>
+<rect x="980" y="450" width="380" height="120" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="1170.0" y="496.0" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">replay key</text>
+<text x="1170.0" y="514.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">conv 모양, schedule, epilogue</text>
+<text x="1170.0" y="533.8" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">lowering 결과(mulV, mulT …)</text>
+<polyline points="440,510 520,510" fill="none" stroke="#333333" stroke-width="2" marker-end="url(#ak)"/>
+<polyline points="980,510 900,510" fill="none" stroke="#333333" stroke-width="1.5" stroke-dasharray="6,4" marker-end="url(#ak)"/>
+<text x="700" y="620" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">그래서 conv_kernel은 모양마다 한 번만 돈다. DeiT처럼 같은 conv가 12층 반복되면 CPU의 명령 만드는 시간이 거의 없다</text>
+<text x="700" y="652" font-size="13" fill="#888888" text-anchor="middle" font-weight="normal">큐가 가득 차면 여러 run으로 나눠 보낸다 (EVTA_REPLAY_LOG=2가 run마다 GEMM / ALU 반복 수, DRAM 바이트, 시간을 찍는다)</text>
+</svg>

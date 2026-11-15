@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="520" viewBox="0 0 1400 520" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif">
+<title>그림 E7. 비트스트림마다 EVTA에서 되는 것 (안 되면 CPU 경로, 결과 바이트는 같다)</title>
+<defs><marker id="ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#333333"/></marker><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f5f98"/></marker><marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c06a10"/></marker><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3c8a35"/></marker><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker><marker id="ap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6d4596"/></marker><marker id="ay" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9a7b00"/></marker><marker id="agr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#888888"/></marker></defs>
+<rect x="0" y="0" width="1400" height="520" fill="#ffffff"/>
+<text x="700.0" y="34" font-size="19" fill="#333333" text-anchor="middle" font-weight="bold">그림 E7. 비트스트림마다 EVTA에서 되는 것 (안 되면 CPU 경로, 결과 바이트는 같다)</text>
+<rect x="60" y="70" width="300" height="50" rx="6" fill="#f2f2f2" stroke="#888888" stroke-width="1.6"/>
+<rect x="360" y="70" width="190" height="50" rx="6" fill="#f2f2f2" stroke="#888888" stroke-width="1.6"/>
+<text x="455.0" y="99.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">shift add</text>
+<rect x="550" y="70" width="210" height="50" rx="6" fill="#f2f2f2" stroke="#888888" stroke-width="1.6"/>
+<text x="655.0" y="99.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">종류 1 (shift·clip)</text>
+<rect x="760" y="70" width="170" height="50" rx="6" fill="#f2f2f2" stroke="#888888" stroke-width="1.6"/>
+<text x="845.0" y="99.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">표 (LUT)</text>
+<rect x="930" y="70" width="230" height="50" rx="6" fill="#f2f2f2" stroke="#888888" stroke-width="1.6"/>
+<text x="1045.0" y="99.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">MUL add</text>
+<rect x="1160" y="70" width="160" height="50" rx="6" fill="#f2f2f2" stroke="#888888" stroke-width="1.6"/>
+<text x="1240.0" y="99.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">그 밖</text>
+<rect x="60" y="120" width="300" height="70" rx="0" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="210.0" y="159.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">HLS GEMM (vta/vtalib)</text>
+<rect x="360" y="120" width="190" height="70" rx="0" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="455.0" y="159.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">○</text>
+<rect x="550" y="120" width="210" height="70" rx="0" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="655.0" y="159.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">○ add 뒤만</text>
+<rect x="760" y="120" width="170" height="70" rx="0" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="845.0" y="159.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">CPU</text>
+<rect x="930" y="120" width="230" height="70" rx="0" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="1045.0" y="159.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">CPU</text>
+<rect x="1160" y="120" width="160" height="70" rx="0" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="1240.0" y="159.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">CPU</text>
+<rect x="60" y="190" width="300" height="70" rx="0" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="210.0" y="229.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">systolic _rq (확장 없음)</text>
+<rect x="360" y="190" width="190" height="70" rx="0" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="455.0" y="229.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">○</text>
+<rect x="550" y="190" width="210" height="70" rx="0" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="655.0" y="229.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">○</text>
+<rect x="760" y="190" width="170" height="70" rx="0" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="845.0" y="229.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">CPU</text>
+<rect x="930" y="190" width="230" height="70" rx="0" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="1045.0" y="229.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">CPU</text>
+<rect x="1160" y="190" width="160" height="70" rx="0" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="1240.0" y="229.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">CPU</text>
+<rect x="60" y="260" width="300" height="70" rx="0" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="210.0" y="299.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">_alux</text>
+<rect x="360" y="260" width="190" height="70" rx="0" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="455.0" y="299.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">○</text>
+<rect x="550" y="260" width="210" height="70" rx="0" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="655.0" y="299.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">○</text>
+<rect x="760" y="260" width="170" height="70" rx="0" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="845.0" y="299.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">○</text>
+<rect x="930" y="260" width="230" height="70" rx="0" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="1045.0" y="299.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">○ MUL·MUL·ADD</text>
+<rect x="1160" y="260" width="160" height="70" rx="0" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="1240.0" y="299.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">CPU</text>
+<rect x="60" y="330" width="300" height="70" rx="0" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="210.0" y="369.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">_alux2 / _alux3</text>
+<rect x="360" y="330" width="190" height="70" rx="0" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="455.0" y="369.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">○</text>
+<rect x="550" y="330" width="210" height="70" rx="0" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="655.0" y="369.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">○</text>
+<rect x="760" y="330" width="170" height="70" rx="0" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="845.0" y="369.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">○</text>
+<rect x="930" y="330" width="230" height="70" rx="0" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="1045.0" y="369.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">○ MUL + MADD</text>
+<rect x="1160" y="330" width="160" height="70" rx="0" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="1240.0" y="369.9" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">CPU</text>
+<text x="700" y="450" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">그 밖 = 표 2개, ADD 2개, MUL add 뒤의 shift·표 등. 같은 실행 파일이 /tmp/evta_bitstream 이름을 보고 길을 고른다</text>
+<text x="700" y="480" font-size="14" fill="#888888" text-anchor="middle" font-weight="normal">CPU 경로 = 보통 conv + VTAEpilogueRef (같은 정수 식) → 어느 길로 가도 출력 바이트가 같다 (EVTA_EPI_CHECK=1로 확인)</text>
+</svg>
