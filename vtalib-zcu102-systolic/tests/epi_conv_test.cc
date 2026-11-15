@@ -149,6 +149,27 @@ int main(int argc, char **argv) {
        false, 14);
   CASE("two adds (cpu)", a, false, 127, 9, prog({{ADD, 0, 0, 0}, {RQ, 2, 1, -128, 127}, {ADD, 1, 0, 0},
                                                   {RQ, 2, 1, -128, 127}}), false, 15);
+  //#### JO added (2026-11-15, docs/evta_isa_ext.md 8.18): the multiplied add (MUL, ADD d, RQ: the integer elemadd; DeiT
+  //#### out-proj / fc2 + the residual stream), on the EVTA with the extended ALU and the rq (MUL + MADD, or MUL MUL ADD)
+  const int MUL = VTA_EPI_MUL;
+  const Shape d = {18, 11, 192, 192, 1, 0, 2, 9}, d1 = {18, 11, 64, 64, 1, 0, 1, 11};
+  CASE("mul add (DeiT layer 0)", d, false, 127, 9, prog({{MUL, 5762}, {ADD, 0, 0, 0, 20107}, {RQ, 2, 14, -128, 127}}),
+       false, 40);
+  CASE("mul add (DeiT fc2), 1 thread", d1, false, 127, 9,
+       prog({{MUL, 20704}, {ADD, 0, 0, 0, 14814}, {RQ, 2, 14, -128, 127}}), false, 41);
+  CASE("mul add in place", d, false, 127, 9, prog({{MUL, 6915}, {ADD, 0, 0, 0, 18051}, {RQ, 2, 14, -128, 127}}), true, 42);
+  CASE("mul add, negative, relu conv", a, true, 127, 9,
+       prog({{MUL, -300}, {ADD, 0, 0, 0, 1000}, {RQ, 2, 10, -128, 127}}), false, 43);
+  CASE("residual mul only + clip", c, false, 127, 9, prog({{ADD, 0, 0, 0, 3}, {RQ, 2, 2, -40, 90}}), false, 44);
+  CASE("conv mul only + relu", b, false, 127, 8, prog({{MUL, 5}, {ADD, 0, 0, 0}, {RQ, 2, 2, -128, 127}, {CLIP, 0, 127}}),
+       false, 45);
+  CASE("table, mul add", a, false, 127, 9, prog({{LUT, 0}, {MUL, 77}, {ADD, 0, 0, 0, 51}, {RQ, 2, 7, -128, 127}}, sig),
+       false, 46);
+  CASE("mul add, shift 20", d1, false, 127, 9, prog({{MUL, 31000}, {ADD, 0, 0, 0, -29000}, {RQ, 2, 20, -128, 127}}),
+       false, 47);
+  CASE("mul add, then shift (cpu)", a, false, 127, 9,
+       prog({{MUL, 300}, {ADD, 0, 0, 0, 200}, {RQ, 2, 10, -128, 127}, {SHL, 1}, {CLIP, -128, 127}}), false, 48);
+  CASE("mul, not before add (cpu)", b, false, 127, 8, prog({{MUL, 3}, {CLIP, -128, 127}}), false, 49);
   // random programs: [unary]* [ADD RQ] [unary]*
   std::mt19937 r(11);
   auto ri = [&](int lo, int hi) { return std::uniform_int_distribution<int>(lo, hi)(r); };

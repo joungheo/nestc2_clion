@@ -2880,8 +2880,8 @@ void generateVTAConvolutionCall(const glow::ConvolutionInst *Inst,
               std::to_string(st[2]) + ", " + std::to_string(st[3]) + ", " + std::to_string(st[4]) + "}";
     }
     bundle->append(init + "}};   // conv epilogue (-vta-conv-epilogue)\n");
-    if (fu->residual)
-      bundle->append("  " + e + ".t[0] = " + fu->residual->getName().str() + "_vbuf;\n");
+    if (fu->residual)   //#### JO changed (2026-11-15): through getOrigin (a packed view at offset 0)
+      bundle->append("  " + e + ".t[0] = " + getOrigin(const_cast<Value *>(fu->residual))->getName().str() + "_vbuf;\n");
     bundle->append("  VTASetConvEpilogue(&" + e + ");\n");
   }
   bundle->append(fu && !epi ? "  convolution_wo_tr_res(" : "  convolution_wo_tr(");
@@ -8571,6 +8571,100 @@ static void findPackedRows(IRFunction *F, VTASaveContext *ctx) {
       llvm::errs() << "-vta-pack-rows: " << v->getName() << "\n";
 }
 
+static bool elemAddIntParams(float sa, float sb, float so, int *A, int *B, int *N);
+//#### JO added (2026-11-15, docs/evta_isa_ext.md 8.18): -vta-fuse-elemadd-mul (default on): an elementadd of an EVTA conv's
+//#### output (or a view of it at offset 0) and another packed int8 tensor with scale ratios that are not powers of two
+//#### (DeiT: out-proj / fc2 + the residual stream) as the conv's epilogue MUL A, ADD (d = B), RQ (round 2, N) = the integer
+//#### elemadd of -vta-evta-elemadd (elemAddIntParams, 15-bit: A, B, N / 2^7), so the same bytes. The vtalib runs it on the
+//#### extended ALU (MUL + MADD with the rq, the residual beside the tile in acc), else the plain conv + VTAEpilogueRef.
+//#### Run after findPackedRows (the packing of the DeiT rows is decided there; a fused conv keeps it).
+//#### Default off (board 2026-11-15, docs/evta_isa_ext.md 8.18): the same bytes, but DeiT OMP 1 47.04 -> 47.95 ms: the conv
+//#### grows by more than elemadd_evta took (out-proj 115 + 58 -> 207 us, fc2 406 + 58 -> 544 us; the residual LOAD waits for
+//#### the tile's GEMMs and the 5 ALU passes run between the GEMMs of the tiles, elemadd_evta overlaps its LOAD / STORE).
+static llvm::cl::opt<bool> vtaFuseElemAddMul(
+    "vta-fuse-elemadd-mul",
+    llvm::cl::desc("Fuse an int8 elementadd with non-power-of-two scale ratios into the EVTA conv before it as an "
+                   "epilogue MUL / ADD / RQ (the -vta-evta-elemadd arithmetic; default off: slower than elemadd_evta)"),
+    llvm::cl::init(false));
+static void findMulResidualFusions(const IRFunction *IR, VTASaveContext *ctx, bool evtaElemAdd) {
+  if (!vtaFuseElemAddMul || !vtaFuseResidual || !vtaConvEpilogue || !evtaElemAdd || ctx->getPacked()->empty())
+    return;
+  std::vector<const Instruction *> ins;
+  std::map<const Value *, size_t> allocAt;
+  std::map<const Value *, int> users;
+  for (const auto &I : IR->getInstrs()) {
+    if (auto *A = llvm::dyn_cast<AllocActivationInst>(&I))
+      allocAt[A] = ins.size();
+    if (!llvm::isa<AllocActivationInst>(&I) && !llvm::isa<DeallocActivationInst>(&I)) {
+      std::set<const Value *> ops;
+      for (const auto &op : I.getOperands())
+        ops.insert(op.first);
+      for (auto *v : ops)
+        users[v]++;
+    }
+    ins.push_back(&I);
+  }
+  auto next = [&](size_t i) {
+    for (i++; i < ins.size(); i++)
+      if (!llvm::isa<DeallocActivationInst>(ins[i]) && !llvm::isa<AllocActivationInst>(ins[i]))
+        return i;
+    return ins.size();
+  };
+  auto i8 = [](const Value *v) {
+    return v->getType()->getElementType() == ElemKind::Int8QTy && v->getType()->getOffset() == 0;
+  };
+  for (size_t i = 0; i < ins.size(); i++) {
+    auto *C = llvm::dyn_cast<ConvolutionInst>(ins[i]);
+    if (!C || getConvPath(C) != ConvPath::VTA || ctx->getFusion(C) || ctx->getPoolFusion(C) || ctx->outLutConv.count(C))
+      continue;
+    const Value *D = C->getDest(), *V = D;
+    if (!ctx->isPacked(D) || !i8(D) || convRelu(C))
+      continue;
+    size_t j = next(i);
+    const Instruction *view = nullptr;
+    if (j < ins.size())
+      if (auto *tv = llvm::dyn_cast<TensorViewInst>(ins[j])) {
+        bool zero = true;
+        for (auto o : tv->getOffsets())
+          zero &= o == 0;
+        if (tv->getSrc() != D || !zero || !ctx->isPacked(tv) || tv->size() != D->size() || users[tv] != 1)
+          continue;
+        view = tv, V = tv, j = next(j);
+      }
+    auto *E = j < ins.size() ? llvm::dyn_cast<ElementAddInst>(ins[j]) : nullptr;
+    if (!E)
+      continue;
+    const Value *R = E->getLHS() == V ? E->getRHS() : E->getRHS() == V ? E->getLHS() : nullptr, *O = E->getDest();
+    if (!R || R == V || R == D || !ctx->isPacked(R) || !ctx->isPacked(O) || !i8(R) || !i8(O) ||
+        R->size() != D->size() || O->size() != D->size() || users[D] != 2)
+      continue;
+    int A, B, N;
+    if (!elemAddIntParams(V->getType()->getScale(), R->getType()->getScale(), O->getType()->getScale(), &A, &B, &N) ||
+        A % 128 || B % 128 || N - 7 > 31)
+      continue;   // the 22-bit form (-vta-elemadd-precise) stays elemadd_evta
+    if (O == C->getSrc() || (O != R && !allocAt.count(O)))
+      continue;
+    const bool hoist = O != R && allocAt[O] > i;
+    if (hoist && allocAt[O] > j)
+      continue;
+    ResidualFusion f = {};
+    f.steps.push_back({6, A / 128, 0, 0, 0});   // VTA_EPI_MUL
+    f.steps.push_back({1, 0, 0, 0, B / 128});   // VTA_EPI_ADD, d = B
+    f.steps.push_back({2, 2, N - 7, -128, 127}); // VTA_EPI_RQ round 2
+    f.residual = R;
+    f.out = O;
+    f.hoistOut = hoist;
+    f.relu = false;
+    (*ctx->getFusions())[C] = f;
+    if (view)
+      ctx->getFusedAway()->insert(view);
+    ctx->getFusedAway()->insert(E);
+    if (getenv("VTA_PACK_ROWS_LOG"))
+      llvm::errs() << "-vta-fuse-elemadd-mul: " << C->getName() << " + " << E->getName() << " (" << A / 128 << ", "
+                   << B / 128 << ", " << N - 7 << ")\n";
+  }
+}
+
 //#### JO added (2026-11-12, ALU extension step 7): -vta-alu-layernorm
 static llvm::cl::opt<bool> vtaAluLayerNorm(
     "vta-alu-layernorm",
@@ -8916,7 +9010,7 @@ static std::string vtaOptionsComment() {
       "vta-keep-layout",   "vta-fuse-residual", "vta-fuse-residual-norelu", "vta-conv-epilogue", "vta-evta-maxpool", "vta-evta-fc",
       "vta-fuse-preprocess", "vta-conv0-pack",  "vta-fuse-pool",    "vta-evta-depthwise",
       "vta-round-shift",   "vta-pad-channels",  "vta-matmul-conv", "vta-fold-matmul-bias", "vta-evta-matmul", "vta-lut-elementwise", "vta-fuse-layernorm",
-      "vta-matmul-heads", "vta-attn-keep-layout", "vta-cpu-approx", "vta-alu-output-lut", "vta-alu-layernorm", "vta-alu-softmax", "vta-pack-rows", "vta-evta-avgpool", "vta-evta-elemadd", "vta-elemadd-precise",
+      "vta-matmul-heads", "vta-attn-keep-layout", "vta-cpu-approx", "vta-alu-output-lut", "vta-alu-layernorm", "vta-alu-softmax", "vta-pack-rows", "vta-evta-avgpool", "vta-evta-elemadd", "vta-elemadd-precise", "vta-fuse-elemadd-mul",
       "enable-channelwise-depthwise", "enable-channelwise"};
   auto &opts = llvm::cl::getRegisteredOptions();
   std::string s = "// Generated by the NEST-C VTA backend with:";
@@ -9094,6 +9188,7 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
   findMatMulGroups(IR.get(), &ctx);
   findAttnKeepLayout(IR.get(), &ctx);
   findPackedRows(IR.get(), &ctx);   //#### JO added (2026-11-15)
+  findMulResidualFusions(IR.get(), &ctx, vtaEvtaElemAdd);   //#### JO added (2026-11-15, 8.18)
 
   for (const auto &I : IR->getInstrs()) {
 

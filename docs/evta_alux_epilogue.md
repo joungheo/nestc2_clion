@@ -58,6 +58,10 @@ v는 conv 자신의 requantize(shift, relu, ReLU6) 뒤의 int8 출력에서 시�
 | CLIP | a = lo, b = hi | v = min(max(v, a), b) |
 | SHL | a = k | v = v << k |
 | LUT | a = 표 번호 | v = lut_a[(uint8_t) v] |
+| MUL | a = k | v = v · k (2026-11-15, ADD 바로 앞에서만 EVTA; [evta_isa_ext.md](evta_isa_ext.md) §8.18) |
+
+ADD의 d(2026-11-15)는 residual 배율이다: v = (v << b) + (t_a << c) · d, d = 0이면 1. MUL · ADD(d) · RQ(2)는 scale 비가 2의 거듭제곱이 아닌 add를 한다
+(DeiT out-proj / fc2 + residual, `-vta-fuse-elemadd-mul`, 기본 꺼짐: 바이트는 같지만 `elemadd_evta`보다 느리다).
 
 지금 모델의 프로그램 (VTASave가 내는 그대로):
 
@@ -215,8 +219,8 @@ ALU 테스트(PC에서 cross build, `tests/run_alux_board_tests.sh CROSS=1`, `EV
    - CNN의 sigmoid / SiLU / leaky relu / hard-swish 사슬이 conv 바로 뒤에 오면, 배치를 유지하고 그 표를 epilogue LUT로 넣어야 한다.
    - `lutEligibleKind`에 해당 명령(sigmoid, tanh, IntLookupTable, clip 등)도 더한다.
    - 이것을 시험할 모델을 onnx/models에서 받는다(YOLO 계열, EfficientNet-Lite, MobileNetV3 등; [host_pc_build.md](host_pc_build.md) §6).
-2. **2의 거듭제곱이 아닌 scale.** ADD의 identity weight를 2^k I 대신 임의의 int8 m I로 하고, conv 쪽은 ALU MUL을 쓴다.
-   avgpool처럼 컴파일 때 모든 (conv, residual) 쌍(256 × 256)에서 CPU 식과 같은지 확인하는 방식이다.
+2. **2의 거듭제곱이 아닌 scale.** 2026-11-15에 MUL · ADD(d) · RQ로 넣었다(acc Y + ALU MUL / MADD; evta_isa_ext.md §8.18). 바이트는 같지만 DeiT에서
+   `elemadd_evta`보다 느려 기본 꺼짐. residual LOAD를 inp 위쪽 절반에 미리 하면 대기가 줄어든다.
 3. **ADD 두 개, 표 두 개.** residual LOAD를 inp의 다른 자리에 하나 더 두고, 표는 tile마다 다시 LUTSET한다.
 4. **pool도 epilogue 단계로.** conv0 + maxpool(`convolution_wo_tr_pool`)은 따로 남아 있다. avgpool 뒤 fc, concat도 같은 틀로 넣는다.
 5. **GEMM `lut_en` (하드웨어).** add 뒤 표는 ALU CPY 한 번이 더 든다. GEMM의 out 쓰기에 표를 두면 그 pass가 없어진다.

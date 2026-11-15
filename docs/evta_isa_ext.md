@@ -1073,3 +1073,52 @@ compute 안의 shift(`ashr`) 등. 400 MHz는 RTL / HLS 쪽 레지스터(LUT RAM 
 - ImageNetV2 9,000장 top-1(`imagenet_eval/eval_board.sh`, OMP 4): **15비트 60.20 %**(`result/ea15_9k.log`), 22비트 60.10 %(`ea22_9k.log`), float elemadd 59.94 %(`sym5_smintq_9k.log`). 모두 `-vta-alu-softmax` 번들.
 - 기본(15비트) 번들을 다시 만든 `_pcsys8`은 `_pcsys6`와 같은 결과(cat 0.736180, 모든 fallback 같음)이고, 다시 잰 시간은 OMP 1 49.96 → 47.13, OMP 4 47.47 → 44.57 ms(elemadd_evta 1.45 ms).
 - 남은 큰 CPU 일(OMP 1): lut8 2.2 ms(softmax 앞 attention scale 표), transpose 1.3 ms(head), elemaddRows 0.5 ms.
+
+### 8.18 residual add를 conv epilogue로 (`-vta-fuse-elemadd-mul`, 2026-11-15, 기본 꺼짐)
+
+**목적.** §8.17의 `elemadd_evta`는 conv(out-proj / fc2)가 STORE한 int8을 다시 LOAD해서 더한다. conv epilogue([evta_alux_epilogue.md](evta_alux_epilogue.md))로 하면 그 왕복과 호출이 없어진다.
+기존 epilogue ADD는 scale 비가 2의 거듭제곱일 때 shift로만 맞춘다(GEMM의 identity weight는 int8, 2^k I). DeiT 비는 0.35 / 1.23 같은 값이라 곱셈이 필요하다.
+
+**epilogue 확장 (두 vtalib의 `VTABundle.h`, `VTA_CONV_EPILOGUE 2`).**
+- MUL(op 6) a: v = v · a. ADD의 d: residual 배율, v = (v << b) + (t << c) · d (d = 0이면 1).
+- DeiT 프로그램: MUL(A / 2^7) · ADD(d = B / 2^7) · RQ(2, N − 7) = §8.17의 정수 elemadd(15비트 계수). 그래서 결과 바이트가 같다.
+
+**vtalib-systolic.**
+- `lowerEpilogue`: ADD 바로 앞의 MUL이 conv 배율(mulV), ADD의 d가 residual 배율(mulT). 확장 ALU와 rq가 있고 ADD 뒤가 clip뿐일 때만 EVTA에서 한다(아니면 보통 conv + `VTAEpilogueRef`).
+- `conv_kernel`(타일마다): conv requantize를 acc에서(ALU SHR / MAX / MIN) → X. residual을 inp에 LOAD → reset + identity GEMM으로 acc Y.
+  이어서 ALU MUL Y · mulT, MADD X = X · mulV + Y를 rq(round 2, shift, clip)와 함께 한다. MADD가 없는 `_alux`는 MUL X 다음 ADD X += Y.
+- Y 자리: 단일 EVTA(acc 4096 항목)는 conv가 쓰지 않는 위쪽 절반(base + 2048). multi-EVTA(2048)는 타일 옆이고, 그만큼 nFilterinLoop가 준다.
+  처음에는 단일 EVTA에서도 Y를 타일 옆에 두었다. 그때 DeiT nFilterinLoop가 6 → 3이 되어 OMP 1이 48.95 ms였다.
+- replay key에 madd / mulV / mulT를 더했다.
+
+**VTASave `findMulResidualFusions`** (`findPackedRows` 뒤): EVTA conv → (offset 0 view) → elementadd 모양을 찾는다.
+조건은 이렇다: 다른 피연산자와 출력이 EVTA 배치 int8, conv 출력을 다른 데서 읽지 않음, 15비트 계수(`-vta-elemadd-precise`이면 `elemadd_evta` 그대로).
+찾으면 view와 add는 fusedAway가 된다. DeiT에서는 `elemadd_evta` 23개가 모두 묶인다. CNN 번들은 옵션 주석 말고 같다.
+
+**검증.**
+- `tests/epi_conv_test.cc`에 MUL 경우 10개를 넣었다(DeiT 모양 2 thread / 1 thread, in place, 음수 배율, residual 배율만, conv 배율만 + relu, 표 뒤, shift 20, CPU로 가는 두 경우).
+  시뮬레이터는 네 모드(rq 끔 / 켬 / `EVTA_ALUX2=0` / `EVTA_ALUX=0`) 모두 0 differ, MUL 8개는 EVTA에서 돌았다. hazard는 `EVTA_ALU_SLOTS=34`, `EVTA_ALU_HAZARD=17` 모두 0.
+- 보드 `_alux3`, `_alux`: all equal, `EVTA_EPI_CHECK` 45줄 0 differ.
+- DeiT(`_pcsys10`, 켠 번들): 281 / 207 / 340, cat 0.736180으로 `elemadd_evta`(`_pcsys8`)와 같다.
+  `EVTA_EPI_CHECK`는 3,500번 0 differ이고, `EVTA_ALUX=0`, `EVTA_ALUX2=0`, `EVTA_REPLAY=0`, `_alux`, 확장 없는 비트스트림이 모두 같다. replay dump hazard는 0이다.
+
+**시간 (보드 `_alux3`, 25회 중앙값, ms): 느려져서 기본 꺼짐.**
+
+| | OMP 1 | OMP 4 | conv | elemadd_evta |
+|---|---|---|---|---|
+| `_pcsys8` (`elemadd_evta`, 기본) | 47.04 | 44.46 | 18.34 | 1.44 |
+| `_pcsys10` (epilogue, Y 위쪽 acc) | 47.95 | 45.34 | 20.78 | 0 |
+
+run 하나씩(`EVTA_REPLAY_LOG=2`, us)으로 보면 이렇다.
+
+| conv | 따로 (conv + `elemadd_evta`) | epilogue |
+|---|---|---|
+| out-proj | 115.4 + 57.5 = 173 | 207 |
+| fc2 | 406.4 + 57.7 = 464 | 544 |
+
+- 더해진 일은 conv당 GEMM 4,752 + ALU 11,880 step이다(ALU 5 pass: conv requantize 3, MUL, MADD; 400 MHz로 약 42 us).
+- 그런데 실제로는 92–138 us가 늘었다. residual LOAD가 그 타일의 GEMM 뒤에야 시작되고(inp 자리를 conv 입력과 같이 쓴다), ALU pass가 다음 타일의 GEMM 앞에 직렬로 끼기 때문이다.
+- `elemadd_evta`는 inp / acc 반쪽 두 개로 LOAD · ALU · STORE를 겹쳐 57 us다.
+- 나아질 여지: residual을 inp 위쪽 절반(단일 EVTA inp 4096 항목, conv는 2048 사용)에 타일 입력과 함께 미리 LOAD하면 대기가 없어진다.
+  그래도 ALU 42 us가 남아, 상한은 conv당 약 16 us, DeiT 23개에서 약 0.4 ms다.
+

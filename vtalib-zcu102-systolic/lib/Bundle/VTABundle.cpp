@@ -488,6 +488,11 @@ struct ConvEpi {
   int kind2, q2, a2, b2;
   bool rqSum;
   const int8_t *T; // the one table (kind1 or kind2 2), by the byte
+  //#### JO added (2026-11-15, docs/evta_isa_ext.md 8.18): the add as conv * mulV + residual * mulT (a MUL step right before
+  //#### the ADD, the ADD's d): the residual tile GEMMed into acc Y beside the tile (after the bias entries), Y *= mulT
+  //#### (ALU MUL), then tile = tile * mulV + Y (MADD; without it MUL and ADD) with the sum's requantize (rq)
+  bool madd;
+  int mulV, mulT;
 };
 #define RES_MAX_SHL 6
 #define RES_WGT_ENTRY 1023  // last entry of WGT_MEM_ENTRY (1024) in conv_kernel
@@ -632,6 +637,12 @@ void VTASetActivationClip(int hi) { gEvtaClipHi = hi < 127 ? hi : 127; }
 #endif
 #ifndef VTA_ALUX_LUT   //#### JO added (2026-11-14): the epilogue's table in acc
 #define VTA_ALUX_LUT 7
+#endif
+#ifndef VTA_ALUX_MUL   //#### JO added (2026-11-15): the epilogue's multiplied add
+#define VTA_ALUX_MUL 4
+#endif
+#ifndef VTA_ALUX_MADD
+#define VTA_ALUX_MADD 12
 #endif
 thread_local const int8_t *gOutLut = nullptr;
 void VTASetOutputLut(const int8_t *T) { gOutLut = T; }
@@ -956,11 +967,15 @@ static int32_t epiRun(const VTAEpilogue &E, int b, int e, int32_t v, const int8_
   for (int i = b; i < e; i++) {
     const VTAEpiStep &s = E.s[i];
     switch (s.op) {
-    case VTA_EPI_ADD: v = (int32_t)(((uint32_t)v << s.b) + ((uint32_t)(int32_t)tv[s.a] << s.c)); break;
+    //#### JO changed (2026-11-15, docs/evta_isa_ext.md 8.18): ADD d (the tensor's multiplier, 0 = 1), MUL
+    case VTA_EPI_ADD:
+      v = (int32_t)(((uint32_t)v << s.b) + ((uint32_t)(int32_t)tv[s.a] << s.c) * (uint32_t)(s.d ? s.d : 1));
+      break;
     case VTA_EPI_RQ: v = epiRq(v, s.a, s.b, s.c, s.d); break;
     case VTA_EPI_CLIP: v = v < s.a ? s.a : v > s.b ? s.b : v; break;
     case VTA_EPI_SHL: v = (int32_t)((uint32_t)v << s.a); break;
     case VTA_EPI_LUT: v = E.lut[s.a][(uint8_t)v]; break;
+    case VTA_EPI_MUL: v = (int32_t)((uint32_t)v * (uint32_t)s.a); break;
     default: break;
     }
   }
@@ -1011,6 +1026,8 @@ static const int8_t *epiTable(const int8_t *T) {
   return t;
 }
 static void *getIdentityWeights(uint32_t idEVTA);
+static void pushAlu2(VTACommandHandle cmdh, uint32_t idEVTA, int op, int io, int ii, int d, int dfo, int dfi, int s, int sfo,
+                     int sfi, bool useImm, int imm);   //#### JO (2026-11-15)
 // the program for conv_kernel on this bitstream; false: the CPU does it (convolution_wo_tr: the plain conv, VTAEpilogueRef)
 static bool lowerEpilogueUncached(const VTAEpilogue &E, bool relu, uint32_t idEVTA, ConvEpi *p) {
   memset(p, 0, sizeof(*p));
@@ -1022,14 +1039,19 @@ static bool lowerEpilogueUncached(const VTAEpilogue &E, bool relu, uint32_t idEV
     const VTAEpiStep &s = E.s[i];
     if (s.op == VTA_EPI_ADD) {
       // one add (a second residual would need its own inp area and LOAD)
-      if (add >= 0 || s.a < 0 || s.a > 1 || !E.t[s.a] || s.b < 0 || s.b > 15 || s.c < 0 || s.c > RES_MAX_SHL)
+      if (add >= 0 || s.a < 0 || s.a > 1 || !E.t[s.a] || s.b < 0 || s.b > 15 || s.c < 0 || s.c > RES_MAX_SHL ||
+          s.d < -32768 || s.d > 32767)
         return false;
       add = i;
+    } else if (s.op == VTA_EPI_MUL) {   //#### JO added (2026-11-15): only right before the ADD (checked below)
+      if (s.a < -32768 || s.a > 32767)
+        return false;
     } else if (s.op == VTA_EPI_LUT) {
       if (s.a < 0 || s.a > 1 || !E.lut[s.a])
         return false;
     } else if (s.op == VTA_EPI_RQ) {
-      if (s.a < 0 || s.a > 2 || s.b < 0 || s.b > 15 || s.c > s.d)
+      //#### JO changed (2026-11-15): shift up to 31 (rq_shift 5 bits); 15 where the ALU SHR does it (below)
+      if (s.a < 0 || s.a > 2 || s.b < 0 || s.b > 31 || s.c > s.d)
         return false;
     } else if (s.op == VTA_EPI_SHL) {
       if (s.a < 0 || s.a > 15)
@@ -1043,7 +1065,18 @@ static bool lowerEpilogueUncached(const VTAEpilogue &E, bool relu, uint32_t idEV
   p->lo0 = relu ? 0 : -128;
   p->hi0 = relu ? gEvtaClipHi : 127;
   p->add = add >= 0;
-  const int k1 = epiUnary(E, 0, p->add ? add : E.n, p->lo0, p->hi0, &q, &a, &b, T1, &ok);
+  //#### JO added (2026-11-15): MUL only as the conv's multiplier right before the ADD
+  int f1End = p->add ? add : E.n;
+  p->mulV = p->mulT = 1;
+  if (p->add && add > 0 && E.s[add - 1].op == VTA_EPI_MUL)
+    p->mulV = E.s[add - 1].a, f1End = add - 1;
+  for (int i = 0; i < E.n; i++)
+    if (E.s[i].op == VTA_EPI_MUL && !(p->add && i == add - 1))
+      return false;
+  if (p->add && E.s[add].d)
+    p->mulT = E.s[add].d;
+  p->madd = p->add && (p->mulV != 1 || p->mulT != 1);
+  const int k1 = epiUnary(E, 0, f1End, p->lo0, p->hi0, &q, &a, &b, T1, &ok);
   if (k1 == 0)
     p->lo0 = a, p->hi0 = b;
   else if (k1 == 1)
@@ -1096,8 +1129,13 @@ static bool lowerEpilogueUncached(const VTAEpilogue &E, bool relu, uint32_t idEV
     p->T = epiTable(T2);
   }
   p->rqSum = rqOn && k2 != 1;
+  //#### JO added (2026-11-15): the multiplied add needs the ALU MUL and the rq on the ALU write, no table / shift after it
+  if (p->madd && (!alux || !rqOn || k2 != 0 || p->shlV || p->shlT))
+    return false;
   if (!p->rqSum && p->rnd == 2)
     return false; // the ALU ADD / SHR cannot round half away from zero
+  if (!p->rqSum && p->shift > 15)
+    return false; // ALU SHR -16..15
   return ok && (p->T == nullptr || alux);
 }
 // cached by the program (with its tables' contents), relu and the clip; the tensors are filled in each call
@@ -1197,8 +1235,13 @@ void conv_kernel(uint32_t sizeOutTileH,
   //#### JO changed (2026-11-06): with the bias reset too when the last thread's bias entries (its base + T x nFilterinLoop)
   //#### would lie past the physical acc: the multi-EVTA buffers have 2048 acc entries (the single ones 4096), VGG16 conv0
   //#### (nVirtualThread 2, 16 x 32, nFilterinLoop 2) on the multi4 systolic bitstream was wrong
+  //#### JO added (2026-11-15): the multiplied add's residual (acc Y) needs another tile of entries per block: in the acc
+  //#### entries above ACC_MEM_ENTRY when the bitstream has them (single EVTA: 4096; the tile keeps its nFilterinLoop), else
+  //#### beside the tile (multi-EVTA, 2048: half the blocks per tile; DeiT out-proj / fc2 6 -> 3 was slower than elemadd_evta)
+  const bool yHigh = ACC_BUFF_DEPTH >= 2 * ACC_MEM_ENTRY;
+  const uint32_t yT = res && res->madd && !yHigh ? padT : 0;
   auto pickNF = [&](uint32_t rows) {
-    uint32_t n = min(KN / nVirtualThread / 16, ACC_MEM_ENTRY / nVirtualThread / (padT + rows));
+    uint32_t n = min(KN / nVirtualThread / 16, ACC_MEM_ENTRY / nVirtualThread / (padT + yT + rows));
     for (; n > 0; n--)
       if ((KN / 16) % (n * nVirtualThread) == 0) break;
     return n;
@@ -1206,7 +1249,7 @@ void conv_kernel(uint32_t sizeOutTileH,
   uint32_t biasRows = bias && !evtaBiasReset() ? 1 : 0;
   uint32_t nFilterinLoop = pickNF(biasRows);
   if (bias && !biasRows &&
-      (nVirtualThread - 1) * (ACC_MEM_ENTRY / nVirtualThread) + padT * nFilterinLoop + nFilterinLoop > ACC_BUFF_DEPTH)
+      (nVirtualThread - 1) * (ACC_MEM_ENTRY / nVirtualThread) + (padT + yT) * nFilterinLoop + nFilterinLoop > ACC_BUFF_DEPTH)
     nFilterinLoop = pickNF(biasRows = 1);
   //#### JO added (2026-11-08, depthwise): per thread nF blocks: acc nF x (tile + bias + shift entry), inp nF input tiles,
   //#### wgt nF x KH x KW entries (dw_convolution_evta checked that one block fits)
@@ -1686,7 +1729,26 @@ void conv_kernel(uint32_t sizeOutTileH,
           if (res->accConv) lutInAcc();
           else lutCpy();   // no add: the conv's rq (rqConv) still set
         }
-        if (res->add) {
+        if (res->add && res->madd) {
+          //#### JO added (2026-11-15, docs/evta_isa_ext.md 8.18): Y = residual * mulT beside the tile, then
+          //#### tile = tile * mulV + Y with the sum's rq (kind2 0: its clip is lo / hi)
+          const uint32_t Y = yHigh ? base + ACC_MEM_ENTRY : base + size + nFilterinLoop;
+          VTADepPop(vtaCmdH, 1, 2);
+          pushReset(vtaCmdH, idEVTA, Y, size);
+          pushResGemm(vtaCmdH, idEVTA, Y, resSramBaseAddr, size);
+          if (res->mulT != 1)
+            pushAlu(vtaCmdH, idEVTA, Y, Y, size, VTA_ALUX_MUL, 1, res->mulT);
+          if (VTAHasAluExt2()) {
+            VTARequant(vtaCmdH, 1, res->rnd, res->shift, res->lo, res->hi);
+            pushAlu2(vtaCmdH, idEVTA, VTA_ALUX_MADD, 1, size, base, 0, 1, Y, 0, 1, false, res->mulV);
+          } else {
+            if (res->mulV != 1)
+              alu(VTA_ALUX_MUL, res->mulV);
+            VTARequant(vtaCmdH, 1, res->rnd, res->shift, res->lo, res->hi);
+            pushAlu(vtaCmdH, idEVTA, base, Y, size, RES_ALU_ADD, 0, 0);
+          }
+          VTARequant(vtaCmdH, 0, 0, 0, 0, 0);
+        } else if (res->add) {
           if (res->shlV)
             alu(RES_ALU_SHR, -(int)res->shlV);
           VTADepPop(vtaCmdH, 1, 2);
@@ -3788,6 +3850,7 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
                          res ? res->b1 : 0, res ? (int32_t)res->shlV : 0, res ? (int32_t)res->shlT : 0, res ? res->rnd : 0,
                          res ? res->shift : 0, res ? res->lo : 0, res ? res->hi : 0, res ? res->kind2 : 0, res ? res->q2 : 0,
                          res ? res->a2 : 0, res ? res->b2 : 0, res && res->add ? res->buf == output : 0,
+                         res ? res->madd : 0, res ? res->mulV : 0, res ? res->mulT : 0,   //#### JO (2026-11-15)
                          pool != nullptr, stream, gEvtaClipHi,   //#### JO: + gEvtaClipHi (2026-11-06)
                          dw != nullptr, dw ? dw->lo : 0, dw ? dw->hi : 0};   //#### JO: + depthwise (2026-11-08)
   //#### JO changed (2026-11-02): a fused max pool writes its output, not the conv's
@@ -5613,16 +5676,14 @@ int xp_convolution_wo_tr_scale(int8_t* input, int8_t *kernel, int32_t *bias, int
 //#### Returns 0 (not run; the caller runs the CPU function) without the extended ALU (VTAHasAluExt), with NESTC_LN_INT other
 //#### than 1, cols not a multiple of 16 or too wide for 17 tokens per run, or rows with different gamma / beta.
 //#### EVTA_LN_CHECK=1 compares every call with the CPU arithmetic (layerNormIntRef below) and prints the differences.
-#ifndef VTA_ALUX_MUL
-#define VTA_ALUX_MUL 4
+#ifndef VTA_ALUX_SUB
 #define VTA_ALUX_SUB 5
 #define VTA_ALUX_LUT 7
 #define VTA_ALUX_RSUM 9
 #define VTA_ALUX_RMAX 10
 #define VTA_ALUX_CLZ 11
 #endif
-#ifndef VTA_ALUX_MADD
-#define VTA_ALUX_MADD 12
+#ifndef VTA_ALUX_MULSHR
 #define VTA_ALUX_MULSHR 13
 #define VTA_ALUX_SHRV 14
 #define VTA_ALUX_SHRR 15

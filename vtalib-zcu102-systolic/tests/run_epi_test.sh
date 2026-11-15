@@ -21,6 +21,8 @@ echo "== requantize off (ALU passes in acc)"
 EVTA_REQUANT=0 EVTA_BIAS_RESET=0 ./epi_conv_test || rc=1
 echo "== requantize on (EVTA_REQUANT=1)"
 EVTA_REQUANT=1 EVTA_BIAS_RESET=0 ./epi_conv_test || rc=1
+echo "== requantize on, no MADD (EVTA_ALUX2=0)"
+EVTA_ALUX2=0 EVTA_REQUANT=1 EVTA_BIAS_RESET=0 ./epi_conv_test || rc=1
 echo "== without the extended ALU (EVTA_ALUX=0)"
 EVTA_ALUX=0 EVTA_REQUANT=1 EVTA_BIAS_RESET=0 ./epi_conv_test || rc=1
 exit $rc

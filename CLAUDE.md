@@ -352,6 +352,10 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   `elemadd_evta` (inp + identity GEMM, MUL + MADD with rq; 22-bit: A = Ah 2^7 + Al in two parts; CPU path `nestc_cpu::elemaddInt`,
   same bytes, `EVTA_EA_CHECK=1`): DeiT's 24 residual adds 4.36 -> 1.44 ms, OMP 1 49.85 -> 47.01 ms, OMP 4 47.38 -> 44.41 ms;
   ImageNetV2 60.20 % (22-bit 60.10 %, float elemadd 59.94 %, all within noise); CNN bundles unchanged.
+  `-vta-fuse-elemadd-mul` (2026-11-15, §8.18, default **off**): the same add as the out-proj / fc2 conv epilogue (new epilogue
+  step MUL and the ADD multiplier d, `VTA_CONV_EPILOGUE 2`; vtalib-systolic residual GEMMed into acc Y above entry 2048, ALU MUL +
+  MADD with rq): same bytes, `EVTA_EPI_CHECK` 0 differ, but DeiT OMP 1 47.04 -> 47.95 ms (the residual LOAD waits for the tile's
+  GEMMs, 5 ALU passes between tiles; elemadd_evta overlaps its transfers).
 - Other models (2026-11-05, `docs/evta_runtime_compare.md` §7.19): Resnet50 res2_0 residual fused (relu to a 2^q smaller scale), schedules of the
   Resnet50 / VGG16 shapes in `VTASchedules.h` (found with vtalib-systolic `EVTA_SCHED`), conv tiles below 7 x 7: the dummy-padded store
   used the wrong channel block with nVirtualThread 2 (fixed in both vtalibs) and the systolic vtalib's minimum tile is 1 on an `_sa_` bitstream

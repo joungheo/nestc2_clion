@@ -206,8 +206,12 @@ bool VTAHasAluExt3();   // #### JO (2026-11-15): + SQACC / LUTC (_alux3)
 //####   RQ   a = round, b = shift, c = lo, d = hi:  v = clip((v + r) >> b, c, d), r = 0 (round 0), 2^(b-1) (1),
 //####        2^(b-1) - (v < 0) (2, half away from zero)
 //####   CLIP a = lo, b = hi;   SHL a = k: v = v << k;   LUT a = table index: v = lut_a[(uint8_t) v]
-#define VTA_CONV_EPILOGUE 1
-enum { VTA_EPI_ADD = 1, VTA_EPI_RQ = 2, VTA_EPI_CLIP = 3, VTA_EPI_SHL = 4, VTA_EPI_LUT = 5 };
+//#### JO added (2026-11-15, docs/evta_isa_ext.md 8.18): MUL a = k: v = v * k; ADD d: the tensor's multiplier (0 = 1):
+//####   v = (v << b) + (t_a << c) * d. MUL k (int16), ADD (0, 0, 0, d), RQ (2, N) = the integer elemadd (elemadd_evta) on
+//####   the conv's int8 output: an ALU MUL and MADD (or MUL, MUL, ADD) with the rq, the residual beside the tile in acc
+//#### VTA_CONV_EPILOGUE 2: has MUL / ADD d
+#define VTA_CONV_EPILOGUE 2
+enum { VTA_EPI_ADD = 1, VTA_EPI_RQ = 2, VTA_EPI_CLIP = 3, VTA_EPI_SHL = 4, VTA_EPI_LUT = 5, VTA_EPI_MUL = 6 };
 #define VTA_EPI_MAX_STEPS 8
 struct VTAEpiStep {
   int32_t op, a, b, c, d;
