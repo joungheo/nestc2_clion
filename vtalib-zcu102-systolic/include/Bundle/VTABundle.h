@@ -229,6 +229,10 @@ int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float
 //#### buffer xBuf / outBuf when non-null (x / out their virtual addresses), else row-major CPU memory; returns 0 if not run
 int layernorm_evta2(int8_t *out, void *outBuf, const int8_t *x, void *xBuf, int rows, int cols, const float *w,
                     const int8_t *b, float a2b, float a2d, void *vtaCmdH, uint32_t idEVTA = 0);
+//#### JO added (2026-11-15, docs/evta_isa_ext.md 8.17): out = clip(round half away((a A + b B) / 2^N), -128, 127) over n
+//#### int8 (nestc_cpu::elemaddInt; VTASave -vta-evta-elemadd) on the EVTA ALU; a / b / out VTA buffers (from offset 0, the
+//#### same layout), n a multiple of 16, A >> 7, B >> 7 in int16, 8 <= N <= 31; 0 = not run (the caller runs the CPU function)
+int elemadd_evta(void *outBuf, void *aBuf, void *bBuf, int n, int A, int B, int N, void *vtaCmdH, uint32_t idEVTA = 0);
 //#### JO added (2026-11-12, ALU extension): the integer softmax with the quantize after it (nestc_cpu::softmaxIntQ) as an EVTA
 //#### ALU program; 0 = not run
 int softmax_evta(int8_t *out, const int8_t *x, int rows, int cols, float s, float outInv, void *vtaCmdH,

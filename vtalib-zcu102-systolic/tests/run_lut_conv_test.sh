@@ -34,3 +34,10 @@ ${CXX:-c++} -std=c++14 -O1 -w -fopenmp -DLLVM_DISABLE_ABI_BREAKING_CHECKS_ENFORC
   -I"$V/include/simulator/vta" -I"$V/3rdparty/dlpack/include" -I"$V/3rdparty/dmlc-core/include" -I"$L" -I"$R" -I. \
   "$H/softmax_evta_test.cc" -o softmax_evta_test libVTABundle.a libvta_runtime.a -lpthread
 OMP_NUM_THREADS=1 ./softmax_evta_test
+#### JO added (2026-11-15, docs/evta_isa_ext.md 8.17): elemadd_evta against nestc_cpu::elemaddInt
+${CXX:-c++} -std=c++14 -O1 -w -fopenmp -DLLVM_DISABLE_ABI_BREAKING_CHECKS_ENFORCING=1 -DNESTC_USE_VTASIM=1 -DPROFILE_ENABLE=0 -DVTALIB_ONLY=1 -I"$V/include" -I"$V/include/simulator" \
+  -I"$V/include/simulator/vta" -I"$V/3rdparty/dlpack/include" -I"$V/3rdparty/dmlc-core/include" -I"$L" -I"$R" -I. \
+  "$H/elemadd_evta_test.cc" -o elemadd_evta_test libVTABundle.a libvta_runtime.a -lpthread
+OMP_NUM_THREADS=1 ./elemadd_evta_test
+echo "without MADD (EVTA_ALUX2=0: MUL, MUL, ADD)"
+EVTA_ALUX2=0 OMP_NUM_THREADS=1 ./elemadd_evta_test

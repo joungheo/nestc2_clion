@@ -221,6 +221,8 @@ public:
   uint32_t getIdxMultiEVTA() { return idxMultiEVTA; }
   //#### JO added (2026-11-09): the bundle calls the generic CPU ops (NESTC_CPU_OPS is written into it)
   bool usesCpuOps = false;
+  //#### JO added (2026-11-15, 8.17): instructions that flush their own output (no flush after them; -vta-evta-elemadd)
+  std::set<const Instruction *> selfFlushed;
   //#### JO added (2026-10-31): activations kept in the EVTA layout (findPackedActivations)
   std::set<const Value *> *getPacked() { return &packed; }
   bool isPacked(const Value *v) const { return packed.count(v) != 0; }
@@ -5533,6 +5535,40 @@ void saveTranspose_6dim(const glow::TransposeInst *Inst, std::string *bundle,
   bundle->append(" );\n");
 }
 
+//#### JO added (2026-11-15, docs/evta_isa_ext.md 8.17): -vta-evta-elemadd
+static llvm::cl::opt<bool> vtaEvtaElemAdd(
+    "vta-evta-elemadd",
+    llvm::cl::desc("An int8 elementadd with all operands in the EVTA layout (VTA buffers, offsets 0) as the integer "
+                   "a A + b B >> N on the EVTA ALU (vtalib-systolic elemadd_evta; CPU path nestc_cpu::elemaddInt, the "
+                   "same bytes) instead of the float elemadd"),
+    llvm::cl::init(true));
+static llvm::cl::opt<bool> vtaElemAddPrecise(
+    "vta-elemadd-precise",
+    llvm::cl::desc("-vta-evta-elemadd with 22-bit multipliers (EVTA: two 16-bit parts, about 1.8x the ALU time) instead of "
+                   "15-bit ones (same ImageNetV2 top-1 within noise, docs/evta_isa_ext.md 8.17)"),
+    llvm::cl::init(false));
+// A, B, N of the integer elemadd: A / 2^N = sa / so, B / 2^N = sb / so, N = 7 + the largest n <= 24 with |A|, |B| <= 32767
+// at n. -vta-elemadd-precise: 22-bit A / B (the EVTA multiplies by A >> 7 and A & 127; |error| of each term <= 128 / 2^(N+1),
+// about 2^-15 here); else A = round(sa / so 2^n) 2^7 (the low 7 bits 0: one MUL + MADD on the EVTA, error about 2^-8)
+static bool elemAddIntParams(float sa, float sb, float so, int *A, int *B, int *N) {
+  const double ka = (double)sa / so, kb = (double)sb / so, k = std::max(std::fabs(ka), std::fabs(kb));
+  int n = 24;
+  while (n > 0 && std::llround(k * std::ldexp(1.0, n)) > 32767)
+    n--;
+  if (n < 1)
+    return false;
+  if (!vtaElemAddPrecise) {
+    *A = (int)std::llround(ka * std::ldexp(1.0, n)) * 128;
+    *B = (int)std::llround(kb * std::ldexp(1.0, n)) * 128;
+    *N = n + 7;
+    return true;
+  }
+  n += 7;
+  *A = (int)std::llround(ka * std::ldexp(1.0, n));
+  *B = (int)std::llround(kb * std::ldexp(1.0, n));
+  *N = n;
+  return true;
+}
 void saveElemAddInst(const glow::ElementAddInst *Inst, std::string *bundle,
                      VTASaveContext *ctx) {
   auto src0 = Inst->getLHS();
@@ -5558,6 +5594,30 @@ void saveElemAddInst(const glow::ElementAddInst *Inst, std::string *bundle,
 
   //#### JO added (2026-11-15, docs/evta_isa_ext.md 8.16, -vta-pack-rows): operands in different layouts (row / EVTA)
   const int lmask = (ctx->isPacked(src0) ? 1 : 0) | (ctx->isPacked(src1) ? 2 : 0) | (ctx->isPacked(dest) ? 4 : 0);
+  //#### JO added (2026-11-15, docs/evta_isa_ext.md 8.17, -vta-evta-elemadd): all three in the EVTA layout (VTA buffers;
+  //#### a packed view is at offset 0): elemadd_evta, else (no extended ALU) nestc_cpu::elemaddInt; one statement per line
+  int iA, iB, iN;
+  if (vtaEvtaElemAdd && lmask == 7 && dest->getType()->getElementType() == ElemKind::Int8QTy &&
+      src0->getType()->getElementType() == ElemKind::Int8QTy && src1->getType()->getElementType() == ElemKind::Int8QTy &&
+      src0->getType()->getOffset() == 0 && src1->getType()->getOffset() == 0 && dest->getType()->getOffset() == 0 &&
+      dest->size() % 16 == 0 &&
+      elemAddIntParams(src0->getType()->getScale(), src1->getType()->getScale(), dest->getType()->getScale(), &iA, &iB,
+                       &iN)) {
+    ctx->usesCpuOps = true;
+    auto nm = [](const Value *v) { return getOrigin(const_cast<Value *>(v))->getName().str(); };
+    const std::string n = std::to_string(dest->size()), p = std::to_string(iA) + ", " + std::to_string(iB) + ", " +
+                                                             std::to_string(iN);
+    const std::string cpu = "nestc_cpu::elemaddInt(" + nm(src0) + ", " + nm(src1) + ", " + nm(dest) + ", " + n + ", " +
+                            p + ", " + nm(dest) + "_vbuf);\n";
+    ctx->selfFlushed.insert(Inst);
+    const uint32_t idx = ctx->getIdxMultiEVTA();
+    *bundle += "  // " + nm(dest) + " = " + nm(src0) + " * " + std::to_string(iA) + " / 2^" + std::to_string(iN) + " + " +
+               nm(src1) + " * " + std::to_string(iB) + " / 2^" + std::to_string(iN) + " (-vta-evta-elemadd)\n";
+    *bundle += "#ifdef VTA_OUTPUT_LUT\n  if (!elemadd_evta(" + nm(dest) + "_vbuf, " + nm(src0) + "_vbuf, " + nm(src1) +
+               "_vbuf, " + n + ", " + p + ", vtaCmdH" + (idx ? std::to_string(idx) + ", " + std::to_string(idx) : "") +
+               ")) " + cpu + "#else\n  " + cpu + "#endif\n";
+    return;
+  }
   if (lmask != 0 && lmask != 7) {
     const size_t cols = destDims.back(), rows = dest->size() / cols;
     ctx->usesCpuOps = true;
@@ -7196,6 +7256,36 @@ static void elemaddRows(int mask, size_t rows, size_t cols, int8_t *a, float sa,
   free(ta);
   free(tb);
 }
+// the integer elemadd (-vta-evta-elemadd, the CPU path of vtalib elemadd_evta; docs/evta_isa_ext.md 8.17):
+// o = clip(round half away((a A + b B) / 2^N), -128, 127), elementwise (o may be a or b)
+// (flush: the VTA buffer of o, flushed for the EVTA after it)
+static void elemaddInt(const int8_t *a, const int8_t *b, int8_t *o, size_t n, int32_t A, int32_t B, int N,
+                       void *flush = nullptr) {
+  size_t i = 0;
+#if defined(__aarch64__)
+  const int32x4_t h = vdupq_n_s32(1 << (N - 1)), sh = vdupq_n_s32(-N);
+  for (; i + 16 <= n; i += 16) {
+    const int8x16_t x = vld1q_s8(a + i), y = vld1q_s8(b + i);
+    const int16x8_t xl = vmovl_s8(vget_low_s8(x)), xh = vmovl_s8(vget_high_s8(x));
+    const int16x8_t yl = vmovl_s8(vget_low_s8(y)), yh = vmovl_s8(vget_high_s8(y));
+    const int16x4_t xs[4] = {vget_low_s16(xl), vget_high_s16(xl), vget_low_s16(xh), vget_high_s16(xh)};
+    const int16x4_t ys[4] = {vget_low_s16(yl), vget_high_s16(yl), vget_low_s16(yh), vget_high_s16(yh)};
+    int32x4_t v[4];
+    for (int k = 0; k < 4; k++) {   // a A + b B (A, B up to 22 bits), + 2^(N-1) - (v < 0), then >> N (arithmetic)
+      v[k] = vmlaq_n_s32(vmulq_n_s32(vmovl_s16(xs[k]), A), vmovl_s16(ys[k]), B);
+      v[k] = vshlq_s32(vaddq_s32(vaddq_s32(v[k], h), vreinterpretq_s32_u32(vcltzq_s32(v[k]))), sh);
+    }
+    const int16x8_t lo = vcombine_s16(vqmovn_s32(v[0]), vqmovn_s32(v[1])), hi = vcombine_s16(vqmovn_s32(v[2]), vqmovn_s32(v[3]));
+    vst1q_s8(o + i, vcombine_s8(vqmovn_s16(lo), vqmovn_s16(hi)));
+  }
+#endif
+  for (; i < n; i++) {
+    const int32_t v = a[i] * A + b[i] * B, q = (v + (1 << (N - 1)) - (v < 0 ? 1 : 0)) >> N;
+    o[i] = (int8_t)(q > 127 ? 127 : q < -128 ? -128 : q);
+  }
+  if (flush)
+    VTABufferFlush(flush, 0, n);
+}
 // layerNormI8 with x and / or out packed (xP / oP; the CPU path of layernorm_evta2): through row copies; a packed out is
 // flushed for the EVTA (outBuf)
 static void layerNormI8Rows(bool xP, bool oP, void *outBuf, int8_t *out, const int8_t *x, size_t rows, size_t cols,
@@ -8826,7 +8916,7 @@ static std::string vtaOptionsComment() {
       "vta-keep-layout",   "vta-fuse-residual", "vta-fuse-residual-norelu", "vta-conv-epilogue", "vta-evta-maxpool", "vta-evta-fc",
       "vta-fuse-preprocess", "vta-conv0-pack",  "vta-fuse-pool",    "vta-evta-depthwise",
       "vta-round-shift",   "vta-pad-channels",  "vta-matmul-conv", "vta-fold-matmul-bias", "vta-evta-matmul", "vta-lut-elementwise", "vta-fuse-layernorm",
-      "vta-matmul-heads", "vta-attn-keep-layout", "vta-cpu-approx", "vta-alu-output-lut", "vta-alu-layernorm", "vta-alu-softmax", "vta-pack-rows", "vta-evta-avgpool",
+      "vta-matmul-heads", "vta-attn-keep-layout", "vta-cpu-approx", "vta-alu-output-lut", "vta-alu-layernorm", "vta-alu-softmax", "vta-pack-rows", "vta-evta-avgpool", "vta-evta-elemadd", "vta-elemadd-precise",
       "enable-channelwise-depthwise", "enable-channelwise"};
   auto &opts = llvm::cl::getRegisteredOptions();
   std::string s = "// Generated by the NEST-C VTA backend with:";
@@ -9264,7 +9354,7 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
          I.getKind() == Kinded::Kind::ReluInstKind ||
          I.getKind() == Kinded::Kind::MaxPoolInstKind ||
          I.getKind() == Kinded::Kind::AvgPoolInstKind) &&
-        !ctx.isEvtaMaxPool(&I) && !ctx.isEvtaDepthwise(&I)) {
+        !ctx.isEvtaMaxPool(&I) && !ctx.isEvtaDepthwise(&I) && !ctx.selfFlushed.count(&I)) {
       for (const auto &op : I.getOperands()) {
         if (op.second != OperandKind::In && ctx.isPacked(op.first)) {
           bundle.append("  VTABufferFlush(");

@@ -30,7 +30,7 @@ open(sys.argv[2], 'w').write(s[a:s.index(')~"', a)])
 PY
   X=
   [ "${CROSS:-0}" = 1 ] && X="--target=aarch64-linux-gnu --sysroot=${ZCU102_SYSROOT:-$HOME/zcu102_sysroot} -B/usr/bin/aarch64-linux-gnu- -Wl,-L${ZCU102_SYSROOT:-$HOME/zcu102_sysroot}/usr/lib/llvm-8/lib -Wl,--hash-style=both"
-  for t in lut_conv_test ln_evta_test softmax_evta_test epi_conv_test; do
+  for t in lut_conv_test ln_evta_test softmax_evta_test epi_conv_test elemadd_evta_test; do
     # the compiler and libraries of build_sys's bundle executables (clang++-8, its OpenMP, ACL, LLVMSupport)
     clang++-8 $X -std=c++14 -O2 -w -fopenmp $DEFS $INCS -I"$O" "$H/$t.cc" -o "$O/$t" \
       "$B/vtalib/libVTABundle.a" -lpng -ltinfo -ldl -lz "$B/vtalib/libvta_runtime.a" \
@@ -47,4 +47,5 @@ if [ "$STEP" != build ]; then
   OMP_NUM_THREADS=1 ./ln_evta_test after-conv
   OMP_NUM_THREADS=1 ./softmax_evta_test
   EVTA_EPI_CHECK=1 ./epi_conv_test
+  OMP_NUM_THREADS=1 ./elemadd_evta_test   # (2026-11-15, 8.17)
 fi

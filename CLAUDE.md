@@ -347,6 +347,11 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   out-proj / fc2 outputs, the fc1 GELU-table output) kept in the EVTA layout; vtalib-systolic `layernorm_evta2` reads / writes VTA buffers
   in that layout (CPU fallback `nestc_cpu::layerNormI8Rows`), mixed-layout adds `nestc_cpu::elemaddRows`. Transposes 121 -> 25, CNN bundles
   unchanged; DeiT `_alux3` OMP 1 59.82 -> 49.93 ms, OMP 4 50.96 -> 47.43 ms, same results on every fallback.
+  `-vta-evta-elemadd` (2026-11-15, §8.17, default on): an int8 add with all operands packed as the integer
+  clip(round((a A + b B) >> N)) (VTASave `elemAddIntParams`: 15-bit A / B, `-vta-elemadd-precise` 22-bit), vtalib-systolic
+  `elemadd_evta` (inp + identity GEMM, MUL + MADD with rq; 22-bit: A = Ah 2^7 + Al in two parts; CPU path `nestc_cpu::elemaddInt`,
+  same bytes, `EVTA_EA_CHECK=1`): DeiT's 24 residual adds 4.36 -> 1.44 ms, OMP 1 49.85 -> 47.01 ms, OMP 4 47.38 -> 44.41 ms;
+  ImageNetV2 60.20 % (22-bit 60.10 %, float elemadd 59.94 %, all within noise); CNN bundles unchanged.
 - Other models (2026-11-05, `docs/evta_runtime_compare.md` §7.19): Resnet50 res2_0 residual fused (relu to a 2^q smaller scale), schedules of the
   Resnet50 / VGG16 shapes in `VTASchedules.h` (found with vtalib-systolic `EVTA_SCHED`), conv tiles below 7 x 7: the dummy-padded store
   used the wrong channel block with nVirtualThread 2 (fixed in both vtalibs) and the systolic vtalib's minimum tile is 1 on an `_sa_` bitstream

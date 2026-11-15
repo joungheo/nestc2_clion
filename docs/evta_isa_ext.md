@@ -1039,3 +1039,37 @@ compute 안의 shift(`ashr`) 등. 400 MHz는 RTL / HLS 쪽 레지스터(LUT RAM 
 
 - 결과: 281 (0.772822) / 207 / 340, `_pcsys4`와 같다. 기본 / `EVTA_ALUX=0` / `EVTA_ALUX2=0` / `EVTA_ALU_INP=0` / 확장 없는 비트스트림(`..._sa_400mhz_rq.bin`) 모두 같은 결과, LN 비교 0 differ.
 - 남은 큰 CPU 일(OMP 1): elemadd 4.4 ms(residual add, 스칼라 `std::round`), lut8 2.2 ms(softmax 앞 attention scale 표), transpose 1.3 ms(head), elemaddRows 0.5 ms. 마지막 LayerNorm은 fused 패턴에 맞지 않아 CPU의 일반 연산 그대로다.
+
+### 8.17 residual add on EVTA (`-vta-evta-elemadd`, 2026-11-15)
+
+**문제.** `-vta-pack-rows` 뒤 DeiT에서 가장 큰 CPU 일은 residual add 24번(층마다 attention 뒤 / MLP 뒤, 198 × 192 = 38016 byte)이었다: OMP 1 4.36 ms(한 번 182 us). 세 피연산자가 모두 EVTA 배치의 VTA 버퍼다. 하지만 scale 비율 sa / so, sb / so가 2의 거듭제곱이 아니어서 conv의 residual 융합(shift만 씀)으로는 할 수 없고, CPU elemadd는 float(2^15 배 → `std::round` → × 2^-15 / so → `std::round`)라 정수 ALU로 같은 byte를 낼 수 없다.
+
+**정수 elemadd.** out = clip(round half away((a·A + b·B) / 2^N), −128, 127). VTASave가 scale에서 A, B, N을 정한다(`elemAddIntParams`): n = round(sa / so · 2^n)이 int16에 드는 가장 큰 shift(≤ 24), N = n + 7.
+- 기본: A = round(sa / so · 2^n) · 2^7(15비트 배율, 항마다 오차 ≤ 128 / 2^(n+1) ≈ 2^-8 LSB). `-vta-elemadd-precise`: A = round(sa / so · 2^N)(22비트, ≈ 2^-15 LSB).
+- 정확한 값(double)의 반올림과 비교(DeiT 층 0 / 8의 scale, a·b 가능한 65536쌍): float elemadd 2–6쌍 틀림, 15비트 18–102쌍, 22비트 0쌍.
+- 그래도 ImageNetV2 top-1은 셋이 표준오차(±0.5 %p) 안에서 같다(아래). 그래서 빠른 15비트를 기본으로 했다.
+- CPU 경로 `nestc_cpu::elemaddInt`(NEON, 같은 식; 번들의 NESTC_CPU_OPS, packed out은 스스로 flush).
+
+**vtalib-systolic `elemadd_evta(outBuf, aBuf, bBuf, n, A, B, N)`** (VTA 버퍼, offset 0, n % 16 = 0; 아니면 0을 돌려주고 번들이 CPU 함수를 부른다)
+- run(최대 256 항목, 16 byte)마다 a, b를 inp 반쪽에 LOAD(load 모듈), reset + identity GEMM으로 acc X / Y에.
+- ALU는 16비트 곱셈이라 A = Ah·2^7 + Al(Al = 아래 7비트): X2 = X, Y2 = Y(CPY); Y = b·Bh + a·Ah(MUL, MADD); Y2 = b·Bl + a·Al(MUL, MADD); out = Y·2^7 + Y2(MADD, rq round 2 / shift N / clip). Al = Bl = 0이면 MUL + MADD 하나(Ah, Bh, N − 7). 항목당 GEMM 4 + slot 10.
+- 반쪽 두 개를 번갈아 써서 run r + 2의 LOAD와 run r의 STORE가 run r + 1의 GEMM / ALU와 겹친다. MADD 없는 `_alux`: MUL / MUL / ADD, ×2^7은 ALU SHR −7.
+- 모든 ALU 명령은 ≥ 40 step(짧은 run은 저장 안 하는 항목까지 계산): 쓰고 읽는 거리 ≥ 40 slot. 시뮬레이터 `EVTA_ALU_SLOTS=34` / `EVTA_ALU_HAZARD=17` 위반 0.
+- (n, A, B, N)마다 한 번 기록하고 replay. `EVTA_EA_CHECK=1`은 매 호출을 CPU 식과 비교한다.
+- 시험: `tests/elemadd_evta_test.cc`(`run_lut_conv_test.sh`, 보드 `run_alux_board_tests.sh`): DeiT 크기 / 짧은 run / 여러 run / in place, 시뮬레이터와 보드 `_alux3`, `_alux` 모두 0 differ.
+
+**DeiT 번들**: residual add 24번 모두 `elemadd_evta`(섞인 배치 두 번은 `elemaddRows` 그대로). CNN 네 모델의 번들은 옵션 주석 한 줄 말고 같다(남은 elementadd가 모두 conv에 융합).
+
+**보드 (`_alux3`, `-vta-alu-softmax` 번들, 25회 중앙값, ms)**
+
+| | OMP 1 | OMP 4 | elemadd (OMP 1) |
+|---|---|---|---|
+| `_pcsys5` (float elemadd, CPU) | 49.85 | 47.38 | 4.36 |
+| **`_pcsys6` (15비트 정수, 기본: MUL + MADD, 512 항목 run)** | **47.01** | **44.41** | **1.44** |
+| `_pcsys7` (22비트 정수, `-vta-elemadd-precise`) | 48.19 | 45.61 | 2.67 |
+
+- 결과: 281 / 207 / 340. cat confidence 0.772822 → 0.738540(22비트; 15비트 0.736180). 기본 / `EVTA_ALUX=0`(CPU elemaddInt) / `EVTA_ALUX2=0` / `EVTA_ALU_INP=0` / `_alux` 비트스트림 / 확장 없는 비트스트림 모두 같은 byte, `EVTA_EA_CHECK` 2300 호출 0 differ.
+- confidence 변화는 더 정확한 연산에서도 생긴다: residual stream의 1 LSB 차이가 24층을 지나며 퍼진다(float도 정확한 값이 아니다). 그래서 정확도로 판단했다.
+- ImageNetV2 9,000장 top-1(`imagenet_eval/eval_board.sh`, OMP 4): **15비트 60.20 %**(`result/ea15_9k.log`), 22비트 60.10 %(`ea22_9k.log`), float elemadd 59.94 %(`sym5_smintq_9k.log`). 모두 `-vta-alu-softmax` 번들.
+- 기본(15비트) 번들을 다시 만든 `_pcsys8`은 `_pcsys6`와 같은 결과(cat 0.736180, 모든 fallback 같음)이고, 다시 잰 시간은 OMP 1 49.96 → 47.13, OMP 4 47.47 → 44.57 ms(elemadd_evta 1.45 ms).
+- 남은 큰 CPU 일(OMP 1): lut8 2.2 ms(softmax 앞 attention scale 표), transpose 1.3 ms(head), elemaddRows 0.5 ms.

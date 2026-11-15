@@ -6063,6 +6063,124 @@ int layernorm_evta2(int8_t *out, void *outBuf, const int8_t *x, void *xBuf, int 
   return layernormEvtaImpl(out, outBuf, x, xBuf, rows, cols, w, b, a2b, a2d, vtaCmdH, idEVTA);
 }
 
+//#### JO added (2026-11-15, docs/evta_isa_ext.md 8.17): the residual add of DeiT on the EVTA. out = clip(round half away
+//#### ((a A + b B) / 2^N), -128, 127) over n int8 (nestc_cpu::elemaddInt, the integer elemadd VTASave -vta-evta-elemadd
+//#### emits with A / B / N from the scales; A, B up to 22 bits). Per run of up to 256 entries (16 bytes; 512 if Al = Bl = 0): a and b LOADed
+//#### into one half of inp (load module), one reset + identity GEMM of both into acc X / Y of the same half. The ALU has
+//#### 16-bit multipliers, so A = Ah 2^7 + Al (Al = the low 7 bits): X2 = X, Y2 = Y; Y = b Bh + a Ah (MUL, MADD);
+//#### Y2 = b Bl + a Al (MUL, MADD); out = Y 2^7 + Y2 (MADD) with the requantize (round 2, shift N, clip); STOREd. Al = Bl = 0:
+//#### only MUL + MADD (Ah, Bh, N - 7). The two halves of inp / acc in turn: the LOADs of run r + 2 and the STORE of run r
+//#### overlap the GEMM / ALU of run r + 1. Without MADD (_alux): MUL / MUL / ADD, the shift by an ALU SHR -7.
+//#### Recorded once per (n, A, B, N) and replayed (the buffers relocated). Every ALU instruction has >= 40 steps (a short
+//#### run computes stale entries, not stored): an entry is read >= 40 slots after its write (slot rule 34 / step rule 17).
+//#### EVTA_EA_CHECK=1 compares with the CPU arithmetic.
+int elemadd_evta(void *outBuf, void *aBuf, void *bBuf, int n, int A, int B, int N, void *vtaCmdH, uint32_t idEVTA) {
+  const int Ah = A >> 7, Al = A & 127, Bh = B >> 7, Bl = B & 127;
+  if (!VTAHasAluExt() || !aluInpPath(1024) || n <= 0 || n % 16 || Ah < -32768 || Ah > 32767 || Bh < -32768 ||
+      Bh > 32767 || std::abs((int64_t)A) + std::abs((int64_t)B) >= (1 << 23) || N < 8 || N > 31 || !outBuf || !aBuf ||
+      !bBuf)
+    return 0;
+  static const bool check = getenv("EVTA_EA_CHECK") && atoi(getenv("EVTA_EA_CHECK")) > 0;
+  std::vector<int8_t> ref;
+  if (check) {   // before the run (out may be a or b)
+    const int8_t *a = (const int8_t *)VTABufferGetVirtAddr(aBuf), *b = (const int8_t *)VTABufferGetVirtAddr(bBuf);
+    ref.resize(n);
+    for (int i = 0; i < n; i++) {
+      const int32_t v = a[i] * A + b[i] * B, h = (1 << (N - 1)) - (v < 0 ? 1 : 0), q = (v + h) >> N;
+      ref[i] = (int8_t)(q > 127 ? 127 : q < -128 ? -128 : q);
+    }
+  }
+  VTACommandHandle cmd = (VTACommandHandle)vtaCmdH;
+  const bool fused = VTAHasAluExt2(), lo = Al || Bl;
+  const int E = n / 16, e = lo ? 256 : 512, runs = (E + e - 1) / e;   // acc X, Y (, X2, Y2) of e entries in each half
+  int32_t replayKey[] = {7, n, A, B, N, (int32_t)idEVTA, fused};
+  void *replayBufs[] = {aBuf, bBuf, outBuf, getIdentityWeights(idEVTA)};
+  const int replayed = VTAReplayBegin(cmd, replayKey, sizeof(replayKey), replayBufs, 4);
+  if (!replayed) {
+    auto I = [&](int op, int ii, int d, int s, bool useImm = false, int imm = 0) {
+      pushAlu2(cmd, idEVTA, op, 1, ii, d, 0, 1, s, 0, useImm ? 0 : 1, useImm, imm);
+    };
+    VTALoadBuffer2D(cmd, getIdentityWeights(idEVTA), 0, 1, 1, 1, 0, 0, 0, 0, RES_WGT_ENTRY, 1);
+    auto load = [&](int r) {
+      const int h = (r % 2) * 1024, m = std::min(e, E - r * e);
+      VTALoadBuffer2D(cmd, aBuf, (uint32_t)(r * e), m, 1, m, 0, 0, 0, 0, h, 2);
+      VTALoadBuffer2D(cmd, bBuf, (uint32_t)(r * e), m, 1, m, 0, 0, 0, 0, h + e, 2);
+      VTADepPush(cmd, 1, 2);
+    };
+    load(0);
+    if (runs > 1)
+      load(1);
+    for (int r = 0; r < runs; r++) {
+      const int h = (r % 2) * 1024, m = std::min(e, E - r * e), st = std::min(e, std::max(m, 40));
+      const int X = h, Y = h + e, X2 = h + 2 * e, Y2 = h + 3 * e;
+      VTADepPop(cmd, 1, 2);
+      if (r >= 2)
+        VTADepPop(cmd, 3, 2);   // the STORE of run r - 2 has read this half's out entries
+      pushReset(cmd, idEVTA, X, st);
+      pushReset(cmd, idEVTA, Y, st);
+      pushResGemm(cmd, idEVTA, X, X, st);
+      pushResGemm(cmd, idEVTA, Y, Y, st);
+      if (r + 2 < runs)
+        VTADepPush(cmd, 2, 1);   // inp half free for run r + 2
+      // sum(x, y, ka, kb, last): y = y kb + x ka (x, y acc ranges), the requantize on the last instruction
+      auto sum = [&](int x, int y, int ka, int kb, bool last) {
+        I(VTA_ALUX_MUL, st, x, 0, true, ka);
+        if (fused) {
+          if (last) VTARequant(cmd, 1, 2, lo ? N : N - 7, -128, 127);
+          I(VTA_ALUX_MADD, st, y, x, false, kb);
+        } else {
+          I(VTA_ALUX_MUL, st, y, 0, true, kb);
+          if (last) VTARequant(cmd, 1, 2, lo ? N : N - 7, -128, 127);
+          I(RES_ALU_ADD, st, y, x);
+        }
+        if (last) VTARequant(cmd, 0, 0, 0, 0, 0);
+      };
+      if (lo) {
+        I(VTA_ALUX_CPY, st, X2, X);
+        I(VTA_ALUX_CPY, st, Y2, Y);
+        sum(X, Y, Ah, Bh, false);
+        sum(X2, Y2, Al, Bl, false);
+        if (fused) {
+          VTARequant(cmd, 1, 2, N, -128, 127);
+          I(VTA_ALUX_MADD, st, Y, Y2, false, 128);
+        } else {
+          I(RES_ALU_SHR, st, Y, 0, true, -7);
+          VTARequant(cmd, 1, 2, N, -128, 127);
+          I(RES_ALU_ADD, st, Y, Y2);
+        }
+        VTARequant(cmd, 0, 0, 0, 0, 0);
+      } else {
+        sum(X, Y, Ah, Bh, true);
+      }
+      VTADepPush(cmd, 2, 3);
+      VTADepPop(cmd, 2, 3);
+      VTAStoreBuffer2D(cmd, Y, 4, outBuf, (uint32_t)(r * e), m, 1, m);
+      VTADepPush(cmd, 3, 2);
+      if (r + 2 < runs) {
+        VTADepPop(cmd, 2, 1);
+        load(r + 2);
+      }
+    }
+    for (int r = std::max(0, runs - 2); r < runs; r++)
+      VTADepPop(cmd, 3, 2);
+    VTASynchronize(cmd, 1 << 31);
+    VTAReplayEnd(cmd, 1);
+  }
+  VTABufferInvalidate(outBuf, 0, n);
+  if (check) {
+    const int8_t *o = (const int8_t *)VTABufferGetVirtAddr(outBuf);
+    long bad = 0, first = -1;
+    for (int i = 0; i < n; i++)
+      if (o[i] != ref[i] && bad++ == 0)
+        first = i;
+    printf("EVTA_EA_CHECK elemadd %d (A %d B %d N %d): %ld differ", n, A, B, N, bad);
+    if (bad)
+      printf(" (first at %ld: evta %d, cpu %d)", first, o[first], ref[first]);
+    printf("\n");
+  }
+  return 1;
+}
+
 //#### JO added (2026-11-12, ALU extension step 7, docs/evta_isa_ext.md 8.10): the integer softmax over rows of int8 scores
 //#### (scale s) and the quantize to the output scale 1 / outInv, as nestc_cpu::softmaxIntQ (VTASave -vta-alu-softmax), on the
 //#### EVTA ALU: the program of tests/alu_ext_test.cc softmaxTest (8-bit exp table, CLZ + 8-bit reciprocal table, the
