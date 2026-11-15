@@ -357,6 +357,9 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   step MUL and the ADD multiplier d, `VTA_CONV_EPILOGUE 2`; vtalib-systolic residual GEMMed into acc Y above entry 2048, ALU MUL +
   MADD with rq): same bytes, `EVTA_EPI_CHECK` 0 differ, but DeiT OMP 1 47.04 -> 47.95 ms (the residual LOAD waits for the tile's
   GEMMs, 5 ALU passes between tiles; elemadd_evta overlaps its transfers).
+  `EVTA_RES_PREFETCH=1` (2026-11-15, §8.19, default off): the epilogue residual LOADed into inp above entry 2048 with the tile's
+  first input (single EVTA): same bytes, no gain (DeiT 47.91 -> 47.93, Resnet50 68.86 -> 69.85 ms); the fused add is slow from
+  compute steps (the conv requantize as 3 ALU passes in acc, since rq writes only to out), not from the LOAD wait.
 - Other models (2026-11-05, `docs/evta_runtime_compare.md` §7.19): Resnet50 res2_0 residual fused (relu to a 2^q smaller scale), schedules of the
   Resnet50 / VGG16 shapes in `VTASchedules.h` (found with vtalib-systolic `EVTA_SCHED`), conv tiles below 7 x 7: the dummy-padded store
   used the wrong channel block with nVirtualThread 2 (fixed in both vtalibs) and the systolic vtalib's minimum tile is 1 on an `_sa_` bitstream

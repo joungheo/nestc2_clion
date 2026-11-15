@@ -238,8 +238,12 @@ f1과 f2는 가능한 입력(−128..127 가운데 앞 clip의 범위)을 **모�
 - **원인 ②:** ALU 5 pass(conv requantize 3, MUL, MADD)가 다음 타일의 GEMM과 겹치지 않는다.
 - `elemadd_evta`는 버퍼 반쪽 두 개로 LOAD · ALU · STORE를 겹쳐 58 us면 된다.
 
+원인을 다시 따져 보았다(§8.19).
+- residual을 inp 위쪽 절반에 미리 LOAD하는 것(`EVTA_RES_PREFETCH=1`)을 넣어 보았다. 바이트는 같지만 이득이 없었다(DeiT 47.91 → 47.93 ms, Resnet50 +1 ms). 그래서 기본은 꺼짐이다.
+- 느린 진짜 이유는 compute 일의 양이다. ADD가 있으면 conv 자신의 requantize(SHR, MAX, MIN)를 acc 안에서 ALU 3 pass로 해야 한다. rq 결과는 out 버퍼에만 가기 때문이다.
+
 남은 일:
-1. residual을 inp 위쪽 절반(그림 E4의 빈 자리)에 타일 입력과 함께 미리 LOAD한다. 대기가 없어져도 ALU 약 42 us는 남아, 이득 상한은 DeiT 전체로 약 0.4 ms다.
+1. 하드웨어가 rq 결과를 acc에도 쓰게 하거나, shift · round · clip을 한 번에 하는 ALU 연산을 넣는다. 그러면 conv requantize 3 pass가 없어진다. DeiT에서 상한은 약 0.4–0.5 ms다.
 2. EVTA 배치 activation 뒤의 표(sigmoid, SiLU, hard-swish)를 epilogue LUT로 넣는다. CNN의 다른 모델용이다([evta_alux_epilogue.md](evta_alux_epilogue.md) §7).
 3. ADD 둘이나 표 둘을 지원한다(inp 두 번째 residual 자리, 타일마다 LUTSET).
 

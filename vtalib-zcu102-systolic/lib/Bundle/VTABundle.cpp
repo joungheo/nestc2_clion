@@ -215,6 +215,12 @@ struct gemmop_mxn {
 #else
 #define ACC_BUFF_DEPTH 4096
 #endif
+//#### JO added (2026-11-15): the inp depth (16-byte entries): 4096 single, 2048 multi-EVTA (conv code uses INP_MEM_ENTRY 2048)
+#ifdef VTA_LOG_INP_BUFF_SIZE
+#define INP_BUFF_DEPTH ((1 << VTA_LOG_INP_BUFF_SIZE) / 16)
+#else
+#define INP_BUFF_DEPTH 4096
+#endif
 static int gemmop_mxn_old(struct gemmop_mxn *ctx, VTACommandHandle cmdh) {
   VTAUopLoopBegin(cmdh, ctx->tile_size_w_, 1, ctx->stride_w_, 0);
   VTAUopLoopBegin(cmdh, ctx->kernel_w_, 0, 1, 1);
@@ -1373,8 +1379,44 @@ void conv_kernel(uint32_t sizeOutTileH,
                             : outputHOffset * stride_size - pad_size;
 
     //#### JO added (2026-11-10, EVTA_CONV_BURST): a 1x1 conv's weights of a thread all at once (see evtaConvBurst)
-    const bool wgtAll = evtaConvBurst() && KH == 1 && KW == 1 && !dw && !(res && res->add) && !pool && cBlocks > 1 &&
-                        nFilterinLoop * cBlocks <= WGT_MEM_ENTRY / nVirtualThread;
+    //#### JO added (2026-11-15, docs/evta_isa_ext.md 8.19): resPre: the residual of the epilogue's ADD is LOADed into the inp
+    //#### entries above INP_MEM_ENTRY (thread k at INP_MEM_ENTRY + k * INP_MEM_ENTRY / nVirtualThread) together with channel
+    //#### 0's input of the tile (behind the same compute -> load token: the tile's reset, pushed after the previous tile's
+    //#### epilogue), so it overlaps the tile's GEMMs (was: LOADed into the thread's input half after the GEMMs, compute
+    //#### waiting for it); the identity weight once per call. Needs the inp entries (single EVTA 4096; multi-EVTA 2048: as
+    //#### before) and the identity entry RES_WGT_ENTRY clear of the last thread's weights. EVTA_RES_PREFETCH=1 turns it on.
+    //#### Default off (board 2026-11-15, _alux3, OMP 1): the same bytes but no gain: DeiT (fused MUL add) 47.91 -> 47.93,
+    //#### MobileNetV2 17.25 -> 17.26, Resnet18 23.03 -> 23.22, Resnet50 68.86 -> 69.85 ms: the residual LOAD already overlapped
+    //#### the other thread's work; the fused add costs compute steps (the conv requantize as 3 ALU passes in acc), not waits.
+    static const int resPreEnv = getenv("EVTA_RES_PREFETCH") ? atoi(getenv("EVTA_RES_PREFETCH")) : 0;
+    const uint32_t wgtThread = WGT_MEM_ENTRY / nVirtualThread, lastWgt = (nVirtualThread - 1) * wgtThread;
+    const bool wgtAllFits = KH == 1 && KW == 1 && cBlocks > 1 && nFilterinLoop * cBlocks <= wgtThread;
+    const bool resPre = resPreEnv && res && res->add && !dw && !pool && INP_BUFF_DEPTH >= 2 * INP_MEM_ENTRY &&
+                        lastWgt + (wgtAllFits && evtaConvBurst() ? nFilterinLoop * cBlocks : KH * KW * nFilterinLoop) <=
+                            RES_WGT_ENTRY;
+    //#### JO changed (2026-11-15): also with a residual when resPre keeps the identity entry clear
+    const bool wgtAll = evtaConvBurst() && wgtAllFits && !dw && (!(res && res->add) || resPre) && !pool;
+    auto resPreLoad = [&](uint32_t threadIdx) {
+      const uint32_t base = INP_MEM_ENTRY + threadIdx * (INP_MEM_ENTRY / nVirtualThread);
+      if (outDummyW == 0) {
+        for (uint32_t fIdx = 0; fIdx < nFilterinLoop; fIdx++)
+          VTALoadBuffer2D(vtaCmdH, res->buf,
+                          (filterIdx * nVirtualThread + threadIdx) * nFilterinLoop * out_w * out_h +
+                              outputHOffset * out_w + outputWOffset + fIdx * out_w * out_h,
+                          sizeOutTileW, sizeOutTileH, out_w, 0, 0, 0, 0,
+                          base + fIdx * resizedOutTileH * resizedOutTileW, 2);
+      } else {
+        for (uint32_t fIdx = 0; fIdx < nFilterinLoop; fIdx++)
+          for (uint32_t hIdx = 0; hIdx < sizeOutTileH; hIdx++)
+            VTALoadBuffer2D(vtaCmdH, res->buf,
+                            ((filterIdx * nVirtualThread + threadIdx) * nFilterinLoop + fIdx) * out_w * out_h +
+                                (outputHOffset + hIdx) * out_w + outputWOffset,
+                            sizeOutTileW, 1, out_w, 0, 0, 0, 0,
+                            base + (hIdx + fIdx * sizeOutTileH) * resizedOutTileW + fIdx * outDummyH * resizedOutTileW, 2);
+      }
+    };
+    if (resPre && filterIdx == 0)
+      VTALoadBuffer2D(vtaCmdH, res->idWgt, res->shlT, 1, 1, 1, 0, 0, 0, 0, RES_WGT_ENTRY, 1);
     // Push operations for loading input and weight then gemming
     for (uint32_t channelIdx = 0; channelIdx < cBlocks;
          channelIdx++) {
@@ -1406,6 +1448,8 @@ void conv_kernel(uint32_t sizeOutTileH,
         uint32_t weightSramBaseAddr =
             threadIdx * (WGT_MEM_ENTRY / nVirtualThread);
         VTADepPop(vtaCmdH, 2, 1);
+        if (resPre && channelIdx == 0)   //#### JO added (2026-11-15): the residual with the tile's first input
+          resPreLoad(threadIdx);
         //#### JO added (2026-11-08, depthwise): each output block's own input block, into the thread's inp half
         if (dw) {
           const uint32_t inTile = resizedInTileH * resizedInTileW;
@@ -1509,7 +1553,7 @@ void conv_kernel(uint32_t sizeOutTileH,
     //#### JO added (2026-10-31): residual of the fused elementadd (ConvResidual): the identity weight, then per thread the
     //#### residual tile into the inp buffer at the acc layout of the output tile (the addresses of the store below);
     //#### the pops above make these loads wait for the GEMMs of this tile
-    if (res && res->add) {
+    if (res && res->add && !resPre) {   //#### JO: + !resPre (2026-11-15)
       VTALoadBuffer2D(vtaCmdH, res->idWgt, res->shlT, 1, 1, 1, 0, 0, 0, 0, RES_WGT_ENTRY, 1);
       for (uint32_t threadIdx = 0; threadIdx < nVirtualThread; threadIdx++) {
         uint32_t resSramBaseAddr = threadIdx * (INP_MEM_ENTRY / nVirtualThread);
@@ -1708,7 +1752,8 @@ void conv_kernel(uint32_t sizeOutTileH,
       //#### ConvResidual: convShl ALU ADD passes, the residual GEMM and its requantize)
       if (res) {
         const uint32_t size = resizedOutTileH * resizedOutTileW * nFilterinLoop, base = outputSramBaseAddr;
-        const uint32_t resSramBaseAddr = threadIdx * (INP_MEM_ENTRY / nVirtualThread);
+        //#### JO changed (2026-11-15): resPre: the residual above INP_MEM_ENTRY, already there (no token)
+        const uint32_t resSramBaseAddr = (resPre ? INP_MEM_ENTRY : 0) + threadIdx * (INP_MEM_ENTRY / nVirtualThread);
         auto alu = [&](int op, int imm) { pushAlu(vtaCmdH, idEVTA, base, base, size, op, 1, imm); };
         // values in [lo, hi] -> clip(v << q, a, b)
         auto shlClip = [&](int q, int a, int b, int lo, int hi) {
@@ -1733,7 +1778,7 @@ void conv_kernel(uint32_t sizeOutTileH,
           //#### JO added (2026-11-15, docs/evta_isa_ext.md 8.18): Y = residual * mulT beside the tile, then
           //#### tile = tile * mulV + Y with the sum's rq (kind2 0: its clip is lo / hi)
           const uint32_t Y = yHigh ? base + ACC_MEM_ENTRY : base + size + nFilterinLoop;
-          VTADepPop(vtaCmdH, 1, 2);
+          if (!resPre) VTADepPop(vtaCmdH, 1, 2);
           pushReset(vtaCmdH, idEVTA, Y, size);
           pushResGemm(vtaCmdH, idEVTA, Y, resSramBaseAddr, size);
           if (res->mulT != 1)
@@ -1751,7 +1796,7 @@ void conv_kernel(uint32_t sizeOutTileH,
         } else if (res->add) {
           if (res->shlV)
             alu(RES_ALU_SHR, -(int)res->shlV);
-          VTADepPop(vtaCmdH, 1, 2);
+          if (!resPre) VTADepPop(vtaCmdH, 1, 2);   //#### JO: resPre: no token (2026-11-15)
           if (res->rqSum && res->kind2 == 2) {
             pushResGemm(vtaCmdH, idEVTA, base, resSramBaseAddr, size);
             VTARequant(vtaCmdH, 1, res->rnd, res->shift, res->lo, res->hi);

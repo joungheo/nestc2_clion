@@ -1122,3 +1122,37 @@ run 하나씩(`EVTA_REPLAY_LOG=2`, us)으로 보면 이렇다.
 - 나아질 여지: residual을 inp 위쪽 절반(단일 EVTA inp 4096 항목, conv는 2048 사용)에 타일 입력과 함께 미리 LOAD하면 대기가 없어진다.
   그래도 ALU 42 us가 남아, 상한은 conv당 약 16 us, DeiT 23개에서 약 0.4 ms다.
 
+### 8.19 residual을 inp 위쪽 절반에 미리 LOAD (`EVTA_RES_PREFETCH`, 2026-11-15, 기본 꺼짐)
+
+**가설 (§8.18).** epilogue ADD의 residual은 그 타일의 모든 GEMM이 끝난 뒤 입력 자리(inp 0 / 1024)에 LOAD한다. 그 대기 때문에 융합 add가 느리다고 보았다.
+- 이 방식은 10-31의 `convolution_wo_tr_res`에서 왔다. 대상이던 HLS 비트스트림과 multi-EVTA는 inp가 2048 항목뿐이라 빈자리가 없었다.
+- 단일 systolic 비트스트림은 inp가 4096 항목이다(conv는 2048 사용).
+
+**구현 (vtalib-systolic `conv_kernel`, `resPre`).**
+- residual을 inp 위쪽 절반(2048 + thread · 1024)에 LOAD한다. 시점은 그 thread의 채널 0 입력과 같은 토큰 뒤다(타일의 reset 토큰: 앞 타일 epilogue 뒤에 compute가 보냄). 그래서 그 타일의 GEMM과 겹친다.
+- epilogue에서는 토큰을 기다리지 않는다. identity weight는 호출마다 한 번 LOAD한다.
+- 조건: `INP_BUFF_DEPTH` ≥ 4096, 그리고 identity weight 자리(1023)가 마지막 thread의 weight와 겹치지 않을 것. 이때는 residual이 있어도 1×1 conv의 weight 한 번에 LOAD(`wgtAll`)를 켠다.
+
+**검증.**
+- 시뮬레이터 `run_epi_test.sh` 네 모드 all equal, hazard 0.
+- 보드 `epi_conv_test`(`_alux3`, `_alux`, 확장 없는 `_rq`) all equal.
+- DeiT(MUL add 융합 번들), MobileNetV2, Resnet18 / 50 결과가 끈 것과 같다. `EVTA_EPI_CHECK`는 3500 / 1000 / 16 / 32번, 모두 0 differ.
+
+**시간 (보드 `_alux3`, 같은 실행 파일, 25회 중앙값, ms): 이득 없음, 기본 꺼짐.**
+
+| 모델 | OMP 1 끔 → 켬 | OMP 4 끔 → 켬 |
+|---|---|---|
+| DeiT (`-vta-fuse-elemadd-mul`) | 47.91 → 47.93 | 45.41 → 45.36 |
+| MobileNetV2 | 17.25 → 17.26 | 16.83 → 16.81 |
+| Resnet18 | 23.03 → 23.22 | 22.89 → 23.06 |
+| Resnet50 | 68.86 → 69.85 | 68.75 → 69.76 |
+
+**결론: 가설이 틀렸다.**
+- residual LOAD는 이미 다른 thread의 일과 겹치고 있었다. 미리 LOAD하면 오히려 첫 GEMM 전 LOAD가 늘어난다(Resnet50 +1 ms).
+- 융합 add가 느린 이유는 compute 일의 양이다. conv 하나(2376 항목)에서 GEMM / ALU step을 세면 이렇다.
+  - `elemadd_evta`: 9504 / 4752.
+  - epilogue가 더하는 것: 4752 / 11880. 그중 7128은 conv 자신의 requantize(SHR, MAX, MIN)를 acc 안에서 하는 ALU pass다.
+- conv의 rq는 out 버퍼로만 쓰고 acc에는 남지 않는다. 그래서 ADD가 있으면 GEMM rq를 쓸 수 없다.
+- 이 3 pass를 없애려면 하드웨어가 rq 결과를 acc에도 쓰는 방식이 필요하다(rq → acc 쓰기, 또는 shift · round · clip 한 번의 ALU 연산).
+  그러면 conv당 compute가 `elemadd_evta`보다 GEMM 4752 step 적고, DeiT에서 상한 약 0.4–0.5 ms다.
+
