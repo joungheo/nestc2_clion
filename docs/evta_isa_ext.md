@@ -1156,3 +1156,37 @@ run 하나씩(`EVTA_REPLAY_LOG=2`, us)으로 보면 이렇다.
 - 이 3 pass를 없애려면 하드웨어가 rq 결과를 acc에도 쓰는 방식이 필요하다(rq → acc 쓰기, 또는 shift · round · clip 한 번의 ALU 연산).
   그러면 conv당 compute가 `elemadd_evta`보다 GEMM 4752 step 적고, DeiT에서 상한 약 0.4–0.5 ms다.
 
+- **§8.20에서 이 결론도 고쳤다**: ALU pass를 줄여도 시간이 그대로다. 병목은 compute가 아니라 compute와 겹치지 못한 전송이다.
+
+### 8.20 conv requantize 1 pass ALU 연산의 효과를 미리 잼 (`EVTA_TIME_NO_CONV_CLIP`, 2026-11-15)
+
+shift · 반올림 · clip을 한 번에 하는 ALU 연산(RQ)을 합성하기 전에, 그 연산을 쓰면 줄어들 일만큼 명령을 빼고 시간을 쟀다.
+- vtalib-systolic `conv_kernel`: `EVTA_TIME_NO_CONV_CLIP=1`이면 epilogue가 conv의 int8을 acc에 필요로 할 때(`accConv`)
+  conv requantize의 MAX / MIN을 내지 않는다. SHR만 남아 1 pass가 되므로 RQ 연산과 ALU step 수가 같다. **시간 측정 전용**이다(clip이
+  걸리는 값은 틀린다. DeiT는 cat 281 그대로였다).
+- GEMM rq 결과를 acc에 쓰는 안은 하지 않기로 했다. acc에는 다음 채널 / tap이 더할 부분합이 있어 마지막 쓰기에만 써야 하고,
+  `sa_rmw.v`의 acc 쓰기(S4)를 rq 단계(S7)로 옮겨야 해서 400 MHz에서 가장 빠듯한 경로를 건드린다.
+
+보드 `_alux3`, DeiT OMP 1, `EVTA_REPLAY_LOG=2`의 run당 시간(us, 중앙값). conv = `_pcsys8`(epilogue 없는 conv + `elemadd_evta`),
+fused = `_pcsys12`(`-vta-fuse-elemadd-mul`). `EVTA_MEMEXP`는 해당 전송을 원소 하나로 줄인다(결과는 틀림, 시간만).
+
+| 조건 | out-proj conv | out-proj fused | fused, clip 뺌 | fc2 conv | fc2 fused | fc2 fused, clip 뺌 |
+|---|---|---|---|---|---|---|
+| 그대로 | 115.4 | 206.9 | 207.1 | 405.8 | 542.8 | 542.9 |
+| inp LOAD 없음 (1) | 114.6 | 169.4 | 156.6 | 405.0 | 482.2 | 469.6 |
+| wgt LOAD 없음 (2) | 106.2 | 178.5 | 178.2 | 353.9 | 402.0 | 402.1 |
+| acc LOAD 없음 (4) | 115.2 | 207.1 | 206.8 | 406.3 | 542.2 | 541.8 |
+| STORE 없음 (8) | 103.9 | 201.6 | 201.4 | 394.9 | 537.5 | 537.0 |
+| 전송 모두 없음 (15) | 94.2 | 142.1 | 129.4 | 340.8 | 366.4 | 353.1 |
+
+`elemadd_evta` 한 번은 57.9 us다. 따로 하면 out-proj 173.3 / fc2 463.7 us이고, fused는 206.9 / 542.8 us다.
+
+- **RQ 연산만으로는 이득이 0이다.** 전송이 그대로면 ALU 4752 step을 빼도 시간이 같다(206.9 → 207.1). 전송을 모두 빼면 13 us 줄어든다
+  (142.1 → 129.4). 즉 ALU는 지금 critical path에 있지 않다.
+- **fused가 느린 이유는 compute와 겹치지 못한 전송이다.** 전송 없이 재면 fused는 conv보다 out-proj에서 48 us(GEMM 4752 + ALU 11880 step),
+  fc2에서 26 us만 길다. 전송이 있을 때 드러나는 시간은 conv가 21 / 65 us, fused가 65 / 176 us다. inp(입력 + residual)와 wgt LOAD를
+  빼면 fused만 크게 줄어든다(out-proj −38 / −28 us, conv는 −1 / −9).
+- **상한 어림**(fused의 드러난 전송이 conv 수준까지 줄어든다고 할 때): out-proj 142 + 21 = 163 us(RQ 연산 있으면 150), fc2 366 + 65 = 431 us
+  (418). 따로 할 때(173 / 464)보다 각각 10 / 33 us(RQ 연산 있으면 23 / 46 us) 빠르다. DeiT는 블록 12개라 약 0.5 ms, RQ 연산까지 하면
+  약 0.8 ms다. 먼저 필요한 것은 소프트웨어 쪽 전송 순서(LOAD 큐 순서 / 토큰)이고, RQ 연산은 그다음에야 효과가 난다.
+- 결정: RQ 연산 비트스트림은 지금 합성하지 않는다. `-vta-fuse-elemadd-mul`은 계속 기본 꺼짐이다.

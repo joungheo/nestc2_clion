@@ -1668,7 +1668,10 @@ void conv_kernel(uint32_t sizeOutTileH,
 
         VTAPushALUOp(vtaCmdH, uopHandle_shift, &alu_shr, &shift_ctx, 0);
       }
-
+      //#### JO added (2026-11-15, timing only, results wrong): EVTA_TIME_NO_CONV_CLIP=1 leaves out the MAX / MIN of the
+      //#### conv requantize when an epilogue needs it in acc (accConv): the time a one-pass ALU RQ op would give
+      static const bool noConvClip = getenv("EVTA_TIME_NO_CONV_CLIP") && atoi(getenv("EVTA_TIME_NO_CONV_CLIP"));
+      if (!(noConvClip && res && res->accConv)) {
       {
         //#### JO changed (2026-11-14): lo0 (the epilogue may narrow the clip; MAX -128 or MAX 0, then MAX lo0 if other)
         // if (!relu) {
@@ -1747,6 +1750,7 @@ void conv_kernel(uint32_t sizeOutTileH,
       if (hi0 < 127)
         pushAlu(vtaCmdH, idEVTA, outputSramBaseAddr, outputSramBaseAddr,
                 resizedOutTileH * resizedOutTileW * nFilterinLoop, RES_ALU_MIN, 1, hi0);
+      }   //#### JO: EVTA_TIME_NO_CONV_CLIP
       }   //#### JO: !rqConv && !rqPool
       //#### JO changed (2026-11-14): the epilogue (ConvEpi) on the conv's tile (was: the fused elementadd (+ relu) of
       //#### ConvResidual: convShl ALU ADD passes, the residual GEMM and its requantize)
