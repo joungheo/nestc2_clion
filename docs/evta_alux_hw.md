@@ -40,6 +40,10 @@ for io < iter_out:  for ii < iter_in:  for u in [uop_bgn, uop_end):
 
 256비트 명령의 pad에서 비트를 가져왔다([hw_spec.h](../vta-hw-zcu102-systolic/include/vta/hw_spec.h) `VTAAluInsn`).
 
+> 2026-11-15 (`_alux3`, [evta_isa_ext.md](evta_isa_ext.md) §8.15): pad에서 1비트를 더 가져와 `alu_op_ext2`로 쓴다. 연산 번호는 5비트
+> (`alu_op_ext2 << 4 | alu_op_ext << 2 | alu_opcode`)가 되고, 16 `SQACC`(dst += src², 곱셈기 입력 앞 mux 하나 + MADD의 덧셈기)와
+> 17 `LUTC`(index를 0..255로 clamp한 LUT)가 들어갔다. 옛 명령은 이 비트가 0이다.
+
 ```c
 uint64_t alu_opcode : 2;   // 원래 필드
 ...
