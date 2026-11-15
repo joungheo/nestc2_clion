@@ -1190,3 +1190,43 @@ fused = `_pcsys12`(`-vta-fuse-elemadd-mul`). `EVTA_MEMEXP`는 해당 전송을 �
   (418). 따로 할 때(173 / 464)보다 각각 10 / 33 us(RQ 연산 있으면 23 / 46 us) 빠르다. DeiT는 블록 12개라 약 0.5 ms, RQ 연산까지 하면
   약 0.8 ms다. 먼저 필요한 것은 소프트웨어 쪽 전송 순서(LOAD 큐 순서 / 토큰)이고, RQ 연산은 그다음에야 효과가 난다.
 - 결정: RQ 연산 비트스트림은 지금 합성하지 않는다. `-vta-fuse-elemadd-mul`은 계속 기본 꺼짐이다.
+
+### 8.21 다음 tile의 LOAD를 앞 tile의 epilogue · STORE와 겹침 (`EVTA_LOAD_AHEAD`, 2026-11-16, 기본 2)
+
+§8.20의 결론(융합 add는 compute와 겹치지 못한 전송 때문에 느림)에 따라 vtalib-systolic `conv_kernel`의 LOAD 큐 순서와 토큰(dependency
+token: 큐 사이의 "다 썼음 / 다 실었음" 신호) 배치를 바꿨다. 하드웨어 변경은 없다.
+
+- **원인**: filter group(같은 tile의 출력 채널 묶음) / tile마다 load 큐의 첫 pop이 그 group의 acc reset 토큰을 받았다. reset은 compute 큐에서
+  앞 group의 epilogue와 STORE 대기(store → compute 토큰) 뒤에 있으므로, 다음 group의 입력 · 가중치 LOAD는 앞 group이 STORE될 때까지 시작하지
+  못했다. 그동안 compute는 놀았다.
+- **바꾼 것** (`convolution_wo_tr_impl`의 한 EVTA run 안에서만; `ConvAhead` / `gAhead`):
+  - 다음 group의 첫 LOAD는 앞 group의 마지막 GEMM 토큰을 받는다(그때 inp / wgt는 비어 있음). reset은 토큰을 내지 않는다.
+  - residual(epilogue ADD)은 inp 위쪽(entry ≥ `INP_MEM_ENTRY`, §8.19)에 첫 입력 다음으로 LOAD한다. 앞 group의 그 thread epilogue가 residual을
+    다 읽은 뒤 compute가 내는 토큰을 하나 더 기다린다. compute는 첫 채널 GEMM 다음에 그 LOAD의 토큰을 받는다.
+  - inp 반쪽(double buffer)의 순서를 group을 넘어 이어 간다(전에는 group마다 채널 0이 위쪽 반). **처음 보드에서 틀렸던 이유**: 다음 group의 첫
+    입력 LOAD는 thread 0의 마지막 GEMM만 기다리는데, 입력 블록 수가 홀수면 그 GEMM의 반쪽이 위쪽이라 다른 thread의 마지막 GEMM이 아직 읽는 중이었다.
+    DeiT A x V(198 → 13 블록)의 출력이 틀렸다(cat 281은 유지, confidence 0.736 → 0.720). PC 시뮬레이터(TLPP)에서는 드러나지 않았다.
+  - run의 마지막 tile(`gAhead.last`, 호출하는 쪽이 VTASynchronize 앞 tile에 켬)은 전과 같이 끝나므로 run마다 큐에 남는 토큰이 전과 같다.
+    시뮬레이터 `EVTA_SIM_TOKENS=1`(`sim_tlpp.cc`)이 run 끝에 남은 토큰을 출력한다(모든 시험에서 0).
+  - 2단계: 1x1 conv의 가중치가 한 번에 들어가고(`wgtAll`) filter group이 하나면, 같은 run의 앞 tile이 실은 같은 가중치를 다시 LOAD하지 않는다.
+  - `EVTA_LOAD_AHEAD=0` = 전과 같음, 1 = 토큰만, 2(기본) = + 가중치 유지. residual을 inp 위쪽에 둘 수 없으면(multi-EVTA의 2048 entry) 그 conv는 전과 같다.
+    `EVTA_AHEAD_LOG=1`이 conv_kernel마다 상태를 출력한다. `EVTA_RES_PREFETCH`는 0일 때만 쓰인다.
+- **시험 3**(첫 tile의 가중치를 채널마다 입력과 함께 LOAD, [channel][kernel] 배치)은 모두 느려서 뺐다: 256 B 행의 strided DMA가 많아져
+  Resnet50 65.41 → 69.03, DeiT 46.66 → 48.76 ms.
+
+보드 `_alux3` 400 MHz, OMP 1, 25회 중앙값(ms). 같은 실행 파일에서 환경변수만 바꿈. 모든 EVTA conv dump가 0 / 1 / 2에서 바이트까지 같고
+(DeiT 7303, MobileNetV2 5200, Resnet50 106, Resnet18 40, VGG16 34개), 결과(281 / 282 / 0)와 confidence가 같다. `EVTA_EPI_CHECK` 3500줄 0 differ.
+
+| 모델 | 0 (전) | 1 | 2 (기본) |
+|---|---|---|---|
+| Resnet50 | 68.85 | 65.68 | **65.41** (−5.0 %) |
+| MobileNetV2 | 17.29 | 15.28 | **15.29** (−11.6 %) |
+| Resnet18 | 23.05 | 22.56 | **22.55** |
+| VGG16 (CIFAR-10) | 7.02 | 7.01 | 7.01 |
+| DeiT (`elemadd_evta`, `-vta-alu-softmax`) | 47.09 | | **46.23** (OMP 4 44.46 → 43.72) |
+| DeiT (`-vta-fuse-elemadd-mul`) | 48.13 | 46.78 | 46.73 (OMP 4 45.32 → 44.10) |
+
+- DeiT EVTA 시간(`EVTA_REPLAY_LOG=2`, run당 중앙값 us, 0 → 2): fused fc2 543.0 → 469.6, fused out-proj 207.2 → 201.6, fc2 conv 406.1 → 379.1,
+  fc1 438.9 → 414.1, q / k / v / out-proj conv 115.7 → 110.5. out-proj은 run 하나에 tile이 2개뿐이라 첫 tile의 LOAD와 마지막 STORE가 그대로 드러난다.
+- 융합 add와 따로 하는 add의 차이가 1.0 ms에서 0.5 ms로 줄었지만 따로 하는 쪽이 아직 빠르다. `-vta-fuse-elemadd-mul`은 계속 기본 꺼짐이다.
+- 보드 시험 중 MobileNetV2가 `timeout 120`에 걸렸다(rc 124). 멈춘 것이 아니라 dump 5200개를 쓰느라 100회가 120 s를 넘긴 것이다(300 s로 다시 돌려 모두 끝남).

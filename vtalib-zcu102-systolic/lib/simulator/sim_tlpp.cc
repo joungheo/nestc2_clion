@@ -1,3 +1,5 @@
+#include <cstdlib>
+#include <cstdio>
 /*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
@@ -27,6 +29,12 @@ TlppVerify::TlppVerify() {
 }
 
 void TlppVerify::Clear() {
+  //#### JO added (2026-11-16): EVTA_SIM_TOKENS=1 prints the dependency tokens a run leaves (load -> gemm, store -> gemm,
+  //#### gemm -> load, gemm -> store; they stay for the next run)
+  static const bool tok = getenv("EVTA_SIM_TOKENS") && atoi(getenv("EVTA_SIM_TOKENS"));
+  if (tok && (l2g_q_.size() || s2g_q_.size() || g2l_q_.size() || g2s_q_.size()))
+    fprintf(stderr, "EVTA_SIM_TOKENS left l2g %zu s2g %zu g2l %zu g2s %zu\n", l2g_q_.size(), s2g_q_.size(), g2l_q_.size(),
+            g2s_q_.size());
   fsim_handle_ = nullptr;
   run_fsim_function_ = nullptr;
   for (int i = 0; i < COREMAX; i++) {

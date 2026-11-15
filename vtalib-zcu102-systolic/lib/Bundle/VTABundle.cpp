@@ -957,6 +957,35 @@ static void storeBuffer2D(VTACommandHandle cmd, uint32_t sram, uint32_t type, vo
   VTAStoreBuffer2D(cmd, sram, type, buf, off, x, y, stride);
 }
 
+//#### JO added (2026-11-16, docs/evta_isa_ext.md 8.21): EVTA_LOAD_AHEAD (default 2): the first LOADs of a filter group /
+//#### tile of conv_kernel no longer wait for the group before it to be stored. Before, the load queue's first pops took
+//#### the tokens of the group's acc resets, which come after the previous group's epilogue and STORE (compute waits for
+//#### the store there), so the input and weights of every group were LOADed while compute stood still. Now, inside one
+//#### EVTA run of convolution_wo_tr_impl, the next group's first LOADs take the tokens of the last GEMMs before (inp / wgt
+//#### are free then; the resets push no token), and the epilogue residual (ADD) goes into the inp entries above
+//#### INP_MEM_ENTRY after the first input, behind one more token per thread that compute pushes when that thread's
+//#### epilogue has read the residual before. The last group of the run (gAhead.last) ends as before, so every run
+//#### leaves the queues as before. 2: also no weight LOAD when a 1x1 conv's weights all fit (one filter group) and the
+//#### group before in the run LOADed the same weights. 0 = as before; not with a residual the upper inp cannot hold.
+//#### The inp half (double buffer) alternates across the groups: the next group's first input LOAD waits only for thread
+//#### 0's last GEMM, whose half (odd block count) the other threads may still read. Board (_alux3, OMP 1, dumps identical):
+//#### Resnet50 68.85 -> 65.41, MobileNetV2 17.29 -> 15.29, Resnet18 23.05 -> 22.55, DeiT 47.09 -> 46.23 ms.
+struct ConvAhead {
+  bool on = false, open = false, last = false;   // in convolution_wo_tr_impl; tokens of the group before; last of the run
+  const void *wgt = nullptr;                     // weights resident from the group before (level 2)
+  uint32_t wgtKey = 0;
+  uint32_t inpPtr = 0;                           // inp half of the last input LOAD (conv_kernel inputSramPtr)
+};
+static thread_local ConvAhead gAhead;
+static int evtaLoadAhead() {
+  static const int v = getenv("EVTA_LOAD_AHEAD") ? atoi(getenv("EVTA_LOAD_AHEAD")) : 2;
+  return v;
+}
+struct ConvAheadScope {
+  ConvAheadScope() { gAhead = ConvAhead(); gAhead.on = evtaLoadAhead() > 0; }
+  ~ConvAheadScope() { gAhead = ConvAhead(); }
+};
+
 //#### JO added (2026-11-14): conv epilogue (VTASetConvEpilogue, VTABundle.h; docs/evta_alux_epilogue.md)
 thread_local const VTAEpilogue *gConvEpi = nullptr;
 void VTASetConvEpilogue(const VTAEpilogue *e) { gConvEpi = e; }
@@ -1290,9 +1319,30 @@ void conv_kernel(uint32_t sizeOutTileH,
   }
   //#### JO added (2026-11-14): the conv's own clip (relu / ReLU6, narrowed by the epilogue)
   const int lo0 = res ? res->lo0 : (relu ? 0 : -128), hi0 = res ? res->hi0 : (relu ? gEvtaClipHi : 127);
-  for (uint32_t filterIdx = 0; filterIdx < KN / nFilterinLoop / nVirtualThread / 16; filterIdx++) {
+  const uint32_t nGroups = KN / nFilterinLoop / nVirtualThread / 16;
+  //#### JO added (2026-11-16): EVTA_LOAD_AHEAD (see ConvAhead). canUp: the residual fits the inp entries above INP_MEM_ENTRY
+  //#### and the identity entry RES_WGT_ENTRY stays clear of the last thread's weights (as resPre below)
+  const uint32_t wgtThread = WGT_MEM_ENTRY / nVirtualThread, lastWgt = (nVirtualThread - 1) * wgtThread;
+  const bool wgtAllFits = KH == 1 && KW == 1 && cBlocks > 1 && nFilterinLoop * cBlocks <= wgtThread;
+  const bool canUp = res && res->add && !dw && !pool && INP_BUFF_DEPTH >= 2 * INP_MEM_ENTRY &&
+                     lastWgt + (wgtAllFits && evtaConvBurst() ? nFilterinLoop * cBlocks : KH * KW * nFilterinLoop) <=
+                         RES_WGT_ENTRY;
+  const bool ahead = gAhead.on && !(res && res->add && !canUp);
+  const bool resAhead = ahead && res && res->add;
+  static const bool aheadLog = getenv("EVTA_AHEAD_LOG") && atoi(getenv("EVTA_AHEAD_LOG"));
+  if (aheadLog)
+    fprintf(stderr, "EVTA_AHEAD %s ahead %d res %d open %d last %d groups %u nF %u C %u nvt %u\n",
+            gAhead.on ? "on" : "off", ahead, resAhead, gAhead.open, gAhead.last, nGroups, nFilterinLoop, cBlocks,
+            nVirtualThread);
+  for (uint32_t filterIdx = 0; filterIdx < nGroups; filterIdx++) {
+    const bool tokIn = !(ahead && gAhead.open);                      // the resets give the first LOADs their tokens
+    const bool closeOut = !ahead || (gAhead.last && filterIdx + 1 == nGroups);   // end this group as before
 
-    uint32_t inputSramPtr = 0;
+    //#### JO changed (2026-11-16, EVTA_LOAD_AHEAD): the inp half alternates across the groups of a run (was: channel 0
+    //#### always in the upper half). The next group's first input LOAD waits only for thread 0's last GEMM; with an odd
+    //#### number of input blocks that GEMM's half is the upper one, still read by the other threads' last GEMMs (DeiT
+    //#### A x V, 198 -> 13 blocks: wrong on the board, not in the simulator)
+    uint32_t inputSramPtr = tokIn ? 0 : gAhead.inpPtr;
     //#### JO changed (2026-11-05): evtaMinTile (was MIN_H_SIZE / MIN_W_SIZE)
     const uint32_t minH = evtaMinTile(MIN_H_SIZE), minW = evtaMinTile(MIN_W_SIZE);
     if (resizedOutTileH < minH) {
@@ -1343,7 +1393,7 @@ void conv_kernel(uint32_t sizeOutTileH,
                         filterIdx * nVirtualThread * nFilterinLoop + threadIdx * nFilterinLoop,
                         nFilterinLoop, 1, 16 * nFilterinLoop, 0, 0, 0, 0, sram_offset, 3);
         pushBiasReset(vtaCmdH, idEVTA, outputSramBaseAddr, sram_offset, T, nFilterinLoop);
-        VTADepPush(vtaCmdH, 2, 1);
+        if (tokIn) VTADepPush(vtaCmdH, 2, 1);   //#### JO: tokIn (2026-11-16, EVTA_LOAD_AHEAD)
         continue;
       }
       ResetAcc reset;
@@ -1368,8 +1418,12 @@ void conv_kernel(uint32_t sizeOutTileH,
       }
 
       VTAPushGEMMOp(vtaCmdH, uopHandle_reset, &reset_acc, &reset, 0);
-      VTADepPush(vtaCmdH, 2, 1);
+      if (tokIn) VTADepPush(vtaCmdH, 2, 1);   //#### JO: tokIn (2026-11-16, EVTA_LOAD_AHEAD)
     }
+    //#### JO added (2026-11-16): resAhead: the first residual LOADs of the run take these (later: the epilogue's tokens)
+    if (resAhead && tokIn)
+      for (uint32_t threadIdx = 0; threadIdx < nVirtualThread; threadIdx++)
+        VTADepPush(vtaCmdH, 2, 1);
 
     uint32_t inputWOffset = (int)(outputWOffset * stride_size - pad_size) < 0
                             ? 0
@@ -1389,13 +1443,16 @@ void conv_kernel(uint32_t sizeOutTileH,
     //#### MobileNetV2 17.25 -> 17.26, Resnet18 23.03 -> 23.22, Resnet50 68.86 -> 69.85 ms: the residual LOAD already overlapped
     //#### the other thread's work; the fused add costs compute steps (the conv requantize as 3 ALU passes in acc), not waits.
     static const int resPreEnv = getenv("EVTA_RES_PREFETCH") ? atoi(getenv("EVTA_RES_PREFETCH")) : 0;
-    const uint32_t wgtThread = WGT_MEM_ENTRY / nVirtualThread, lastWgt = (nVirtualThread - 1) * wgtThread;
-    const bool wgtAllFits = KH == 1 && KW == 1 && cBlocks > 1 && nFilterinLoop * cBlocks <= wgtThread;
-    const bool resPre = resPreEnv && res && res->add && !dw && !pool && INP_BUFF_DEPTH >= 2 * INP_MEM_ENTRY &&
-                        lastWgt + (wgtAllFits && evtaConvBurst() ? nFilterinLoop * cBlocks : KH * KW * nFilterinLoop) <=
-                            RES_WGT_ENTRY;
+    //#### JO changed (2026-11-16): canUp / wgtAllFits above the group loop; not with EVTA_LOAD_AHEAD (resAhead: the
+    //#### residual in the same upper entries, LOADed after the first input behind the epilogue's token)
+    const bool resPre = resPreEnv && canUp && !ahead;
+    const bool resUp = resPre || resAhead;   // the residual above INP_MEM_ENTRY
     //#### JO changed (2026-11-15): also with a residual when resPre keeps the identity entry clear
-    const bool wgtAll = evtaConvBurst() && wgtAllFits && !dw && (!(res && res->add) || resPre) && !pool;
+    const bool wgtAll = evtaConvBurst() && wgtAllFits && !dw && (!(res && res->add) || resUp) && !pool;
+    //#### JO added (2026-11-16, EVTA_LOAD_AHEAD 2): the weights LOADed by the group before stay (one filter group)
+    const uint32_t wgtKey = nFilterinLoop | cBlocks << 10 | nVirtualThread << 22;
+    const bool wgtKeep = ahead && evtaLoadAhead() >= 2 && wgtAll && nGroups == 1 && gAhead.open &&
+                         gAhead.wgt == vta_filter_buf && gAhead.wgtKey == wgtKey;
     auto resPreLoad = [&](uint32_t threadIdx) {
       const uint32_t base = INP_MEM_ENTRY + threadIdx * (INP_MEM_ENTRY / nVirtualThread);
       if (outDummyW == 0) {
@@ -1415,7 +1472,8 @@ void conv_kernel(uint32_t sizeOutTileH,
                             base + (hIdx + fIdx * sizeOutTileH) * resizedOutTileW + fIdx * outDummyH * resizedOutTileW, 2);
       }
     };
-    if (resPre && filterIdx == 0)
+    //#### JO changed (2026-11-16): resAhead: once per run (its first group; nothing reads wgt before it)
+    if (resPre ? filterIdx == 0 : resAhead && tokIn)
       VTALoadBuffer2D(vtaCmdH, res->idWgt, res->shlT, 1, 1, 1, 0, 0, 0, 0, RES_WGT_ENTRY, 1);
     // Push operations for loading input and weight then gemming
     for (uint32_t channelIdx = 0; channelIdx < cBlocks;
@@ -1479,7 +1537,7 @@ void conv_kernel(uint32_t sizeOutTileH,
         //                 nFilterinLoop, KH * KW * cBlocks, 0, 0, 0,
         //                 0, weightSramBaseAddr, 1);
         if (wgtAll) {
-          if (channelIdx == 0)
+          if (channelIdx == 0 && !wgtKeep)   //#### JO: + !wgtKeep (2026-11-16)
             loadBuffer2D(vtaCmdH, vta_filter_buf, filter_offset, cBlocks, nFilterinLoop, cBlocks, 0, 0, 0, 0,
                          weightSramBaseAddr, 1);
         } else
@@ -1487,6 +1545,14 @@ void conv_kernel(uint32_t sizeOutTileH,
                        weightSramBaseAddr, 1);
         VTADepPush(vtaCmdH, 1, 2);
       }
+      //#### JO added (2026-11-16, EVTA_LOAD_AHEAD): the residual after the first input, once the epilogue before has read
+      //#### the upper entries (its token; the first group of the run: the reset's)
+      if (resAhead && channelIdx == 0)
+        for (uint32_t threadIdx = 0; threadIdx < nVirtualThread; threadIdx++) {
+          VTADepPop(vtaCmdH, 2, 1);
+          resPreLoad(threadIdx);
+          VTADepPush(vtaCmdH, 1, 2);
+        }
       for (uint32_t threadIdx = 0; threadIdx < nVirtualThread; threadIdx++) {
 
         uint32_t outputSramBaseAddr =
@@ -1544,16 +1610,20 @@ void conv_kernel(uint32_t sizeOutTileH,
 
         VTADepPush(vtaCmdH, 2, 1);
       }
+      if (resAhead && channelIdx == 0)   //#### JO added (2026-11-16): the residual LOADs' tokens (in their order)
+        for (uint32_t threadIdx = 0; threadIdx < nVirtualThread; threadIdx++)
+          VTADepPop(vtaCmdH, 1, 2);
     }
 
-    for (uint32_t threadIdx = 0; threadIdx < nVirtualThread; threadIdx++) {
+    //#### JO changed (2026-11-16, EVTA_LOAD_AHEAD): left to the next group's first LOADs unless closeOut
+    for (uint32_t threadIdx = 0; closeOut && threadIdx < nVirtualThread; threadIdx++) {
       VTADepPop(vtaCmdH, 2, 1);
     }
 
     //#### JO added (2026-10-31): residual of the fused elementadd (ConvResidual): the identity weight, then per thread the
     //#### residual tile into the inp buffer at the acc layout of the output tile (the addresses of the store below);
     //#### the pops above make these loads wait for the GEMMs of this tile
-    if (res && res->add && !resPre) {   //#### JO: + !resPre (2026-11-15)
+    if (res && res->add && !resUp) {   //#### JO: + !resPre (2026-11-15), resUp (2026-11-16)
       VTALoadBuffer2D(vtaCmdH, res->idWgt, res->shlT, 1, 1, 1, 0, 0, 0, 0, RES_WGT_ENTRY, 1);
       for (uint32_t threadIdx = 0; threadIdx < nVirtualThread; threadIdx++) {
         uint32_t resSramBaseAddr = threadIdx * (INP_MEM_ENTRY / nVirtualThread);
@@ -1757,7 +1827,7 @@ void conv_kernel(uint32_t sizeOutTileH,
       if (res) {
         const uint32_t size = resizedOutTileH * resizedOutTileW * nFilterinLoop, base = outputSramBaseAddr;
         //#### JO changed (2026-11-15): resPre: the residual above INP_MEM_ENTRY, already there (no token)
-        const uint32_t resSramBaseAddr = (resPre ? INP_MEM_ENTRY : 0) + threadIdx * (INP_MEM_ENTRY / nVirtualThread);
+        const uint32_t resSramBaseAddr = (resUp ? INP_MEM_ENTRY : 0) + threadIdx * (INP_MEM_ENTRY / nVirtualThread);
         auto alu = [&](int op, int imm) { pushAlu(vtaCmdH, idEVTA, base, base, size, op, 1, imm); };
         // values in [lo, hi] -> clip(v << q, a, b)
         auto shlClip = [&](int q, int a, int b, int lo, int hi) {
@@ -1782,7 +1852,7 @@ void conv_kernel(uint32_t sizeOutTileH,
           //#### JO added (2026-11-15, docs/evta_isa_ext.md 8.18): Y = residual * mulT beside the tile, then
           //#### tile = tile * mulV + Y with the sum's rq (kind2 0: its clip is lo / hi)
           const uint32_t Y = yHigh ? base + ACC_MEM_ENTRY : base + size + nFilterinLoop;
-          if (!resPre) VTADepPop(vtaCmdH, 1, 2);
+          if (!resUp) VTADepPop(vtaCmdH, 1, 2);
           pushReset(vtaCmdH, idEVTA, Y, size);
           pushResGemm(vtaCmdH, idEVTA, Y, resSramBaseAddr, size);
           if (res->mulT != 1)
@@ -1800,7 +1870,7 @@ void conv_kernel(uint32_t sizeOutTileH,
         } else if (res->add) {
           if (res->shlV)
             alu(RES_ALU_SHR, -(int)res->shlV);
-          if (!resPre) VTADepPop(vtaCmdH, 1, 2);   //#### JO: resPre: no token (2026-11-15)
+          if (!resUp) VTADepPop(vtaCmdH, 1, 2);   //#### JO: resPre / resUp: no token (2026-11-15)
           if (res->rqSum && res->kind2 == 2) {
             pushResGemm(vtaCmdH, idEVTA, base, resSramBaseAddr, size);
             VTARequant(vtaCmdH, 1, res->rnd, res->shift, res->lo, res->hi);
@@ -1862,6 +1932,8 @@ void conv_kernel(uint32_t sizeOutTileH,
         if (rqPool) VTARequant(vtaCmdH, 0, 0, 0, 0, 0);
       }
       //#### JO changed (2026-11-14): the output LUT pass is in the epilogue above (kind1 2)
+      //#### JO added (2026-11-16, EVTA_LOAD_AHEAD): this thread's residual entries are free for the next group's LOAD
+      if (resAhead && !closeOut) VTADepPush(vtaCmdH, 2, 1);
       VTADepPush(vtaCmdH, 2, 3);
     }
     if (rqConv) VTARequant(vtaCmdH, 0, 0, 0, 0, 0);   //#### JO added (2026-11-04)
@@ -1922,6 +1994,13 @@ void conv_kernel(uint32_t sizeOutTileH,
       VTADepPush(vtaCmdH, 3, 2);
       VTADepPop(vtaCmdH, 3, 2);
     }
+    //#### JO added (2026-11-16, EVTA_LOAD_AHEAD): the next group's first LOADs take this group's last tokens
+    gAhead.open = ahead && !closeOut;
+    gAhead.inpPtr = inputSramPtr;
+    if (gAhead.open && wgtAll && nGroups == 1)
+      gAhead.wgt = vta_filter_buf, gAhead.wgtKey = wgtKey;
+    else
+      gAhead.wgt = nullptr;
   }
 }
 
@@ -3870,6 +3949,7 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
   //#### 13 blocks with 2 threads: no filter loop, garbage output, no error); else one thread
   if (!dw && nVirtualThread > 1 && (KN / 16) % nVirtualThread)
     nVirtualThread = 1;
+  ConvAheadScope aheadScope;   //#### JO added (2026-11-16): EVTA_LOAD_AHEAD inside this call's runs
   //#### JO added (2026-11-05): input written while this call runs (InputStream): one run per tile row
   InputStream *ins = gInputStream.buf && gInputStream.buf == (void *)input && N == 1 ? &gInputStream : nullptr;
   const bool stream = ins != nullptr;
@@ -4047,6 +4127,7 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
       tp.px0 = tileWIdx * tp.ptw;
       uint32_t outH0 = tileHIdx * sizeOutTileH - tp.haloH, outW0 = tileWIdx * sizeOutTileW - tp.haloW;
       uint32_t tileH = sizeOutTileH + tp.haloH, tileW = sizeOutTileW + tp.haloW;
+      gAhead.last = tileWIdx == nTileW - 1 && (stream || tileHIdx == nTileH - 1);   //#### JO: the run's last tile
       conv_kernel(tileH, tileW, pad_size, stride_size,
                   tileWIdx == 0 ? pad_size : 0, tileWIdx == nTileW - 1 ? pad_size : 0,
                   tileHIdx == 0 ? pad_size : 0, tileHIdx == nTileH - 1 ? pad_size : 0,
@@ -4082,6 +4163,9 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
         resizedInTileH = (resizedOutTileH - 1) * stride_size + KH;
       }
 
+      //#### JO added (2026-11-16, EVTA_LOAD_AHEAD): the last tile before a VTASynchronize
+      gAhead.last = tileWIdx == nTileW - 1 &&
+                    (stream || (tileHIdx == (int)nTileH - 1 && bi == (batch ? batch->n : 1) - 1));
       if ((tileWIdx != nTileW - 1)) {
 #ifdef NESTC_EVTA_PROFILE_AUTOTUNE
         b0 = 0;
