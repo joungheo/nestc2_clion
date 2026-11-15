@@ -48,7 +48,32 @@ static int run(int R, int C, float a2b, float a2d, unsigned seed) {
   if (first >= 0)
     printf(" (first at row %ld col %ld: cpu %d, evta %d)", first / C, first % C, ref[first], o[first]);
   printf("\n");
-  return !done || bad;
+  //#### JO added (2026-11-15, docs/evta_isa_ext.md 8.16): layernorm_evta2 with x and / or out packed in VTA buffers
+  int fail = !done || bad;
+  const size_t n = (size_t)R * C;
+  auto pk = [&](size_t r, size_t c) { return (c / 16) * (size_t)R * 16 + r * 16 + c % 16; };
+  void *xb = VTABufferAlloc(n), *ob = VTABufferAlloc(n);
+  int8_t *xp = (int8_t *)VTABufferGetVirtAddr(xb), *op = (int8_t *)VTABufferGetVirtAddr(ob);
+  for (size_t r = 0; r < (size_t)R; r++)
+    for (size_t c = 0; c < (size_t)C; c++) xp[pk(r, c)] = x[r * C + c];
+  VTABufferFlush(xb, 0, n);
+  for (int m = 1; m < 4; m++) {
+    const bool xP = m & 1, oP = m & 2;
+    std::vector<int8_t> orow(n, 0x5a);
+    memset(op, 0x5a, n);
+    VTABufferFlush(ob, 0, n);
+    const int d = layernorm_evta2(oP ? op : orow.data(), oP ? ob : nullptr, xP ? xp : x.data(), xP ? xb : nullptr, R, C,
+                                  w.data(), b.data(), a2b, a2d, VTATLSCommandHandle(0));
+    long e = 0;
+    for (size_t r = 0; r < (size_t)R; r++)
+      for (size_t c = 0; c < (size_t)C; c++)
+        e += (oP ? op[pk(r, c)] : orow[r * C + c]) != ref[r * C + c];
+    printf("  layernorm_evta2 x %s out %s: %s, %ld differ\n", xP ? "packed" : "row", oP ? "packed" : "row",
+           d ? "on the EVTA" : "NOT RUN", e);
+    fail |= !d || e;
+  }
+  VTABufferFree(xb), VTABufferFree(ob);
+  return fail;
 }
 
 // an EVTA conv before (the layer norms of a bundle run between convs)

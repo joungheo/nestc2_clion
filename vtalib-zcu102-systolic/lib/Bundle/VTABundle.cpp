@@ -5676,7 +5676,9 @@ struct AluInp {
   void *buf;
   int e, runs;
   bool on;
-  AluInp(VTACommandHandle c, uint32_t i, void *b, int entries, int nr, bool o) : cmd(c), id(i), buf(b), e(entries), runs(nr), on(o) {
+  int nb, n, rows;   //#### JO added (2026-11-15, 8.16): nb > 0: buf packed ([nb][rows] entries), run r = rows r n .. + n
+  AluInp(VTACommandHandle c, uint32_t i, void *b, int entries, int nr, bool o, int nb_ = 0, int n_ = 0, int rows_ = 0)
+      : cmd(c), id(i), buf(b), e(entries), runs(nr), on(o), nb(nb_), n(n_), rows(rows_) {
     if (!on)
       return;
     VTALoadBuffer2D(cmd, getIdentityWeights(id), 0, 1, 1, 1, 0, 0, 0, 0, RES_WGT_ENTRY, 1);
@@ -5685,7 +5687,13 @@ struct AluInp {
       load(1);
   }
   void load(int r) {
+    if (nb > 0) {   // block b's rows of the run to inp half + b n (the rest of a short last run: stale, not stored)
+      const int nr = std::min(n, rows - r * n);
+      for (int b = 0; b < nb; b++)
+        VTALoadBuffer2D(cmd, buf, (uint32_t)(b * rows + r * n), nr, 1, nr, 0, 0, 0, 0, (r % 2) * 1024 + b * n, 2);
+    } else {
     VTALoadBuffer2D(cmd, buf, (uint32_t)(r * e), e, 1, e, 0, 0, 0, 0, (r % 2) * 1024, 2);
+    }
     VTADepPush(cmd, 1, 2);
   }
   void waitLoad(int r) {
@@ -5763,12 +5771,20 @@ void layerNormIntRef(int8_t *o, const int8_t *xr, size_t cols, const LnConsts &k
 }
 } // namespace
 
-int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float *w, const int8_t *b, float a2b, float a2d,
-                   void *vtaCmdH, uint32_t idEVTA) {
+//#### JO changed (2026-11-15, docs/evta_isa_ext.md 8.16): x and out each in the row layout (CPU memory, x / out) or packed in
+//#### the EVTA layout [cols / 16][rows][16] in a VTA buffer (xBuf / outBuf non-null; x / out are then their virtual
+//#### addresses). A packed x is LOADed block by block straight from xBuf, a packed out STOREd block by block into outBuf (no
+//#### CPU copies); acc holds the rows of a run in the input's layout, and an output in the other layout gets one ALU CPY into
+//#### E in its layout before the last step. Packed needs the fused program (_alux2) and the int8 input path.
+static int layernormEvtaImpl(int8_t *out, void *outBuf, const int8_t *x, void *xBuf, int rows, int cols, const float *w,
+                             const int8_t *b, float a2b, float a2d, void *vtaCmdH, uint32_t idEVTA) {
   static const int lnInt = getenv("NESTC_LN_INT") ? atoi(getenv("NESTC_LN_INT")) : 1;
   const int NB = cols / 16, kAcc = 2048;   // the acc entries of the multi-EVTA buffers (the single ones have more)
   const int n = std::min(64, (kAcc - 2 * NB - 16) / std::max(1, 3 * NB + 13));
   if (!VTAHasAluExt() || lnInt != 1 || cols % 16 || n < 17 || rows < 1)
+    return 0;
+  const bool xP = xBuf != nullptr, oP = outBuf != nullptr;
+  if ((xP || oP) && (!VTAHasAluExt2() || !aluInpPath(n * NB)))
     return 0;
   // the constants of this gamma / beta (once per pointer; remade if the first row, the scales or the rows changed: a
   // freed buffer's address can come back for other parameters)
@@ -5835,8 +5851,13 @@ int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float
     }
     xin = bb.first, xo = bb.second;
   }
+  if (xP)
+    xin = xBuf;
+  if (oP)
+    xo = outBuf;
   int32_t *xi = (int32_t *)VTABufferGetVirtAddr(xin);
-  if (inp) {
+  if (xP) {
+  } else if (inp) {
     memcpy(xi, x, (size_t)rows * cols);
     VTABufferFlush(xin, 0, (size_t)rows * cols);
   } else {
@@ -5879,7 +5900,10 @@ int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float
   const bool sqacc = fused && VTAHasAluExt3();
   // int32_t replayKey[] = {5, rows, cols, n, k->gs, (int32_t)idEVTA, fused};
   // int32_t replayKey[] = {5, rows, cols, n, k->gs, (int32_t)idEVTA, fused, sqacc};
-  int32_t replayKey[] = {5, rows, cols, n, k->gs, (int32_t)idEVTA, fused, sqacc, inp};
+  // int32_t replayKey[] = {5, rows, cols, n, k->gs, (int32_t)idEVTA, fused, sqacc, inp};
+  int32_t replayKey[] = {5, rows, cols, n, k->gs, (int32_t)idEVTA, fused, sqacc, inp, xP, oP};
+  // the acc layout of X / E: entry of (row r, block b) = r * rs + b * bs (the input's layout); oP != xP: E in the other
+  const int rs = xP ? 1 : NB, bs = xP ? n : 1, ors = oP ? 1 : NB, obs = oP ? n : 1;
   void *replayBufs[] = {k->buf, xin, xo, getIdentityWeights(idEVTA)};
   const int replayed = VTAReplayBegin(cmd, replayKey, sizeof(replayKey), replayBufs, 4);
   if (!replayed) {
@@ -5887,7 +5911,7 @@ int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float
   VTALoadBuffer2D(cmd, k->buf, 0, 2 * NB + 16, 1, 2 * NB + 16, 0, 0, 0, 0, GB, 3);
   I(VTA_ALUX_LUTSET, 1, 16, 0, 0, 0, TB, 0, 1, true, 0);
   const int runs = (rows + n - 1) / n;
-  AluInp in8(cmd, idEVTA, xin, n * NB, runs, inp);
+  AluInp in8(cmd, idEVTA, xin, n * NB, runs, inp, xP ? NB : 0, n, rows);
   for (int r0 = 0; r0 < rows; r0 += n) {
     in8.waitLoad(r0 / n);
     if (r0)
@@ -5895,16 +5919,21 @@ int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float
     // VTALoadBuffer2D(cmd, xin, r0 * NB, n * NB, 1, n * NB, 0, 0, 0, 0, X, 3);
     in8.toAcc(r0 / n, X);
     // 1. S = sum x; 2. Q = sum x^2
-    I(VTA_ALUX_CPY, n, 1, S, 1, 0, X, NB, 0);
-    I(RES_ALU_ADD, NB - 1, n, S, 0, 1, X + 1, 1, NB);
+    // I(VTA_ALUX_CPY, n, 1, S, 1, 0, X, NB, 0);
+    // I(RES_ALU_ADD, NB - 1, n, S, 0, 1, X + 1, 1, NB);
+    I(VTA_ALUX_CPY, n, 1, S, 1, 0, X, rs, 0);
+    I(RES_ALU_ADD, NB - 1, n, S, 0, 1, X + bs, bs, rs);
     I(VTA_ALUX_RSUM, n, 1, S, 1, 0, S, 1, 0);
     if (sqacc) {
       // Q[r] = 0, then Q[r] += x[r][b]^2 with the blocks outside (the same Q entry every n >= 17 steps, 2n slots)
       I(VTA_ALUX_CPY, n, 1, Q, 1, 0, 0, 0, 0, true, 0);
-      I(VTA_ALUX_SQACC, NB, n, Q, 0, 1, X, 1, NB);
+      // I(VTA_ALUX_SQACC, NB, n, Q, 0, 1, X, 1, NB);
+      I(VTA_ALUX_SQACC, NB, n, Q, 0, 1, X, bs, rs);
     } else {
-    I(VTA_ALUX_CPY, n, NB, D, NB, 1, X, NB, 1);
-    I(VTA_ALUX_MUL, n, NB, D, NB, 1, X, NB, 1);
+    // I(VTA_ALUX_CPY, n, NB, D, NB, 1, X, NB, 1);
+    // I(VTA_ALUX_MUL, n, NB, D, NB, 1, X, NB, 1);
+    I(VTA_ALUX_CPY, n, NB, D, NB, 1, X, rs, bs);
+    I(VTA_ALUX_MUL, n, NB, D, NB, 1, X, rs, bs);
     I(VTA_ALUX_CPY, n, 1, Q, 1, 0, D, NB, 0);
     I(RES_ALU_ADD, NB - 1, n, Q, 0, 1, D + 1, 1, NB);
     }
@@ -5939,17 +5968,20 @@ int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float
       //#### JO added (2026-11-15): the fused program (bitstream _alux2, docs/evta_isa_ext.md 8.14): H is SHRR's rounding;
       //#### x * C - S as one MADD (src -S per row), * TV >> 8 one MULSHR, E = B >> (16 - t) one SHRV, the rounding shift
       //#### one SHRR. The per-row operands (-S, TV, A2, TT) are broadcast srcs: one slot per step on the II 1 loop.
+      //#### JO changed (2026-11-15, 8.16): X / E entries r * rs + b * bs (the layout of the input)
       I(VTA_ALUX_MUL, n, 1, S, 1, 0, 0, 0, 0, true, -1);
-      I(VTA_ALUX_MADD, n, NB, X, NB, 1, S, 1, 0, false, C);
-      I(VTA_ALUX_MULSHR, n, NB, X, NB, 1, TV, 1, 0, false, 8);
+      I(VTA_ALUX_MADD, n, NB, X, rs, bs, S, 1, 0, false, C);
+      I(VTA_ALUX_MULSHR, n, NB, X, rs, bs, TV, 1, 0, false, 8);
       //#### JO changed (2026-11-15): * G[b] with the blocks outside: G[b] is then a broadcast src (n + 1 slots per block, not 2n)
       // I(VTA_ALUX_MUL, n, NB, X, NB, 1, GB, 0, 1);
-      I(VTA_ALUX_MUL, NB, n, X, 1, NB, GB, 1, 0);
-      I(VTA_ALUX_CPY, n, NB, E, NB, 1, GB + NB, 0, 1);
-      I(VTA_ALUX_SHRV, n, NB, E, NB, 1, A2, 1, 0);
-      I(RES_ALU_ADD, n, NB, X, NB, 1, E, NB, 1);
+      I(VTA_ALUX_MUL, NB, n, X, bs, rs, GB, 1, 0);
+      I(VTA_ALUX_CPY, n, NB, E, rs, bs, GB + NB, 0, 1);
+      I(VTA_ALUX_SHRV, n, NB, E, rs, bs, A2, 1, 0);
+      I(RES_ALU_ADD, n, NB, X, rs, bs, E, rs, bs);
+      if (oP != xP)
+        I(VTA_ALUX_CPY, n, NB, E, ors, obs, X, rs, bs);   // into the output's layout
       VTARequant(cmd, 1, 0, 0, -128, 127);
-      I(VTA_ALUX_SHRR, n, NB, X, NB, 1, TT, 1, 0);
+      I(VTA_ALUX_SHRR, n, NB, oP != xP ? E : X, ors, obs, TT, 1, 0);
       VTARequant(cmd, 0, 0, 0, 0, 0);
     } else {
     I(VTA_ALUX_CPY, n, 1, H, 1, 0, 0, 0, 0, true, 1);
@@ -5972,7 +6004,14 @@ int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float
     VTADepPush(cmd, 2, 3);
     VTADepPop(cmd, 2, 3);
     const int nr = std::min(n, rows - r0);
-    VTAStoreBuffer2D(cmd, fused ? X : D, 4, xo, r0 * NB, nr * NB, 1, nr * NB);
+    if (oP) {
+      const int P = xP ? X : E;   // packed: block b's rows at P + b * n
+      for (int bb = 0; bb < NB; bb++)
+        VTAStoreBuffer2D(cmd, P + bb * n, 4, xo, bb * rows + r0, nr, 1, nr);
+    } else {
+    // VTAStoreBuffer2D(cmd, fused ? X : D, 4, xo, r0 * NB, nr * NB, 1, nr * NB);
+    VTAStoreBuffer2D(cmd, !fused ? D : xP ? E : X, 4, xo, r0 * NB, nr * NB, 1, nr * NB);
+    }
     VTADepPush(cmd, 3, 2);
     in8.next(r0 / n);
   }
@@ -5984,7 +6023,8 @@ int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float
     lt[2] = lt[1];
   if (lnTime) clock_gettime(CLOCK_MONOTONIC, &lt[3]);
   VTABufferInvalidate(xo, 0, (size_t)rows * cols);
-  memcpy(out, VTABufferGetVirtAddr(xo), (size_t)rows * cols);
+  if (!oP)
+    memcpy(out, VTABufferGetVirtAddr(xo), (size_t)rows * cols);
   // VTABufferFree(xin);
   // VTABufferFree(xo);
   if (lnTime) {
@@ -5995,20 +6035,32 @@ int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float
   }
   static const bool check = getenv("EVTA_LN_CHECK") && atoi(getenv("EVTA_LN_CHECK")) > 0;
   if (check) {
-    std::vector<int8_t> ref(cols);
+    std::vector<int8_t> ref(cols), xr(cols);
     long bad = 0, first = -1;
+    // element (r, c) in the row or the packed layout
+    auto at = [&](bool p, size_t r, size_t c) { return p ? (c / 16) * (size_t)rows * 16 + r * 16 + c % 16 : r * cols + c; };
+    int fe = 0, fc = 0;
     for (int r = 0; r < rows; r++) {
-      layerNormIntRef(ref.data(), x + (size_t)r * cols, cols, *k);
+      for (int l = 0; l < cols; l++) xr[l] = x[at(xP, r, l)];
+      layerNormIntRef(ref.data(), xr.data(), cols, *k);
       for (int l = 0; l < cols; l++)
-        if (ref[l] != out[(size_t)r * cols + l] && bad++ == 0)
-          first = (long)r * cols + l;
+        if (ref[l] != out[at(oP, r, l)] && bad++ == 0)
+          first = (long)r * cols + l, fe = out[at(oP, r, l)], fc = ref[l];
     }
-    printf("EVTA_LN_CHECK layer norm %d x %d: %ld differ", rows, cols, bad);
+    printf("EVTA_LN_CHECK layer norm %d x %d%s%s: %ld differ", rows, cols, xP ? " x packed" : "", oP ? " out packed" : "", bad);
     if (bad)
-      printf(" (first at %ld: evta %d, cpu %d)", first, out[first], (layerNormIntRef(ref.data(), x + first / cols * cols, cols, *k), ref[first % cols]));
+      printf(" (first at %ld: evta %d, cpu %d)", first, fe, fc);
     printf("\n");
   }
   return 1;
+}
+int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float *w, const int8_t *b, float a2b, float a2d,
+                   void *vtaCmdH, uint32_t idEVTA) {
+  return layernormEvtaImpl(out, nullptr, x, nullptr, rows, cols, w, b, a2b, a2d, vtaCmdH, idEVTA);
+}
+int layernorm_evta2(int8_t *out, void *outBuf, const int8_t *x, void *xBuf, int rows, int cols, const float *w,
+                    const int8_t *b, float a2b, float a2d, void *vtaCmdH, uint32_t idEVTA) {
+  return layernormEvtaImpl(out, outBuf, x, xBuf, rows, cols, w, b, a2b, a2d, vtaCmdH, idEVTA);
 }
 
 //#### JO added (2026-11-12, ALU extension step 7, docs/evta_isa_ext.md 8.10): the integer softmax over rows of int8 scores

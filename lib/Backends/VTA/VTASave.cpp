@@ -2300,7 +2300,9 @@ void generateInputTranspose(const glow::ConvolutionInst *Inst,
     bundle->append("  int8_t* ");
     bundle->append(Inst->getName());
     bundle->append("_input_transpose = ");
-    bundle->append(src->getName());
+    //#### JO changed (2026-11-15, -vta-pack-rows): the activation under a view (DeiT: the layer norm output as an image)
+    // bundle->append(src->getName());
+    bundle->append(getOrigin(src)->getName());
     bundle->append("_vbuf;\n");
     return;
   }
@@ -3915,6 +3917,7 @@ ConvPath getConvPath(const glow::ConvolutionInst *Inst) {
 
 static bool saveEvtaConvAsFc(const glow::ConvolutionInst *Inst, std::string *bundle, VTASaveContext *ctx);
 static std::string makeLutTable(const LutRegion &r, std::string *bundle, VTASaveContext *ctx);   //#### JO (2026-11-12)
+static void emitPackedAlloc(const Value *v, std::string *bundle);   //#### JO (2026-11-15)
 
 void saveConvolutionInst(const glow::ConvolutionInst *Inst, std::string *bundle,
                          std::string *initConst, VTASaveContext *ctx) {
@@ -3930,9 +3933,15 @@ void saveConvolutionInst(const glow::ConvolutionInst *Inst, std::string *bundle,
   auto olc = ctx->outLutConv.find(Inst);
   if (olc != ctx->outLutConv.end()) {
     const LutRegion &r = ctx->getLutRegions()->at(olc->second);
-    if (r.outAlloc && ctx->getHoisted()->insert(r.outAlloc).second)
+    //#### JO changed (2026-11-15, -vta-pack-rows): out kept in the EVTA layout: a VTA buffer the conv writes into
+    const bool outPacked = ctx->isPacked(getOrigin(const_cast<Value *>(r.out)));
+    if (r.outAlloc && ctx->getHoisted()->insert(r.outAlloc).second) {
+      if (outPacked)
+        emitPackedAlloc(r.out, bundle);
+      else
       *bundle += "  int8_t *" + r.out->getName().str() + " = (int8_t *)malloc(" +
                  std::to_string(r.out->getSizeInBytes()) + ");\n";
+    }
     const std::string lut = makeLutTable(r, bundle, ctx);
     *bundle += "  // the table of the elementwise region after this conv as its output LUT (-vta-alu-output-lut)\n";
     *bundle += "#ifdef VTA_OUTPUT_LUT\n  static const nestc_cpu::Lut8U " + lut + "_u = nestc_cpu::lutByByte(" + lut +
@@ -3947,6 +3956,23 @@ void saveConvolutionInst(const glow::ConvolutionInst *Inst, std::string *bundle,
       std::exit(1);
     }
     conv.replace(at, from.size(), "_output_bef_transpose), " + r.out->getName().str() + ", ");
+    //#### JO added (2026-11-15, -vta-pack-rows): a packed out: the conv's output buffer is out's VTA buffer, no transpose
+    if (outPacked) {
+      const std::string nm = Inst->getName().str() + "_output_bef_transpose";
+      const std::string ob = getOrigin(const_cast<Value *>(r.out))->getName().str() + "_vbuf";
+      auto cut = [&](const std::string &head, const std::string &with) {
+        const size_t a = conv.find(head);
+        const size_t e = a == std::string::npos ? a : conv.find('\n', a);
+        if (e == std::string::npos) {
+          llvm::errs() << "VTASave: -vta-pack-rows: unexpected code for " << Inst->getName() << "\n" << conv;
+          std::exit(1);
+        }
+        conv.replace(a, e + 1 - a, with);
+      };
+      cut("  int8_t* " + nm + " = (int8_t *)VTABufferAlloc(", "  int8_t* " + nm + " = " + ob + ";   // -vta-pack-rows\n");
+      cut("  transpose_vtaio2nhwc((int8_t* )VTABufferGetVirtAddr(" + nm + ")", "");
+      cut("  VTABufferFree(" + nm + ");", "");
+    }
     *bundle += conv;
     *bundle += "#ifdef VTA_OUTPUT_LUT\n  VTASetOutputLut(nullptr);\n#endif\n";
     if (clipHi < 127)
@@ -5530,6 +5556,14 @@ void saveElemAddInst(const glow::ElementAddInst *Inst, std::string *bundle,
     addSymbolEntryGenBundle(destWeight, bundle, ctx);
   }
 
+  //#### JO added (2026-11-15, docs/evta_isa_ext.md 8.16, -vta-pack-rows): operands in different layouts (row / EVTA)
+  const int lmask = (ctx->isPacked(src0) ? 1 : 0) | (ctx->isPacked(src1) ? 2 : 0) | (ctx->isPacked(dest) ? 4 : 0);
+  if (lmask != 0 && lmask != 7) {
+    const size_t cols = destDims.back(), rows = dest->size() / cols;
+    ctx->usesCpuOps = true;
+    bundle->append("  nestc_cpu::elemaddRows(" + std::to_string(lmask) + ", " + std::to_string(rows) + ", " +
+                   std::to_string(cols) + ", ");
+  } else
   bundle->append("  elemadd(");
 
   if (srcWeight0->getMutability() == glow::WeightVar::MutabilityKind::Mutable) {
@@ -7132,6 +7166,62 @@ static void fill(int8_t *o8, size_t n, float v) {
   float *o = (float *)o8;
   for (size_t i = 0; i < n; i++) o[i] = v;
 }
+//#### JO added (2026-11-15, docs/evta_isa_ext.md 8.16, VTASave -vta-pack-rows): rows x cols int8 in the row layout <-> the
+//#### EVTA layout [cols / 16][rows][16] (cols % 16 == 0)
+static void packRows(int8_t *p, const int8_t *r, size_t rows, size_t cols) {
+  for (size_t i = 0; i < rows; i++)
+    for (size_t b = 0; b < cols / 16; b++) memcpy(p + (b * rows + i) * 16, r + i * cols + b * 16, 16);
+}
+static void unpackRows(int8_t *r, const int8_t *p, size_t rows, size_t cols) {
+  for (size_t i = 0; i < rows; i++)
+    for (size_t b = 0; b < cols / 16; b++) memcpy(r + i * cols + b * 16, p + (b * rows + i) * 16, 16);
+}
+// elemadd with each operand in either layout (mask bit 0: a packed, 1: b packed, 2: out packed): the inputs in the other
+// layout than out are converted first, then one elemadd (the same bytes)
+static void elemaddRows(int mask, size_t rows, size_t cols, int8_t *a, float sa, int32_t oa, int8_t *b, float sb,
+                        int32_t ob, int8_t *o, float so, int32_t oo, size_t n) {
+  const bool op = mask & 4;
+  int8_t *ta = nullptr, *tb = nullptr;   // (the bundle has no <vector>)
+  if (((mask & 1) != 0) != op) {
+    ta = (int8_t *)malloc(n);
+    op ? packRows(ta, a, rows, cols) : unpackRows(ta, a, rows, cols);
+    a = ta;
+  }
+  if (((mask & 2) != 0) != op) {
+    tb = (int8_t *)malloc(n);
+    op ? packRows(tb, b, rows, cols) : unpackRows(tb, b, rows, cols);
+    b = tb;
+  }
+  elemadd(a, sa, oa, b, sb, ob, o, so, oo, n);
+  free(ta);
+  free(tb);
+}
+// layerNormI8 with x and / or out packed (xP / oP; the CPU path of layernorm_evta2): through row copies; a packed out is
+// flushed for the EVTA (outBuf)
+static void layerNormI8Rows(bool xP, bool oP, void *outBuf, int8_t *out, const int8_t *x, size_t rows, size_t cols,
+                            const int8_t *p1, const int8_t *p2, const int8_t *eps, const int8_t *e8, const int8_t *w8,
+                            const int8_t *b, float sD0, float sQ1, float v1a, float v1b, float v1d, float e1a, float e1b,
+                            float e1d, float sD2, float sQ2, float v2a, float v2b, float v2d, float a1a, float a1b,
+                            float a1d, float sD3, float sQ3, float v3a, float v3b, float v3d, float sD4, float sQ4,
+                            float a2a, float a2b, float a2d, int approx) {
+  int8_t *tx = nullptr, *to = nullptr;
+  if (xP) {
+    tx = (int8_t *)malloc(rows * cols);
+    unpackRows(tx, x, rows, cols);
+    x = tx;
+  }
+  int8_t *o = out;
+  if (oP)
+    o = to = (int8_t *)malloc(rows * cols);
+  layerNormI8(o, x, rows, cols, p1, p2, eps, e8, w8, b, sD0, sQ1, v1a, v1b, v1d, e1a, e1b, e1d, sD2, sQ2, v2a, v2b, v2d,
+              a1a, a1b, a1d, sD3, sQ3, v3a, v3b, v3d, sD4, sQ4, a2a, a2b, a2d, approx);
+  if (oP) {
+    packRows(out, o, rows, cols);
+    VTABufferFlush(outBuf, 0, rows * cols);
+  }
+  free(tx);
+  free(to);
+}
 } // namespace nestc_cpu
 )~";
 
@@ -7860,7 +7950,15 @@ static void emitLutRegion(const LutRegion &r, std::string *bundle, VTASaveContex
     //#### the timer as its body)
     const std::string look =
         "nestc_cpu::lut8(" + r.out->getName().str() + ", " + r.out->getName().str() + ", " + lut + ", " + num + ");\n";
-    *bundle += "#ifdef VTA_OUTPUT_LUT\n  if (!VTAHasAluExt()) " + look + "#else\n  " + look + "#endif\n";
+    //#### JO changed (2026-11-15, -vta-pack-rows): a packed out is an EVTA buffer (the next conv reads it): flushed after the
+    //#### CPU table
+    const Value *oo = getOrigin(const_cast<Value *>(r.out));
+    const std::string fl = ctx->isPacked(oo) ? "VTABufferFlush(" + oo->getName().str() + "_vbuf, 0, " +
+                                                   std::to_string(oo->getSizeInBytes()) + ");\n"
+                                             : "";
+    // *bundle += "#ifdef VTA_OUTPUT_LUT\n  if (!VTAHasAluExt()) " + look + "#else\n  " + look + "#endif\n";
+    *bundle += "#ifdef VTA_OUTPUT_LUT\n  if (!VTAHasAluExt()) " + look + (fl.empty() ? "" : "  if (!VTAHasAluExt()) " + fl) +
+               "#else\n  " + look + (fl.empty() ? "" : "  " + fl) + "#endif\n";
     return;
   }
   *bundle += "  nestc_cpu::lut8(" + r.out->getName().str() + ", " + r.root->getName().str() + ", " + lut + ", " +
@@ -8263,6 +8361,126 @@ static void findLayerNorms(IRFunction *F, VTASaveContext *ctx) {
   }
 }
 
+//#### JO added (2026-11-15, docs/evta_isa_ext.md 8.16): -vta-pack-rows (default on): 2-D / 3-D int8 activations of rows x C
+//#### (C % 16 == 0; DeiT: the residual stream, the layer norm outputs, the out-proj / fc2 outputs) kept in the EVTA layout
+//#### [C/16][rows][16], i.e. the conv layout with H x W = rows, so that the EVTA convs read / write them without transposes.
+//#### Run after the other passes: only activations not packed yet. A view at offset 0 that keeps C and the size is packed
+//#### together with its source; uses that allow either layout: an EVTA conv (src / dest; not fused, no output LUT), an
+//#### elementadd that is not 4-D (operands in different layouts: nestc_cpu::elemaddRows), the input / output of a fused
+//#### layer norm (layernorm_evta2); any other use keeps it in the row layout.
+static llvm::cl::opt<bool> vtaPackRows(
+    "vta-pack-rows",
+    llvm::cl::desc("Keep the rows x C int8 activations between EVTA convs, element adds and fused layer norms (DeiT) in "
+                   "the EVTA layout (no transposes)"),
+    llvm::cl::init(true));
+static void findPackedRows(IRFunction *F, VTASaveContext *ctx) {
+  if (!vtaPackRows || !vtaKeepLayout)
+    return;
+  auto &packed = *ctx->getPacked();
+  auto rowShape = [](const Value *v) {
+    auto ty = v->getType();
+    auto d = ty->dims();
+    if (ty->getElementType() != ElemKind::Int8QTy || d.size() < 2 || d.size() > 4 || d.back() % 16)
+      return false;
+    if (d.size() >= 3 && d[0] != 1)
+      return false;
+    return v->size() / d.back() > 1;
+  };
+  std::set<const Value *> cand, lnX, lnOut;
+  std::map<const Value *, const Value *> viewSrc;
+  for (const auto &kv : ctx->layerNorms) {
+    lnX.insert(kv.second.x);
+    lnOut.insert(kv.second.out);
+  }
+  std::map<const Instruction *, const Value *> lutOut;   // the instructions of the output LUT regions -> their out
+  for (const auto &kv : ctx->outLutConv) {
+    const LutRegion &r = ctx->getLutRegions()->at(kv.second);
+    for (const Instruction *J : r.instrs)
+      lutOut[J] = r.out;
+  }
+  for (const auto &I : F->getInstrs()) {
+    if (llvm::isa<AllocActivationInst>(&I) && rowShape(&I) && !packed.count(&I))
+      cand.insert(&I);
+    if (auto *tv = llvm::dyn_cast<TensorViewInst>(&I)) {
+      bool zero = true;
+      for (auto o : tv->getOffsets())
+        zero &= o == 0;
+      const Value *src = tv->getSrc();
+      if (zero && rowShape(tv) && rowShape(src) && tv->size() == src->size() &&
+          tv->dims().back() == src->dims().back() && !packed.count(tv) && !packed.count(src)) {
+        cand.insert(tv);
+        viewSrc[tv] = src;
+      }
+    }
+  }
+  bool changed = true;
+  auto unpack = [&](const Value *v) {
+    if (cand.erase(v))
+      changed = true;
+  };
+  auto unpackAll = [&](const Instruction &I, const std::set<const Value *> &keep) {
+    for (unsigned q = 0, e = I.getNumOperands(); q < e; q++)
+      if (!keep.count(I.getOperand(q).first))
+        unpack(I.getOperand(q).first);
+  };
+  while (changed) {
+    changed = false;
+    for (const auto &I : F->getInstrs()) {
+      switch (I.getKind()) {
+      case Kinded::Kind::AllocActivationInstKind:
+      case Kinded::Kind::DeallocActivationInstKind:
+        continue;
+      case Kinded::Kind::TensorViewInstKind: {
+        auto it = viewSrc.find(&I);
+        if (it != viewSrc.end() && cand.count(&I) && cand.count(it->second))
+          continue;
+        unpack(&I);
+        unpack(llvm::cast<TensorViewInst>(&I)->getSrc());
+        continue;
+      }
+      case Kinded::Kind::ConvolutionInstKind: {
+        auto *C = llvm::cast<ConvolutionInst>(&I);
+        if (getConvPath(C) == ConvPath::VTA && !ctx->getFusion(C)) {
+          if (ctx->outLutConv.count(C))   // its dest is the table's input; it writes the region's out
+            unpack(C->getDest());
+          continue;
+        }
+        break;
+      }
+      case Kinded::Kind::ElementAddInstKind: {
+        bool four = false;
+        for (unsigned q = 0, e = I.getNumOperands(); q < e; q++)
+          four |= I.getOperand(q).first->dims().size() == 4;
+        if (!four && !ctx->layerNormAway.count(&I) && !ctx->layerNorms.count(&I))
+          continue;
+        break;
+      }
+      default:
+        break;
+      }
+      if (ctx->layerNormAway.count(&I)) {
+        unpackAll(I, lnX);
+        continue;
+      }
+      auto lo = lutOut.find(&I);
+      if (lo != lutOut.end()) {   // an instruction of an output LUT region: only its out may be packed
+        unpackAll(I, {lo->second});
+        continue;
+      }
+      if (ctx->layerNorms.count(&I)) {
+        unpackAll(I, {ctx->layerNorms[&I].out});
+        continue;
+      }
+      unpackAll(I, {});
+    }
+  }
+  for (const Value *v : cand)
+    packed.insert(v);
+  if (getenv("VTA_PACK_ROWS_LOG"))
+    for (const Value *v : cand)
+      llvm::errs() << "-vta-pack-rows: " << v->getName() << "\n";
+}
+
 //#### JO added (2026-11-12, ALU extension step 7): -vta-alu-layernorm
 static llvm::cl::opt<bool> vtaAluLayerNorm(
     "vta-alu-layernorm",
@@ -8281,6 +8499,25 @@ static void emitLayerNormI8(const LayerNormFusion &f, std::string *bundle, VTASa
   *bundle += "  // the layer norm in one (layerNormI8, -vta-fuse-layernorm)\n";
   //#### JO added (2026-11-12, ALU extension step 7, docs/evta_isa_ext.md 8.10): on the EVTA ALU when it has the extended
   //#### operations (vtalib-systolic layernorm_evta, the same bytes as layerNormI8 with NESTC_LN_INT=1), else on the CPU
+  //#### JO added (2026-11-15, docs/evta_isa_ext.md 8.16, -vta-pack-rows): x and / or out kept in the EVTA layout:
+  //#### layernorm_evta2 reads / writes the VTA buffers; the CPU path through row copies (layerNormI8Rows)
+  const bool xP = ctx->isPacked(f.x), oP = ctx->isPacked(f.out);
+  if (xP || oP) {
+    const uint32_t idx = ctx->getIdxMultiEVTA();
+    auto vb = [&](const Value *v, bool p) { return p ? getOrigin(const_cast<Value *>(v))->getName().str() + "_vbuf" : std::string("nullptr"); };
+    std::string cpu = "nestc_cpu::layerNormI8Rows(" + std::string(xP ? "true" : "false") + ", " + (oP ? "true" : "false") +
+                      ", " + vb(f.out, oP) + ", " + call.substr(call.find('(') + 1) + ")";
+    *bundle += "  // x " + std::string(xP ? "packed" : "row") + ", out " + (oP ? "packed" : "row") + " (-vta-pack-rows)\n";
+    if (vtaAluLayerNorm && f.scales.size() == 26)
+      *bundle += "#ifdef VTA_OUTPUT_LUT\n  if (!layernorm_evta2(" + ptr(f.out) + ", " + vb(f.out, oP) + ", " + ptr(f.x) + ", " +
+                 vb(f.x, xP) + ", " + std::to_string(f.rows) + ", " + std::to_string(f.cols) + ", (const float *)" + ptr(f.w) +
+                 ", " + ptr(f.b) + ", " + f.scales[24] + ", " + f.scales[25] + ", vtaCmdH" +
+                 (idx ? std::to_string(idx) + ", " + std::to_string(idx) : "") + ")) " + cpu + ";\n#else\n  " + cpu +
+                 ";\n#endif\n";
+    else
+      *bundle += "  " + cpu + ";\n";
+    return;
+  }
   if (vtaAluLayerNorm && f.scales.size() == 26) {
     const uint32_t idx = ctx->getIdxMultiEVTA();
     // one line (timed_bundle.py wraps each statement line)
@@ -8589,7 +8826,7 @@ static std::string vtaOptionsComment() {
       "vta-keep-layout",   "vta-fuse-residual", "vta-fuse-residual-norelu", "vta-conv-epilogue", "vta-evta-maxpool", "vta-evta-fc",
       "vta-fuse-preprocess", "vta-conv0-pack",  "vta-fuse-pool",    "vta-evta-depthwise",
       "vta-round-shift",   "vta-pad-channels",  "vta-matmul-conv", "vta-fold-matmul-bias", "vta-evta-matmul", "vta-lut-elementwise", "vta-fuse-layernorm",
-      "vta-matmul-heads", "vta-attn-keep-layout", "vta-cpu-approx", "vta-alu-output-lut", "vta-alu-layernorm", "vta-alu-softmax", "vta-evta-avgpool",
+      "vta-matmul-heads", "vta-attn-keep-layout", "vta-cpu-approx", "vta-alu-output-lut", "vta-alu-layernorm", "vta-alu-softmax", "vta-pack-rows", "vta-evta-avgpool",
       "enable-channelwise-depthwise", "enable-channelwise"};
   auto &opts = llvm::cl::getRegisteredOptions();
   std::string s = "// Generated by the NEST-C VTA backend with:";
@@ -8766,6 +9003,7 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
   findLayerNorms(IR.get(), &ctx);
   findMatMulGroups(IR.get(), &ctx);
   findAttnKeepLayout(IR.get(), &ctx);
+  findPackedRows(IR.get(), &ctx);   //#### JO added (2026-11-15)
 
   for (const auto &I : IR->getInstrs()) {
 
@@ -9030,7 +9268,8 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
       for (const auto &op : I.getOperands()) {
         if (op.second != OperandKind::In && ctx.isPacked(op.first)) {
           bundle.append("  VTABufferFlush(");
-          bundle.append(op.first->getName());
+          // bundle.append(op.first->getName());
+          bundle.append(getOrigin(op.first)->getName());   //#### JO changed (2026-11-15): a view's activation
           bundle.append("_vbuf, 0, ");
           bundle.append(std::to_string(op.first->getSizeInBytes()));
           bundle.append(");\n");

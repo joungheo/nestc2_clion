@@ -1008,3 +1008,34 @@ compute 안의 shift(`ashr`) 등. 400 MHz는 RTL / HLS 쪽 레지스터(LUT RAM 
 - 오늘 DeiT 전체 (OMP 1): 76.14(`_alux`, replay 전 LN 9.66) → 71.73(`_alux2`) → 60.55(EVTA softmax + int8 입력, `_alux2`) → **60.14**(`_alux3`). OMP 4: 57.40 → 53.82 → 51.78 → **51.12**; 확장 없는 비트스트림 53.29보다 빠르다.
 - softmax 숫자는 `-vta-alu-softmax`로 만든 번들이다(기본 꺼짐, 정확도 −0.35 %p, §8.10).
 - 남은 CPU 일(OMP 1, `_pcsys3`): transpose_vtaio2nhwc 6.3 ms(49회), transpose_nhwc2vtaio 5.9 ms(72회), elemadd 3.8 ms, lut8 2.2 ms. LayerNorm / residual add가 EVTA 배치를 바로 읽고 쓰면 대부분 없어진다(VTASave 쪽 일).
+
+### 8.16 DeiT의 행 텐서를 EVTA 배치로: LayerNorm / residual add가 conv 출력을 바로 읽고 씀 (`-vta-pack-rows`, 2026-11-15)
+
+**문제.** DeiT의 Linear는 행(198 token)을 H × W = 18 × 11 이미지로 본 1x1 conv다. conv는 EVTA 배치 `[C/16][rows][16]`로 읽고 쓰는데, residual stream x, LayerNorm 출력, residual add는 행 배치 `[rows][C]`였다. 그래서 층마다 transpose가 10번 있었다(Q / K / V / out-proj / fc1 / fc2 입력 6번, V / out-proj / fc1(GELU 표) / fc2 출력 4번). Q / K / V는 같은 LN 출력을 세 번 따로 옮겼다. 모두 121번, OMP 1에서 12.1 ms.
+
+**VTASave `findPackedRows`** (`-vta-pack-rows`, 기본 켜짐; 다른 pass 뒤에 돌고 아직 packed가 아닌 값만 더한다)
+- 후보: int8 2-D / 3-D(첫 차원 1) / 4-D(N = 1) activation, C % 16 = 0, 행 > 1. offset 0이고 C와 크기가 같은 view는 원본과 같이 packed가 된다.
+- 어느 배치든 되는 사용: EVTA conv의 src / dest(fusion 없는 것; 출력 LUT conv는 src와 표 영역의 out), 4-D가 아닌 elementadd, fused LayerNorm의 x / out. 그 밖의 사용이 하나라도 있으면 행 배치로 남는다.
+- elementadd의 피연산자 배치가 다르면 `nestc_cpu::elemaddRows`: out과 배치가 다른 입력만 옮긴 뒤 elemadd 한 번(같은 byte). DeiT에서는 처음(위치 임베딩 add, out만 packed)과 끝(마지막 LN 앞, out만 행) 두 번이다.
+- 출력 LUT conv(fc1 + GELU 표)는 표 영역의 out(fc2 입력) VTA 버퍼에 바로 쓴다(transpose 없음). 확장이 없어 CPU가 표를 적용하면 그 뒤에 flush한다(처음에 빠져서 `EVTA_ALUX=0`에서 결과가 틀렸다).
+- CNN 네 모델의 번들은 옵션 주석 한 줄 말고 같다.
+
+**vtalib-systolic `layernorm_evta2(out, outBuf, x, xBuf, ...)`**: xBuf / outBuf가 null이 아니면 그 VTA 버퍼에 EVTA 배치로 있다.
+- packed x: 블록마다 run의 행을 inp 반쪽 + b·n에 LOAD(load 모듈), identity GEMM으로 acc에. acc의 X / E는 입력 배치(항목 = r·rs + b·bs, 행 배치 (NB, 1), packed (1, n))로 두고 프로그램의 index만 바꿨다.
+- packed out: 블록마다 STORE. 출력 배치가 입력과 다르면 마지막 SHRR 앞에 CPY 한 번으로 E에 출력 배치로 옮긴다.
+- CPU 복사(입력 memcpy, 출력 memcpy)가 없다. `_alux2` 결합 프로그램과 int8 입력 경로가 필요하고, 아니면 0을 돌려주어 bundle이 `nestc_cpu::layerNormI8Rows`(행으로 옮겨 layerNormI8, packed out은 flush)를 부른다.
+- 시뮬레이터 / 보드 `ln_evta_test`: 네 모양 × 네 배치 조합 모두 0 differ, 34 slot 규칙 위반 0.
+
+**DeiT 번들**: transpose_nhwc2vtaio 72 → 12, transpose_vtaio2nhwc 49 → 13(층마다 out-proj 입력과 V 출력만 남음: attention head transpose를 거친다). LayerNorm 24번 모두 x / out packed.
+
+**보드 (`_alux3`, `-vta-alu-softmax` 번들, 25회 중앙값, ms)**
+
+| | OMP 1 | OMP 4 |
+|---|---|---|
+| `_pcsys4` (행 배치) | 59.82 | 50.96 |
+| **`_pcsys5` (`-vta-pack-rows`)** | **49.93** | **47.43** |
+| transpose 두 종류 합 | 12.12 → 1.68 | 4.77 → 0.77 |
+| layernorm_evta(2) | 4.47 → 4.34 | 4.48 → 4.35 |
+
+- 결과: 281 (0.772822) / 207 / 340, `_pcsys4`와 같다. 기본 / `EVTA_ALUX=0` / `EVTA_ALUX2=0` / `EVTA_ALU_INP=0` / 확장 없는 비트스트림(`..._sa_400mhz_rq.bin`) 모두 같은 결과, LN 비교 0 differ.
+- 남은 큰 CPU 일(OMP 1): elemadd 4.4 ms(residual add, 스칼라 `std::round`), lut8 2.2 ms(softmax 앞 attention scale 표), transpose 1.3 ms(head), elemaddRows 0.5 ms. 마지막 LayerNorm은 fused 패턴에 맞지 않아 CPU의 일반 연산 그대로다.

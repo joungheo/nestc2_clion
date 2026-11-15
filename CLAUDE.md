@@ -343,6 +343,10 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   fused program (`EVTA_SM_TIME=1`); int8 input of both through inp + identity GEMM with the next LOAD overlapping the ALU (`AluInp`,
   `EVTA_ALU_INP=0` = int32 into acc). Board `..._sa_alux3_400mhz_rq.bin` (Explore WNS +0.022 ns): tests pass, CNN dumps identical, 0 hazards;
   DeiT built with `-vta-alu-softmax` (default still off: ImageNetV2 -0.35 %p) OMP 1 60.14 ms, OMP 4 51.12 ms (no-ext bitstream 53.29).
+  `-vta-pack-rows` (2026-11-15, §8.16, VTASave `findPackedRows`, default on): DeiT's rows x C int8 tensors (residual stream, LN outputs,
+  out-proj / fc2 outputs, the fc1 GELU-table output) kept in the EVTA layout; vtalib-systolic `layernorm_evta2` reads / writes VTA buffers
+  in that layout (CPU fallback `nestc_cpu::layerNormI8Rows`), mixed-layout adds `nestc_cpu::elemaddRows`. Transposes 121 -> 25, CNN bundles
+  unchanged; DeiT `_alux3` OMP 1 59.82 -> 49.93 ms, OMP 4 50.96 -> 47.43 ms, same results on every fallback.
 - Other models (2026-11-05, `docs/evta_runtime_compare.md` §7.19): Resnet50 res2_0 residual fused (relu to a 2^q smaller scale), schedules of the
   Resnet50 / VGG16 shapes in `VTASchedules.h` (found with vtalib-systolic `EVTA_SCHED`), conv tiles below 7 x 7: the dummy-padded store
   used the wrong channel block with nVirtualThread 2 (fixed in both vtalibs) and the systolic vtalib's minimum tile is 1 on an `_sa_` bitstream

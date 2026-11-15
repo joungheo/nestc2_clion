@@ -225,6 +225,10 @@ int8_t VTAEpilogueRef(const VTAEpilogue *e, int8_t x, const int8_t *tv);
 //#### program; 0 = not run (no extended ALU, unsupported shape): the caller runs the CPU function. See VTABundle.cpp
 int layernorm_evta(int8_t *out, const int8_t *x, int rows, int cols, const float *w, const int8_t *b, float a2b, float a2d,
                    void *vtaCmdH, uint32_t idEVTA = 0);
+//#### JO added (2026-11-15, docs/evta_isa_ext.md 8.16): x / out packed in the EVTA layout [cols/16][rows][16] in the VTA
+//#### buffer xBuf / outBuf when non-null (x / out their virtual addresses), else row-major CPU memory; returns 0 if not run
+int layernorm_evta2(int8_t *out, void *outBuf, const int8_t *x, void *xBuf, int rows, int cols, const float *w,
+                    const int8_t *b, float a2b, float a2d, void *vtaCmdH, uint32_t idEVTA = 0);
 //#### JO added (2026-11-12, ALU extension): the integer softmax with the quantize after it (nestc_cpu::softmaxIntQ) as an EVTA
 //#### ALU program; 0 = not run
 int softmax_evta(int8_t *out, const int8_t *x, int rows, int cols, float s, float outInv, void *vtaCmdH,
