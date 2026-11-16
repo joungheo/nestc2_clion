@@ -381,6 +381,10 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   from the value conv's output (16 x 16 transposes into filter blocks), heads written into views of the out-proj conv's input; no NHWC / head
   transposes or slice copies. `EVTA_MATMUL_CHECK` 0 differ (the Q K^T check now applies the output LUT), 2,000 output hashes identical;
   DeiT OMP 1 41.00 -> 37.82, OMP 4 38.33 -> 36.46 ms.
+  Patch embedding add as the patch conv's epilogue (2026-11-16, §6.9, VTASave `findEmbedFusions`, `-vta-fuse-embed`): conv -> transposes
+  (identity on rows x C) -> rows of the token concat -> + position embedding becomes the conv epilogue (integer add, the constant's rows packed
+  once) with the output in the EVTA layout, `nestc_cpu::embedRows` placing the rows; the first-conv path takes epilogues now. Bytes change
+  (integer add); ImageNetV2 first 2,500 top-1 1,547 -> 1,545; OMP 1 37.79 -> 37.35 ms. add + layer norm in one run: not done (no gain).
 - Other models (2026-11-05, `docs/evta_runtime_compare.md` §7.19): Resnet50 res2_0 residual fused (relu to a 2^q smaller scale), schedules of the
   Resnet50 / VGG16 shapes in `VTASchedules.h` (found with vtalib-systolic `EVTA_SCHED`), conv tiles below 7 x 7: the dummy-padded store
   used the wrong channel block with nVirtualThread 2 (fixed in both vtalibs) and the systolic vtalib's minimum tile is 1 on an `_sa_` bitstream

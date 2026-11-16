@@ -499,6 +499,28 @@ Q K^T(`matmul_evta_qk`, §7.27)처럼 A x V도 V를 value conv의 EVTA 출력에
 OMP 1에서 줄어든 것: 배치 변환 / transpose 3.27 → 0.82, 복사 0.41 → 0.02, matmul 3.48 → 3.14 ms. 남은 transpose는 patch embedding(conv 뒤
 위치 임베딩 add 앞)과 마지막 블록의 것이다.
 
+## 6.9 patch embedding의 위치 임베딩 add를 patch conv의 epilogue로 (2026-11-16)
+
+patch conv(conv0 pack, 14 x 14 x 768 → 192)의 출력은 transpose 두 번(NHWC → NCHW → [196][192])을 거쳐 class / distillation token 2행 뒤에
+붙고, 위치 임베딩(상수)과 CPU float add를 한 뒤 EVTA 배치로 바뀌었다. transpose 두 번을 합치면 [196][192]의 항등이므로, conv의 EVTA 출력
+[12][196][16]이 곧 그 196행의 EVTA 배치다. 이름(Conv / Transpose / Concat / Add)이 아니라 이 구조로 찾는다.
+
+- VTASave `findEmbedFusions` (`-vta-fuse-embed`, 기본 켜짐): conv(VTA 또는 첫 conv 경로) → transpose {0, 3, 1, 2} → transpose {0, 2, 1}이
+  [1, rows, c] 버퍼의 r0행부터 쓰고(나머지 행은 insert), 그 버퍼 + 상수가 packed int8이면: conv 출력을 EVTA 배치로 두고, add를 conv의
+  epilogue(MUL A, ADD d = B, RQ round 2: `-vta-evta-elemadd`의 정수 add, §8.17)로 한다. 상수의 r0행부터를 한 번 EVTA 배치로 바꿔 VTA 버퍼에
+  둔다. add 자리에서 `nestc_cpu::embedRows`가 conv 행을 채널 블록마다 복사하고, token 행은 같은 정수 add로 계산해 넣는다. 첫 conv 경로
+  (`saveFirstBNNVTAConvolutionInst`)에도 epilogue를 붙였다. conv 출력의 해제는 embedRows 뒤로 옮긴다.
+- float add 대신 정수 add라 결과 바이트가 바뀐다(§8.17의 residual add와 같은 식). 보드: `EVTA_EPI_CHECK` 0 differ, cat / dog / zebra 같음,
+  ImageNetV2 앞 2,500장 top-1 1,547 → 1,545(61.88 → 61.80 %, 2장 차이; 9,000장 평가는 2,653장에서 중단되어 다시 해야 함), 출력이 다른 그림
+  225 / 2,652장.
+- 시간: OMP 1 37.79 → 37.35 ms, OMP 4 36.46 → 36.17 ms (transpose 0.42 → 0.12, `elemaddRows` 0.19 → 0, `embedRows` 0.03 ms).
+
+**add + layer norm을 한 EVTA run으로 (안 함):** `elemadd_evta` 한 번(59 us) 중 58 us가 EVTA 실행 자체이고 호출 부담은 작다. 합치면 layer
+norm의 x LOAD와 identity GEMM을 아끼지만, add 결과는 rq로 out에만 써지므로 layer norm이 acc에서 쓸 int8 값을 ALU로 다시 만들어야 한다
+(round half away: 부호 추출, ADD, `SHRR`(half up), clip 2번, 약 6 pass). 이득이 거의 없어 하지 않았다. rq 결과를 acc에도 쓰는 하드웨어가
+있으면 달라진다(§8.20에서 하지 않기로 한 것). layer norm은 한 행의 192채널(두 thread의 acc에 나뉨)을 다 합해야 해서 conv epilogue로도
+넣을 수 없다.
+
 ## 7. 재현
 
 끄는 방법은 세 종류다. `-vta-*`는 번들 생성(`model-compiler`) 옵션이라 번들을 다시 만들어야 하고, `EVTA_*`는 실행할 때 주는 환경변수(`sudo /bin/sh -c "EVTA_X=0 hw/script/run_prof.sh ..."`), 하드웨어 단계는 `BIN=<비트스트림>`이다. 자세한 절차와 vtalib마다 읽는 변수의 차이는 `resnet18_optimization.md` §9.2–§9.5에 있다.

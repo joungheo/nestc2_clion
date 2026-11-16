@@ -157,6 +157,10 @@ struct ResidualFusion {
   //#### be null (no add); convShl ... reluShl are set when it is one of the convolution_wo_tr_res forms (classic)
   std::vector<std::array<int, 5>> steps;
   bool classic = false;
+  //#### JO added (2026-11-16, findEmbedFusions): the residual as an expression (a VTA buffer made by `prelude`) instead of
+  //#### an activation, and code emitted before the epilogue
+  std::string residualVar, prelude;
+  const Value *ptrArg = nullptr;   // "@PTR@" in prelude: cpuPtr of this constant (declared on use)
 };
 
 //#### JO added (2026-11-02): a max pool done by the first conv's call (findPoolFusions)
@@ -282,6 +286,9 @@ public:
   std::set<const Instruction *> layerNormAway;
   std::map<const Instruction *, MatMulGroup> matMulGroups; // by the first matmul
   std::set<const Instruction *> matMulAway;
+  std::map<const Instruction *, std::string> embedAdd;   //#### JO added (2026-11-16): findEmbedFusions, code at the add
+  std::set<const Instruction *> deferredFree;            //#### deallocations emitted later (with that code)
+  std::map<const Instruction *, const Value *> embedPtr; //#### "@PTR@" in embedAdd: cpuPtr of this constant
   std::map<const Instruction *, MatMulGroup> *getMatMulGroups() { return &matMulGroups; }
   std::set<const Instruction *> *getMatMulAway() { return &matMulAway; }
   // a name that lives as long as the symbol tables (constants that are not IR values)
@@ -2888,8 +2895,11 @@ void generateVTAConvolutionCall(const glow::ConvolutionInst *Inst,
       init += std::string(k ? ", " : "") + "{" + std::to_string(st[0]) + ", " + std::to_string(st[1]) + ", " +
               std::to_string(st[2]) + ", " + std::to_string(st[3]) + ", " + std::to_string(st[4]) + "}";
     }
+    bundle->append(fu->prelude);   //#### JO added (2026-11-16)
     bundle->append(init + "}};   // conv epilogue (-vta-conv-epilogue)\n");
-    if (fu->residual)   //#### JO changed (2026-11-15): through getOrigin (a packed view at offset 0)
+    if (!fu->residualVar.empty())
+      bundle->append("  " + e + ".t[0] = " + fu->residualVar + ";\n");
+    else if (fu->residual)   //#### JO changed (2026-11-15): through getOrigin (a packed view at offset 0)
       bundle->append("  " + e + ".t[0] = " + getOrigin(const_cast<Value *>(fu->residual))->getName().str() + "_vbuf;\n");
     bundle->append("  VTASetConvEpilogue(&" + e + ");\n");
   }
@@ -3858,7 +3868,32 @@ void saveFirstBNNVTAConvolutionInst(const glow::ConvolutionInst *Inst,
   generateFirstBNNInputTranspose(Inst, bundle, initConst, ctx);
   declareOutputTranspose(Inst, bundle, initConst, ctx);
 
+  //#### JO added (2026-11-16, findEmbedFusions): an epilogue program on the first conv (the DeiT patch embedding)
+  auto *fu = ctx->getFusion(Inst);
+  const bool epi = fu && vtaConvEpilogue && !fu->steps.empty();
+  if (epi) {
+    const std::string e = Inst->getName().str() + "_epi";
+    std::string init = "  VTAEpilogue " + e + " = {" + std::to_string(fu->steps.size()) + ", {";
+    for (size_t k = 0; k < fu->steps.size(); k++) {
+      auto &st = fu->steps[k];
+      init += std::string(k ? ", " : "") + "{" + std::to_string(st[0]) + ", " + std::to_string(st[1]) + ", " +
+              std::to_string(st[2]) + ", " + std::to_string(st[3]) + ", " + std::to_string(st[4]) + "}";
+    }
+    std::string pre = fu->prelude;
+    if (fu->ptrArg)
+      for (size_t at; (at = pre.find("@PTR@")) != std::string::npos;)
+        pre.replace(at, 5, cpuPtr(const_cast<Value *>(fu->ptrArg), bundle, ctx));
+    bundle->append(pre);
+    bundle->append(init + "}};   // conv epilogue (-vta-conv-epilogue)\n");
+    if (!fu->residualVar.empty())
+      bundle->append("  " + e + ".t[0] = " + fu->residualVar + ";\n");
+    else if (fu->residual)
+      bundle->append("  " + e + ".t[0] = " + getOrigin(const_cast<Value *>(fu->residual))->getName().str() + "_vbuf;\n");
+    bundle->append("  VTASetConvEpilogue(&" + e + ");\n");
+  }
   generateFirstBNNVTAConvolutionCall(Inst, bundle, initConst, ctx);
+  if (epi)
+    bundle->append("  VTASetConvEpilogue(nullptr);\n");
 
   generateOutputTranspose(Inst, bundle, initConst, ctx);
   generateVTABufferFree(Inst, bundle, ctx);
@@ -7274,6 +7309,11 @@ static void unpackRows(int8_t *r, const int8_t *p, size_t rows, size_t cols) {
   for (size_t i = 0; i < rows; i++)
     for (size_t b = 0; b < cols / 16; b++) memcpy(r + i * cols + b * 16, p + (b * rows + i) * 16, 16);
 }
+// #### JO added (2026-11-16, VTASave findEmbedFusions): the patch embedding's output o (packed, rows x cols): rows r0 .. r0 + n
+// from the patch conv's packed output c (n rows: the conv + position embedding by its epilogue), the other rows (the class /
+// distillation tokens in t, row layout) + the position embedding p (row layout) by the integer elemadd (A, B, N) packed
+static void embedRows(int8_t *o, const int8_t *c, const int8_t *t, const int8_t *p, size_t rows, size_t cols, size_t r0,
+                      size_t n, int32_t A, int32_t B, int N);
 // elemadd with each operand in either layout (mask bit 0: a packed, 1: b packed, 2: out packed): the inputs in the other
 // layout than out are converted first, then one elemadd (the same bytes)
 static void elemaddRows(int mask, size_t rows, size_t cols, int8_t *a, float sa, int32_t oa, int8_t *b, float sb,
@@ -7344,6 +7384,19 @@ static void elemaddRowsInt(int mask, size_t rows, size_t cols, int8_t *a, int8_t
   elemaddInt(a, b, o, n, A, B, N);
   free(ta);
   free(tb);
+}
+static void embedRows(int8_t *o, const int8_t *c, const int8_t *t, const int8_t *p, size_t rows, size_t cols, size_t r0,
+                      size_t n, int32_t A, int32_t B, int N) {
+  for (size_t b = 0; b < cols / 16; b++)
+    memcpy(o + (b * rows + r0) * 16, c + b * n * 16, n * 16);
+  int8_t row[1024];
+  for (size_t i = 0; i < rows; i++) {
+    if (i >= r0 && i < r0 + n)
+      continue;
+    elemaddInt(t + i * cols, p + i * cols, row, cols, A, B, N);
+    for (size_t b = 0; b < cols / 16; b++)
+      memcpy(o + (b * rows + i) * 16, row + b * 16, 16);
+  }
 }
 // layerNormI8 with x and / or out packed (xP / oP; the CPU path of layernorm_evta2): through row copies; a packed out is
 // flushed for the EVTA (outBuf)
@@ -8639,6 +8692,129 @@ static void findPackedRows(IRFunction *F, VTASaveContext *ctx) {
 }
 
 static bool elemAddIntParams(float sa, float sb, float so, int *A, int *B, int *N);
+//#### JO added (2026-11-16, docs/deit_optimization.md 6.9): -vta-fuse-embed (default on): an EVTA conv whose NHWC output
+//#### [1, h, w, c] goes through transpose {0, 3, 1, 2} and transpose {0, 2, 1} (together the identity on h w x c) into rows
+//#### r0 .. r0 + h w of a [1, rows, c] buffer whose other rows are inserted (the class / distillation tokens), and that
+//#### buffer + a constant [1, rows, c] (the position embedding) into a packed int8 tensor (DeiT's patch embedding): the conv
+//#### writes its output in the EVTA layout (= rows of h w x c) with the add as its epilogue (MUL A, ADD d = B, RQ: the integer
+//#### elemadd of -vta-evta-elemadd, elemAddIntParams 15-bit) over the constant's rows r0 .. packed once into a VTA buffer;
+//#### at the add the rows go into the output (nestc_cpu::embedRows: a copy per channel block, the token rows by the same
+//#### integer add on the CPU). No transposes. The integer add instead of the float elemadd (as -vta-evta-elemadd, 8.17).
+static llvm::cl::opt<bool> vtaFuseEmbed(
+    "vta-fuse-embed",
+    llvm::cl::desc("Run the patch embedding's position-embedding add as the patch conv's epilogue and keep its output in "
+                   "the EVTA layout (no transposes)"),
+    llvm::cl::init(true));
+static std::pair<const Value *, size_t> viewOrigin(const Value *v);   // below
+static void findEmbedFusions(const IRFunction *IR, VTASaveContext *ctx) {
+  if (!vtaFuseEmbed || !vtaConvEpilogue || !vtaEvtaElemAdd)
+    return;
+  std::vector<const Instruction *> L;
+  for (const auto &I : IR->getInstrs())
+    L.push_back(&I);
+  auto users = [&](const Value *o) {
+    std::vector<const Instruction *> u;
+    for (const Instruction *I : L) {
+      if (llvm::isa<TensorViewInst>(I) || llvm::isa<DeallocActivationInst>(I) || I == o)
+        continue;
+      for (unsigned q = 0, e = I->getNumOperands(); q < e; q++)
+        if (getOrigin(const_cast<Value *>(I->getOperand(q).first)) == o) {
+          u.push_back(I);
+          break;
+        }
+    }
+    return u;
+  };
+  auto i8 = [](const Value *v) {
+    return v->getType()->getElementType() == ElemKind::Int8QTy && v->getType()->getOffset() == 0;
+  };
+  for (const Instruction *I : L) {
+    auto *C = llvm::dyn_cast<ConvolutionInst>(I);
+    //#### the first conv too (ConvPath::FirstBNN: DeiT's patch conv over the packed input, -vta-conv0-pack)
+    if (!C || (getConvPath(C) != ConvPath::VTA && getConvPath(C) != ConvPath::FirstBNN) || ctx->getFusion(C) ||
+        ctx->getPoolFusion(C) || ctx->outLutConv.count(C) || ctx->isPacked(C->getDest()) || !i8(C->getDest()) ||
+        convRelu(C))
+      continue;
+    const Value *D = getOrigin(C->getDest());
+    auto dd = C->getDest()->dims();
+    if (dd.size() != 4 || dd[0] != 1 || dd[3] % 16 || D != C->getDest())
+      continue;
+    const size_t hw = dd[1] * dd[2], c = dd[3];
+    auto ud = users(D);
+    const TransposeInst *T1 = ud.size() == 2 ? llvm::dyn_cast<TransposeInst>(ud[1] == C ? ud[0] : ud[1]) : nullptr;
+    if (!T1 || getOrigin(T1->getSrc()) != D || T1->getShuffle().vec() != std::vector<unsigned>{0, 3, 1, 2})
+      continue;
+    const Value *X1 = getOrigin(T1->getDest());
+    auto u1 = users(X1);
+    const TransposeInst *T2 = u1.size() == 2 ? llvm::dyn_cast<TransposeInst>(u1[1] == T1 ? u1[0] : u1[1]) : nullptr;
+    if (!T2 || getOrigin(T2->getSrc()) != X1 || T2->getShuffle().vec() != std::vector<unsigned>{0, 2, 1} ||
+        T2->getSrc()->dims().vec() != std::vector<dim_t>{1, c, hw})
+      continue;
+    auto dv = viewOrigin(T2->getDest());
+    const Value *Cc = dv.first;
+    auto cd = Cc->dims();
+    if (cd.size() != 3 || cd[0] != 1 || cd[2] != c || dv.second % c || dv.second / c + hw > cd[1] || !i8(Cc) ||
+        Cc->getType()->getScale() != C->getDest()->getType()->getScale() || ctx->isPacked(Cc))
+      continue;
+    const size_t r0 = dv.second / c, rows = cd[1];
+    // Cc: written by the inserts and T2, read by one elementadd with a constant into a packed int8 tensor
+    const ElementAddInst *E = nullptr;
+    bool ok = true;
+    for (const Instruction *J : users(Cc)) {
+      if (J == T2 || llvm::isa<InsertTensorInst>(J) || llvm::isa<TouchInst>(J))
+        continue;
+      auto *e = llvm::dyn_cast<ElementAddInst>(J);
+      if (e && !E)
+        E = e;
+      else
+        ok = false;
+    }
+    if (!ok || !E)
+      continue;
+    const Value *P = getOrigin(E->getLHS()) == Cc ? E->getRHS() : E->getLHS(), *O = E->getDest();
+    if (getOrigin(P) == Cc || !isConstantWeight(P) || P->dims() != Cc->dims() || !i8(P) || !i8(O) ||
+        !ctx->isPacked(O) || O->dims() != Cc->dims() || getOrigin(E->getLHS()) != Cc && getOrigin(E->getRHS()) != Cc)
+      continue;
+    const Value *Ce = getOrigin(E->getLHS()) == Cc ? E->getLHS() : E->getRHS();
+    int A, B, N;
+    if (!elemAddIntParams(Ce->getType()->getScale(), P->getType()->getScale(), O->getType()->getScale(), &A, &B, &N) ||
+        A % 128 || B % 128 || N - 7 > 31)
+      continue;
+    const std::string nm = C->getName().str(), pv = nm + "_embpos";
+    ResidualFusion f = {};
+    f.steps.push_back({6, A / 128, 0, 0, 0});    // VTA_EPI_MUL
+    f.steps.push_back({1, 0, 0, 0, B / 128});    // VTA_EPI_ADD, d = B
+    f.steps.push_back({2, 2, N - 7, -128, 127}); // VTA_EPI_RQ round 2
+    f.out = D;
+    f.residual = nullptr;
+    f.residualVar = pv;
+    f.ptrArg = P;
+    f.prelude = "  // the position embedding's rows " + std::to_string(r0) + " .. in the EVTA layout, once (-vta-fuse-embed)\n"
+                "  static void *" + pv + " = nullptr;\n  if (!" + pv + ") {\n    " + pv + " = VTABufferAlloc(" +
+                std::to_string(hw * c) + ");\n    nestc_cpu::packRows((int8_t *)VTABufferGetVirtAddr(" + pv + "), (const int8_t *)@PTR@ + " + std::to_string(r0 * c) + ", " + std::to_string(hw) + ", " + std::to_string(c) +
+                ");\n    VTABufferFlush(" + pv + ", 0, " + std::to_string(hw * c) + ");\n  }\n";
+    (*ctx->getFusions())[C] = f;
+    ctx->getPacked()->insert(D);
+    ctx->getFusedAway()->insert(T1);
+    ctx->getFusedAway()->insert(T2);
+    ctx->usesCpuOps = true;
+    // the conv output's deallocation (after its transpose, before the add) after embedRows
+    for (const Instruction *J : L)
+      if (auto *d = llvm::dyn_cast<DeallocActivationInst>(J))
+        if (getOrigin(d->getSrc()) == D)
+          ctx->deferredFree.insert(d);
+    ctx->embedPtr[E] = P;
+    ctx->embedAdd[E] = "  // the patch conv's rows and the token rows into the output (-vta-fuse-embed)\n"
+                       "  nestc_cpu::embedRows(" + O->getName().str() + ", " + D->getName().str() + ", " + Cc->getName().str() +
+                       ", (const int8_t *)@PTR@, " + std::to_string(rows) + ", " +
+                       std::to_string(c) + ", " + std::to_string(r0) + ", " + std::to_string(hw) + ", " + std::to_string(A) +
+                       ", " + std::to_string(B) + ", " + std::to_string(N) + ");\n  VTABufferFree(" +
+                       D->getName().str() + "_vbuf);\n";
+    if (getenv("VTA_PACK_ROWS_LOG"))
+      llvm::errs() << "-vta-fuse-embed: " << C->getName() << " + " << E->getName() << " (" << A / 128 << ", " << B / 128
+                   << ", " << N - 7 << ", rows " << r0 << " ..)\n";
+  }
+}
 //#### JO added (2026-11-15, docs/evta_isa_ext.md 8.18): -vta-fuse-elemadd-mul (default on): an elementadd of an EVTA conv's
 //#### output (or a view of it at offset 0) and another packed int8 tensor with scale ratios that are not powers of two
 //#### (DeiT: out-proj / fc2 + the residual stream) as the conv's epilogue MUL A, ADD (d = B), RQ (round 2, N) = the integer
@@ -9495,6 +9671,7 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
   findOutLutMatMuls(IR.get(), &ctx);   //#### JO added (2026-11-16)
   findPackedRows(IR.get(), &ctx);   //#### JO added (2026-11-15)
   findMulResidualFusions(IR.get(), &ctx, vtaEvtaElemAdd);   //#### JO added (2026-11-15, 8.18)
+  findEmbedFusions(IR.get(), &ctx);   //#### JO added (2026-11-16)
 
   for (const auto &I : IR->getInstrs()) {
 
@@ -9552,6 +9729,20 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
         emitLutRegion(it->second, &bundle, &ctx);
         continue;
       }
+    }
+    //#### JO added (2026-11-16): findEmbedFusions
+    if (ctx.deferredFree.count(&I)) {
+      bundle.append("  // freed later (-vta-fuse-embed)\n");
+      continue;
+    }
+    if (ctx.embedAdd.count(&I)) {
+      std::string t = ctx.embedAdd[&I];
+      for (size_t at; (at = t.find("@PTR@")) != std::string::npos;)
+        t.replace(at, 5, cpuPtr(const_cast<Value *>(ctx.embedPtr[&I]), &bundle, &ctx));
+      bundle.append(t);
+      bundle.append("  VTABufferFlush(" + getOrigin(llvm::cast<ElementAddInst>(&I)->getDest())->getName().str() +
+                    "_vbuf, 0, " + std::to_string(llvm::cast<ElementAddInst>(&I)->getDest()->getSizeInBytes()) + ");\n");
+      continue;
     }
     //#### JO added (2026-10-31): elementadd / relu done by the fused conv before them
     if (ctx.isFusedAway(&I)) {
