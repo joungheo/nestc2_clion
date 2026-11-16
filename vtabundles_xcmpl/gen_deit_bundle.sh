@@ -33,9 +33,26 @@ if [ ! -s deit_calib.yaml ]; then
   $B/glow/bin/image-classifier $I/cat_285.png $I/dog_207.png $I/zebra_340.png -m=deit_fold.onnx -model-input-name=pixel_values \
     -backend=VTAInterpreter -minibatch=1 $PRE -topk=5 -dump-profile=deit_calib.yaml $Q > prof.log 2>&1 || { echo "profile failed (prof.log)"; exit 1; }
 fi
+#### JO added (2026-11-16, docs/deit_optimization.md 6.7): PRUNE_ROWS=1 (default): only the rows the outputs read (the class and
+#### distillation tokens of the last block, prune_rows_onnx.py), with the profile of the whole model (+ the Slices): same scales
+MODEL=deit_fold.onnx
+if [ "${PRUNE_ROWS:-1}" != 0 ]; then
+  python3 $H/prune_rows_onnx.py deit_fold.onnx deit_prune.onnx > prune.log 2>&1 || { echo "prune_rows_onnx.py failed (prune.log)"; exit 1; }
+  # a profile of the pruned model for the nodes only it has (the whole model's profile keeps every other scale)
+  if [ ! -s deit_prune_prof.yaml ] || [ deit_prune_prof.yaml -ot deit_prune.onnx ]; then
+    $B/glow/bin/image-classifier $I/cat_285.png $I/dog_207.png $I/zebra_340.png -m=deit_prune.onnx -model-input-name=pixel_values \
+      -backend=VTAInterpreter -minibatch=1 $PRE -topk=5 -dump-profile=deit_prune_prof.yaml $Q > prof_prune.log 2>&1 ||
+      { echo "profile of the pruned model failed (prof_prune.log)"; exit 1; }
+  fi
+  python3 $H/prune_rows_onnx.py deit_fold.onnx deit_prune.onnx deit_calib.yaml deit_calib_prune.yaml deit_prune_prof.yaml \
+    >> prune.log 2>&1 || { echo "prune_rows_onnx.py failed (prune.log)"; exit 1; }
+  MODEL=deit_prune.onnx
+  cp deit_calib_prune.yaml deit_calib_mc.yaml
+else
 cp deit_calib.yaml deit_calib_mc.yaml
+fi
 for i in 1 2 3 4; do
-  $B/glow/bin/model-compiler -g -model=deit_fold.onnx -backend=VTA -emit-bundle=$O -bundle-api=dynamic -network-name=deit \
+  $B/glow/bin/model-compiler -g -model=$MODEL -backend=VTA -emit-bundle=$O -bundle-api=dynamic -network-name=deit \
     -model-input=pixel_values,float,[1,3,224,224] -load-profile=deit_calib_mc.yaml $Q -vta-round-shift "$@" > gen.log 2>&1
   r=$?
   h=$(grep -o "Current graph hash: 0x[0-9A-Fa-f]*" gen.log | awk '{print $4}')

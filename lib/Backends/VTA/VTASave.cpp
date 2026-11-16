@@ -181,6 +181,7 @@ struct LayerNormFusion {
   const Value *x, *out, *p1, *p2, *eps, *e, *w, *b;
   size_t rows, cols;
   std::vector<std::string> scales; // the scale arguments as the replaced calls wrote them
+  std::vector<const Instruction *> freeAfter; // deallocations of p1 / p2 / e inside the chain, moved after the call
 };
 
 //#### JO added (2026-11-10): findMatMulGroups / findAttnKeepLayout
@@ -5620,6 +5621,24 @@ void saveElemAddInst(const glow::ElementAddInst *Inst, std::string *bundle,
                ")) " + cpu + "#else\n  " + cpu + "#endif\n";
     return;
   }
+  //#### JO added (2026-11-16): two activations in other layouts with the integer elemadd's parameters: the same integer
+  //#### arithmetic on the CPU (nestc_cpu::elemaddRowsInt), so these adds give the bytes elemadd_evta gives (an add with a
+  //#### constant operand, e.g. the position embedding, keeps the float elemadd as before)
+  if (vtaEvtaElemAdd && lmask != 0 && lmask != 7 && !isConstantWeight(src0) && !isConstantWeight(src1) &&
+      dest->getType()->getElementType() == ElemKind::Int8QTy && src0->getType()->getElementType() == ElemKind::Int8QTy &&
+      src1->getType()->getElementType() == ElemKind::Int8QTy && src0->getType()->getOffset() == 0 &&
+      src1->getType()->getOffset() == 0 && dest->getType()->getOffset() == 0 && destDims.size() >= 2 &&
+      destDims.size() <= 3 && !llvm::isa<WeightVar>(src0) && !llvm::isa<WeightVar>(src1) && !llvm::isa<WeightVar>(dest) &&
+      elemAddIntParams(src0->getType()->getScale(), src1->getType()->getScale(), dest->getType()->getScale(), &iA, &iB,
+                       &iN)) {
+    ctx->usesCpuOps = true;
+    const size_t cols = destDims.back(), rows = dest->size() / cols;
+    bundle->append("  nestc_cpu::elemaddRowsInt(" + std::to_string(lmask) + ", " + std::to_string(rows) + ", " +
+                   std::to_string(cols) + ", " + src0->getName().str() + ", " + src1->getName().str() + ", " +
+                   dest->getName().str() + ", " + std::to_string(dest->size()) + ", " + std::to_string(iA) + ", " +
+                   std::to_string(iB) + ", " + std::to_string(iN) + ");\n");
+    return;
+  }
   if (lmask != 0 && lmask != 7) {
     const size_t cols = destDims.back(), rows = dest->size() / cols;
     ctx->usesCpuOps = true;
@@ -6525,7 +6544,18 @@ static inline int8_t satRound(int32_t acc, float scale) {
   const float v = std::round((float)acc * scale);
   return (int8_t)(v > 127.f ? 127.f : v < -128.f ? -128.f : v);
 }
+// #### JO added (2026-11-16): a scale 2^-s (the EVTA matmuls' requantize: -vta-pow2-ratio) rounds as the EVTA does,
+// (acc + 2^(s-1)) >> s (half up; std::round is half away from zero), so a matmul on the CPU gives the bytes matmul_evta
+// gives (prune_rows_onnx.py: the 2-row attention of the last block)
+static inline int8_t satShr(int32_t acc, int s) {
+  const int32_t v = (acc + (1 << (s - 1))) >> s;
+  return (int8_t)(v > 127 ? 127 : v < -128 ? -128 : v);
+}
 static void matmulI8(int8_t *C, const int8_t *A, const int8_t *B, size_t M, size_t K, size_t N, float scale) {
+  int e2;
+  const float fr = std::frexp(scale, &e2);   // scale = fr 2^e2, fr in [0.5, 1)
+  const int sh = fr == 0.5f && e2 <= 0 && e2 > -30 ? 1 - e2 : 0;   // scale = 2^-sh
+  auto rnd = [&](int32_t acc) { return sh ? satShr(acc, sh) : satRound(acc, scale); };
   // rows in pairs: each 16 columns of B loaded once for two rows of A (8 independent sums)
 #pragma omp parallel for schedule(static)
   for (long p = 0; p < (long)(M + 1) / 2; p++) {
@@ -6561,9 +6591,9 @@ static void matmulI8(int8_t *C, const int8_t *A, const int8_t *B, size_t M, size
       vst1q_s32(acc + 20, t1);
       vst1q_s32(acc + 24, t2);
       vst1q_s32(acc + 28, t3);
-      for (int j = 0; j < 16; j++) c0[n + j] = satRound(acc[j], scale);
+      for (int j = 0; j < 16; j++) c0[n + j] = rnd(acc[j]);
       if (two)
-        for (int j = 0; j < 16; j++) c1[n + j] = satRound(acc[16 + j], scale);
+        for (int j = 0; j < 16; j++) c1[n + j] = rnd(acc[16 + j]);
     }
 #endif
     for (; n < N; n++) {
@@ -6572,9 +6602,9 @@ static void matmulI8(int8_t *C, const int8_t *A, const int8_t *B, size_t M, size
         x += (int32_t)a0[k] * B[k * N + n];
         y += (int32_t)a1[k] * B[k * N + n];
       }
-      c0[n] = satRound(x, scale);
+      c0[n] = rnd(x);
       if (two)
-        c1[n] = satRound(y, scale);
+        c1[n] = rnd(y);
     }
   }
 }
@@ -7287,6 +7317,27 @@ static void elemaddInt(const int8_t *a, const int8_t *b, int8_t *o, size_t n, in
   }
   if (flush)
     VTABufferFlush(flush, 0, n);
+}
+// #### JO added (2026-11-16): the integer elemadd over operands in different layouts (row / EVTA, as elemaddRows): the same
+// bytes as elemadd_evta when not all three are VTA buffers in the EVTA layout (prune_rows_onnx.py: the residual adds of the
+// last block)
+static void elemaddRowsInt(int mask, size_t rows, size_t cols, int8_t *a, int8_t *b, int8_t *o, size_t n, int32_t A,
+                           int32_t B, int N) {
+  const bool op = mask & 4;
+  int8_t *ta = nullptr, *tb = nullptr;
+  if (((mask & 1) != 0) != op) {
+    ta = (int8_t *)malloc(n);
+    op ? packRows(ta, a, rows, cols) : unpackRows(ta, a, rows, cols);
+    a = ta;
+  }
+  if (((mask & 2) != 0) != op) {
+    tb = (int8_t *)malloc(n);
+    op ? packRows(tb, b, rows, cols) : unpackRows(tb, b, rows, cols);
+    b = tb;
+  }
+  elemaddInt(a, b, o, n, A, B, N);
+  free(ta);
+  free(tb);
 }
 // layerNormI8 with x and / or out packed (xP / oP; the CPU path of layernorm_evta2): through row copies; a packed out is
 // flushed for the EVTA (outBuf)
@@ -8395,11 +8446,16 @@ static void findLayerNorms(IRFunction *F, VTASaveContext *ctx) {
     // x and the divisors / exponent stay valid up to A2: no interleaved deallocation or splat of them
     const Value *ox = org(x);
     bool ok = true;
+    //#### JO changed (2026-11-16): the divisors / exponent (splats shared by all the layer norms) freed inside the chain
+    //#### (its last use: the layer norm after it works on fewer rows, prune_rows_onnx.py) are freed after the call
+    std::vector<const Instruction *> freeAfter;
     for (const Instruction *J : inter)
       for (unsigned q = 0, e = J->getNumOperands(); q < e; q++) {
         const Value *o = org(J->getOperand(q).first);
         if (J->getKind() == Kinded::Kind::DeallocActivationInstKind &&
-            (o == ox || o == org(V1->getRHS()) || o == org(V2->getRHS()) || o == org(PW->getRHS())))
+            (o == org(V1->getRHS()) || o == org(V2->getRHS()) || o == org(PW->getRHS())))
+          freeAfter.push_back(J);
+        else if (J->getKind() == Kinded::Kind::DeallocActivationInstKind && o == ox)
           ok = false;
         if (J->getKind() == Kinded::Kind::SplatInstKind && o == ox)
           ok = false;
@@ -8436,6 +8492,9 @@ static void findLayerNorms(IRFunction *F, VTASaveContext *ctx) {
     f.b = B;
     f.rows = rows;
     f.cols = cols;
+    f.freeAfter = freeAfter;
+    for (const Instruction *J : freeAfter)
+      ctx->layerNormAway.insert(J);
     auto q = [](float s) { return "1/" + std::to_string(1 / s); };
     auto el = [](float s) { return "1.0/" + std::to_string(1 / s); };
     f.scales = {q(sc(D0->getSrc())), q(sc(Q1->getDest())),  el(sc(V1->getLHS())), el(sc(V1->getRHS())),
@@ -9303,6 +9362,8 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
     }
     if (ctx.layerNorms.count(&I)) {
       emitLayerNormI8(ctx.layerNorms[&I], &bundle, &ctx);
+      for (const Instruction *J : ctx.layerNorms[&I].freeAfter)   //#### JO added (2026-11-16)
+        bundle.append("  free(" + llvm::cast<DeallocActivationInst>(J)->getSrc()->getName().str() + ");\n");
       continue;
     }
     //#### JO added (2026-11-09): findSoftmaxI8

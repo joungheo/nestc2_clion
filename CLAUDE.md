@@ -372,6 +372,11 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   `VTASetOutputLut` around `matmul_evta_qk`, heads written into the region's out (CPU table without the extended ALU); vtalib-systolic
   runs a table-only epilogue over a conv batch (`gConvBatch` was off with any epilogue: only the first head was computed), the table
   buffer relocated in replays. Same bytes; DeiT OMP 1 46.17 -> 44.21, OMP 4 43.58 -> 41.52 ms (lut8 2.25 -> 0).
+  Last block on 2 rows (2026-11-16, `docs/deit_optimization.md` §6.7): `vtabundles_xcmpl/prune_rows_onnx.py` (`gen_deit_bundle.sh`
+  `PRUNE_ROWS=1` default) computes only the rows the outputs read (backward row liveness over the ONNX graph, Slices inserted, Reshape / Gather
+  fixed; the whole model's profile + Slice entries + the pruned model's new names); VTASave: shared layer-norm splats freed after the fused call,
+  mixed-layout int8 adds as the integer elemadd (`elemaddRowsInt`), `matmulI8` rounds 2^-s scales half up as the EVTA. ImageNetV2 2,000 output
+  hashes identical (`EVAL_HASH=1`); DeiT OMP 1 44.28 -> 41.07, OMP 4 41.73 -> 38.42 ms.
 - Other models (2026-11-05, `docs/evta_runtime_compare.md` §7.19): Resnet50 res2_0 residual fused (relu to a 2^q smaller scale), schedules of the
   Resnet50 / VGG16 shapes in `VTASchedules.h` (found with vtalib-systolic `EVTA_SCHED`), conv tiles below 7 x 7: the dummy-padded store
   used the wrong channel block with nVirtualThread 2 (fixed in both vtalibs) and the systolic vtalib's minimum tile is 1 on an `_sa_` bitstream

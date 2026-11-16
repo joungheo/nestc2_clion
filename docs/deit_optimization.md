@@ -438,6 +438,39 @@ python fakequant.py deit_fold.onnx ~/data2/datasets/imagenetv2/png224 --n 9000 -
   - 민감한 층(첫 patch embedding, 마지막 classifier)을 16비트로 두기
   - percentile / KL calibration
 
+## 6.7 마지막 블록은 2행만 계산 (2026-11-16)
+
+DeiT의 출력(분류기 두 개)은 마지막 layer norm의 0행(class token)과 1행(distillation token)만 읽는다(`Gather` 두 개, axis 1).
+행마다 따로 계산되는 연산(linear, layer norm, add, GELU)은 다른 행이 필요 없고, 행끼리 섞는 것은 attention뿐이다. 그래서 마지막
+블록은 query 쪽과 attention 뒤 전부를 2행으로 계산해도 결과가 같다. key / value는 198행 모두 필요하다.
+
+- `vtabundles_xcmpl/prune_rows_onnx.py` (ONNX 단계, `gen_deit_bundle.sh`의 `PRUNE_ROWS=1` 기본): 출력에서 거꾸로 "이 텐서는 어느 축의
+  어느 범위만 읽히나"를 구한다(Gather는 인덱스, 원소별 연산 / 다른 축의 ReduceMean / Softmax는 그대로, MatMul은 왼쪽 행만, Transpose /
+  Reshape는 축을 옮김, 나머지는 전부). 일부만 읽히는 텐서는 그 행만 계산하게 바꾸고, 전부 계산되는 텐서에서 일부를 받는 곳에 `Slice`를
+  넣는다(layer norm 출력 → query, 층 10 출력 → residual). Reshape 모양과 Gather 인덱스도 고친다. 41개 텐서가 2행이 됐다. 이름 대신 실제
+  연산이 행끼리 섞이는지로 판단하므로 다른 모델의 같은 구조에도 그대로 쓴다.
+- 양자화 scale을 그대로 두는 법: 원래 모델의 profile을 그대로 쓰고, 새 `Slice`에는 입력의 항목을 복사한다. 2행 모양에서만 생기는 노드
+  (Glow가 [1, 2, 1]일 때 상수로 접는 broadcast 등, 7개)는 줄인 모델을 다시 profile해 그 이름만 더한다. 항목은 YAML 문서 끝 표시(`...`)
+  앞에 넣어야 읽힌다(처음엔 뒤에 붙여 무시됐다).
+- 같은 바이트가 나오게 고친 것(VTASave):
+  - `findLayerNorms`: 여러 layer norm이 같이 쓰는 나눗셈 / 지수 splat이 chain 안에서 해제되면(다음 layer norm이 2행이라 자기 것을 써서
+    이게 마지막 사용) 거부하던 것을, 해제를 fused 호출 뒤로 옮기게 했다. 층 11의 첫 layer norm이 다시 EVTA로 돈다.
+  - 두 활성값의 add인데 배치가 섞여 `elemadd_evta`를 못 쓰면(`lmask` 1~6) CPU에서도 같은 정수식 `nestc_cpu::elemaddRowsInt`(§8.17)로
+    한다(전에는 float `elemaddRows`). 상수 피연산자(위치 임베딩)나 4-D(CNN) add는 그대로.
+  - `nestc_cpu::matmulI8`: scale이 2^-s면 EVTA처럼 `(acc + 2^(s-1)) >> s`(half up)로 반올림한다(`std::round`는 half away라 음수
+    동점에서 달랐다). 2행 attention이 CPU int8 matmul로 돈다. 지금 다른 번들은 이 함수를 쓰지 않는다.
+- 확인(보드 `_alux3` 400 MHz): ImageNetV2 앞 2,000장에서 출력 바이트의 hash(`EVAL_HASH=1`, 이번에 추가)가 원래 번들과 2,000장 모두 같다.
+  cat / dog / zebra 결과와 confidence, `EVTA_ALUX=0`도 같다. 중간 확인으로 층 11 q / k / v / out-proj / fc1 / fc2 conv dump의 0, 1행을 비교했다.
+
+| DeiT (`-vta-alu-softmax`) | 198행 | 2행 |
+|---|---|---|
+| OMP 1 | 44.28 ms | **41.07 ms** (−3.2) |
+| OMP 4 | 41.73 ms | **38.42 ms** (−3.3) |
+
+줄어든 곳(OMP 1): EVTA conv 17.47 → 16.64, softmax 5.66 → 5.24, Q K^T 4.37 → 4.01, A x V 3.60 → 3.30, layer norm 4.32 → 4.21 ms, 마지막
+layer norm의 float CPU chain(약 1 ms)이 거의 0. 남은 것: 층 10 출력 add가 CPU(198행, 출력 배치가 행이라서)이고 층 11 첫 layer norm은
+`layernorm_evta`(행 배치 입력)이다. 묶인 행 배치에서 앞 2행을 꺼내는 view를 지원하면 둘 다 EVTA 배치로 돌아간다.
+
 ## 7. 재현
 
 끄는 방법은 세 종류다. `-vta-*`는 번들 생성(`model-compiler`) 옵션이라 번들을 다시 만들어야 하고, `EVTA_*`는 실행할 때 주는 환경변수(`sudo /bin/sh -c "EVTA_X=0 hw/script/run_prof.sh ..."`), 하드웨어 단계는 `BIN=<비트스트림>`이다. 자세한 절차와 vtalib마다 읽는 변수의 차이는 `resnet18_optimization.md` §9.2–§9.5에 있다.

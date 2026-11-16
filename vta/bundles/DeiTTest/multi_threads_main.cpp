@@ -290,6 +290,16 @@ int main(int argc, char **argv) {
       n++;
       if (!quiet || n % 500 == 0)
         printf("EV %d %d %d  top1 %d/%d\n", n, pred, label, ok, n);
+      //#### JO added (2026-11-16): EVAL_HASH=1 prints a hash (FNV-1a) of the output's bytes per image, to compare two
+      //#### builds byte for byte over an image set (prune_rows_onnx.py)
+      static const bool hashOut = getenv("EVAL_HASH") && atoi(getenv("EVAL_HASH")) > 0;
+      if (hashOut) {
+        const SymbolTableEntry &out = getMutableWeightVar(c, MODEL_OUTPUT);
+        const uint8_t *ob = mw + out.offset;
+        uint64_t h = 1469598103934665603ull;
+        for (size_t i = 0; i < out.size * sizeof(float); i++) h = (h ^ ob[i]) * 1099511628211ull;
+        printf("EH %d %016llx\n", n, (unsigned long long)h);
+      }
     }
     gettimeofday(&t2, NULL);
     fclose(lf);
