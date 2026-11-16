@@ -1193,6 +1193,8 @@ fused = `_pcsys12`(`-vta-fuse-elemadd-mul`). `EVTA_MEMEXP`는 해당 전송을 �
 
 ### 8.21 다음 tile의 LOAD를 앞 tile의 epilogue · STORE와 겹침 (`EVTA_LOAD_AHEAD`, 2026-11-16, 기본 2)
 
+코드와 그림으로 풀어 쓴 설명: [evta_load_ahead_guide.md](evta_load_ahead_guide.md).
+
 §8.20의 결론(융합 add는 compute와 겹치지 못한 전송 때문에 느림)에 따라 vtalib-systolic `conv_kernel`의 LOAD 큐 순서와 토큰(dependency
 token: 큐 사이의 "다 썼음 / 다 실었음" 신호) 배치를 바꿨다. 하드웨어 변경은 없다.
 

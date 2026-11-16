@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="600" viewBox="0 0 1400 600" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif">
+<title>그림 A4. 단일 EVTA의 inp / wgt 배치 (thread 2개): 다음 tile의 LOAD가 앞 tile이 읽는 곳을 덮지 않는다</title>
+<defs><marker id="ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#333333"/></marker><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f5f98"/></marker><marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c06a10"/></marker><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3c8a35"/></marker><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker><marker id="ap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6d4596"/></marker><marker id="ay" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9a7b00"/></marker><marker id="agr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#888888"/></marker></defs>
+<rect x="0" y="0" width="1400" height="600" fill="#ffffff"/>
+<text x="700.0" y="34" font-size="19" fill="#333333" text-anchor="middle" font-weight="bold">그림 A4. 단일 EVTA의 inp / wgt 배치 (thread 2개): 다음 tile의 LOAD가 앞 tile이 읽는 곳을 덮지 않는다</text>
+<text x="188" y="110" font-size="15" fill="#333333" text-anchor="end" font-weight="bold">inp (16 B)</text>
+<rect x="200.0" y="80" width="287.5" height="52" rx="2" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="343.75" y="102.10000000000001" font-size="12" fill="#333333" text-anchor="middle" font-weight="bold">입력 반쪽 A</text>
+<text x="343.75" y="118.30000000000001" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">홀수 채널</text>
+<rect x="487.5" y="80" width="287.5" height="52" rx="2" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="631.25" y="102.10000000000001" font-size="12" fill="#333333" text-anchor="middle" font-weight="bold">입력 반쪽 B</text>
+<text x="631.25" y="118.30000000000001" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">짝수 채널</text>
+<rect x="775.0" y="80" width="287.5" height="52" rx="2" fill="#fbf6dc" stroke="#9a7b00" stroke-width="1.6"/>
+<text x="918.75" y="102.10000000000001" font-size="12" fill="#333333" text-anchor="middle" font-weight="bold">residual thread 0</text>
+<text x="918.75" y="118.30000000000001" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">(epilogue ADD)</text>
+<rect x="1062.5" y="80" width="287.5" height="52" rx="2" fill="#fbf6dc" stroke="#9a7b00" stroke-width="1.6"/>
+<text x="1206.25" y="102.10000000000001" font-size="12" fill="#333333" text-anchor="middle" font-weight="bold">residual thread 1</text>
+<text x="1206.25" y="118.30000000000001" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal"></text>
+<text x="200.0" y="150" font-size="11" fill="#888888" text-anchor="middle" font-weight="normal">0</text>
+<text x="487.5" y="150" font-size="11" fill="#888888" text-anchor="middle" font-weight="normal">1024</text>
+<text x="775.0" y="150" font-size="11" fill="#888888" text-anchor="middle" font-weight="normal">2048</text>
+<text x="1062.5" y="150" font-size="11" fill="#888888" text-anchor="middle" font-weight="normal">3072</text>
+<text x="1350.0" y="150" font-size="11" fill="#888888" text-anchor="middle" font-weight="normal">4096</text>
+<text x="188" y="230" font-size="15" fill="#333333" text-anchor="end" font-weight="bold">wgt (256 B)</text>
+<rect x="200.0" y="200" width="575.0" height="52" rx="2" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.6"/>
+<text x="487.5" y="222.1" font-size="12" fill="#333333" text-anchor="middle" font-weight="bold">thread 0 가중치</text>
+<text x="487.5" y="238.3" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">[kernel][channel]</text>
+<rect x="775.0" y="200" width="573.876953125" height="52" rx="2" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.6"/>
+<text x="1061.9384765625" y="222.1" font-size="12" fill="#333333" text-anchor="middle" font-weight="bold">thread 1 가중치</text>
+<text x="1061.9384765625" y="238.3" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal"></text>
+<rect x="1348.876953125" y="200" width="1.123046875" height="52" rx="2" fill="#fbe9e7" stroke="#c0392b" stroke-width="1.6"/>
+<text x="1349.4384765625" y="230.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="bold"></text>
+<text x="200.0" y="270" font-size="11" fill="#888888" text-anchor="middle" font-weight="normal">0</text>
+<text x="775.0" y="270" font-size="11" fill="#888888" text-anchor="middle" font-weight="normal">512</text>
+<text x="1348.876953125" y="270" font-size="11" fill="#888888" text-anchor="middle" font-weight="normal">1023</text>
+<text x="1346" y="196" font-size="12" fill="#c0392b" text-anchor="end" font-weight="normal">identity 1023 (residual GEMM)</text>
+<rect x="60" y="320" width="1290" height="250" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="80" y="350" font-size="14" fill="#333333" text-anchor="start" font-weight="bold">누가 덮어쓰고, 무엇을 기다리나 (group k+1의 LOAD)</text>
+<text x="80" y="377" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">• 입력 c=0 → 반쪽 하나: 그 반쪽을 마지막으로 읽은 것은 group k의 c=C-2 GEMM. thread 0의 c=C-1 GEMM 토큰이 오면 이미 끝났다</text>
+<text x="80" y="404" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">   (compute는 명령 순서대로: c=C-2 t0, t1 → c=C-1 t0). 반쪽 순서는 group을 넘어 이어 간다 (그림 A5).</text>
+<text x="80" y="431" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">• 가중치 thread t → 자기 영역: 읽는 것은 thread t의 GEMM뿐. c=0의 pop이 그 thread의 c=C-1 GEMM 토큰이다.</text>
+<text x="80" y="458" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">• residual thread t → 2048 + 1024 t: 읽는 것은 group k의 epilogue(residual GEMM). ▲E 토큰을 받고 LOAD한다.</text>
+<text x="80" y="485" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">• identity 1023: run 첫 group에서 한 번만 LOAD. 가중치는 1023 아래에 들어갈 때만 이 방식 (canUp).</text>
+<text x="80" y="512" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">• 2단계: 1x1 conv의 가중치가 한 번에 들어가고 filter group이 하나면, 같은 run의 다음 tile은 가중치 LOAD를 하지 않는다.</text>
+<text x="80" y="539" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">• multi-EVTA 비트스트림은 inp가 2048 entry라 residual 자리가 없다 → residual 있는 conv는 전과 같이 (ahead 끔).</text>
+</svg>

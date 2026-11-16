@@ -366,6 +366,8 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   A x V was wrong without it, the simulator did not show it), the run's last tile ends as before; 2: a 1x1 conv's resident weights are not
   reLOADed. Dumps byte-identical; OMP 1: Resnet50 68.85 -> 65.41, MobileNetV2 17.29 -> 15.29, Resnet18 23.05 -> 22.55, DeiT 47.09 -> 46.23
   (fused add 48.13 -> 46.73, still behind: stays off) ms. Simulator `EVTA_SIM_TOKENS=1` prints the tokens a run leaves.
+  How it works, with the code and 5 figures (queues / tokens, which token each LOAD takes, SRAM layout, the odd-block bug):
+  [docs/evta_load_ahead_guide.md](docs/evta_load_ahead_guide.md).
 - Other models (2026-11-05, `docs/evta_runtime_compare.md` §7.19): Resnet50 res2_0 residual fused (relu to a 2^q smaller scale), schedules of the
   Resnet50 / VGG16 shapes in `VTASchedules.h` (found with vtalib-systolic `EVTA_SCHED`), conv tiles below 7 x 7: the dummy-padded store
   used the wrong channel block with nVirtualThread 2 (fixed in both vtalibs) and the systolic vtalib's minimum tile is 1 on an `_sa_` bitstream

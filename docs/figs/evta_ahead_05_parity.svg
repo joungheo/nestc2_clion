@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="700" viewBox="0 0 1400 700" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif">
+<title>그림 A5. 처음 보드에서 틀렸던 이유: 입력 채널 블록이 홀수(13)일 때 반쪽 순서</title>
+<defs><marker id="ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#333333"/></marker><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f5f98"/></marker><marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c06a10"/></marker><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3c8a35"/></marker><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker><marker id="ap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6d4596"/></marker><marker id="ay" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9a7b00"/></marker><marker id="agr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#888888"/></marker></defs>
+<rect x="0" y="0" width="1400" height="700" fill="#ffffff"/>
+<text x="700.0" y="34" font-size="19" fill="#333333" text-anchor="middle" font-weight="bold">그림 A5. 처음 보드에서 틀렸던 이유: 입력 채널 블록이 홀수(13)일 때 반쪽 순서</text>
+<text x="40" y="84" font-size="16" fill="#333333" text-anchor="start" font-weight="bold">① 고치기 전: group마다 c=0을 반쪽 B에서 시작</text>
+<rect x="60" y="100" width="74" height="44" rx="3" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="97.0" y="118.425" font-size="11" fill="#333333" text-anchor="middle" font-weight="bold">k c=0</text>
+<text x="97.0" y="133.275" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">B</text>
+<rect x="140" y="100" width="74" height="44" rx="3" fill="#fbf6dc" stroke="#9a7b00" stroke-width="1.6"/>
+<text x="177.0" y="118.425" font-size="11" fill="#333333" text-anchor="middle" font-weight="bold">k c=1</text>
+<text x="177.0" y="133.275" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">A</text>
+<rect x="220" y="100" width="74" height="44" rx="3" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="257.0" y="118.425" font-size="11" fill="#333333" text-anchor="middle" font-weight="bold">k c=2</text>
+<text x="257.0" y="133.275" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">B</text>
+<rect x="300" y="100" width="74" height="44" rx="3" fill="#fbf6dc" stroke="#9a7b00" stroke-width="1.6"/>
+<text x="337.0" y="118.425" font-size="11" fill="#333333" text-anchor="middle" font-weight="bold">k c=3</text>
+<text x="337.0" y="133.275" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">A</text>
+<rect x="380" y="100" width="74" height="44" rx="3" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="417.0" y="118.425" font-size="11" fill="#333333" text-anchor="middle" font-weight="bold">k c=4</text>
+<text x="417.0" y="133.275" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">B</text>
+<rect x="460" y="100" width="74" height="44" rx="3" fill="#fbf6dc" stroke="#9a7b00" stroke-width="1.6"/>
+<text x="497.0" y="118.425" font-size="11" fill="#333333" text-anchor="middle" font-weight="bold">k c=5</text>
+<text x="497.0" y="133.275" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">A</text>
+<rect x="540" y="100" width="74" height="44" rx="3" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="577.0" y="118.425" font-size="11" fill="#333333" text-anchor="middle" font-weight="bold">k c=6</text>
+<text x="577.0" y="133.275" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">B</text>
+<rect x="620" y="100" width="74" height="44" rx="3" fill="#fbf6dc" stroke="#9a7b00" stroke-width="1.6"/>
+<text x="657.0" y="118.425" font-size="11" fill="#333333" text-anchor="middle" font-weight="bold">k c=7</text>
+<text x="657.0" y="133.275" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">A</text>
+<rect x="700" y="100" width="74" height="44" rx="3" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="737.0" y="118.425" font-size="11" fill="#333333" text-anchor="middle" font-weight="bold">k c=8</text>
+<text x="737.0" y="133.275" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">B</text>
+<rect x="780" y="100" width="74" height="44" rx="3" fill="#fbf6dc" stroke="#9a7b00" stroke-width="1.6"/>
+<text x="817.0" y="118.425" font-size="11" fill="#333333" text-anchor="middle" font-weight="bold">k c=9</text>
+<text x="817.0" y="133.275" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">A</text>
+<rect x="860" y="100" width="74" height="44" rx="3" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="897.0" y="118.425" font-size="11" fill="#333333" text-anchor="middle" font-weight="bold">k c=10</text>
+<text x="897.0" y="133.275" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">B</text>
+<text x="970" y="128" font-size="16" fill="#333333" text-anchor="middle" font-weight="normal">…</text>
+<rect x="1000" y="100" width="74" height="44" rx="3" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="1037.0" y="118.425" font-size="11" fill="#333333" text-anchor="middle" font-weight="bold">k c=12</text>
+<text x="1037.0" y="133.275" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">B</text>
+<rect x="1090" y="100" width="110" height="44" rx="3" fill="#fbe9e7" stroke="#c0392b" stroke-width="1.6"/>
+<text x="1145.0" y="118.10000000000001" font-size="12" fill="#333333" text-anchor="middle" font-weight="bold">k+1 c=0</text>
+<text x="1145.0" y="134.3" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">B !</text>
+<text x="60" y="180" font-size="14" fill="#c0392b" text-anchor="start" font-weight="normal">group k의 c=12 = B.  compute: GEMM k c=12 t0 → GEMM k c=12 t1 (둘 다 B를 읽음)</text>
+<text x="60" y="204" font-size="14" fill="#c0392b" text-anchor="start" font-weight="normal">load: 입력 k+1 c=0 → B.  이 LOAD가 받는 토큰은 GEMM k c=12 t0 것 → t1이 아직 B를 읽는 중에 덮어씀</text>
+<text x="40" y="270" font-size="13" fill="#888888" text-anchor="start" font-weight="normal">시간 →</text>
+<text x="148" y="306" font-size="14" fill="#333333" text-anchor="end" font-weight="bold">compute</text>
+<line x1="160" y1="320" x2="1040" y2="320" stroke="#888888" stroke-width="1" stroke-dasharray="5,4"/>
+<text x="148" y="356" font-size="14" fill="#333333" text-anchor="end" font-weight="bold">load</text>
+<line x1="160" y1="370" x2="1040" y2="370" stroke="#888888" stroke-width="1" stroke-dasharray="5,4"/>
+<rect x="160" y="286" width="200" height="34" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.6"/>
+<text x="260.0" y="307.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">GEMM k c=12 t0  (B)</text>
+<rect x="360" y="286" width="220" height="34" rx="4" fill="#fbe9e7" stroke="#c0392b" stroke-width="1.6"/>
+<text x="470.0" y="307.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">GEMM k c=12 t1  (B 읽는 중)</text>
+<rect x="365" y="336" width="215" height="34" rx="4" fill="#fbe9e7" stroke="#c0392b" stroke-width="1.6"/>
+<text x="472.5" y="357.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">입력 k+1 c=0 → B 쓰기</text>
+<polyline points="360,320 365,336" fill="none" stroke="#c0392b" stroke-width="1.8" marker-end="url(#ar)"/>
+<text x="600" y="400" font-size="13" fill="#c0392b" text-anchor="middle" font-weight="normal">DeiT A x V (K 198 → 13 블록): 출력 783 / 12672 바이트가 달라짐, confidence 0.738 → 0.735. 시뮬레이터에서는 안 드러남</text>
+<text x="40" y="470" font-size="16" fill="#333333" text-anchor="start" font-weight="bold">② 고친 뒤: 반쪽 순서를 group을 넘어 이어 감 (gAhead.inpPtr)</text>
+<rect x="60" y="486" width="74" height="44" rx="3" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="97.0" y="504.425" font-size="11" fill="#333333" text-anchor="middle" font-weight="bold">k c=0</text>
+<text x="97.0" y="519.275" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">B</text>
+<rect x="140" y="486" width="74" height="44" rx="3" fill="#fbf6dc" stroke="#9a7b00" stroke-width="1.6"/>
+<text x="177.0" y="504.425" font-size="11" fill="#333333" text-anchor="middle" font-weight="bold">k c=1</text>
+<text x="177.0" y="519.275" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">A</text>
+<rect x="220" y="486" width="74" height="44" rx="3" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="257.0" y="504.425" font-size="11" fill="#333333" text-anchor="middle" font-weight="bold">k c=2</text>
+<text x="257.0" y="519.275" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">B</text>
+<rect x="300" y="486" width="74" height="44" rx="3" fill="#fbf6dc" stroke="#9a7b00" stroke-width="1.6"/>
+<text x="337.0" y="504.425" font-size="11" fill="#333333" text-anchor="middle" font-weight="bold">k c=3</text>
+<text x="337.0" y="519.275" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">A</text>
+<rect x="380" y="486" width="74" height="44" rx="3" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="417.0" y="504.425" font-size="11" fill="#333333" text-anchor="middle" font-weight="bold">k c=4</text>
+<text x="417.0" y="519.275" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">B</text>
+<rect x="460" y="486" width="74" height="44" rx="3" fill="#fbf6dc" stroke="#9a7b00" stroke-width="1.6"/>
+<text x="497.0" y="504.425" font-size="11" fill="#333333" text-anchor="middle" font-weight="bold">k c=5</text>
+<text x="497.0" y="519.275" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">A</text>
+<rect x="540" y="486" width="74" height="44" rx="3" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="577.0" y="504.425" font-size="11" fill="#333333" text-anchor="middle" font-weight="bold">k c=6</text>
+<text x="577.0" y="519.275" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">B</text>
+<rect x="620" y="486" width="74" height="44" rx="3" fill="#fbf6dc" stroke="#9a7b00" stroke-width="1.6"/>
+<text x="657.0" y="504.425" font-size="11" fill="#333333" text-anchor="middle" font-weight="bold">k c=7</text>
+<text x="657.0" y="519.275" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">A</text>
+<rect x="700" y="486" width="74" height="44" rx="3" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="737.0" y="504.425" font-size="11" fill="#333333" text-anchor="middle" font-weight="bold">k c=8</text>
+<text x="737.0" y="519.275" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">B</text>
+<rect x="780" y="486" width="74" height="44" rx="3" fill="#fbf6dc" stroke="#9a7b00" stroke-width="1.6"/>
+<text x="817.0" y="504.425" font-size="11" fill="#333333" text-anchor="middle" font-weight="bold">k c=9</text>
+<text x="817.0" y="519.275" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">A</text>
+<rect x="860" y="486" width="74" height="44" rx="3" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="897.0" y="504.425" font-size="11" fill="#333333" text-anchor="middle" font-weight="bold">k c=10</text>
+<text x="897.0" y="519.275" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">B</text>
+<text x="970" y="514" font-size="16" fill="#333333" text-anchor="middle" font-weight="normal">…</text>
+<rect x="1000" y="486" width="74" height="44" rx="3" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="1037.0" y="504.425" font-size="11" fill="#333333" text-anchor="middle" font-weight="bold">k c=12</text>
+<text x="1037.0" y="519.275" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">B</text>
+<rect x="1090" y="486" width="110" height="44" rx="3" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="1145.0" y="504.09999999999997" font-size="12" fill="#333333" text-anchor="middle" font-weight="bold">k+1 c=0</text>
+<text x="1145.0" y="520.3" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">A</text>
+<text x="60" y="566" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">입력 k+1 c=0 → A: A를 마지막으로 읽은 것은 GEMM k c=11 (t0, t1). GEMM k c=12 t0의 토큰이 오면 둘 다 끝났다.</text>
+<text x="60" y="592" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">블록 수가 짝수면 전과 같은 배치다. run의 첫 group은 전처럼 B에서 시작한다.</text>
+<text x="60" y="618" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">uint32_t inputSramPtr = tokIn ? 0 : gAhead.inpPtr;   …   gAhead.inpPtr = inputSramPtr;</text>
+</svg>

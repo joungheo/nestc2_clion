@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="720" viewBox="0 0 1400 720" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif">
+<title>그림 A1. 한 EVTA run 안의 tile 두 개: 전에는 다음 tile의 LOAD가 앞 tile의 STORE 뒤에야 시작했다</title>
+<defs><marker id="ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#333333"/></marker><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f5f98"/></marker><marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c06a10"/></marker><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3c8a35"/></marker><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker><marker id="ap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6d4596"/></marker><marker id="ay" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9a7b00"/></marker><marker id="agr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#888888"/></marker></defs>
+<rect x="0" y="0" width="1400" height="720" fill="#ffffff"/>
+<text x="700.0" y="34" font-size="19" fill="#333333" text-anchor="middle" font-weight="bold">그림 A1. 한 EVTA run 안의 tile 두 개: 전에는 다음 tile의 LOAD가 앞 tile의 STORE 뒤에야 시작했다</text>
+<text x="40" y="84" font-size="16" fill="#333333" text-anchor="start" font-weight="bold">① 전 (EVTA_LOAD_AHEAD=0)</text>
+<text x="188" y="126" font-size="14" fill="#333333" text-anchor="end" font-weight="bold">load 큐</text>
+<line x1="200" y1="140" x2="1400" y2="140" stroke="#888888" stroke-width="1" stroke-dasharray="5,4"/>
+<text x="188" y="176" font-size="14" fill="#333333" text-anchor="end" font-weight="bold">compute 큐</text>
+<line x1="200" y1="190" x2="1400" y2="190" stroke="#888888" stroke-width="1" stroke-dasharray="5,4"/>
+<text x="188" y="226" font-size="14" fill="#333333" text-anchor="end" font-weight="bold">store 큐</text>
+<line x1="200" y1="240" x2="1400" y2="240" stroke="#888888" stroke-width="1" stroke-dasharray="5,4"/>
+<rect x="210.0" y="106" width="105.0" height="34" rx="4" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="262.5" y="127.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">입력 · 가중치 0</text>
+<rect x="472.5" y="106" width="70.0" height="34" rx="4" fill="#fbf6dc" stroke="#9a7b00" stroke-width="1.6"/>
+<text x="507.5" y="127.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">residual 0</text>
+<rect x="280.0" y="156" width="192.5" height="34" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.6"/>
+<text x="376.25" y="177.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">GEMM 0</text>
+<rect x="542.5" y="156" width="105.0" height="34" rx="4" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="595.0" y="177.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">epilogue 0</text>
+<rect x="647.5" y="206" width="87.5" height="34" rx="4" fill="#f1eaf8" stroke="#6d4596" stroke-width="1.6"/>
+<text x="691.25" y="227.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">STORE 0</text>
+<rect x="735.0" y="106" width="105.0" height="34" rx="4" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="787.5" y="127.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">입력 · 가중치 1</text>
+<rect x="997.5" y="106" width="70.0" height="34" rx="4" fill="#fbf6dc" stroke="#9a7b00" stroke-width="1.6"/>
+<text x="1032.5" y="127.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">residual 1</text>
+<rect x="805.0" y="156" width="192.5" height="34" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.6"/>
+<text x="901.25" y="177.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">GEMM 1</text>
+<rect x="1067.5" y="156" width="105.0" height="34" rx="4" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="1120.0" y="177.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">epilogue 1</text>
+<rect x="1172.5" y="206" width="87.5" height="34" rx="4" fill="#f1eaf8" stroke="#6d4596" stroke-width="1.6"/>
+<text x="1216.25" y="227.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">STORE 1</text>
+<rect x="472.5" y="156" width="70.0" height="34" rx="4" fill="#fbe9e7" stroke="#c0392b" stroke-width="1.6" stroke-dasharray="6,4"/>
+<text x="507.5" y="177.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="bold">기다림</text>
+<rect x="647.5" y="156" width="157.5" height="34" rx="4" fill="#fbe9e7" stroke="#c0392b" stroke-width="1.6" stroke-dasharray="6,4"/>
+<text x="726.25" y="177.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="bold">기다림</text>
+<polyline points="735.0,206 735.0,140" fill="none" stroke="#c0392b" stroke-width="1.6" marker-end="url(#ar)"/>
+<text x="743.0" y="262" font-size="12" fill="#c0392b" text-anchor="start" font-weight="normal">STORE 0이 끝나야 reset 1 → 그 토큰으로 LOAD 1 시작</text>
+<text x="1270.0" y="178" font-size="13" fill="#c0392b" text-anchor="start" font-weight="bold">끝 600</text>
+<text x="40" y="330" font-size="16" fill="#333333" text-anchor="start" font-weight="bold">② 후 (EVTA_LOAD_AHEAD=2, 기본)</text>
+<text x="188" y="372" font-size="14" fill="#333333" text-anchor="end" font-weight="bold">load 큐</text>
+<line x1="200" y1="386" x2="1400" y2="386" stroke="#888888" stroke-width="1" stroke-dasharray="5,4"/>
+<text x="188" y="422" font-size="14" fill="#333333" text-anchor="end" font-weight="bold">compute 큐</text>
+<line x1="200" y1="436" x2="1400" y2="436" stroke="#888888" stroke-width="1" stroke-dasharray="5,4"/>
+<text x="188" y="472" font-size="14" fill="#333333" text-anchor="end" font-weight="bold">store 큐</text>
+<line x1="200" y1="486" x2="1400" y2="486" stroke="#888888" stroke-width="1" stroke-dasharray="5,4"/>
+<rect x="210.0" y="352" width="105.0" height="34" rx="4" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="262.5" y="373.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">입력 · 가중치 0</text>
+<rect x="315.0" y="352" width="70.0" height="34" rx="4" fill="#fbf6dc" stroke="#9a7b00" stroke-width="1.6"/>
+<text x="350.0" y="373.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">residual 0</text>
+<rect x="280.0" y="402" width="192.5" height="34" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.6"/>
+<text x="376.25" y="423.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">GEMM 0</text>
+<rect x="472.5" y="402" width="105.0" height="34" rx="4" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="525.0" y="423.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">epilogue 0</text>
+<rect x="577.5" y="452" width="87.5" height="34" rx="4" fill="#f1eaf8" stroke="#6d4596" stroke-width="1.6"/>
+<text x="621.25" y="473.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">STORE 0</text>
+<rect x="472.5" y="352" width="105.0" height="34" rx="4" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="525.0" y="373.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">입력 1</text>
+<rect x="577.5" y="352" width="70.0" height="34" rx="4" fill="#fbf6dc" stroke="#9a7b00" stroke-width="1.6"/>
+<text x="612.5" y="373.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">residual 1</text>
+<rect x="665.0" y="402" width="192.5" height="34" rx="4" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.6"/>
+<text x="761.25" y="423.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">GEMM 1</text>
+<rect x="857.5" y="402" width="105.0" height="34" rx="4" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="910.0" y="423.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">epilogue 1</text>
+<rect x="962.5" y="452" width="87.5" height="34" rx="4" fill="#f1eaf8" stroke="#6d4596" stroke-width="1.6"/>
+<text x="1006.25" y="473.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">STORE 1</text>
+<rect x="577.5" y="402" width="87.5" height="34" rx="4" fill="#f2f2f2" stroke="#888888" stroke-width="1.6" stroke-dasharray="6,4"/>
+<text x="621.25" y="423.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="bold">STORE 대기</text>
+<polyline points="472.5,402 472.5,386" fill="none" stroke="#3c8a35" stroke-width="1.6" marker-end="url(#ag)"/>
+<text x="466.5" y="344" font-size="12" fill="#3c8a35" text-anchor="end" font-weight="normal">마지막 GEMM 토큰</text>
+<polyline points="577.5,402 577.5,386" fill="none" stroke="#3c8a35" stroke-width="1.6" marker-end="url(#ag)"/>
+<text x="651.5" y="344" font-size="12" fill="#3c8a35" text-anchor="start" font-weight="normal">epilogue 0이 residual을 다 읽은 토큰</text>
+<text x="1060.0" y="424" font-size="13" fill="#3c8a35" text-anchor="start" font-weight="bold">끝 480</text>
+<text x="700" y="560" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">다음 tile의 LOAD(주황 · 노랑)가 앞 tile의 epilogue · STORE와 같은 시간에 돈다. compute는 STORE 대기만 남는다.</text>
+<text x="700" y="590" font-size="13" fill="#888888" text-anchor="middle" font-weight="normal">시간은 설명용 비율이다 (실측: DeiT fc2 + residual add 543 → 470 us, Resnet50 68.85 → 65.41 ms)</text>
+<text x="700" y="620" font-size="13" fill="#888888" text-anchor="middle" font-weight="normal">tile = 출력의 한 조각 (공간 조각 또는 출력 채널 묶음 = filter group). 모듈 셋은 각자 자기 큐의 명령을 순서대로 실행한다.</text>
+<text x="700" y="650" font-size="13" fill="#888888" text-anchor="middle" font-weight="normal">run 하나의 첫 LOAD와 마지막 STORE는 겹칠 상대가 없어 그대로 남는다 (tile이 적은 conv일수록 이득이 작다).</text>
+</svg>
