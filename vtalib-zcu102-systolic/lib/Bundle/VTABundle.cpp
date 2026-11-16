@@ -4684,7 +4684,9 @@ void matmulCheckOne(const char *what, FA a, FB b, const int8_t *C, int M, int K,
       for (int k = 0; k < K; k++)
         acc += (int32_t)a(m, k) * b(k, n);
       acc >>= shift;
-      const int want = (int)std::max<int64_t>(-128, std::min<int64_t>(127, acc));
+      int want = (int)std::max<int64_t>(-128, std::min<int64_t>(127, acc));
+      if (gOutLut)   //#### JO added (2026-11-16): the output LUT applied by the EVTA (matmul_evta_qk, the attention Div)
+        want = gOutLut[(uint8_t)want];
       if (C[(size_t)m * N + n] != want && bad++ < 5)
         fprintf(stderr, "%s %dx%dx%d [%d][%d]: %d, want %d\n", what, M, K, N, m, n, C[(size_t)m * N + n], want);
     }
@@ -4751,6 +4753,97 @@ int matmul_evta(const int8_t *A, const int8_t *B, int8_t *C, int M, int K, int N
   return matmul_evta_n(1, &A, &B, &C, M, K, N, shift, vtaCmdH, nVirtualThread, tileHSize, tileWSize, idEVTA);
 }
 
+//#### JO added (2026-11-16, docs/deit_optimization.md 6.8): A x V of H heads with V and the output in the EVTA layout
+//#### (VTASave -vta-attn-keep-layout): V is the value conv's output [H dh / 16][K][16] (K key rows); the filter block (nb, kb)
+//#### of head i is the 16 x 16 transpose of rows kb * 16 .. of its channel block i dh / 16 + nb (no NHWC copy, no head
+//#### transpose, no slice copies); head i's output [dh / 16][M][16] is written into outbuf at i dh M bytes, the input of the
+//#### out-proj conv in its layout [H dh / 16][M][16] (no transposes). A as matmul_evta_n (row-major [M][K] per head).
+int matmul_evta_av(const int8_t *const *A, void *vbuf, void *outbuf, int H, int M, int K, int dh, int shift,
+                   void *vtaCmdH, int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA) {
+  if (H < 1 || H > kMaxHeads || dh % 16)
+    return -1;
+  MatMulLap lap;
+  const int Kp = (K + 15) / 16 * 16, KB = Kp / 16, DB = dh / 16;
+  const int Np = matmulSched(M, Kp, dh, nVirtualThread, tileHSize, tileWSize);
+  thread_local MatMulEvtaBufs bufs;
+  void *in[kMaxHeads], *wgt[kMaxHeads], *out[kMaxHeads];
+  const bool direct = Np == dh;   // else each head into its own buffer, the first dh channels copied
+  for (int i = 0; i < H; i++) {
+    in[i] = matmulBuf(bufs.in[i], bufs.inCap[i], (size_t)M * Kp);
+    wgt[i] = matmulBuf(bufs.wgt[i], bufs.wgtCap[i], (size_t)Np * Kp);
+    out[i] = direct ? VTABufferView(outbuf, (size_t)i * dh * M) : matmulBuf(bufs.out[i], bufs.outCap[i], (size_t)M * Np);
+  }
+  for (int i = 0; i < H; i++)
+    matmulPackA(A[i], (int8_t *)VTABufferGetVirtAddr(in[i]), M, K);
+  lap(0);
+  VTABufferInvalidate(vbuf, 0, (size_t)H * dh * K);
+  const int8_t *vv = (const int8_t *)VTABufferGetVirtAddr(vbuf);
+  for (int i = 0; i < H; i++) {
+    int8_t *w = (int8_t *)VTABufferGetVirtAddr(wgt[i]);
+    for (int nb = 0; nb < DB; nb++) {
+      const int8_t *blk = vv + (size_t)(i * DB + nb) * K * 16;   // rows k of 16 channels
+      for (int kb = 0; kb < KB; kb++) {
+        const int nk = std::min(16, K - kb * 16);
+        int8_t *o = w + ((size_t)nb * KB + kb) * 256;
+#if defined(__aarch64__)
+        uint8x16_t R[16];
+        for (int k = 0; k < 16; k++)
+          R[k] = k < nk ? vld1q_u8((const uint8_t *)blk + (size_t)(kb * 16 + k) * 16) : vdupq_n_u8(0);
+        transpose16x16(R, o);
+#else
+        memset(o, 0, 256);
+        for (int k = 0; k < nk; k++)
+          for (int n = 0; n < 16; n++)
+            o[n * 16 + k] = blk[(size_t)(kb * 16 + k) * 16 + n];
+#endif
+      }
+    }
+    if ((size_t)Np * Kp > (size_t)dh * Kp)   // matmulSched's padding
+      memset(w + (size_t)dh * Kp, 0, (size_t)(Np - dh) * Kp);
+  }
+  lap(1);
+  void *bias = matmulBias(bufs, Np, shift);
+  lap(2);
+  for (int i = 0; i < H; i++) {
+    VTABufferFlush(in[i], 0, (size_t)M * Kp);
+    VTABufferFlush(wgt[i], 0, (size_t)Np * Kp);
+  }
+  lap(3);
+  const int rc = matmulConvs(H, in, wgt, bias, out, M, Kp, Np, shift, vtaCmdH, nVirtualThread, tileHSize, tileWSize,
+                             idEVTA);
+  lap(4);
+  int8_t *ob = (int8_t *)VTABufferGetVirtAddr(outbuf);
+  if (!direct) {
+    for (int i = 0; i < H; i++) {
+      VTABufferInvalidate(out[i], 0, (size_t)M * Np);
+      memcpy(ob + (size_t)i * dh * M, VTABufferGetVirtAddr(out[i]), (size_t)dh * M);
+    }
+    VTABufferFlush(outbuf, 0, (size_t)H * dh * M);
+  }
+  lap(5);
+  if (direct)
+    for (int i = 0; i < H; i++)
+      VTABufferViewFree(out[i]);
+  lap(6);
+  if (lap.on) {
+    gMatMulCalls++;
+    gMatMulHeads += H;
+  }
+  if (matmulCheck()) {
+    VTABufferInvalidate(outbuf, 0, (size_t)H * dh * M);
+    std::vector<int8_t> c((size_t)M * dh);
+    for (int i = 0; i < H; i++) {
+      for (int m = 0; m < M; m++)
+        for (int n = 0; n < dh; n++)
+          c[(size_t)m * dh + n] = ob[(size_t)i * dh * M + ((size_t)(n / 16) * M + m) * 16 + n % 16];
+      const int8_t *a = A[i];
+      matmulCheckOne("matmul_evta_av", [&](int m, int k) { return a[(size_t)m * K + k]; },
+                     [&](int k, int n) { return vv[((size_t)(i * DB + n / 16) * K + k) * 16 + n % 16]; }, c.data(), M,
+                     K, dh, shift);
+    }
+  }
+  return rc;
+}
 int matmul_evta_qk(void *qbuf, void *kbuf, int8_t *const *C, int H, int M, int dh, int shift, void *vtaCmdH,
                    int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA) {
   if (H < 1 || H > kMaxHeads || dh % 16)

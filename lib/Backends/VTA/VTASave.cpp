@@ -193,6 +193,12 @@ struct MatMulGroup {
   std::vector<const Value *> freeAfter;            // their deallocations (before the matmul in the IR) moved after it
   const Instruction *outLut = nullptr;             // findOutLutMatMuls: the table region applied as the output LUT
   bool hoistOut = false;                           // its out is allocated after the matmuls: allocate it before them
+  //#### JO added (2026-11-16): A x V with V and the output in the EVTA layout (matmul_evta_av)
+  bool av = false;
+  const Value *vbuf = nullptr, *avOut = nullptr; // the value conv's output; the out-proj conv's input (packed)
+  bool avHoist = false;                          // avOut is allocated after the matmuls: allocate it before them
+  std::vector<const Value *> avA;                // the left operands read where their copies read them (or null)
+  std::vector<const Value *> freeAfterCpu;       // CPU buffers whose deallocations (before the matmul) move after it
 };
 
 struct LutRegion {
@@ -9000,6 +9006,144 @@ static void findAttnKeepLayout(IRFunction *F, VTASaveContext *ctx) {
       ctx->getMatMulAway()->insert(k[i].copy);
     }
   }
+  //#### JO added (2026-11-16, docs/deit_optimization.md 6.8): A x V whose right operands are the head slices of the
+  //#### transpose {0, 2, 1, 3} of an EVTA conv (the value) and whose outputs, views of one buffer, are read only by a
+  //#### transpose {0, 2, 1, 3} into the input of an EVTA conv (the out-proj): matmul_evta_av with the value conv's output and
+  //#### the out-proj conv's input in the EVTA layout (no NHWC copy of V, head transposes, slice copies, output transposes)
+  std::map<const Value *, size_t> posOf;
+  for (size_t k2 = 0; k2 < L.size(); k2++)
+    posOf[L[k2]] = k2;
+  for (auto &it : *ctx->getMatMulGroups()) {
+    MatMulGroup &g = it.second;
+    if (g.qk)
+      continue;
+    const size_t H = g.mm.size(), M = g.mm[0]->getLHS()->dims()[0], K = g.mm[0]->getLHS()->dims()[1],
+                 dh = g.mm[0]->getRHS()->dims()[1];
+    if (dh % 16 || g.mm[0]->getRHS()->dims()[0] != K)
+      continue;
+    std::vector<Head> v(H);
+    bool ok = true;
+    for (size_t i = 0; i < H && ok; i++)
+      ok = trace(g.mm[i]->getRHS(), {0, 2, 1, 3}, v[i]) && v[i].head == i && v[i].conv == v[0].conv &&
+           v[i].tr == v[0].tr && g.mm[i]->getLHS()->dims()[0] == M && g.mm[i]->getRHS()->dims()[1] == dh;
+    if (!ok)
+      continue;
+    const ConvolutionInst *cv = v[0].conv;
+    auto cd = cv->getDest()->dims();
+    if (getConvPath(cv) != ConvPath::VTA || ctx->getFusion(cv) || ctx->outLutConv.count(cv) || cd.size() != 4 ||
+        cd[0] != 1 || cd[1] * cd[2] != K || cd[3] != H * dh ||
+        cv->getDest()->getType()->getScale() != g.mm[0]->getRHS()->getType()->getScale())
+      continue;
+    // the outputs: views of one buffer at head i * M * dh
+    const Value *c0 = viewOrigin(g.mm[0]->getDest()).first;
+    for (size_t i = 0; i < H && ok; i++)
+      ok = viewOrigin(g.mm[i]->getDest()).first == c0 && viewOrigin(g.mm[i]->getDest()).second == i * M * dh;
+    if (!ok || c0->size() != H * M * dh)
+      continue;
+    const TransposeInst *t3 = nullptr;
+    std::set<const Instruction *> mms(g.mm.begin(), g.mm.end());
+    for (const Instruction *I : users(c0)) {
+      if (auto *t = llvm::dyn_cast<TransposeInst>(I))
+        if (viewOrigin(t->getSrc()).first == c0 && !t3) {
+          t3 = t;
+          continue;
+        }
+      if (!mms.count(I) && I->getKind() != Kinded::Kind::TouchInstKind)
+        ok = false;
+    }
+    if (!ok || !t3 || t3->getShuffle().vec() != std::vector<unsigned>{0, 2, 1, 3} || viewOrigin(t3->getSrc()).second ||
+        t3->getSrc()->getType()->getScale() != g.mm[0]->getDest()->getType()->getScale())
+      continue;
+    const Value *o3 = getOrigin(t3->getDest());
+    const ConvolutionInst *co = nullptr;
+    for (const Instruction *I : users(o3)) {
+      if (I == t3)
+        continue;
+      auto *c = llvm::dyn_cast<ConvolutionInst>(I);
+      if (c && !co && getOrigin(c->getSrc()) == o3 && viewOrigin(c->getSrc()).second == 0)
+        co = c;
+      else
+        ok = false;
+    }
+    if (!ok || !co || getConvPath(co) != ConvPath::VTA || co->getSrc()->dims().size() != 4 ||
+        co->getSrc()->dims()[1] * co->getSrc()->dims()[2] != M || co->getSrc()->dims()[3] != H * dh ||
+        co->getSrc()->getType()->getScale() != t3->getDest()->getType()->getScale() || ctx->isPacked(o3))
+      continue;
+    // V: its conv's output, transpose and slices used by nothing else
+    auto only = [&](const Value *o, std::set<const Instruction *> allowed) {
+      for (const Instruction *I : users(o))
+        if (!allowed.count(I))
+          return false;
+      return true;
+    };
+    const Value *ov = getOrigin(cv->getDest());
+    std::set<const Instruction *> vc;
+    for (size_t i = 0; i < H; i++)
+      vc.insert(v[i].copy);
+    ok = only(ov, {cv, v[0].tr}) && only(getOrigin(v[0].tr->getDest()), [&] {
+           auto s2 = vc;
+           s2.insert(v[0].tr);
+           return s2;
+         }());
+    for (size_t i = 0; i < H && ok; i++)
+      ok = only(viewOrigin(g.mm[i]->getRHS()).first, {v[i].copy, g.mm[i]});
+    if (!ok)
+      continue;
+    // A: a head slice that only a copy of a contiguous block writes (offset 0, the whole slice) is read at the copy's
+    // source, when nothing writes that source from the copy on (the softmax output; no 39 KB copies per head)
+    g.avA.assign(H, nullptr);
+    for (size_t i = 0; i < H; i++) {
+      const Value *sa = viewOrigin(g.mm[i]->getLHS()).first;
+      const CopyInst *cp = nullptr;
+      for (const Instruction *I : users(sa))
+        if (auto *c = llvm::dyn_cast<CopyInst>(I))
+          if (viewOrigin(c->getDest()).first == sa && viewOrigin(c->getDest()).second == 0 &&
+              c->getDest()->size() == g.mm[i]->getLHS()->size())
+            cp = c;
+      if (!cp || !only(sa, {cp, g.mm[i]}))
+        continue;
+      const Value *src = getOrigin(cp->getSrc());
+      bool clean = true;
+      for (const Instruction *I : users(src))
+        if (posOf[I] > posOf[cp] && !llvm::isa<CopyInst>(I) && !mms.count(I))
+          for (unsigned q = 0, e = I->getNumOperands(); q < e; q++)
+            if (getOrigin(const_cast<Value *>(I->getOperand(q).first)) == src && I->getOperand(q).second != OperandKind::In)
+              clean = false;
+      if (!clean || ctx->isPacked(src))
+        continue;
+      g.avA[i] = cp->getSrc();
+      ctx->getMatMulAway()->insert(cp);
+      // its deallocation (after the copies, before the matmul) after the matmul
+      for (const Instruction *I : L)
+        if (auto *d = llvm::dyn_cast<DeallocActivationInst>(I))
+          if (getOrigin(d->getSrc()) == src && posOf[I] < posOf[g.mm[0]] && !ctx->getMatMulAway()->count(d)) {
+            ctx->getMatMulAway()->insert(d);
+            g.freeAfterCpu.push_back(src);
+          }
+    }
+    g.av = true;
+    g.vbuf = ov;
+    g.avOut = o3;
+    g.avHoist = !posOf.count(o3) || posOf[o3] > posOf[g.mm[0]];
+    bool before = true;
+    for (const Instruction *I : L) {
+      if (I == g.mm[0])
+        before = false;
+      if (auto *d = llvm::dyn_cast<DeallocActivationInst>(I))
+        if (before && d->getSrc() == ov) {
+          ctx->getMatMulAway()->insert(d);
+          g.freeAfter.push_back(d->getSrc());
+        }
+    }
+    ctx->getPacked()->insert(ov);
+    ctx->getPacked()->insert(cv->getDest());
+    ctx->getPacked()->insert(o3);
+    ctx->getPacked()->insert(co->getSrc());
+    ctx->getMatMulAway()->insert(v[0].tr);
+    ctx->getMatMulAway()->insert(t3);
+    for (size_t i = 0; i < H; i++)
+      ctx->getMatMulAway()->insert(v[i].copy);
+  }
 }
 
 //#### JO added (2026-11-16, docs/evta_isa_ext.md 8.22): a table region whose root is the output of a Q K^T head group
@@ -9067,6 +9211,28 @@ static void emitMatMulGroup(const MatMulGroup &g, std::string *bundle, VTASaveCo
     auto o = viewOrigin(v);
     return o.second ? "(" + o.first->getName().str() + " + " + std::to_string(o.second) + ")" : o.first->getName().str();
   };
+  //#### JO added (2026-11-16): A x V with V and the output in the EVTA layout (findAttnKeepLayout)
+  if (g.av) {
+    std::string a = "  const int8_t *mmA" + n + "[] = {";
+    for (size_t i = 0; i < g.mm.size(); i++)
+      a += (i ? ", " : "") + ptr(g.avA.size() > i && g.avA[i] ? g.avA[i] : g.mm[i]->getLHS());
+    *bundle += a + "};\n";
+    if (g.avHoist && ctx->getHoisted()->insert(g.avOut).second)
+      emitPackedAlloc(g.avOut, bundle);
+    const auto *M0 = g.mm[0];
+    *bundle += "  // A x V of " + H + " heads, V and the output in the EVTA layout (-vta-attn-keep-layout)\n";
+    *bundle += "  matmul_evta_av(mmA" + n + ", " + g.vbuf->getName().str() + "_vbuf, " + g.avOut->getName().str() +
+               "_vbuf, " + H + ", " + std::to_string(M0->getLHS()->dims()[0]) + ", " +
+               std::to_string(M0->getLHS()->dims()[1]) + ", " + std::to_string(M0->getRHS()->dims()[1]) + ", " +
+               std::to_string(g.shift) +
+               matMulCallTail(ctx, matMulSchedArgs(M0->getLHS()->dims()[0], M0->getLHS()->dims()[1],
+                                                   M0->getRHS()->dims()[1])) + ");\n";
+    for (const Value *v : g.freeAfter)
+      *bundle += "  VTABufferFree(" + v->getName().str() + "_vbuf);\n";
+    for (const Value *v : g.freeAfterCpu)
+      *bundle += "  free(" + v->getName().str() + ");\n";
+    return;
+  }
   //#### JO added (2026-11-16): findOutLutMatMuls: the heads into the region's out with the table as the output LUT
   const LutRegion *olr = g.outLut ? &ctx->getLutRegions()->at(g.outLut) : nullptr;
   std::string lut;

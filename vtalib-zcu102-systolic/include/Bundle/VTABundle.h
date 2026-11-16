@@ -23,6 +23,9 @@ int matmul_evta(const int8_t *A, const int8_t *B, int8_t *C, int M, int K, int N
 //#### JO added (2026-11-10): the products of H heads in one EVTA call; Q K^T from the EVTA outputs of the query / key convs
 int matmul_evta_n(int H, const int8_t *const *A, const int8_t *const *B, int8_t *const *C, int M, int K, int N, int shift,
                   void *vtaCmdH, int nVirtualThread = 1, int tileHSize = 14, int tileWSize = 14, uint32_t idEVTA = 0);
+//#### JO added (2026-11-16): A x V with V (the value conv's output) and C (the out-proj conv's input) in the EVTA layout
+int matmul_evta_av(const int8_t *const *A, void *vbuf, void *outbuf, int H, int M, int K, int dh, int shift,
+                   void *vtaCmdH, int nVirtualThread = 1, int tileHSize = 14, int tileWSize = 14, uint32_t idEVTA = 0);
 int matmul_evta_qk(void *qbuf, void *kbuf, int8_t *const *C, int H, int M, int dh, int shift, void *vtaCmdH,
                    int nVirtualThread = 1, int tileHSize = 14, int tileWSize = 14, uint32_t idEVTA = 0);
 //#### JO added (2026-11-02): conv (with relu) + max pool 3x3 / stride 2 / pad 1 in one EVTA call (see VTABundle.cpp ConvPool)

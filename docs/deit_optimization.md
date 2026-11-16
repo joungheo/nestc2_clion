@@ -471,6 +471,34 @@ DeiT의 출력(분류기 두 개)은 마지막 layer norm의 0행(class token)�
 layer norm의 float CPU chain(약 1 ms)이 거의 0. 남은 것: 층 10 출력 add가 CPU(198행, 출력 배치가 행이라서)이고 층 11 첫 layer norm은
 `layernorm_evta`(행 배치 입력)이다. 묶인 행 배치에서 앞 2행을 꺼내는 view를 지원하면 둘 다 EVTA 배치로 돌아간다.
 
+## 6.8 A x V에서 V와 출력을 EVTA 배치 그대로 (2026-11-16)
+
+Q K^T(`matmul_evta_qk`, §7.27)처럼 A x V도 V를 value conv의 EVTA 출력에서 바로 읽고, 결과를 out-proj conv의 입력 버퍼(EVTA 배치)에 바로 쓴다.
+층마다 있던 CPU 일 다섯 가지가 빠진다: V conv 출력의 NHWC 변환(`transpose_vtaio2nhwc`), head transpose, V 조각 복사 3번, softmax 출력 조각
+복사 3번(39 KB씩), A x V 결과의 head transpose와 EVTA 배치 변환(`transpose_nhwc2vtaio`).
+
+- vtalib `matmul_evta_av(A[], vbuf, outbuf, H, M, K, dh, shift, ...)` (systolic, `vta/vtalib` 둘 다):
+  - V의 EVTA 배치 [H dh / 16][K][16]에서 채널 블록 하나는 key 행 K개 × 16채널이다. filter 블록 (nb, kb)는 그 16행을 16 x 16 transpose한 것이라,
+    `matmul_evta_n`의 B 포장(NEON transpose)과 같은 일로 V를 가중치로 만든다.
+  - head i의 출력 [dh / 16][M][16]은 out-proj 입력 [H dh / 16][M][16]의 i dh M 바이트부터와 모양이 같다. 그 자리의 view에 바로 쓴다(복사 없음;
+    `matmulSched`가 N을 늘린 경우만 따로 계산해 복사).
+  - `EVTA_MATMUL_CHECK=1`이 결과를 CPU 정수 matmul과 비교한다. 출력 LUT가 걸린 Q K^T는 기준값에도 그 표를 적용하게 고쳤다(전에는 표 때문에
+    "differ"가 나왔다).
+- VTASave `findAttnKeepLayout`(`-vta-attn-keep-layout`)의 둘째 부분: A x V 묶음의 오른쪽이 VTA conv 출력의 transpose {0, 2, 1, 3} head 조각이고,
+  출력(한 버퍼의 view들)을 transpose {0, 2, 1, 3} 하나만 읽어 VTA conv의 입력으로 넘기면, V conv 출력과 out-proj 입력을 EVTA 배치로 표시하고
+  `matmul_evta_av`를 낸다. 왼쪽(softmax 출력 조각)이 연속 구간의 복사뿐이면 원본을 그 자리에서 읽고, 그 해제는 matmul 뒤로 옮긴다.
+- 마지막 블록(§6.7, 2행)의 attention은 CPU int8 matmul이라 해당 없음(11개 층 적용).
+- 확인(보드 `_alux3` 400 MHz): `EVTA_MATMUL_CHECK` A x V / Q K^T 3,300번씩 0 differ, ImageNetV2 앞 2,000장의 출력 hash가 원래(198행, §6.7 앞)
+  번들과 모두 같다.
+
+| DeiT (`-vta-alu-softmax`, §6.7 포함) | 전 | 후 |
+|---|---|---|
+| OMP 1 | 41.00 ms | **37.82 ms** (−3.2) |
+| OMP 4 | 38.33 ms | **36.46 ms** (−1.9) |
+
+OMP 1에서 줄어든 것: 배치 변환 / transpose 3.27 → 0.82, 복사 0.41 → 0.02, matmul 3.48 → 3.14 ms. 남은 transpose는 patch embedding(conv 뒤
+위치 임베딩 add 앞)과 마지막 블록의 것이다.
+
 ## 7. 재현
 
 끄는 방법은 세 종류다. `-vta-*`는 번들 생성(`model-compiler`) 옵션이라 번들을 다시 만들어야 하고, `EVTA_*`는 실행할 때 주는 환경변수(`sudo /bin/sh -c "EVTA_X=0 hw/script/run_prof.sh ..."`), 하드웨어 단계는 `BIN=<비트스트림>`이다. 자세한 절차와 vtalib마다 읽는 변수의 차이는 `resnet18_optimization.md` §9.2–§9.5에 있다.

@@ -377,6 +377,10 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   fixed; the whole model's profile + Slice entries + the pruned model's new names); VTASave: shared layer-norm splats freed after the fused call,
   mixed-layout int8 adds as the integer elemadd (`elemaddRowsInt`), `matmulI8` rounds 2^-s scales half up as the EVTA. ImageNetV2 2,000 output
   hashes identical (`EVAL_HASH=1`); DeiT OMP 1 44.28 -> 41.07, OMP 4 41.73 -> 38.42 ms.
+  A x V with V and the output in the EVTA layout (2026-11-16, §6.8, `findAttnKeepLayout` part 2, vtalib `matmul_evta_av` in both vtalibs): V read
+  from the value conv's output (16 x 16 transposes into filter blocks), heads written into views of the out-proj conv's input; no NHWC / head
+  transposes or slice copies. `EVTA_MATMUL_CHECK` 0 differ (the Q K^T check now applies the output LUT), 2,000 output hashes identical;
+  DeiT OMP 1 41.00 -> 37.82, OMP 4 38.33 -> 36.46 ms.
 - Other models (2026-11-05, `docs/evta_runtime_compare.md` §7.19): Resnet50 res2_0 residual fused (relu to a 2^q smaller scale), schedules of the
   Resnet50 / VGG16 shapes in `VTASchedules.h` (found with vtalib-systolic `EVTA_SCHED`), conv tiles below 7 x 7: the dummy-padded store
   used the wrong channel block with nVirtualThread 2 (fixed in both vtalibs) and the systolic vtalib's minimum tile is 1 on an `_sa_` bitstream
