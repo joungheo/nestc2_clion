@@ -1232,3 +1232,27 @@ token: 큐 사이의 "다 썼음 / 다 실었음" 신호) 배치를 바꿨다. �
   fc1 438.9 → 414.1, q / k / v / out-proj conv 115.7 → 110.5. out-proj은 run 하나에 tile이 2개뿐이라 첫 tile의 LOAD와 마지막 STORE가 그대로 드러난다.
 - 융합 add와 따로 하는 add의 차이가 1.0 ms에서 0.5 ms로 줄었지만 따로 하는 쪽이 아직 빠르다. `-vta-fuse-elemadd-mul`은 계속 기본 꺼짐이다.
 - 보드 시험 중 MobileNetV2가 `timeout 120`에 걸렸다(rc 124). 멈춘 것이 아니라 dump 5200개를 쓰느라 100회가 120 s를 넘긴 것이다(300 s로 다시 돌려 모두 끝남).
+
+### 8.22 attention의 `Div` 표를 Q K^T의 output LUT로 (2026-11-16)
+
+DeiT의 CPU 일 중 가장 큰 `nestc_cpu::lut8`(2.25 ms)은 전부 attention의 `Div`(Q K^T ÷ √d를 다시 int8로)였다. 층마다 117,612바이트에 표 하나를
+CPU에서 적용했다. 같은 표를 fc1의 GELU처럼(§8.10 `findOutLutConvs`) Q K^T matmul의 output LUT로 EVTA에서 적용한다. 결과 바이트는 같다.
+
+- VTASave `findOutLutMatMuls` (`-vta-alu-output-lut`, 기본 켜짐): `matmul_evta_qk` head 묶음의 출력이 표 영역의 root이고, 그 뒤로 그 영역 말고
+  아무도 root를 읽지 않으면 `VTASetOutputLut(표)`로 matmul을 감싸고 head 출력을 영역의 out에 바로 쓴다. out의 할당이 matmul 뒤에 있으면 앞으로
+  옮긴다(`hoistOut`). 확장 ALU가 없는 비트스트림에서는 번들이 out 자리에서 CPU 표를 적용한다(전과 같은 결과).
+- vtalib-systolic:
+  - `convolution_wo_tr_impl`이 epilogue가 있으면 batch(`gConvBatch`, head 여러 개를 한 run에)를 끄고 있었다. 그래서 첫 head만 계산되고
+    나머지는 이전 내용이 남았다(처음 보드 시험에서 57 %가 다름). tensor가 없는 epilogue(표만)는 batch로 돈다. 층마다 표가 달라서, 표 버퍼를
+    replay의 relocation 목록에 넣었다.
+  - `convEpilogue`: batch일 때 CPU 경로와 `EVTA_EPI_CHECK`를 head마다 한다(tensor가 있는 epilogue는 batch에서 쓰지 않는다: 오류로 끝냄).
+  - `tests/lut_conv_test.cc`: Q K^T 3 head / 1 head와 다른 표로의 replay 경우를 추가했다(시뮬레이터, 보드 모두 0 differ).
+- 보드 `_alux3` 400 MHz: 시험 5종 모두 같음. DeiT conv dump는 Q K^T 출력(표가 적용된 값) 2개 말고 같다.
+  `EVTA_EPI_CHECK` batch 1200건 0 differ. cat / dog / zebra 결과와 confidence가 같고, `EVTA_ALUX=0`(CPU 표)도 같다. CNN 네 개의 dump도 같다.
+
+| DeiT (`-vta-alu-softmax`) | 전 | 후 |
+|---|---|---|
+| OMP 1 | 46.17 ms | **44.21 ms** |
+| OMP 4 | 43.58 ms | **41.52 ms** |
+| `lut8` (OMP 1) | 2.25 ms | 0 |
+| `matmul_evta_qk` (OMP 1, EVTA 표 pass 포함) | 4.07 ms | 4.32 ms |

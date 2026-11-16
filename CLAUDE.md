@@ -368,6 +368,10 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   (fused add 48.13 -> 46.73, still behind: stays off) ms. Simulator `EVTA_SIM_TOKENS=1` prints the tokens a run leaves.
   How it works, with the code and 5 figures (queues / tokens, which token each LOAD takes, SRAM layout, the odd-block bug):
   [docs/evta_load_ahead_guide.md](docs/evta_load_ahead_guide.md).
+  Attention `Div` table as the Q K^T output LUT (2026-11-16, §8.22, VTASave `findOutLutMatMuls` under `-vta-alu-output-lut`):
+  `VTASetOutputLut` around `matmul_evta_qk`, heads written into the region's out (CPU table without the extended ALU); vtalib-systolic
+  runs a table-only epilogue over a conv batch (`gConvBatch` was off with any epilogue: only the first head was computed), the table
+  buffer relocated in replays. Same bytes; DeiT OMP 1 46.17 -> 44.21, OMP 4 43.58 -> 41.52 ms (lut8 2.25 -> 0).
 - Other models (2026-11-05, `docs/evta_runtime_compare.md` §7.19): Resnet50 res2_0 residual fused (relu to a 2^q smaller scale), schedules of the
   Resnet50 / VGG16 shapes in `VTASchedules.h` (found with vtalib-systolic `EVTA_SCHED`), conv tiles below 7 x 7: the dummy-padded store
   used the wrong channel block with nVirtualThread 2 (fixed in both vtalibs) and the systolic vtalib's minimum tile is 1 on an `_sa_` bitstream

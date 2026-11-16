@@ -3990,7 +3990,9 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
   const size_t dumpBytes = pool ? (size_t)KN * pool->PH * pool->PW : (size_t)N * KN * out_h * out_w;
   if (stream)
     VTASetSegmentHook(vtaCmdH, inputStreamHook, ins);
-  const ConvBatch *batch = gConvBatch && !pool && !res && !dw && !stream ? gConvBatch : nullptr;   // res: the epilogue
+  //#### JO changed (2026-11-16): also with an epilogue without a tensor (the output LUT of matmul_evta_qk; was !res: the
+  //#### heads after the first were not computed at all)
+  const ConvBatch *batch = gConvBatch && !pool && !(res && res->add) && !dw && !stream ? gConvBatch : nullptr;
   std::vector<int32_t> batchKey;
   std::vector<void *> batchBufs;
   if (batch) {
@@ -4003,6 +4005,7 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
       batchBufs.push_back(doBias ? batch->bias[b] : nullptr);
       batchBufs.push_back(batch->out[b]);
     }
+    batchBufs.push_back(res && res->T ? outLutBuffer(res->T) : nullptr);   //#### JO (2026-11-16): the table, per layer
   }
   const int replayed = batch ? VTAReplayBegin(vtaCmdH, batchKey.data(), (int)(batchKey.size() * sizeof(int32_t)),
                                               batchBufs.data(), (int)batchBufs.size())
@@ -4337,6 +4340,49 @@ static int convEpilogue(int8_t *input, int8_t *kernel, int32_t *bias, int8_t *ou
                                   doBias, shift, out_h, out_w, vtaCmdH, nVirtualThread, tileHSize, tileWSize, idEVTA,
                                   nullptr);
   };
+  //#### JO added (2026-11-16): the heads of one call (gConvBatch, matmul_evta_qk / _n with an output LUT): the CPU path and
+  //#### the check per head output (a program without tensors only: the tensors would be per head)
+  if (gConvBatch) {
+    const ConvBatch *B = gConvBatch;
+    if (nt) {
+      fprintf(stderr, "convEpilogue: an epilogue with tensors over a batch of %d convs\n", B->n);
+      std::exit(1);
+    }
+    if (!onEvta) {
+      int rc = plain(output);   // every head into its out
+      for (int bi = 0; bi < B->n; bi++) {
+        VTABufferInvalidate(B->out[bi], 0, n);
+        int8_t *o = (int8_t *)VTABufferGetVirtAddr(B->out[bi]);
+        cpu(o, o);
+        VTABufferFlush(B->out[bi], 0, n);
+      }
+      return rc;
+    }
+    if (!check && !envCheck)
+      return convolution_wo_tr_impl(input, kernel, bias, output, N, H, W, C, KN, KH, KW, pad_size, stride_size, doRelu,
+                                    doBias, shift, out_h, out_w, vtaCmdH, nVirtualThread, tileHSize, tileWSize, idEVTA,
+                                    &p);
+    plain(output);
+    std::vector<std::vector<int8_t>> ref(B->n);
+    for (int bi = 0; bi < B->n; bi++) {
+      VTABufferInvalidate(B->out[bi], 0, n);
+      const int8_t *c = (const int8_t *)VTABufferGetVirtAddr(B->out[bi]);
+      ref[bi].resize(n);
+      cpu(c, ref[bi].data());
+    }
+    int rc = convolution_wo_tr_impl(input, kernel, bias, output, N, H, W, C, KN, KH, KW, pad_size, stride_size, doRelu,
+                                    doBias, shift, out_h, out_w, vtaCmdH, nVirtualThread, tileHSize, tileWSize, idEVTA, &p);
+    size_t bad = 0;
+    for (int bi = 0; bi < B->n; bi++) {
+      VTABufferInvalidate(B->out[bi], 0, n);
+      const int8_t *o = (const int8_t *)VTABufferGetVirtAddr(B->out[bi]);
+      for (size_t i = 0; i < n; i++) bad += o[i] != ref[bi][i];
+    }
+    if (envCheck)
+      printf("EVTA_EPI_CHECK %dx%dx%d -> %d x %d convs, %d steps (kinds %d/%d): %zu of %zu differ\n", H, W, C, KN, B->n,
+             E.n, p.kind1, p.kind2, bad, n * B->n);
+    return rc;
+  }
   if (!onEvta) {
     void *tmp = nt ? VTABufferAlloc(n) : (void *)output;
     int rc = plain((int8_t *)tmp);

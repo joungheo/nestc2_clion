@@ -190,6 +190,8 @@ struct MatMulGroup {
   bool qk = false;
   const Value *qbuf = nullptr, *kbuf = nullptr; // the conv outputs kept in the EVTA layout (qk)
   std::vector<const Value *> freeAfter;            // their deallocations (before the matmul in the IR) moved after it
+  const Instruction *outLut = nullptr;             // findOutLutMatMuls: the table region applied as the output LUT
+  bool hoistOut = false;                           // its out is allocated after the matmuls: allocate it before them
 };
 
 struct LutRegion {
@@ -8941,6 +8943,64 @@ static void findAttnKeepLayout(IRFunction *F, VTASaveContext *ctx) {
   }
 }
 
+//#### JO added (2026-11-16, docs/evta_isa_ext.md 8.22): a table region whose root is the output of a Q K^T head group
+//#### (matmul_evta_qk) that nothing else reads (DeiT: the attention Div by sqrt(d) before the softmax, 2.25 ms of CPU
+//#### lut8 per inference) runs as that matmul's output LUT, as findOutLutConvs: VTASetOutputLut around the call (the
+//#### heads' convs get the one-step LUT epilogue, an ALU CPY with lut_en per tile), the heads written straight into the
+//#### region's out; without the extended ALU the bundle looks the table up in place in out afterwards. Same bytes.
+static void findOutLutMatMuls(IRFunction *F, VTASaveContext *ctx) {
+  if (!vtaAluOutputLut || !vtaLutElementwise)
+    return;
+  std::vector<const Instruction *> L;
+  std::map<const Instruction *, size_t> pos;
+  for (const auto &I : F->getInstrs()) {
+    pos[&I] = L.size();
+    L.push_back(&I);
+  }
+  for (auto &it : *ctx->getMatMulGroups()) {
+    MatMulGroup &g = it.second;
+    if (!g.qk)
+      continue;
+    const Value *root = viewOrigin(g.mm[0]->getDest()).first;
+    bool same = true;
+    for (const auto *M : g.mm)
+      same = same && viewOrigin(M->getDest()).first == root;
+    if (!same)
+      continue;
+    for (auto &kv : *ctx->getLutRegions()) {
+      const LutRegion &r = kv.second;
+      if (r.root != root || r.n != root->getType()->size() || r.out->getType()->size() != r.n ||
+          ctx->isPacked(r.out) || ctx->outLutRegion.count(kv.first))
+        continue;
+      const size_t first = pos[kv.first], mpos = pos[g.mm[0]], mlast = pos[g.mm.back()];
+      if (first < mlast)
+        continue;
+      // after the matmuls only the region (and deallocs / views / allocs) touches root; out not before the region
+      std::set<const Instruction *> members(r.instrs.begin(), r.instrs.end());
+      for (const auto *M : g.mm) members.insert(M);
+      bool ok = true;
+      for (size_t k = mpos; k < L.size() && ok; k++) {
+        const Instruction *J = L[k];
+        if (members.count(J) || J->getKind() == Kinded::Kind::DeallocActivationInstKind ||
+            J->getKind() == Kinded::Kind::TensorViewInstKind || J->getKind() == Kinded::Kind::AllocActivationInstKind)
+          continue;
+        for (unsigned q = 0, e = J->getNumOperands(); q < e; q++) {
+          const Value *o = getOrigin(const_cast<Value *>(J->getOperand(q).first));
+          if (o == root || (k < first && o == r.out))
+            ok = false;
+        }
+      }
+      if (!ok)
+        continue;
+      g.outLut = kv.first;
+      const auto *oa = llvm::dyn_cast<AllocActivationInst>(r.out);
+      g.hoistOut = oa && pos.count(oa) && pos[oa] > mpos;
+      ctx->outLutRegion.insert(kv.first);
+      break;
+    }
+  }
+}
+
 static void emitMatMulGroup(const MatMulGroup &g, std::string *bundle, VTASaveContext *ctx) {
   static int id = 0;
   const std::string n = std::to_string(id++), H = std::to_string(g.mm.size());
@@ -8948,9 +9008,27 @@ static void emitMatMulGroup(const MatMulGroup &g, std::string *bundle, VTASaveCo
     auto o = viewOrigin(v);
     return o.second ? "(" + o.first->getName().str() + " + " + std::to_string(o.second) + ")" : o.first->getName().str();
   };
+  //#### JO added (2026-11-16): findOutLutMatMuls: the heads into the region's out with the table as the output LUT
+  const LutRegion *olr = g.outLut ? &ctx->getLutRegions()->at(g.outLut) : nullptr;
+  std::string lut;
+  if (olr) {
+    if ((olr->outAlloc || g.hoistOut) && ctx->getHoisted()->insert(olr->out).second)
+      *bundle += "  int8_t *" + olr->out->getName().str() + " = (int8_t *)malloc(" +
+                 std::to_string(olr->out->getSizeInBytes()) + ");\n";
+    lut = makeLutTable(*olr, bundle, ctx);
+    *bundle += "  // the table of the elementwise region after these heads as their output LUT (-vta-alu-output-lut)\n";
+    *bundle += "#ifdef VTA_OUTPUT_LUT\n  static const nestc_cpu::Lut8U " + lut + "_u = nestc_cpu::lutByByte(" + lut +
+               ");\n  VTASetOutputLut(VTAHasAluExt() ? " + lut + "_u.v : nullptr);\n#endif\n";
+  }
   std::string c = "  int8_t *mmC" + n + "[] = {";
-  for (size_t i = 0; i < g.mm.size(); i++)
-    c += (i ? ", " : "") + ptr(g.mm[i]->getDest());
+  for (size_t i = 0; i < g.mm.size(); i++) {
+    std::string pi = ptr(g.mm[i]->getDest());
+    if (olr) {
+      const auto o = viewOrigin(g.mm[i]->getDest());
+      pi = o.second ? "(" + olr->out->getName().str() + " + " + std::to_string(o.second) + ")" : olr->out->getName().str();
+    }
+    c += (i ? ", " : "") + pi;
+  }
   *bundle += c + "};\n";
   const auto *M0 = g.mm[0];
   if (g.qk) {
@@ -8960,6 +9038,8 @@ static void emitMatMulGroup(const MatMulGroup &g, std::string *bundle, VTASaveCo
                std::to_string(M0->getLHS()->dims()[1]) + ", " + std::to_string(g.shift) +
                matMulCallTail(ctx, matMulSchedArgs(M0->getLHS()->dims()[0], M0->getLHS()->dims()[1],
                                                    M0->getLHS()->dims()[0])) + ");\n";
+    if (olr)
+      *bundle += "#ifdef VTA_OUTPUT_LUT\n  VTASetOutputLut(nullptr);\n#endif\n";
     for (const Value *v : g.freeAfter)
       *bundle += "  VTABufferFree(" + v->getName().str() + "_vbuf);\n";
     return;
@@ -9187,6 +9267,7 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
   findLayerNorms(IR.get(), &ctx);
   findMatMulGroups(IR.get(), &ctx);
   findAttnKeepLayout(IR.get(), &ctx);
+  findOutLutMatMuls(IR.get(), &ctx);   //#### JO added (2026-11-16)
   findPackedRows(IR.get(), &ctx);   //#### JO added (2026-11-15)
   findMulResidualFusions(IR.get(), &ctx, vtaEvtaElemAdd);   //#### JO added (2026-11-15, 8.18)
 

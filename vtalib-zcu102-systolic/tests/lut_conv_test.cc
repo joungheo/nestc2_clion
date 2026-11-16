@@ -73,6 +73,38 @@ static int run(const char *name, int H, int W, int C, int KN, int K, int pad, bo
   return diff != 0;
 }
 
+//#### JO added (2026-11-16, docs/evta_isa_ext.md 8.22): Q K^T of H heads (matmul_evta_qk, the heads as one batch of convs)
+//#### with the output LUT against the same matmul and the table on the CPU (DeiT: the attention Div)
+static int runQK(const char *name, int H, int M, int dh, int shift, int nvt, int th, int tw, const int8_t *T, unsigned seed) {
+  std::mt19937 g(seed);
+  std::uniform_int_distribution<int> u8(-128, 127);
+  const size_t qn = (size_t)H * dh * M;
+  std::vector<int8_t> q(qn), k(qn);
+  for (auto &v : q) v = (int8_t)u8(g);
+  for (auto &v : k) v = (int8_t)u8(g);
+  void *h = VTATLSCommandHandle(0);
+  void *vq = VTABufferAlloc(qn), *vk = VTABufferAlloc(qn);
+  memcpy(VTABufferGetVirtAddr(vq), q.data(), qn), VTABufferFlush(vq, 0, qn);
+  memcpy(VTABufferGetVirtAddr(vk), k.data(), qn), VTABufferFlush(vk, 0, qn);
+  std::vector<std::vector<int8_t>> a(H, std::vector<int8_t>((size_t)M * M)), b = a;
+  std::vector<int8_t *> pa(H), pb(H);
+  for (int i = 0; i < H; i++) pa[i] = a[i].data(), pb[i] = b[i].data();
+  VTASetOutputLut(nullptr);
+  matmul_evta_qk(vq, vk, pa.data(), H, M, dh, shift, h, nvt, th, tw, 0);
+  for (auto &x : a)
+    for (auto &v : x) v = T[(uint8_t)v];
+  VTASetOutputLut(T);
+  matmul_evta_qk(vq, vk, pb.data(), H, M, dh, shift, h, nvt, th, tw, 0);
+  VTASetOutputLut(nullptr);
+  VTABufferFree(vq), VTABufferFree(vk);
+  long diff = 0;
+  for (int i = 0; i < H; i++)
+    for (size_t j = 0; j < a[i].size(); j++) diff += a[i][j] != b[i][j];
+  printf("%-28s %d heads %d x %d x %d nvt %d tile %dx%d: %ld of %zu differ\n", name, H, M, dh, M, nvt, th, tw, diff,
+         (size_t)H * M * M);
+  return diff != 0;
+}
+
 int main(int argc, char **argv) {
   const int only = argc > 1 ? atoi(argv[1]) : -1;   // run one case (0..)
   int idx = 0;
@@ -91,6 +123,13 @@ int main(int argc, char **argv) {
   CASE("DeiT fc1 + random table", 197, 1, 192, 768, 1, 0, false, 8, 2, 14, rnd, 2);
   CASE("3x3 relu + random table", 28, 28, 32, 64, 3, 1, true, 9, 2, 14, rnd, 3);
   CASE("3x3 relu nvt 1 + GELU", 14, 14, 64, 32, 3, 1, true, 10, 1, 7, gelu, 4);
+  if (only < 0 || only == idx) bad |= runQK("DeiT Q K^T + random table", 3, 198, 64, 9, 2, 9, 11, rnd, 5);
+  idx++;
+  if (only < 0 || only == idx) bad |= runQK("Q K^T 1 head + random table", 1, 198, 64, 9, 2, 9, 11, rnd, 6);
+  idx++;
+  // the same shape as case 4 with another table: a replay of its recording with the table relocated (each DeiT layer)
+  if (only < 0 || only == idx) bad |= runQK("DeiT Q K^T + GELU (replay)", 3, 198, 64, 9, 2, 9, 11, gelu, 5);
+  idx++;
   printf(bad ? "FAILED\n" : "all equal\n");
   return bad;
 }
