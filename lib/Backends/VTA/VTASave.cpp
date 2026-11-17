@@ -289,6 +289,7 @@ public:
   std::map<const Instruction *, std::string> embedAdd;   //#### JO added (2026-11-16): findEmbedFusions, code at the add
   std::set<const Instruction *> deferredFree;            //#### deallocations emitted later (with that code)
   std::map<const Instruction *, const Value *> embedPtr; //#### "@PTR@" in embedAdd: cpuPtr of this constant
+  std::set<const Instruction *> rowSlices;               //#### findPackedRows: views of the first rows of a packed tensor
   std::map<const Instruction *, MatMulGroup> *getMatMulGroups() { return &matMulGroups; }
   std::set<const Instruction *> *getMatMulAway() { return &matMulAway; }
   // a name that lives as long as the symbol tables (constants that are not IR values)
@@ -7309,6 +7310,11 @@ static void unpackRows(int8_t *r, const int8_t *p, size_t rows, size_t cols) {
   for (size_t i = 0; i < rows; i++)
     for (size_t b = 0; b < cols / 16; b++) memcpy(r + i * cols + b * 16, p + (b * rows + i) * 16, 16);
 }
+// #### JO added (2026-11-17): the first n of the rows x cols packed rows, in the row layout (a row slice, VTASave rowSlices)
+static void unpackRowsPart(int8_t *r, const int8_t *p, size_t rows, size_t cols, size_t n) {
+  for (size_t i = 0; i < n; i++)
+    for (size_t b = 0; b < cols / 16; b++) memcpy(r + i * cols + b * 16, p + (b * rows + i) * 16, 16);
+}
 // #### JO added (2026-11-16, VTASave findEmbedFusions): the patch embedding's output o (packed, rows x cols): rows r0 .. r0 + n
 // from the patch conv's packed output c (n rows: the conv + position embedding by its epilogue), the other rows (the class /
 // distillation tokens in t, row layout) + the position embedding p (row layout) by the integer elemadd (A, B, N) packed
@@ -8235,11 +8241,14 @@ static void findOutLutConvs(IRFunction *F, VTASaveContext *ctx) {
 //#### it has the extended operations (vtalib-systolic softmax_evta, the same bytes), else on the CPU. Off by default: the
 //#### float softmax is the default and its results differ in the last bit (ImageNetV2 accuracy of NESTC_SM_INT=1: the same
 //#### within the noise, docs/evta_isa_ext.md 8.6).
+//#### JO changed (2026-11-17, docs/deit_optimization.md 6.10): on by default (the work goes to the EVTA). DeiT ImageNetV2
+//#### 9,000 top-1: float softmax 60.29 %, this 59.94 % (-0.35 %p, standard error +-0.5 %p; 11-11), with the integer elemadd
+//#### 60.20 % (11-15). -vta-alu-softmax=0 for the float softmax when the accuracy is in question.
 static llvm::cl::opt<bool> vtaAluSoftmax(
     "vta-alu-softmax",
     llvm::cl::desc("Run a fused softmax and the quantize after it as the integer softmax (nestc_cpu::softmaxIntQ), on the "
                    "EVTA ALU when it has the extended operations (vtalib softmax_evta)"),
-    llvm::cl::init(false));
+    llvm::cl::init(true));
 
 static void findSoftmaxI8(IRFunction *F, VTASaveContext *ctx) {
   std::vector<const Instruction *> L;
@@ -8608,6 +8617,34 @@ static void findPackedRows(IRFunction *F, VTASaveContext *ctx) {
     for (const Instruction *J : r.instrs)
       lutOut[J] = r.out;
   }
+  //#### JO added (2026-11-17): a view at offset 0 of the first rows of a row tensor (prune_rows_onnx.py's Slices: the class /
+  //#### distillation rows of the residual stream and of a layer norm output), after the last write of its source: the
+  //#### source may stay packed; the view is a copy of those rows in the row layout (emitted at the view)
+  std::set<const Instruction *> rowSl;
+  {
+    std::map<const Value *, size_t> lastWrite;
+    size_t k = 0;
+    for (const auto &I : F->getInstrs()) {
+      for (unsigned q = 0, e = I.getNumOperands(); q < e; q++)
+        if (I.getOperand(q).second != OperandKind::In && !llvm::isa<DeallocActivationInst>(&I))
+          lastWrite[getOrigin(const_cast<Value *>(I.getOperand(q).first))] = k;
+      k++;
+    }
+    k = 0;
+    for (const auto &I : F->getInstrs()) {
+      if (auto *tv = llvm::dyn_cast<TensorViewInst>(&I)) {
+        bool zero = true;
+        for (auto o : tv->getOffsets())
+          zero &= o == 0;
+        const Value *src = tv->getSrc();
+        if (zero && llvm::isa<AllocActivationInst>(src) && rowShape(src) && tv->size() < src->size() &&
+            tv->dims().back() == src->dims().back() && tv->size() % tv->dims().back() == 0 && lastWrite.count(src) &&
+            lastWrite[src] < k)
+          rowSl.insert(tv);
+      }
+      k++;
+    }
+  }
   for (const auto &I : F->getInstrs()) {
     if (llvm::isa<AllocActivationInst>(&I) && rowShape(&I) && !packed.count(&I))
       cand.insert(&I);
@@ -8644,6 +8681,10 @@ static void findPackedRows(IRFunction *F, VTASaveContext *ctx) {
         auto it = viewSrc.find(&I);
         if (it != viewSrc.end() && cand.count(&I) && cand.count(it->second))
           continue;
+        if (rowSl.count(&I)) {   //#### JO added (2026-11-17): a row slice: the source keeps its layout
+          unpack(&I);
+          continue;
+        }
         unpack(&I);
         unpack(llvm::cast<TensorViewInst>(&I)->getSrc());
         continue;
@@ -8686,9 +8727,15 @@ static void findPackedRows(IRFunction *F, VTASaveContext *ctx) {
   }
   for (const Value *v : cand)
     packed.insert(v);
-  if (getenv("VTA_PACK_ROWS_LOG"))
+  for (const Instruction *tv : rowSl)
+    if (packed.count(llvm::cast<TensorViewInst>(tv)->getSrc()))
+      ctx->rowSlices.insert(tv);
+  if (getenv("VTA_PACK_ROWS_LOG")) {
     for (const Value *v : cand)
       llvm::errs() << "-vta-pack-rows: " << v->getName() << "\n";
+    for (const Instruction *tv : ctx->rowSlices)
+      llvm::errs() << "-vta-pack-rows: row slice " << tv->getName() << "\n";
+  }
 }
 
 static bool elemAddIntParams(float sa, float sb, float so, int *A, int *B, int *N);
@@ -9890,6 +9937,22 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
     }
     case Kinded::Kind::TensorViewInstKind: {
       auto I2 = llvm::cast<TensorViewInst>(&I);
+      //#### JO added (2026-11-17): a row slice of a packed tensor: its first rows copied into the row layout here
+      if (ctx.rowSlices.count(I2)) {
+        const Value *src = I2->getSrc();
+        const size_t cols = src->dims().back(), rows = src->size() / cols, n = I2->size() / cols;
+        const std::string nm = I2->getName().str(), sn = src->getName().str();
+        ctx.usesCpuOps = true;
+        bundle.append("  // the first " + std::to_string(n) + " rows of the packed " + sn + " (a row slice)\n");
+        bundle.append("  static thread_local int8_t " + nm + "_rows[" + std::to_string(I2->getSizeInBytes()) + "];\n");
+        bundle.append("  int8_t* " + nm + " = " + nm + "_rows;\n");
+        bundle.append("  VTABufferInvalidate(" + sn + "_vbuf, 0, " + std::to_string(src->getSizeInBytes()) + ");\n");
+        bundle.append("  nestc_cpu::unpackRowsPart(" + nm + ", " + sn + ", " + std::to_string(rows) + ", " +
+                      std::to_string(cols) + ", " + std::to_string(n) + ");\n");
+        auto csyms = ctx.getConstantSymbols();
+        csyms->push_back({I2->getName().data(), 0, I2->getSizeInBytes(), '1'});
+        break;
+      }
       saveTensorViewInst(I2, &bundle, &ctx);
 
       // for not constant but represented as a constant value

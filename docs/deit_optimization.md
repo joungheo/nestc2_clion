@@ -521,6 +521,41 @@ norm의 x LOAD와 identity GEMM을 아끼지만, add 결과는 rq로 out에만 �
 있으면 달라진다(§8.20에서 하지 않기로 한 것). layer norm은 한 행의 192채널(두 thread의 acc에 나뉨)을 다 합해야 해서 conv epilogue로도
 넣을 수 없다.
 
+## 6.10 `-vta-alu-softmax` 기본 켜짐, 정확도 기록, 압축된 텐서의 앞 행 꺼내기 (2026-11-17)
+
+**`-vta-alu-softmax` 기본 켜짐.** attention softmax를 EVTA ALU의 정수 softmax(`softmax_evta`)로 한다. 정확도가 문제가 되면
+`gen_deit_bundle.sh -vta-alu-softmax=0`(float softmax, CPU)으로 다시 만들어 비교한다.
+
+**DeiT ImageNetV2 정확도 기록 (앞 9,000장 top-1, 보드 `EVAL_LIST`, 표준오차 약 ±0.5 %p).** 바이트가 바뀌는 변경마다 잰다.
+
+| 날짜 | 번들 / 변경 | top-1 | 비고 |
+|---|---|---|---|
+| 11-11 | 정수 LayerNorm, float softmax (기본이었음) | 60.29 % | §6.6.3 |
+| 11-11 | + `-vta-alu-softmax` (정수 softmax) | 59.94 % | −0.35 %p, `evta_isa_ext.md` §8.10 |
+| 11-15 | + `-vta-evta-elemadd` (residual add 정수 15비트) | 60.20 % | §8.17 (22비트 60.10 %) |
+| 11-16 | + 마지막 블록 2행, A x V EVTA 배치 (§6.7, §6.8) | 60.20 % | 출력 바이트 같음(2,000장 hash) |
+| 11-16 | + 위치 임베딩 add를 patch conv epilogue로 (§6.9) | 60.13 % | −0.07 %p, 출력이 다른 그림 225 / 2,652장 |
+| 11-17 | + 앞 행 꺼내기 (아래) | 60.13 % | 출력 바이트 같음(2,000장 hash) |
+| 참고 | float 모델 (PC) | 62.34 % | §6.6 |
+
+**압축된 텐서의 앞 행 꺼내기 (VTASave `findPackedRows`의 row slice).** §6.7의 Slice(앞 2행)는 offset 0의 view다. 전에는 view가 원본과
+크기가 다르면 원본까지 행 배치로 돌려, 층 10 출력 add가 CPU(`elemaddRowsInt`, 198행)로, 층 11 첫 layer norm이 `layernorm_evta`로 내려갔다.
+이제 원본(층 10 출력, 층 11 layer norm 출력)은 EVTA 배치로 두고, view 자리에서 앞 n행만 행 배치로 복사한다(`nestc_cpu::unpackRowsPart`,
+384바이트, thread_local 버퍼). 원본의 마지막 쓰기보다 뒤에 있는 view만. 출력 바이트 같음(2,000장 hash), OMP 1 37.37 → 37.03 ms, OMP 4 36.15 →
+35.92 ms.
+
+## 6.11 연구 과제: softmax를 Q K^T의 epilogue로
+
+softmax(`softmax_evta`, 층마다 0.44 ms, 합 5.2 ms)는 Q K^T 결과를 DRAM에서 다시 읽고 쓴다. Q K^T conv(198행을 18 x 11 그림으로, 출력 채널 =
+key 198 → 224)의 tile 안에서 softmax까지 끝내면 그 왕복과 run 하나가 빠진다. 어려운 점:
+- softmax는 한 행(query 하나)의 198개 key에 걸친 최대값과 합이 필요하다. 그 198값은 출력 채널 쪽이라, tile에서 14개 채널 블록이 두 virtual
+  thread의 acc 절반에 7개씩 나뉜다. 행 최대 / 합은 두 절반을 가로지르는 reduction이 되어야 한다(지금 ALU의 RMAX / RSUM은 한 블록 안의
+  16채널 reduction).
+- filter group이 하나여야 한다(224채널이 한 tile에 다 있어야 함). 지금 schedule에서는 성립하지만 tile 크기를 제한한다.
+- Div 표(§8.22 output LUT)는 이미 epilogue에 있으므로, softmax 프로그램(exp 표, 합, CLZ 역수, 곱)을 그 뒤에 이으면 된다.
+방법 후보: (1) thread 1개 schedule로 한 tile의 채널이 한 acc 절반에 오게 하고 ALU로 블록 간 MAX / ADD(16 x 14 pass), (2) 블록 간 reduction
+연산을 ALU에 추가(하드웨어). 이득 상한은 softmax의 LOAD / STORE와 run 부담 몫(층마다 약 0.1~0.2 ms 추정)이다.
+
 ## 7. 재현
 
 끄는 방법은 세 종류다. `-vta-*`는 번들 생성(`model-compiler`) 옵션이라 번들을 다시 만들어야 하고, `EVTA_*`는 실행할 때 주는 환경변수(`sudo /bin/sh -c "EVTA_X=0 hw/script/run_prof.sh ..."`), 하드웨어 단계는 `BIN=<비트스트림>`이다. 자세한 절차와 vtalib마다 읽는 변수의 차이는 `resnet18_optimization.md` §9.2–§9.5에 있다.

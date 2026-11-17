@@ -384,7 +384,11 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   Patch embedding add as the patch conv's epilogue (2026-11-16, §6.9, VTASave `findEmbedFusions`, `-vta-fuse-embed`): conv -> transposes
   (identity on rows x C) -> rows of the token concat -> + position embedding becomes the conv epilogue (integer add, the constant's rows packed
   once) with the output in the EVTA layout, `nestc_cpu::embedRows` placing the rows; the first-conv path takes epilogues now. Bytes change
-  (integer add); ImageNetV2 first 2,500 top-1 1,547 -> 1,545; OMP 1 37.79 -> 37.35 ms. add + layer norm in one run: not done (no gain).
+  (integer add); ImageNetV2 9,000 top-1 60.20 -> 60.13 %; OMP 1 37.79 -> 37.35 ms. add + layer norm in one run: not done (no gain).
+  2026-11-17 (§6.10): `-vta-alu-softmax` on by default (`=0` for the float softmax); the DeiT accuracy record of every byte-changing step
+  is the table in §6.10. A view of the first rows of a packed tensor (row slice) copies them out (`unpackRowsPart`) and the source stays
+  packed: DeiT OMP 1 37.37 -> 37.03 ms. Research note: softmax as the Q K^T epilogue (§6.11). The board's root disk filling up (100 %) ends
+  runs silently (logs cut, `/tmp/evta_bitstream` empty -> rc 3): delete dumps after use.
 - Other models (2026-11-05, `docs/evta_runtime_compare.md` §7.19): Resnet50 res2_0 residual fused (relu to a 2^q smaller scale), schedules of the
   Resnet50 / VGG16 shapes in `VTASchedules.h` (found with vtalib-systolic `EVTA_SCHED`), conv tiles below 7 x 7: the dummy-padded store
   used the wrong channel block with nVirtualThread 2 (fixed in both vtalibs) and the systolic vtalib's minimum tile is 1 on an `_sa_` bitstream
