@@ -2904,7 +2904,9 @@ void generateVTAConvolutionCall(const glow::ConvolutionInst *Inst,
       bundle->append("  " + e + ".t[0] = " + getOrigin(const_cast<Value *>(fu->residual))->getName().str() + "_vbuf;\n");
     bundle->append("  VTASetConvEpilogue(&" + e + ");\n");
   }
-  bundle->append(fu && !epi ? "  convolution_wo_tr_res(" : "  convolution_wo_tr(");
+  //#### JO added (2026-11-17): a max pool after it (findPoolFusions): convolution_wo_tr_pool
+  const PoolFusion *pfv = ctx->getPoolFusion(Inst);
+  bundle->append(pfv ? "  convolution_wo_tr_pool(" : fu && !epi ? "  convolution_wo_tr_res(" : "  convolution_wo_tr(");
   bundle->append(Inst->getName());
   bundle->append("_input_transpose, ");
   bundle->append(filterSte.name);
@@ -2991,7 +2993,16 @@ void generateVTAConvolutionCall(const glow::ConvolutionInst *Inst,
     bundle->append(std::to_string(ctx->getIdxMultiEVTA()));
   }
 #endif
+  if (pfv) {   //#### JO added (2026-11-17): the pool's output and kernel / stride / pad
+    auto *P = llvm::cast<MaxPoolInst>(pfv->pool);
+    bundle->append(", " + pfv->out->getName().str() + "_vbuf");
+    for (int v : {(int)P->getKernels()[0], (int)P->getStrides()[0], (int)P->getPads()[0]})
+      bundle->append(", " + std::to_string(v));
+  }
   bundle->append(");\n");
+  if (pfv)   //#### JO added (2026-11-17): as the first conv's pool (a CPU reader sees the EVTA's pool output)
+    bundle->append("  VTABufferInvalidate(" + pfv->out->getName().str() + "_vbuf, 0, " +
+                   std::to_string(pfv->out->getSizeInBytes()) + ");\n");
   if (epi)
     bundle->append("  VTASetConvEpilogue(nullptr);\n");   //#### JO added (2026-11-14)
 }
@@ -4426,7 +4437,12 @@ void findPoolFusions(const IRFunction *IR, VTASaveContext *ctx) {
   for (size_t i = 0; i < ins.size(); i++) {
     auto *C = llvm::dyn_cast<ConvolutionInst>(ins[i]);
     Conv0Pack pk;
-    if (!C || getConvPath(C) != ConvPath::FirstBNN || C->getFusedActivation() != RELU || !getConv0Pack(C, &pk))
+    //#### JO changed (2026-11-17): also an EVTA conv (ConvPath::VTA, relu, no other fusion) with a 2 x 2 / 2 / pad 0 or
+    //#### 3 x 3 / 2 / pad 1 max pool after it (VGG16's five pools; was the packed first conv only)
+    const bool first = C && getConvPath(C) == ConvPath::FirstBNN && C->getFusedActivation() == RELU && getConv0Pack(C, &pk);
+    const bool vta = C && getConvPath(C) == ConvPath::VTA && convRelu(C) && convClipHi(C) == 127 && !ctx->getFusion(C) &&
+                     !ctx->outLutConv.count(C);
+    if (!first && !vta)
       continue;
     size_t j = i + 1;
     while (j < ins.size() && (llvm::isa<AllocActivationInst>(ins[j]) || llvm::isa<DeallocActivationInst>(ins[j])))
@@ -4438,16 +4454,24 @@ void findPoolFusions(const IRFunction *IR, VTASaveContext *ctx) {
     if (!P || P->getSrc() != D || !ctx->isEvtaMaxPool(P) || users[D] != 2)
       continue;
     auto k = P->getKernels(), st = P->getStrides(), pads = P->getPads();
-    if (k[0] != 3 || k[1] != 3 || st[0] != 2 || st[1] != 2)
+    const int kk = k[0];
+    if (k[0] != k[1] || (kk != 3 && kk != 2) || st[0] != 2 || st[1] != 2 || (first && kk != 3))
       continue;
-    bool pad1 = true;
+    bool padOk = true;
     for (auto p : pads)
-      pad1 = pad1 && p == 1;
+      padOk = padOk && p == (kk == 3 ? 1u : 0u);
     int vt, th, tw;
-    getConvSchedule(C->getSrc()->dims()[0], pk.H2, pk.W2, pk.CO, C->getFilter()->dims()[0], pk.KH2, 1, 1, 0, &vt, &th,
-                    &tw);
+    if (first)
+      getConvSchedule(C->getSrc()->dims()[0], pk.H2, pk.W2, pk.CO, C->getFilter()->dims()[0], pk.KH2, 1, 1, 0, &vt, &th,
+                      &tw);
+    else {
+      auto sd = C->getSrc()->dims(), fd = C->getFilter()->dims();
+      getConvSchedule(sd[0], sd[1], sd[2], sd[3], fd[0], fd[1], fd[2], C->getStrides()[0], C->getPads()[0], &vt, &th,
+                      &tw);
+    }
     const Value *O = P->getDest();
-    if (!pad1 || th % 2 || tw % 2 || !allocAt.count(O))
+    auto od = D->dims();
+    if (!padOk || th % 2 || tw % 2 || !allocAt.count(O) || od[1] % th || od[2] % tw || !ctx->isPacked(O))
       continue;
     (*ctx->getPoolFusions())[C] = {P, O, allocAt[O] > i};
     ctx->getFusedAway()->insert(P);

@@ -525,6 +525,7 @@ struct ConvPool {
   uint32_t py0, px0;    // this tile's first pooled pixel
   uint32_t pth, ptw;    // this tile's pooled pixels (conv tile / 2)
   bool haloH, haloW;    // the conv tile has the extra row above / column to the left
+  uint32_t k = 3;       //#### JO added (2026-11-17): 3 (3 x 3 / 2 / pad 1, halo) or 2 (2 x 2 / 2 / pad 0, no halo: VGG16)
 };
 // acc[out + i * outRow + j * outCol + f * outF] = max(itself, acc[in + i * inRow + j * inCol + f * inF]),
 // i < oh, j < ow, f < nF (one uop per f)
@@ -1275,8 +1276,10 @@ void conv_kernel(uint32_t sizeOutTileH,
   //#### beside the tile (multi-EVTA, 2048: half the blocks per tile; DeiT out-proj / fc2 6 -> 3 was slower than elemadd_evta)
   const bool yHigh = ACC_BUFF_DEPTH >= 2 * ACC_MEM_ENTRY;
   const uint32_t yT = res && res->madd && !yHigh ? padT : 0;
+  //#### JO changed (2026-11-17): + the pooled area of a fused max pool (after the bias entries; it was not counted)
+  const uint32_t poolP = pool ? pool->pth * pool->ptw : 0;
   auto pickNF = [&](uint32_t rows) {
-    uint32_t n = min(KN / nVirtualThread / 16, ACC_MEM_ENTRY / nVirtualThread / (padT + yT + rows));
+    uint32_t n = min(KN / nVirtualThread / 16, ACC_MEM_ENTRY / nVirtualThread / (padT + yT + rows + poolP));
     for (; n > 0; n--)
       if ((KN / 16) % (n * nVirtualThread) == 0) break;
     return n;
@@ -1916,6 +1919,16 @@ void conv_kernel(uint32_t sizeOutTileH,
         const uint32_t pooled = outputSramBaseAddr + T * nFilterinLoop + nFilterinLoop;
         const uint32_t TW = resizedOutTileW, nF = nFilterinLoop;
         pushReset(vtaCmdH, idEVTA, pooled, P * nF);
+        //#### JO added (2026-11-17): 2 x 2 / 2 / pad 0: column 2j takes column 2j + 1, pooled (i, j) the max of column 2j of
+        //#### rows 2i and 2i + 1 (no halo; the pooled area starts at 0, the conv output >= 0 after the relu)
+        if (pool->k == 2) {
+          const uint32_t base = outputSramBaseAddr;
+          pushPoolMax2(vtaCmdH, idEVTA, {base, base + 1, resizedOutTileH, pool->ptw, TW, 2, TW, 2, nF, T, T});
+          if (rqPool) VTARequant(vtaCmdH, 1, 0, shift, 0, 127);
+          for (uint32_t dy = 0; dy < 2; dy++)
+            pushPoolMax2(vtaCmdH, idEVTA, {pooled, base + dy * TW, pool->pth, pool->ptw, pool->ptw, 1, 2 * TW, 2, nF, P, T});
+          if (rqPool) VTARequant(vtaCmdH, 0, 0, 0, 0, 0);
+        } else {
         // rows: centre column 2j + haloW takes the column left (j >= 1 without the halo) and right of it
         const uint32_t j0 = pool->haloW ? 0 : 1, centre = outputSramBaseAddr + pool->haloW;
         pushPoolMax2(vtaCmdH, idEVTA, {centre + 2 * j0, centre + 2 * j0 - 1, resizedOutTileH, pool->ptw - j0, TW, 2, TW,
@@ -1930,6 +1943,7 @@ void conv_kernel(uint32_t sizeOutTileH,
                                          pool->ptw, 1, 2 * TW, 2, nF, P, T});
         }
         if (rqPool) VTARequant(vtaCmdH, 0, 0, 0, 0, 0);
+        }   //#### JO: pool->k
       }
       //#### JO changed (2026-11-14): the output LUT pass is in the epilogue above (kind1 2)
       //#### JO added (2026-11-16, EVTA_LOAD_AHEAD): this thread's residual entries are free for the next group's LOAD
@@ -4122,8 +4136,8 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
       VTASetSegmentTag(vtaCmdH, streamRows(tileHIdx, sizeOutTileH));
     for (uint32_t tileWIdx = 0; tileWIdx < nTileW; tileWIdx++) {
       ConvPool tp = *pool;
-      tp.haloH = tileHIdx > 0;
-      tp.haloW = tileWIdx > 0;
+      tp.haloH = pool->k == 3 && tileHIdx > 0;   //#### JO changed (2026-11-17): no halo for the 2 x 2 pool
+      tp.haloW = pool->k == 3 && tileWIdx > 0;
       tp.pth = sizeOutTileH / 2;
       tp.ptw = sizeOutTileW / 2;
       tp.py0 = tileHIdx * tp.pth;
@@ -4924,9 +4938,13 @@ int convolution_wo_tr_pool(int8_t* input, int8_t *kernel, int32_t *bias, int8_t 
       if ((KN / 16) % (nF * nVirtualThread) == 0)
         break;
   }
-  const bool fits = N == 1 && doRelu && poolK == 3 && poolStride == 2 && poolPad == 1 && KN % 16 == 0 && nF > 0 &&
+  //#### JO changed (2026-11-17): also 2 x 2 / 2 / pad 0 (VGG16; VTASave findPoolFusions after any EVTA conv)
+  const bool k3 = poolK == 3 && poolStride == 2 && poolPad == 1, k2 = poolK == 2 && poolStride == 2 && poolPad == 0;
+  const bool fits = N == 1 && doRelu && (k3 || k2) && KN % 16 == 0 && nF > 0 &&
                     tileHSize % 2 == 0 && tileWSize % 2 == 0 && out_h % tileHSize == 0 && out_w % tileWSize == 0 &&
-                    tileHSize + 1 >= MIN_H_SIZE && tileWSize + 1 >= MIN_W_SIZE &&
+                    //#### JO changed (2026-11-17): evtaMinTile (1 on the systolic GEMM), the halo only for the 3 x 3 pool
+                    tileHSize + (k3 ? 1 : 0) >= (int)evtaMinTile(MIN_H_SIZE) &&
+                    tileWSize + (k3 ? 1 : 0) >= (int)evtaMinTile(MIN_W_SIZE) &&
                     (tileHSize + 1) * (tileWSize + 1) * nF + nF + tileHSize * tileWSize / 4 * nF <= 2048 / (uint32_t)nVirtualThread;
   static int check = -1;
   if (check < 0) {
@@ -4935,7 +4953,7 @@ int convolution_wo_tr_pool(int8_t* input, int8_t *kernel, int32_t *bias, int8_t 
   }
   int rc = 0;
   if (fits) {
-    ConvPool pool = {pool_out, (uint32_t)PH, (uint32_t)PW, 0, 0, 0, 0, false, false};
+    ConvPool pool = {pool_out, (uint32_t)PH, (uint32_t)PW, 0, 0, 0, 0, false, false, (uint32_t)poolK};
     rc = convolution_wo_tr_impl(input, kernel, bias, output, N, H, W, C, KN, KH, KW, pad_size, stride_size, doRelu,
                                 doBias, shift, out_h, out_w, vtaCmdH, nVirtualThread, tileHSize, tileWSize, idEVTA,
                                 nullptr, &pool);

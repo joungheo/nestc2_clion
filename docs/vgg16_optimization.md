@@ -150,6 +150,21 @@ VGG16 추론은 11-05 하루에 15.5 → 7.3 ms(−53 %)가 됐다. 최소 1에�
 | fc (EVTA) | 0.09 ms | EVTA |
 | 그 밖 | 약 0.1 ms | CPU |
 
+### 3.7 conv + 2x2 max pool을 한 EVTA 호출로 (2026-11-17)
+
+VGG16의 max pool 다섯 개(2x2 / stride 2 / pad 0) 가운데 네 개는 EVTA(`maxpool_evta`)에서 따로 돌았다. conv + pool을 한 호출로 하는 기능
+(`convolution_wo_tr_pool`, Resnet의 conv0 + 3x3 pool)은 있었지만, 찾기 규칙(VTASave `findPoolFusions`)이 **첫 conv(conv0 pack 경로)와 3x3 / 2 /
+pad 1 pool만** 보도록 되어 있어 VGG16은 후보가 아니었다.
+
+- VTASave `findPoolFusions`: 일반 EVTA conv(relu, 다른 fusion 없음)와 2x2 / 2 / pad 0 또는 3x3 / 2 / pad 1 max pool도 받는다(schedule의 tile이
+  짝수이고 출력을 나눌 때). VTA 경로의 conv 호출이 `convolution_wo_tr_pool`(pool 출력, k / s / p)을 낸다.
+- vtalib-systolic: `ConvPool.k`(2 / 3). 2x2는 halo가 없다. tile 안에서 ALU MAX 두 번(열 2j ← 2j + 1, 행 2i / 2i + 1 → pool 영역; requantize는
+  마지막 pass의 rq)으로 끝내고 pool 영역만 STORE한다. `conv_kernel`의 채널 블록 수(`pickNF`)가 pool 영역도 센다(전에는 빠져 있었다; Resnet
+  conv0는 그대로 2). 맞는지 확인하는 조건의 최소 tile이 `evtaMinTile`(systolic 1)이다. `vta/vtalib`은 3x3만 받고 2x2는 conv + `maxpool_evta`로 한다.
+- 보드(`_alux3` 400 MHz): `EVTA_RES_CHECK`(conv + CPU maxpool과 비교) 4종 0 differ, 새 dump 13개가 모두 예전 dump와 같고, CIFAR 시험 그림
+  20장 결과 같음. Resnet18 / 50 dump 그대로(40 / 106개). VGG16 OMP 1 **7.01 → 6.75 ms**(`maxpool_evta` 0.30 ms, conv 쪽 STORE도 줄어듦).
+- 마지막 pool(2x2 → 1x1, `MaxPool_30`)은 CPU pool이라(`isEvtaMaxPool` 아님) 그대로다(0.04 ms).
+
 ## 6. 다음 후보
 
 | 후보 | 내용 | 예상 | 비고 |

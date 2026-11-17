@@ -389,6 +389,9 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   is the table in §6.10. A view of the first rows of a packed tensor (row slice) copies them out (`unpackRowsPart`) and the source stays
   packed: DeiT OMP 1 37.37 -> 37.03 ms. Research note: softmax as the Q K^T epilogue (§6.11). The board's root disk filling up (100 %) ends
   runs silently (logs cut, `/tmp/evta_bitstream` empty -> rc 3): delete dumps after use.
+- conv + 2x2 max pool in one call (2026-11-17, `docs/vgg16_optimization.md` §3.7): `findPoolFusions` takes any EVTA conv with relu and a
+  2x2 / 2 / 0 or 3x3 / 2 / 1 max pool (was the packed first conv + 3x3 only), the VTA path emits `convolution_wo_tr_pool`; vtalib-systolic
+  `ConvPool.k` (2: no halo, two ALU MAX passes), `pickNF` counts the pooled area. `EVTA_RES_CHECK` 0 differ; VGG16 OMP 1 7.01 -> 6.75 ms.
 - Other models (2026-11-05, `docs/evta_runtime_compare.md` §7.19): Resnet50 res2_0 residual fused (relu to a 2^q smaller scale), schedules of the
   Resnet50 / VGG16 shapes in `VTASchedules.h` (found with vtalib-systolic `EVTA_SCHED`), conv tiles below 7 x 7: the dummy-padded store
   used the wrong channel block with nVirtualThread 2 (fixed in both vtalibs) and the systolic vtalib's minimum tile is 1 on an `_sa_` bitstream
