@@ -164,6 +164,7 @@ pad 1 pool만** 보도록 되어 있어 VGG16은 후보가 아니었다.
 - 보드(`_alux3` 400 MHz): `EVTA_RES_CHECK`(conv + CPU maxpool과 비교) 4종 0 differ, 새 dump 13개가 모두 예전 dump와 같고, CIFAR 시험 그림
   20장 결과 같음. Resnet18 / 50 dump 그대로(40 / 106개). VGG16 OMP 1 **7.01 → 6.75 ms**(`maxpool_evta` 0.30 ms, conv 쪽 STORE도 줄어듦).
 - 마지막 pool(2x2 → 1x1, `MaxPool_30`)은 CPU pool이라(`isEvtaMaxPool` 아님) 그대로다(0.04 ms).
+- 바꾸기 전 · 후의 코드와 그림 5개로 쉽게 풀어 쓴 설명: [evta_conv_pool_guide.md](evta_conv_pool_guide.md).
 
 ## 6. 다음 후보
 
@@ -171,7 +172,7 @@ pad 1 pool만** 보도록 되어 있어 VGG16은 후보가 아니었다.
 |---|---|---|---|
 | 최소 tile 1에서 schedule 다시 찾기 | ③ 뒤에는 vt 2, tile = 출력 전체만 재 봄 | 미측정 | `EVTA_SCHED` 탐색 |
 | 작은 출력 conv의 weight 재사용 | 2×2 / 4×4 conv는 tile 하나에 weight 전부라 LOAD가 대부분. weight 2.36 MB의 실효 대역을 높이기(burst 길이, 두 thread가 weight를 나눠 읽기) | 뒤쪽 conv 수 ms 중 일부 | `EVTA_REPLAY_LOG=2`로 DRAM byte부터 확인 |
-| conv + maxpool 합치기 | maxpool 0.3 ms | −0.2 ms | Resnet18 conv0 + pool과 같은 방식(`convolution_wo_tr_pool`) |
+| ~~conv + maxpool 합치기~~ | maxpool 0.3 ms | −0.26 ms | 했음 (§3.7, 2026-11-17) |
 | multi4 하드웨어 | register slice, HP 포트 | copy당 약 1 ms | `resnet50_optimization.md` §4 |
 
 ## 7. 재현

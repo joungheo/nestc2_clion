@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="600" viewBox="0 0 1400 600" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif">
+<title>그림 P4. 2x2 / stride 2는 tile 안에서 끝나고, 3x3 / stride 2 / pad 1은 이웃 tile의 한 줄(halo)이 필요하다</title>
+<defs><marker id="ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#333333"/></marker><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f5f98"/></marker><marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c06a10"/></marker><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3c8a35"/></marker><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker><marker id="ap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6d4596"/></marker><marker id="ay" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9a7b00"/></marker><marker id="agr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#888888"/></marker></defs>
+<rect x="0" y="0" width="1400" height="600" fill="#ffffff"/>
+<text x="700.0" y="34" font-size="19" fill="#333333" text-anchor="middle" font-weight="bold">그림 P4. 2x2 / stride 2는 tile 안에서 끝나고, 3x3 / stride 2 / pad 1은 이웃 tile의 한 줄(halo)이 필요하다</text>
+<text x="40" y="90" font-size="15" fill="#333333" text-anchor="start" font-weight="bold">한 행만 보기: conv 출력 열 0..11, tile 너비 4 (tile 경계는 열 4와 8 앞)</text>
+<text x="250" y="147.0" font-size="14" fill="#333333" text-anchor="end" font-weight="bold">conv 출력</text>
+<rect x="260" y="120" width="56" height="44" rx="0" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1"/>
+<text x="288.0" y="146.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">0</text>
+<rect x="316" y="120" width="56" height="44" rx="0" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1"/>
+<text x="344.0" y="146.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">1</text>
+<rect x="372" y="120" width="56" height="44" rx="0" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1"/>
+<text x="400.0" y="146.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">2</text>
+<rect x="428" y="120" width="56" height="44" rx="0" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1"/>
+<text x="456.0" y="146.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">3</text>
+<rect x="484" y="120" width="56" height="44" rx="0" fill="#f1eaf8" stroke="#6d4596" stroke-width="1"/>
+<text x="512.0" y="146.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">4</text>
+<rect x="540" y="120" width="56" height="44" rx="0" fill="#f1eaf8" stroke="#6d4596" stroke-width="1"/>
+<text x="568.0" y="146.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">5</text>
+<rect x="596" y="120" width="56" height="44" rx="0" fill="#f1eaf8" stroke="#6d4596" stroke-width="1"/>
+<text x="624.0" y="146.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">6</text>
+<rect x="652" y="120" width="56" height="44" rx="0" fill="#f1eaf8" stroke="#6d4596" stroke-width="1"/>
+<text x="680.0" y="146.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">7</text>
+<rect x="708" y="120" width="56" height="44" rx="0" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1"/>
+<text x="736.0" y="146.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">8</text>
+<rect x="764" y="120" width="56" height="44" rx="0" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1"/>
+<text x="792.0" y="146.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">9</text>
+<rect x="820" y="120" width="56" height="44" rx="0" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1"/>
+<text x="848.0" y="146.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">10</text>
+<rect x="876" y="120" width="56" height="44" rx="0" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1"/>
+<text x="904.0" y="146.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">11</text>
+<line x1="484" y1="105" x2="484" y2="470" stroke="#c0392b" stroke-width="2" stroke-dasharray="5,4"/>
+<line x1="708" y1="105" x2="708" y2="470" stroke="#c0392b" stroke-width="2" stroke-dasharray="5,4"/>
+<text x="40" y="230" font-size="15" fill="#333333" text-anchor="start" font-weight="bold">2x2 / s2 / p0</text>
+<rect x="263" y="190" width="106" height="50" rx="4" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="316.0" y="219.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="bold">pool 0</text>
+<rect x="375" y="190" width="106" height="50" rx="4" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="428.0" y="219.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="bold">pool 1</text>
+<rect x="487" y="190" width="106" height="50" rx="4" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="540.0" y="219.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="bold">pool 2</text>
+<rect x="599" y="190" width="106" height="50" rx="4" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="652.0" y="219.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="bold">pool 3</text>
+<rect x="711" y="190" width="106" height="50" rx="4" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="764.0" y="219.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="bold">pool 4</text>
+<rect x="823" y="190" width="106" height="50" rx="4" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="876.0" y="219.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="bold">pool 5</text>
+<text x="952" y="220" font-size="13" fill="#3c8a35" text-anchor="start" font-weight="normal">창 = 열 2p, 2p+1: 늘 한 tile 안</text>
+<text x="40" y="330" font-size="15" fill="#333333" text-anchor="start" font-weight="bold">3x3 / s2 / p1</text>
+<rect x="263" y="280" width="106" height="48" rx="4" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="316.0" y="308.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="bold">pool 0</text>
+<rect x="319" y="338" width="162" height="48" rx="4" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="400.0" y="366.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="bold">pool 1</text>
+<rect x="431" y="280" width="162" height="48" rx="4" fill="#fbe9e7" stroke="#c0392b" stroke-width="1.6"/>
+<text x="512.0" y="308.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="bold">pool 2 ← 열 3 필요</text>
+<rect x="543" y="338" width="162" height="48" rx="4" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="624.0" y="366.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="bold">pool 3</text>
+<rect x="655" y="280" width="162" height="48" rx="4" fill="#fbe9e7" stroke="#c0392b" stroke-width="1.6"/>
+<text x="736.0" y="308.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="bold">pool 4 ← 열 7 필요</text>
+<rect x="767" y="338" width="162" height="48" rx="4" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="848.0" y="366.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="bold">pool 5</text>
+<text x="952" y="330" font-size="13" fill="#c0392b" text-anchor="start" font-weight="normal">창 = 열 2p-1 .. 2p+1:</text>
+<text x="952" y="352" font-size="13" fill="#c0392b" text-anchor="start" font-weight="normal">왼쪽 tile의 마지막 열이 필요</text>
+<rect x="40" y="460" width="1320" height="110" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="60" y="490" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">3x3: 둘째 tile부터 conv tile을 한 줄 · 한 열 더 계산한다 (haloH / haloW = tile 번호 &gt; 0).</text>
+<text x="60" y="520" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">2x2: halo 없음.  코드: tp.haloH = pool-&gt;k == 3 &amp;&amp; tileHIdx &gt; 0;   (전: tp.haloH = tileHIdx &gt; 0;)</text>
+<text x="60" y="550" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">맞는지 확인하는 최소 tile 조건도 halo 줄을 3x3일 때만 더한다: tileHSize + (k3 ? 1 : 0) &gt;= evtaMinTile(MIN_H_SIZE).</text>
+</svg>

@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="760" viewBox="0 0 1400 760" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif">
+<title>그림 P3. tile 안의 2x2 max pool: ALU MAX 두 번 (예: tile 4×4, 채널 블록 하나)</title>
+<defs><marker id="ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#333333"/></marker><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f5f98"/></marker><marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c06a10"/></marker><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3c8a35"/></marker><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker><marker id="ap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6d4596"/></marker><marker id="ay" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9a7b00"/></marker><marker id="agr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#888888"/></marker></defs>
+<rect x="0" y="0" width="1400" height="760" fill="#ffffff"/>
+<text x="700.0" y="34" font-size="19" fill="#333333" text-anchor="middle" font-weight="bold">그림 P3. tile 안의 2x2 max pool: ALU MAX 두 번 (예: tile 4×4, 채널 블록 하나)</text>
+<text x="216.0" y="96" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">conv 결과 (acc, int32, bias 포함)</text>
+<rect x="60" y="110" width="78" height="50" rx="0" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1"/>
+<text x="99.0" y="139.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">a</text>
+<rect x="138" y="110" width="78" height="50" rx="0" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1"/>
+<text x="177.0" y="139.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">b</text>
+<rect x="216" y="110" width="78" height="50" rx="0" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1"/>
+<text x="255.0" y="139.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">c</text>
+<rect x="294" y="110" width="78" height="50" rx="0" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1"/>
+<text x="333.0" y="139.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">d</text>
+<rect x="60" y="160" width="78" height="50" rx="0" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1"/>
+<text x="99.0" y="189.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">e</text>
+<rect x="138" y="160" width="78" height="50" rx="0" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1"/>
+<text x="177.0" y="189.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">f</text>
+<rect x="216" y="160" width="78" height="50" rx="0" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1"/>
+<text x="255.0" y="189.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">g</text>
+<rect x="294" y="160" width="78" height="50" rx="0" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1"/>
+<text x="333.0" y="189.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">h</text>
+<rect x="60" y="210" width="78" height="50" rx="0" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1"/>
+<text x="99.0" y="239.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">i</text>
+<rect x="138" y="210" width="78" height="50" rx="0" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1"/>
+<text x="177.0" y="239.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">j</text>
+<rect x="216" y="210" width="78" height="50" rx="0" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1"/>
+<text x="255.0" y="239.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">k</text>
+<rect x="294" y="210" width="78" height="50" rx="0" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1"/>
+<text x="333.0" y="239.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">l</text>
+<rect x="60" y="260" width="78" height="50" rx="0" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1"/>
+<text x="99.0" y="289.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">m</text>
+<rect x="138" y="260" width="78" height="50" rx="0" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1"/>
+<text x="177.0" y="289.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">n</text>
+<rect x="216" y="260" width="78" height="50" rx="0" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1"/>
+<text x="255.0" y="289.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">o</text>
+<rect x="294" y="260" width="78" height="50" rx="0" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1"/>
+<text x="333.0" y="289.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">p</text>
+<polyline points="390,210 450,210" fill="none" stroke="#333333" stroke-width="2" marker-end="url(#ak)"/>
+<text x="420" y="190" font-size="16" fill="#333333" text-anchor="middle" font-weight="bold">①</text>
+<text x="616.0" y="96" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">① 가로: 열 2j ← max(열 2j, 열 2j+1)</text>
+<rect x="460" y="110" width="78" height="50" rx="0" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1"/>
+<text x="499.0" y="139.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">a∨b</text>
+<rect x="538" y="110" width="78" height="50" rx="0" fill="#f2f2f2" stroke="#888888" stroke-width="1"/>
+<text x="577.0" y="139.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">b</text>
+<rect x="616" y="110" width="78" height="50" rx="0" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1"/>
+<text x="655.0" y="139.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">c∨d</text>
+<rect x="694" y="110" width="78" height="50" rx="0" fill="#f2f2f2" stroke="#888888" stroke-width="1"/>
+<text x="733.0" y="139.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">d</text>
+<rect x="460" y="160" width="78" height="50" rx="0" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1"/>
+<text x="499.0" y="189.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">e∨f</text>
+<rect x="538" y="160" width="78" height="50" rx="0" fill="#f2f2f2" stroke="#888888" stroke-width="1"/>
+<text x="577.0" y="189.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">f</text>
+<rect x="616" y="160" width="78" height="50" rx="0" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1"/>
+<text x="655.0" y="189.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">g∨h</text>
+<rect x="694" y="160" width="78" height="50" rx="0" fill="#f2f2f2" stroke="#888888" stroke-width="1"/>
+<text x="733.0" y="189.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">h</text>
+<rect x="460" y="210" width="78" height="50" rx="0" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1"/>
+<text x="499.0" y="239.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">i∨j</text>
+<rect x="538" y="210" width="78" height="50" rx="0" fill="#f2f2f2" stroke="#888888" stroke-width="1"/>
+<text x="577.0" y="239.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">j</text>
+<rect x="616" y="210" width="78" height="50" rx="0" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1"/>
+<text x="655.0" y="239.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">k∨l</text>
+<rect x="694" y="210" width="78" height="50" rx="0" fill="#f2f2f2" stroke="#888888" stroke-width="1"/>
+<text x="733.0" y="239.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">l</text>
+<rect x="460" y="260" width="78" height="50" rx="0" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1"/>
+<text x="499.0" y="289.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">m∨n</text>
+<rect x="538" y="260" width="78" height="50" rx="0" fill="#f2f2f2" stroke="#888888" stroke-width="1"/>
+<text x="577.0" y="289.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">n</text>
+<rect x="616" y="260" width="78" height="50" rx="0" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1"/>
+<text x="655.0" y="289.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">o∨p</text>
+<rect x="694" y="260" width="78" height="50" rx="0" fill="#f2f2f2" stroke="#888888" stroke-width="1"/>
+<text x="733.0" y="289.2" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">p</text>
+<polyline points="790,210 850,210" fill="none" stroke="#333333" stroke-width="2" marker-end="url(#ak)"/>
+<text x="820" y="190" font-size="16" fill="#333333" text-anchor="middle" font-weight="bold">②</text>
+<text x="1000.0" y="121" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">② 세로 → pool 영역 (2×2)</text>
+<rect x="880" y="135" width="120" height="76" rx="0" fill="#fdf0e2" stroke="#c06a10" stroke-width="1"/>
+<text x="940.0" y="177.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">a∨b∨e∨f</text>
+<rect x="1000" y="135" width="120" height="76" rx="0" fill="#fdf0e2" stroke="#c06a10" stroke-width="1"/>
+<text x="1060.0" y="177.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">c∨d∨g∨h</text>
+<rect x="880" y="211" width="120" height="76" rx="0" fill="#fdf0e2" stroke="#c06a10" stroke-width="1"/>
+<text x="940.0" y="253.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">i∨j∨m∨n</text>
+<rect x="1000" y="211" width="120" height="76" rx="0" fill="#fdf0e2" stroke="#c06a10" stroke-width="1"/>
+<text x="1060.0" y="253.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">k∨l∨o∨p</text>
+<text x="1120" y="320" font-size="13" fill="#888888" text-anchor="start" font-weight="normal">∨ = max</text>
+<rect x="40" y="350" width="1320" height="380" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="60" y="380" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">ALU 명령 (pushPoolMax2: acc[out + i·outRow + j·outCol] = max(그 자리, acc[in + i·inRow + j·inCol]), 채널 블록 nF개)</text>
+<text x="60" y="410" font-size="14" fill="#333333" text-anchor="start" font-weight="normal"></text>
+<text x="60" y="440" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">① 가로 1번:   out = base,      in = base + 1,       i &lt; 4 행, j &lt; 2,  outRow = inRow = TW,  outCol = inCol = 2</text>
+<text x="60" y="470" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">      → 각 행의 짝수 열이 오른쪽 이웃과의 max가 된다 (홀수 열은 그대로, 이제 안 쓴다)</text>
+<text x="60" y="500" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">② 세로 2번 (dy = 0, 1):  out = pooled,  in = base + dy·TW,  i &lt; 2, j &lt; 2,  outRow = 2, outCol = 1,  inRow = 2·TW, inCol = 2</text>
+<text x="60" y="530" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">      → pool[i][j] = max(pool[i][j], 행 2i+dy의 열 2j).  pool 영역은 먼저 0으로 reset되어 있다</text>
+<text x="60" y="560" font-size="14" fill="#333333" text-anchor="start" font-weight="normal"></text>
+<text x="60" y="590" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">0에서 시작하므로 결과 = max(0, 네 값) = relu(max(네 값)).  relu 전의 int32 acc에 바로 해도 된다.</text>
+<text x="60" y="620" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">② 두 번에 requantize(rq: &gt;&gt; shift, 0..127로 clip, int8)를 켜 둔다. max와 requantize는 순서를 바꿔도 같으므로</text>
+<text x="60" y="650" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">      (둘 다 커지는 쪽을 지키는 함수) 마지막 값 = int8(max).  rq는 out 버퍼에 쓰고, STORE는 그 pool 영역만 내보낸다.</text>
+<text x="60" y="680" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">3x3 pool이면 가로 2번 + 세로 3번이고, tile 경계 밖 한 줄(halo)이 필요하다 (그림 P4).</text>
+</svg>

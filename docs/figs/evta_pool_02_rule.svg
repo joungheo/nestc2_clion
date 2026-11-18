@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="740" viewBox="0 0 1400 740" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif">
+<title>그림 P2. findPoolFusions의 조건: 전에는 Resnet conv0 하나만 맞았다</title>
+<defs><marker id="ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#333333"/></marker><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f5f98"/></marker><marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c06a10"/></marker><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3c8a35"/></marker><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker><marker id="ap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6d4596"/></marker><marker id="ay" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9a7b00"/></marker><marker id="agr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#888888"/></marker></defs>
+<rect x="0" y="0" width="1400" height="740" fill="#ffffff"/>
+<text x="700.0" y="34" font-size="19" fill="#333333" text-anchor="middle" font-weight="bold">그림 P2. findPoolFusions의 조건: 전에는 Resnet conv0 하나만 맞았다</text>
+<rect x="40" y="70" width="630" height="44" rx="6" fill="#f2f2f2" stroke="#888888" stroke-width="1.6"/>
+<text x="355.0" y="97.25" font-size="15" fill="#333333" text-anchor="middle" font-weight="bold">전</text>
+<rect x="40" y="130" width="630" height="38" rx="4" fill="#ffffff" stroke="#333333" stroke-width="1"/>
+<text x="62" y="155" font-size="16" fill="#3c8a35" text-anchor="middle" font-weight="bold">✔</text>
+<text x="84" y="155" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">conv가 ConvPath::FirstBNN (conv0 pack 경로, 모델의 첫 conv)</text>
+<rect x="40" y="176" width="630" height="38" rx="4" fill="#ffffff" stroke="#333333" stroke-width="1"/>
+<text x="62" y="201" font-size="16" fill="#3c8a35" text-anchor="middle" font-weight="bold">✔</text>
+<text x="84" y="201" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">relu가 붙어 있음</text>
+<rect x="40" y="222" width="630" height="38" rx="4" fill="#ffffff" stroke="#333333" stroke-width="1"/>
+<text x="62" y="247" font-size="16" fill="#3c8a35" text-anchor="middle" font-weight="bold">✔</text>
+<text x="84" y="247" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">conv 출력을 읽는 것이 pool 하나뿐, pool이 EVTA maxpool</text>
+<rect x="40" y="268" width="630" height="38" rx="4" fill="#ffffff" stroke="#333333" stroke-width="1"/>
+<text x="62" y="293" font-size="16" fill="#c0392b" text-anchor="middle" font-weight="bold">✘</text>
+<text x="84" y="293" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">pool이 3x3 / stride 2 / pad 1  ← VGG16의 2x2 / 2 / 0은 여기서 탈락</text>
+<rect x="40" y="314" width="630" height="38" rx="4" fill="#ffffff" stroke="#333333" stroke-width="1"/>
+<text x="62" y="339" font-size="16" fill="#3c8a35" text-anchor="middle" font-weight="bold">✔</text>
+<text x="84" y="339" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">schedule의 tile 높이 · 너비가 짝수</text>
+<rect x="40" y="360" width="630" height="38" rx="4" fill="#ffffff" stroke="#333333" stroke-width="1"/>
+<text x="62" y="385" font-size="16" fill="#3c8a35" text-anchor="middle" font-weight="bold">✔</text>
+<text x="84" y="385" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">pool 출력 버퍼가 아직 할당 전이 아님</text>
+<rect x="730" y="70" width="630" height="44" rx="6" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="1045.0" y="97.25" font-size="15" fill="#333333" text-anchor="middle" font-weight="bold">후</text>
+<rect x="730" y="130" width="630" height="38" rx="4" fill="#ffffff" stroke="#333333" stroke-width="1"/>
+<text x="752" y="155" font-size="16" fill="#2f5f98" text-anchor="middle" font-weight="bold">＋</text>
+<text x="774" y="155" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">첫 conv(위와 같음)  또는  일반 EVTA conv (ConvPath::VTA)</text>
+<rect x="730" y="176" width="630" height="38" rx="4" fill="#ffffff" stroke="#333333" stroke-width="1"/>
+<text x="752" y="201" font-size="16" fill="#2f5f98" text-anchor="middle" font-weight="bold">＋</text>
+<text x="774" y="201" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">  일반 conv: relu, 위쪽 clip 없음 (clipHi = 127)</text>
+<rect x="730" y="222" width="630" height="38" rx="4" fill="#ffffff" stroke="#333333" stroke-width="1"/>
+<text x="752" y="247" font-size="16" fill="#2f5f98" text-anchor="middle" font-weight="bold">＋</text>
+<text x="774" y="247" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">  일반 conv: residual / epilogue / 출력 LUT 융합이 없음</text>
+<rect x="730" y="268" width="630" height="38" rx="4" fill="#ffffff" stroke="#333333" stroke-width="1"/>
+<text x="752" y="293" font-size="16" fill="#3c8a35" text-anchor="middle" font-weight="bold">✔</text>
+<text x="774" y="293" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">conv 출력을 읽는 것이 pool 하나뿐, pool이 EVTA maxpool</text>
+<rect x="730" y="314" width="630" height="38" rx="4" fill="#ffffff" stroke="#333333" stroke-width="1"/>
+<text x="752" y="339" font-size="16" fill="#2f5f98" text-anchor="middle" font-weight="bold">＋</text>
+<text x="774" y="339" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">pool이 3x3 / 2 / 1  또는  2x2 / 2 / 0  (첫 conv는 3x3만)</text>
+<rect x="730" y="360" width="630" height="38" rx="4" fill="#ffffff" stroke="#333333" stroke-width="1"/>
+<text x="752" y="385" font-size="16" fill="#2f5f98" text-anchor="middle" font-weight="bold">＋</text>
+<text x="774" y="385" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">tile이 짝수이고 출력 높이 · 너비를 나누어떨어뜨림</text>
+<rect x="730" y="406" width="630" height="38" rx="4" fill="#ffffff" stroke="#333333" stroke-width="1"/>
+<text x="752" y="431" font-size="16" fill="#2f5f98" text-anchor="middle" font-weight="bold">＋</text>
+<text x="774" y="431" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">pool 출력이 EVTA layout (isPacked)</text>
+<rect x="40" y="480" width="1320" height="230" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="60" y="510" font-size="14" fill="#333333" text-anchor="start" font-weight="bold">왜 이 조건들인가</text>
+<text x="60" y="538" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">· relu: pool 영역을 0으로 채우고 MAX를 시작한다. 0과의 MAX = relu이므로 conv 출력이 relu를 거쳐야 같은 값이 된다.</text>
+<text x="60" y="566" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">· clipHi = 127: relu6처럼 위를 자르는 clip이면 requantize(0..127)만으로는 같지 않다.</text>
+<text x="60" y="594" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">· 다른 융합 없음: residual add · 출력 LUT도 tile 끝(STORE 전)에 붙는 일이라 한 tile에 둘을 섞지 않는다.</text>
+<text x="60" y="622" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">· tile 짝수 · 나누어떨어짐: 2x2 묶음 하나가 tile 두 개에 걸치지 않아야 tile 안에서 끝난다.</text>
+<text x="60" y="650" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">· isPacked: 출력을 EVTA layout(N{C/16}HW16)으로 쓴다. 다음 conv가 그대로 읽는다.</text>
+<text x="60" y="678" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">조건이 하나라도 안 맞으면 예전처럼 conv 호출 + maxpool_evta 호출이다 (vtalib도 한 번 더 확인하고 안 맞으면 둘로 나눈다).</text>
+</svg>

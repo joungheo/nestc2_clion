@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="560" viewBox="0 0 1400 560" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif">
+<title>그림 P5. thread 하나의 acc 자리: pool 영역도 채널 블록 수(nF)를 정할 때 세야 한다</title>
+<defs><marker id="ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#333333"/></marker><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f5f98"/></marker><marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c06a10"/></marker><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3c8a35"/></marker><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker><marker id="ap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6d4596"/></marker><marker id="ay" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9a7b00"/></marker><marker id="agr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#888888"/></marker></defs>
+<rect x="0" y="0" width="1400" height="560" fill="#ffffff"/>
+<text x="700.0" y="34" font-size="19" fill="#333333" text-anchor="middle" font-weight="bold">그림 P5. thread 하나의 acc 자리: pool 영역도 채널 블록 수(nF)를 정할 때 세야 한다</text>
+<rect x="120.0" y="110" width="580.0" height="70" rx="2" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.6"/>
+<text x="410.0" y="149.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">conv tile  T × nF = 256 × 2 = 512</text>
+<rect x="700.0" y="110" width="2.265625" height="70" rx="2" fill="#fbf6dc" stroke="#9a7b00" stroke-width="1.6"/>
+<rect x="702.265625" y="110" width="145.0" height="70" rx="2" fill="#fdf0e2" stroke="#c06a10" stroke-width="1.6"/>
+<text x="774.765625" y="149.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">pool  P × nF = 128</text>
+<rect x="847.265625" y="110" width="432.734375" height="70" rx="2" fill="#f2f2f2" stroke="#888888" stroke-width="1.6"/>
+<text x="1063.6328125" y="149.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">비어 있음</text>
+<text x="701.1328125" y="200" font-size="12" fill="#9a7b00" text-anchor="middle" font-weight="normal">bias nF</text>
+<text x="110" y="152" font-size="15" fill="#333333" text-anchor="end" font-weight="bold">acc</text>
+<text x="120.0" y="100" font-size="12" fill="#888888" text-anchor="middle" font-weight="normal">0</text>
+<text x="700.0" y="100" font-size="12" fill="#888888" text-anchor="middle" font-weight="normal">512</text>
+<text x="847.265625" y="100" font-size="12" fill="#888888" text-anchor="middle" font-weight="normal">642</text>
+<text x="1280.0" y="100" font-size="12" fill="#888888" text-anchor="middle" font-weight="normal">1024</text>
+<text x="700" y="240" font-size="13" fill="#888888" text-anchor="middle" font-weight="normal">VGG16 첫 pool 자리의 conv: tile 8×32 (T = 256 행), thread 2개 → thread당 acc 1024 entry, pool 영역 P = 4×16 = 64</text>
+<rect x="40" y="280" width="1320" height="250" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="60" y="312" font-size="14" fill="#333333" text-anchor="start" font-weight="bold">pickNF(rows): 한 번에 처리할 출력 채널 블록 수 nF (16 채널 = 1 블록)</text>
+<text x="60" y="346" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">전:  n = min(KN/vt/16, 1024 / (padT + yT + rows))           ← pool 영역이 빠짐</text>
+<text x="60" y="380" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">후:  n = min(KN/vt/16, 1024 / (padT + yT + rows + poolP))   poolP = pth × ptw (tile의 1/4)</text>
+<text x="60" y="414" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">      그 뒤 (KN/16)이 n × vt로 나누어떨어질 때까지 n을 줄인다.</text>
+<text x="60" y="448" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">VGG16 이 자리: 전 1024 / 257 = 3, 후 1024 / 321 = 3 → 둘 다 나누어떨어짐 때문에 2.  결과는 같았다.</text>
+<text x="60" y="482" font-size="14" fill="#333333" text-anchor="start" font-weight="normal">하지만 다른 모양에서는 pool 영역이 thread 자리를 넘어 다음 thread의 acc를 덮을 수 있었다 (Resnet conv0도 그대로 2).</text>
+</svg>

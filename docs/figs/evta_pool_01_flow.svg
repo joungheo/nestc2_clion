@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="560" viewBox="0 0 1400 560" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif">
+<title>그림 P1. VGG16 첫 pool: conv 출력이 DRAM을 오가던 왕복이 없어진다</title>
+<defs><marker id="ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#333333"/></marker><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f5f98"/></marker><marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c06a10"/></marker><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3c8a35"/></marker><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker><marker id="ap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6d4596"/></marker><marker id="ay" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9a7b00"/></marker><marker id="agr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#888888"/></marker></defs>
+<rect x="0" y="0" width="1400" height="560" fill="#ffffff"/>
+<text x="700.0" y="34" font-size="19" fill="#333333" text-anchor="middle" font-weight="bold">그림 P1. VGG16 첫 pool: conv 출력이 DRAM을 오가던 왕복이 없어진다</text>
+<text x="40" y="84" font-size="16" fill="#333333" text-anchor="start" font-weight="bold">① 전: conv 호출과 pool 호출이 따로 (maxpool_evta)</text>
+<rect x="40" y="104" width="220" height="80" rx="6" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.6"/>
+<text x="150.0" y="139.45000000000002" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">EVTA conv</text>
+<text x="150.0" y="158.35000000000002" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">convolution_wo_tr</text>
+<rect x="370" y="104" width="200" height="80" rx="6" fill="#f2f2f2" stroke="#888888" stroke-width="1.6"/>
+<text x="470.0" y="139.45000000000002" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">DRAM</text>
+<text x="470.0" y="158.35000000000002" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">32×32×64 = 64 KB</text>
+<rect x="680" y="104" width="220" height="80" rx="6" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.6"/>
+<text x="790.0" y="139.45000000000002" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">EVTA pool</text>
+<text x="790.0" y="158.35000000000002" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">maxpool_evta</text>
+<rect x="1010" y="104" width="200" height="80" rx="6" fill="#f2f2f2" stroke="#888888" stroke-width="1.6"/>
+<text x="1110.0" y="139.45000000000002" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">DRAM</text>
+<text x="1110.0" y="158.35000000000002" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">16×16×64 = 16 KB</text>
+<polyline points="260,144 370,144" fill="none" stroke="#c0392b" stroke-width="2.4" marker-end="url(#ar)"/>
+<text x="315" y="134" font-size="12" fill="#c0392b" text-anchor="middle" font-weight="normal">STORE 64 KB</text>
+<polyline points="570,144 680,144" fill="none" stroke="#c0392b" stroke-width="2.4" marker-end="url(#ar)"/>
+<text x="625" y="134" font-size="12" fill="#c0392b" text-anchor="middle" font-weight="normal">LOAD 64 KB</text>
+<polyline points="900,144 1010,144" fill="none" stroke="#333333" stroke-width="2" marker-end="url(#ak)"/>
+<text x="955" y="134" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">STORE 16 KB</text>
+<text x="1230" y="140" font-size="14" fill="#c0392b" text-anchor="start" font-weight="bold">EVTA run 2개</text>
+<text x="1230" y="162" font-size="14" fill="#c0392b" text-anchor="start" font-weight="normal">+0.30 ms</text>
+<text x="40" y="270" font-size="16" fill="#333333" text-anchor="start" font-weight="bold">② 후: 한 호출 (convolution_wo_tr_pool) 안에서 tile마다 conv → 2x2 MAX → STORE</text>
+<rect x="40" y="290" width="520" height="150" rx="6" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.6"/>
+<text x="300" y="316" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">EVTA conv + pool (tile 하나, acc 안)</text>
+<rect x="60" y="334" width="140" height="86" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="130.0" y="364.0" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">GEMM</text>
+<text x="130.0" y="381.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">conv 결과</text>
+<text x="130.0" y="399.1" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">(int32)</text>
+<rect x="230" y="334" width="140" height="86" rx="6" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="300.0" y="372.77500000000003" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">ALU MAX ①</text>
+<text x="300.0" y="390.32500000000005" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">가로 2개</text>
+<rect x="400" y="334" width="140" height="86" rx="6" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="470.0" y="364.0" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">ALU MAX ②</text>
+<text x="470.0" y="381.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">세로 2개</text>
+<text x="470.0" y="399.1" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">+ requantize</text>
+<polyline points="200,377 230,377" fill="none" stroke="#333333" stroke-width="1.6" marker-end="url(#ak)"/>
+<polyline points="370,377 400,377" fill="none" stroke="#333333" stroke-width="1.6" marker-end="url(#ak)"/>
+<rect x="1010" y="325" width="200" height="80" rx="6" fill="#f2f2f2" stroke="#888888" stroke-width="1.6"/>
+<text x="1110.0" y="360.45" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">DRAM</text>
+<text x="1110.0" y="379.34999999999997" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">16×16×64 = 16 KB</text>
+<polyline points="560,365 1010,365" fill="none" stroke="#3c8a35" stroke-width="2.4" marker-end="url(#ag)"/>
+<text x="785" y="355" font-size="13" fill="#3c8a35" text-anchor="middle" font-weight="normal">STORE 16 KB (pool 영역만)</text>
+<text x="1230" y="360" font-size="14" fill="#3c8a35" text-anchor="start" font-weight="bold">EVTA run 1개</text>
+<text x="700" y="490" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">conv 출력 64 KB의 STORE · LOAD와 pool 호출 하나가 빠지고, conv의 STORE도 1/4이 된다. VGG16 OMP 1 7.01 → 6.75 ms.</text>
+<text x="700" y="520" font-size="13" fill="#888888" text-anchor="middle" font-weight="normal">크기는 VGG16 첫 pool(MaxPool_4) 자리의 값이다. EVTA에서 돌던 나머지 pool 셋도 같은 방식이다.</text>
+</svg>
