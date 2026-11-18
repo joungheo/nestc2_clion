@@ -275,6 +275,11 @@ public:
   //#### by the conv, and the regions done that way; lutNames: the table of a region (by its first instruction)
   std::map<const Instruction *, const Instruction *> outLutConv; // conv -> the region's first instruction
   std::set<const Instruction *> outLutRegion;                    // regions (first instruction) applied at the conv
+  //#### JO added (2026-11-19, docs/evta_fusion_rules.md): a producer's call does one tail (an epilogue program, a fused
+  //#### pool or an output table), so a finder takes only a producer no finder before it has given one
+  bool tailFree(const Instruction *I) const {
+    return !fusions.count(I) && !poolFusions.count(I) && !outLutConv.count(I);
+  }
   std::map<const Instruction *, std::string> lutNames;
   //#### JO added (2026-11-09): softmax of a dequantized int8 tensor emitted at the dequantize (findSoftmaxI8)
   std::map<const Instruction *, const SoftMaxInst *> softmaxAtDq;
@@ -4093,6 +4098,76 @@ static bool isDepthwiseCW(const glow::ChannelwiseQuantizedConvolutionInst *I) {
          sd[3] % 16 == 0 && I->getDest()->dims()[3] == sd[3];
 }
 
+//#### JO added (2026-11-19, docs/evta_fusion_rules.md): the finding rules in one place. A fusion is a producer (an
+//#### instruction that runs as EVTA GEMM tiles) and a tail its call does in acc before the STORE. The producer is told by
+//#### what its call computes (evtaGemmOf: the conv path, not the IR class; attention matmuls: MatMulGroup), what each
+//#### producer's call can do is evtaTails (the vtalib entry and the bundle emission that take it), a producer has one tail
+//#### (VTASaveContext::tailFree), the finders walk the IR through IrSeq. Before, each finder checked these on its own
+//#### (findPoolFusions saw only the first conv: VGG16's pools were missed, docs/evta_conv_pool_guide.md).
+enum class EvtaGemm { None, Conv, FirstConv };
+enum : unsigned {
+  TAIL_CHAIN = 1,      // add of a packed residual (power-of-two scales) and relus: findResidualFusions
+  TAIL_MUL_ADD = 2,    // integer add of a packed tensor (MUL, ADD d, RQ): findMulResidualFusions
+  TAIL_CONST_ADD = 4,  // integer add of a constant, out = the conv's own buffer: findEmbedFusions
+  TAIL_POOL3 = 8,      // max pool 3 x 3 / 2 / pad 1: findPoolFusions
+  TAIL_POOL2 = 16,     // max pool 2 x 2 / 2 / pad 0: findPoolFusions
+  TAIL_OUT_LUT = 32,   // a 256-entry table of an elementwise region: findOutLutConvs
+};
+static EvtaGemm evtaGemmOf(const Instruction *I) {
+  auto *C = llvm::dyn_cast_or_null<ConvolutionInst>(I);
+  if (!C)
+    return EvtaGemm::None;
+  switch (getConvPath(C)) {
+  case ConvPath::VTA: return EvtaGemm::Conv;            // convolution_wo_tr[_res|_pool] (generateVTAConvolutionCall)
+  case ConvPath::FirstBNN: return EvtaGemm::FirstConv;  // the first conv over a packed / zero-filled input
+  default: return EvtaGemm::None;
+  }
+}
+// what the producer's call can do before its STORE. The first conv writes only its own output (no chain to another
+// buffer, no output table: the bundle's first-conv emission has neither) and its pool fusion is the 3 x 3 one of Resnet
+// (conv0 pack; 2 x 2 untested there). The Q K^T heads take TAIL_OUT_LUT too (findOutLutMatMuls on MatMulGroup::qk).
+static unsigned evtaTails(EvtaGemm k) {
+  switch (k) {
+  case EvtaGemm::Conv:
+    return TAIL_CHAIN | TAIL_MUL_ADD | TAIL_CONST_ADD | TAIL_POOL3 | TAIL_POOL2 | TAIL_OUT_LUT;
+  case EvtaGemm::FirstConv:
+    return TAIL_CONST_ADD | TAIL_POOL3;
+  default:
+    return 0;
+  }
+}
+// I is a producer whose call can do the tail t and has no tail yet
+static bool canTail(const Instruction *I, unsigned t, const VTASaveContext *ctx) {
+  return (evtaTails(evtaGemmOf(I)) & t) && ctx->tailFree(I);
+}
+// the instructions in order, where each activation is allocated, how many instructions other than alloc / dealloc use a
+// value (once per instruction: an in-place relu lists its value twice), the next one after i that is not an alloc / dealloc
+struct IrSeq {
+  std::vector<const Instruction *> ins;
+  std::map<const Value *, size_t> allocAt;
+  std::map<const Value *, int> users;
+  explicit IrSeq(const IRFunction *IR) {
+    for (const auto &I : IR->getInstrs()) {
+      if (auto *A = llvm::dyn_cast<AllocActivationInst>(&I))
+        allocAt[A] = ins.size();
+      if (!llvm::isa<AllocActivationInst>(&I) && !llvm::isa<DeallocActivationInst>(&I)) {
+        std::set<const Value *> ops;
+        for (const auto &op : I.getOperands())
+          ops.insert(op.first);
+        for (auto *v : ops)
+          users[v]++;
+      }
+      ins.push_back(&I);
+    }
+  }
+  size_t next(size_t i) const {
+    for (i++; i < ins.size(); i++)
+      if (!llvm::isa<DeallocActivationInst>(ins[i]) && !llvm::isa<AllocActivationInst>(ins[i]))
+        return i;
+    return ins.size();
+  }
+};
+
 void findPackedActivations(const IRFunction *IR, VTASaveContext *ctx) {
   auto &packed = *ctx->getPacked();
   packed.clear();
@@ -4203,27 +4278,11 @@ void findResidualFusions(const IRFunction *IR, VTASaveContext *ctx) {
   ctx->getHoisted()->clear();
   if (!vtaFuseResidual || ctx->getPacked()->empty())
     return;
-  std::vector<const Instruction *> ins;
-  std::map<const Value *, size_t> allocAt;
-  std::map<const Value *, int> users; // instructions other than alloc/dealloc that use a value
-  for (const auto &I : IR->getInstrs()) {
-    if (auto *A = llvm::dyn_cast<AllocActivationInst>(&I))
-      allocAt[A] = ins.size();
-    if (!llvm::isa<AllocActivationInst>(&I) && !llvm::isa<DeallocActivationInst>(&I)) {
-      std::set<const Value *> ops; // once per instruction (relu in place lists its value twice)
-      for (const auto &op : I.getOperands())
-        ops.insert(op.first);
-      for (auto *v : ops)
-        users[v]++;
-    }
-    ins.push_back(&I);
-  }
-  auto next = [&](size_t i) {
-    for (i++; i < ins.size(); i++)
-      if (!llvm::isa<DeallocActivationInst>(ins[i]) && !llvm::isa<AllocActivationInst>(ins[i]))
-        return i;
-    return ins.size();
-  };
+  const IrSeq seq(IR);   //#### JO changed (2026-11-19): the IR walk shared by the finders
+  const auto &ins = seq.ins;
+  auto allocAt = seq.allocAt;
+  auto users = seq.users;
+  auto next = [&](size_t i) { return seq.next(i); };
   //#### JO changed (2026-11-14, -vta-conv-epilogue, docs/evta_alux_epilogue.md): the chain after the conv, instruction by
   //#### instruction (deallocs / allocs between them skipped): an elementadd of the current value and a packed residual
   //#### (one; power-of-two scale ratios: ADD shlV shlT, RQ round 2 by m), a relu of it (sV / sO = 2^q, q = 0..7: CLIP 0..127
@@ -4233,7 +4292,7 @@ void findResidualFusions(const IRFunction *IR, VTASaveContext *ctx) {
   enum { ADD = 1, RQ = 2, CLIP = 3, SHL = 4 };
   for (size_t i = 0; i < ins.size(); i++) {
     auto *C = llvm::dyn_cast<ConvolutionInst>(ins[i]);
-    if (!C || getConvPath(C) != ConvPath::VTA || !ctx->isPacked(C->getDest()))
+    if (!canTail(C, TAIL_CHAIN, ctx) || !ctx->isPacked(C->getDest()))   //#### JO changed (2026-11-19): evtaTails
       continue;
     const Value *D = C->getDest(), *V = D, *R = nullptr;
     ResidualFusion f = {};
@@ -4415,34 +4474,24 @@ void findResidualFusions(const IRFunction *IR, VTASaveContext *ctx) {
 //#### JO added (2026-11-02): the EVTA max pool (findEvtaMaxPools) 3x3 / stride 2 / pad 1 that is the next instruction after a
 //#### packed first conv (getConv0Pack) with relu and the only other user of its output, when the conv's schedule tiles are
 //#### even: done by the conv's call (convolution_wo_tr_pool); the pool's dest is allocated before the conv if needed.
+//#### JO changed (2026-11-17 / 19): any producer whose call takes the pool (evtaTails TAIL_POOL3 / TAIL_POOL2: the EVTA
+//#### convs, 2 x 2 / 2 / pad 0 too) with a relu and no clip above 127, no other tail, tiles even and dividing the output
 void findPoolFusions(const IRFunction *IR, VTASaveContext *ctx) {
   ctx->getPoolFusions()->clear();
   if (!vtaFusePool)
     return;
-  std::vector<const Instruction *> ins;
-  std::map<const Value *, size_t> allocAt;
-  std::map<const Value *, int> users; // instructions other than alloc/dealloc that use a value
-  for (const auto &I : IR->getInstrs()) {
-    if (auto *A = llvm::dyn_cast<AllocActivationInst>(&I))
-      allocAt[A] = ins.size();
-    if (!llvm::isa<AllocActivationInst>(&I) && !llvm::isa<DeallocActivationInst>(&I)) {
-      std::set<const Value *> ops;
-      for (const auto &op : I.getOperands())
-        ops.insert(op.first);
-      for (auto *v : ops)
-        users[v]++;
-    }
-    ins.push_back(&I);
-  }
+  const IrSeq seq(IR);
+  const auto &ins = seq.ins;
+  auto allocAt = seq.allocAt;
+  auto users = seq.users;
   for (size_t i = 0; i < ins.size(); i++) {
     auto *C = llvm::dyn_cast<ConvolutionInst>(ins[i]);
     Conv0Pack pk;
-    //#### JO changed (2026-11-17): also an EVTA conv (ConvPath::VTA, relu, no other fusion) with a 2 x 2 / 2 / pad 0 or
-    //#### 3 x 3 / 2 / pad 1 max pool after it (VGG16's five pools; was the packed first conv only)
-    const bool first = C && getConvPath(C) == ConvPath::FirstBNN && C->getFusedActivation() == RELU && getConv0Pack(C, &pk);
-    const bool vta = C && getConvPath(C) == ConvPath::VTA && convRelu(C) && convClipHi(C) == 127 && !ctx->getFusion(C) &&
-                     !ctx->outLutConv.count(C);
-    if (!first && !vta)
+    if (!canTail(C, TAIL_POOL3 | TAIL_POOL2, ctx) || !convRelu(C) || convClipHi(C) != 127)
+      continue;
+    // the first conv's call is the conv0 pack one (preprocess_conv0pack + convolution_wo_tr_pool)
+    const bool first = evtaGemmOf(C) == EvtaGemm::FirstConv;
+    if (first && (C->getFusedActivation() != RELU || !getConv0Pack(C, &pk)))
       continue;
     size_t j = i + 1;
     while (j < ins.size() && (llvm::isa<AllocActivationInst>(ins[j]) || llvm::isa<DeallocActivationInst>(ins[j])))
@@ -4455,7 +4504,8 @@ void findPoolFusions(const IRFunction *IR, VTASaveContext *ctx) {
       continue;
     auto k = P->getKernels(), st = P->getStrides(), pads = P->getPads();
     const int kk = k[0];
-    if (k[0] != k[1] || (kk != 3 && kk != 2) || st[0] != 2 || st[1] != 2 || (first && kk != 3))
+    if (k[0] != k[1] || (kk != 3 && kk != 2) || st[0] != 2 || st[1] != 2 ||
+        !(evtaTails(evtaGemmOf(C)) & (kk == 3 ? TAIL_POOL3 : TAIL_POOL2)))
       continue;
     bool padOk = true;
     for (auto p : pads)
@@ -8231,9 +8281,9 @@ static void findOutLutConvs(IRFunction *F, VTASaveContext *ctx) {
       cpos = k;
       break;
     }
-    if (!conv || getConvPath(conv) != ConvPath::VTA || ctx->getPoolFusion(conv) || ctx->getFusion(conv) ||
+    if (!conv || !canTail(conv, TAIL_OUT_LUT, ctx) ||   //#### JO changed (2026-11-19): evtaTails / tailFree
         ctx->isPacked(conv->getDest()) || zeroOffsetActivation(conv->getDest()) != r.root ||
-        conv->getDest()->dims()[1] * conv->getDest()->dims()[2] <= 1 || ctx->outLutConv.count(conv))
+        conv->getDest()->dims()[1] * conv->getDest()->dims()[2] <= 1)
       continue;
     // nothing but the region (and deallocs / views) touches root after the conv; out is not touched before the region
     std::set<const Instruction *> members(r.instrs.begin(), r.instrs.end());
@@ -8802,9 +8852,7 @@ static void findEmbedFusions(const IRFunction *IR, VTASaveContext *ctx) {
   for (const Instruction *I : L) {
     auto *C = llvm::dyn_cast<ConvolutionInst>(I);
     //#### the first conv too (ConvPath::FirstBNN: DeiT's patch conv over the packed input, -vta-conv0-pack)
-    if (!C || (getConvPath(C) != ConvPath::VTA && getConvPath(C) != ConvPath::FirstBNN) || ctx->getFusion(C) ||
-        ctx->getPoolFusion(C) || ctx->outLutConv.count(C) || ctx->isPacked(C->getDest()) || !i8(C->getDest()) ||
-        convRelu(C))
+    if (!canTail(C, TAIL_CONST_ADD, ctx) || ctx->isPacked(C->getDest()) || !i8(C->getDest()) || convRelu(C))
       continue;
     const Value *D = getOrigin(C->getDest());
     auto dd = C->getDest()->dims();
@@ -8903,33 +8951,17 @@ static llvm::cl::opt<bool> vtaFuseElemAddMul(
 static void findMulResidualFusions(const IRFunction *IR, VTASaveContext *ctx, bool evtaElemAdd) {
   if (!vtaFuseElemAddMul || !vtaFuseResidual || !vtaConvEpilogue || !evtaElemAdd || ctx->getPacked()->empty())
     return;
-  std::vector<const Instruction *> ins;
-  std::map<const Value *, size_t> allocAt;
-  std::map<const Value *, int> users;
-  for (const auto &I : IR->getInstrs()) {
-    if (auto *A = llvm::dyn_cast<AllocActivationInst>(&I))
-      allocAt[A] = ins.size();
-    if (!llvm::isa<AllocActivationInst>(&I) && !llvm::isa<DeallocActivationInst>(&I)) {
-      std::set<const Value *> ops;
-      for (const auto &op : I.getOperands())
-        ops.insert(op.first);
-      for (auto *v : ops)
-        users[v]++;
-    }
-    ins.push_back(&I);
-  }
-  auto next = [&](size_t i) {
-    for (i++; i < ins.size(); i++)
-      if (!llvm::isa<DeallocActivationInst>(ins[i]) && !llvm::isa<AllocActivationInst>(ins[i]))
-        return i;
-    return ins.size();
-  };
+  const IrSeq seq(IR);   //#### JO changed (2026-11-19): IrSeq, canTail
+  const auto &ins = seq.ins;
+  auto allocAt = seq.allocAt;
+  auto users = seq.users;
+  auto next = [&](size_t i) { return seq.next(i); };
   auto i8 = [](const Value *v) {
     return v->getType()->getElementType() == ElemKind::Int8QTy && v->getType()->getOffset() == 0;
   };
   for (size_t i = 0; i < ins.size(); i++) {
     auto *C = llvm::dyn_cast<ConvolutionInst>(ins[i]);
-    if (!C || getConvPath(C) != ConvPath::VTA || ctx->getFusion(C) || ctx->getPoolFusion(C) || ctx->outLutConv.count(C))
+    if (!canTail(C, TAIL_MUL_ADD, ctx))
       continue;
     const Value *D = C->getDest(), *V = D;
     if (!ctx->isPacked(D) || !i8(D) || convRelu(C))
@@ -8977,6 +9009,62 @@ static void findMulResidualFusions(const IRFunction *IR, VTASaveContext *ctx, bo
       llvm::errs() << "-vta-fuse-elemadd-mul: " << C->getName() << " + " << E->getName() << " (" << A / 128 << ", "
                    << B / 128 << ", " << N - 7 << ")\n";
   }
+}
+
+//#### JO added (2026-11-19, docs/evta_fusion_rules.md): VTA_FUSION_LOG=1 lists every EVTA producer (evtaGemmOf), the tail
+//#### its call does, and for one without a tail the first instruction that reads its output: a max pool, an add, a relu /
+//#### clip or a table region there is a fusion the rules miss (VGG16's 2 x 2 pools were such a case); anything else
+//#### (a conv, a transpose, ...) is not a tail. Only stderr; the bundle does not change.
+static void reportFusions(const IRFunction *IR, VTASaveContext *ctx) {
+  if (!getenv("VTA_FUSION_LOG"))
+    return;
+  const IrSeq seq(IR);
+  int nProd = 0, nTail = 0, nMiss = 0;
+  for (size_t i = 0; i < seq.ins.size(); i++) {
+    const Instruction *C = seq.ins[i];
+    const EvtaGemm k = evtaGemmOf(C);
+    if (k == EvtaGemm::None)
+      continue;
+    nProd++;
+    const char *kn = k == EvtaGemm::Conv ? "conv" : "first conv";
+    std::string tail = ctx->getFusion(C) ? "epilogue" : ctx->getPoolFusion(C) ? "max pool" : ctx->outLutConv.count(C) ? "out LUT" : "";
+    if (!tail.empty()) {
+      nTail++;
+      llvm::errs() << "VTA_FUSION_LOG " << C->getName() << " (" << kn << "): " << tail << "\n";
+      continue;
+    }
+    const Value *D = getOrigin(const_cast<Value *>(llvm::cast<ConvolutionInst>(C)->getDest()));
+    const Instruction *R = nullptr;
+    for (size_t j = i + 1; j < seq.ins.size() && !R; j++) {
+      const Instruction *J = seq.ins[j];
+      if (llvm::isa<AllocActivationInst>(J) || llvm::isa<DeallocActivationInst>(J) || llvm::isa<TensorViewInst>(J))
+        continue;
+      for (unsigned q = 0, e = J->getNumOperands(); q < e && !R; q++)
+        if (J->getOperand(q).second == OperandKind::In && getOrigin(const_cast<Value *>(J->getOperand(q).first)) == D)
+          R = J;
+    }
+    const bool tailOp = R && (llvm::isa<MaxPoolInst>(R) || llvm::isa<AvgPoolInst>(R) || llvm::isa<ElementAddInst>(R) ||
+                              llvm::isa<ReluInst>(R) || llvm::isa<ClipInst>(R) || ctx->getLutRegions()->count(R) ||
+                              ctx->isLutAway(R));
+    // an add fused into another producer's epilogue reads this output as its residual: not a miss
+    const bool elsewhere = tailOp && ctx->isFusedAway(R);
+    nMiss += tailOp && !elsewhere;
+    llvm::errs() << "VTA_FUSION_LOG " << C->getName() << " (" << kn << "): no tail; read by "
+                 << (R ? R->getName().str() + " (" + R->getKindName() + ")" : std::string("nothing"))
+                 << (elsewhere ? "  (the residual of another producer's epilogue)" : tailOp ? "  <- a tail op not fused" : "");
+    // the known reasons (docs/evta_fusion_rules.md 5)
+    if (tailOp && !elsewhere) {
+      if (auto *P = llvm::dyn_cast<MaxPoolInst>(R))
+        llvm::errs() << (ctx->isEvtaMaxPool(P) ? " (an EVTA pool: see findPoolFusions' conditions)" : " (a CPU pool)");
+      else if (llvm::isa<AvgPoolInst>(R))
+        llvm::errs() << " (avgpool_evta on its own)";
+      else if (llvm::isa<ElementAddInst>(R) && !vtaFuseElemAddMul)
+        llvm::errs() << " (-vta-fuse-elemadd-mul is off: elemadd_evta is faster)";
+    }
+    llvm::errs() << "\n";
+  }
+  llvm::errs() << "VTA_FUSION_LOG " << nProd << " EVTA producers, " << nTail << " with a tail, " << nMiss
+               << " read by a tail op not fused\n";
 }
 
 //#### JO added (2026-11-12, ALU extension step 7): -vta-alu-layernorm
@@ -9277,7 +9365,7 @@ static void findAttnKeepLayout(IRFunction *F, VTASaveContext *ctx) {
       continue;
     const ConvolutionInst *cv = v[0].conv;
     auto cd = cv->getDest()->dims();
-    if (getConvPath(cv) != ConvPath::VTA || ctx->getFusion(cv) || ctx->outLutConv.count(cv) || cd.size() != 4 ||
+    if (evtaGemmOf(cv) != EvtaGemm::Conv || !ctx->tailFree(cv) || cd.size() != 4 ||   //#### JO changed (2026-11-19)
         cd[0] != 1 || cd[1] * cd[2] != K || cd[3] != H * dh ||
         cv->getDest()->getType()->getScale() != g.mm[0]->getRHS()->getType()->getScale())
       continue;
@@ -9743,6 +9831,7 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
   findPackedRows(IR.get(), &ctx);   //#### JO added (2026-11-15)
   findMulResidualFusions(IR.get(), &ctx, vtaEvtaElemAdd);   //#### JO added (2026-11-15, 8.18)
   findEmbedFusions(IR.get(), &ctx);   //#### JO added (2026-11-16)
+  reportFusions(IR.get(), &ctx);   //#### JO added (2026-11-19, VTA_FUSION_LOG=1)
 
   for (const auto &I : IR->getInstrs()) {
 

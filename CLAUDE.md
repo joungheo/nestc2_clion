@@ -393,6 +393,11 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   2x2 / 2 / 0 or 3x3 / 2 / 1 max pool (was the packed first conv + 3x3 only), the VTA path emits `convolution_wo_tr_pool`; vtalib-systolic
   `ConvPool.k` (2: no halo, two ALU MAX passes), `pickNF` counts the pooled area. `EVTA_RES_CHECK` 0 differ; VGG16 OMP 1 7.01 -> 6.75 ms.
   Before / after code with 5 figures: [docs/evta_conv_pool_guide.md](docs/evta_conv_pool_guide.md).
+- Fusion finding rules in one place (2026-11-19, [docs/evta_fusion_rules.md](docs/evta_fusion_rules.md)): a fusion is a producer (VTASave
+  `evtaGemmOf`: what the call computes, the conv path, not the IR class) and one tail its call does before the STORE (`evtaTails`: which
+  producer takes the chain / mul-add / const-add / pool 3 / pool 2 / output LUT; `VTASaveContext::tailFree`; `IrSeq` the shared IR walk).
+  The five bundles are byte-identical. `VTA_FUSION_LOG=1` on model-compiler lists every producer, its tail, and a tail op it does not fuse
+  with the known reason (now: VGG16's last CPU pool, MobileNetV2's avgpool, DeiT's 24 adds with `-vta-fuse-elemadd-mul` off).
 - Other models (2026-11-05, `docs/evta_runtime_compare.md` §7.19): Resnet50 res2_0 residual fused (relu to a 2^q smaller scale), schedules of the
   Resnet50 / VGG16 shapes in `VTASchedules.h` (found with vtalib-systolic `EVTA_SCHED`), conv tiles below 7 x 7: the dummy-padded store
   used the wrong channel block with nVirtualThread 2 (fixed in both vtalibs) and the systolic vtalib's minimum tile is 1 on an `_sa_` bitstream
