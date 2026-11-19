@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="640" viewBox="0 0 1400 640" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif">
+<title>그림 R1. finder마다 따로 적던 확인 (전)과 한 함수 canTail (후)</title>
+<defs><marker id="ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#333333"/></marker><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f5f98"/></marker><marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c06a10"/></marker><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3c8a35"/></marker><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker><marker id="ap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6d4596"/></marker><marker id="ay" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9a7b00"/></marker><marker id="agr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#888888"/></marker></defs>
+<rect x="0" y="0" width="1400" height="640" fill="#ffffff"/>
+<text x="700.0" y="34" font-size="19" fill="#333333" text-anchor="middle" font-weight="bold">그림 R1. finder마다 따로 적던 확인 (전)과 한 함수 canTail (후)</text>
+<text x="40" y="80" font-size="16" fill="#333333" text-anchor="start" font-weight="bold">① 전: 생산자 판정과 &quot;이미 꼬리가 있나&quot; 확인이 finder마다 다르다</text>
+<rect x="40" y="96" width="290" height="34" rx="6" fill="#f2f2f2" stroke="#888888" stroke-width="1.6"/>
+<text x="185.0" y="117.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">finder</text>
+<rect x="330" y="96" width="310" height="34" rx="6" fill="#f2f2f2" stroke="#888888" stroke-width="1.6"/>
+<text x="485.0" y="117.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">생산자 판정</text>
+<rect x="640" y="96" width="120" height="34" rx="6" fill="#f2f2f2" stroke="#888888" stroke-width="1.6"/>
+<text x="700.0" y="117.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">fusions</text>
+<rect x="760" y="96" width="120" height="34" rx="6" fill="#f2f2f2" stroke="#888888" stroke-width="1.6"/>
+<text x="820.0" y="117.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">poolFusions</text>
+<rect x="880" y="96" width="120" height="34" rx="6" fill="#f2f2f2" stroke="#888888" stroke-width="1.6"/>
+<text x="940.0" y="117.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">outLutConv</text>
+<rect x="40" y="134" width="290" height="36" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="185.0" y="156.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">findResidualFusions</text>
+<rect x="330" y="134" width="310" height="36" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="485.0" y="156.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">ConvPath::VTA</text>
+<rect x="640" y="134" width="120" height="36" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="700.0" y="156.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">–</text>
+<rect x="760" y="134" width="120" height="36" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="820.0" y="156.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">–</text>
+<rect x="880" y="134" width="120" height="36" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="940.0" y="156.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">–</text>
+<rect x="40" y="174" width="290" height="36" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="185.0" y="196.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">findPoolFusions (보통 conv)</text>
+<rect x="330" y="174" width="310" height="36" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="485.0" y="196.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">VTA + relu</text>
+<rect x="640" y="174" width="120" height="36" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="700.0" y="196.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">✔</text>
+<rect x="760" y="174" width="120" height="36" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="820.0" y="196.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">–</text>
+<rect x="880" y="174" width="120" height="36" rx="6" fill="#fbe9e7" stroke="#c0392b" stroke-width="1.6"/>
+<text x="940.0" y="196.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">✔*</text>
+<rect x="40" y="214" width="290" height="36" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="185.0" y="236.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">findPoolFusions (첫 conv)</text>
+<rect x="330" y="214" width="310" height="36" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="485.0" y="236.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">FirstBNN + RELU + pack</text>
+<rect x="640" y="214" width="120" height="36" rx="6" fill="#fbe9e7" stroke="#c0392b" stroke-width="1.6"/>
+<text x="700.0" y="236.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">–</text>
+<rect x="760" y="214" width="120" height="36" rx="6" fill="#fbe9e7" stroke="#c0392b" stroke-width="1.6"/>
+<text x="820.0" y="236.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">–</text>
+<rect x="880" y="214" width="120" height="36" rx="6" fill="#fbe9e7" stroke="#c0392b" stroke-width="1.6"/>
+<text x="940.0" y="236.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">–</text>
+<rect x="40" y="254" width="290" height="36" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="185.0" y="276.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">findOutLutConvs</text>
+<rect x="330" y="254" width="310" height="36" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="485.0" y="276.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">ConvPath::VTA</text>
+<rect x="640" y="254" width="120" height="36" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="700.0" y="276.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">✔</text>
+<rect x="760" y="254" width="120" height="36" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="820.0" y="276.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">✔</text>
+<rect x="880" y="254" width="120" height="36" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="940.0" y="276.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">✔</text>
+<rect x="40" y="294" width="290" height="36" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="185.0" y="316.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">findMulResidualFusions</text>
+<rect x="330" y="294" width="310" height="36" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="485.0" y="316.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">ConvPath::VTA</text>
+<rect x="640" y="294" width="120" height="36" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="700.0" y="316.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">✔</text>
+<rect x="760" y="294" width="120" height="36" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="820.0" y="316.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">✔</text>
+<rect x="880" y="294" width="120" height="36" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="940.0" y="316.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">✔</text>
+<rect x="40" y="334" width="290" height="36" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="185.0" y="356.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">findEmbedFusions</text>
+<rect x="330" y="334" width="310" height="36" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="485.0" y="356.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">VTA 또는 FirstBNN</text>
+<rect x="640" y="334" width="120" height="36" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="700.0" y="356.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">✔</text>
+<rect x="760" y="334" width="120" height="36" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="820.0" y="356.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">✔</text>
+<rect x="880" y="334" width="120" height="36" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="940.0" y="356.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">✔</text>
+<rect x="40" y="374" width="290" height="36" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="185.0" y="396.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">findAttnKeepLayout</text>
+<rect x="330" y="374" width="310" height="36" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="485.0" y="396.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">ConvPath::VTA</text>
+<rect x="640" y="374" width="120" height="36" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="700.0" y="396.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">✔</text>
+<rect x="760" y="374" width="120" height="36" rx="6" fill="#fbe9e7" stroke="#c0392b" stroke-width="1.6"/>
+<text x="820.0" y="396.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">–</text>
+<rect x="880" y="374" width="120" height="36" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="940.0" y="396.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">✔</text>
+<text x="1020" y="160" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">✔ = 확인함, – = 확인 안 함</text>
+<text x="1020" y="196" font-size="13" fill="#c0392b" text-anchor="start" font-weight="bold">빨강 = 틀리거나 빠진 확인</text>
+<text x="1020" y="232.0" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">✔*: outLutConv는 findOutLutConvs가 채우는데</text>
+<text x="1020" y="249.55" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">그 finder가 Pool보다 뒤에 돈다.</text>
+<text x="1020" y="267.1" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">확인할 때 늘 비어 있다 (효과 없음).</text>
+<text x="1020" y="310.0" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">첫 conv: 아무 확인도 없다.</text>
+<text x="1020" y="327.55" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">2x2 pool은 아예 볼 수 없었다</text>
+<text x="1020" y="345.1" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">(kk != 3이면 버림: VGG16 pool 놓침).</text>
+<text x="1020" y="388.0" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">AttnKeepLayout: pool 꼬리를 안 봄</text>
+<text x="1020" y="405.55" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">(DeiT에는 pool이 없어 드러나지 않았다).</text>
+<text x="40" y="450" font-size="16" fill="#333333" text-anchor="start" font-weight="bold">② 후: 모든 finder가 같은 한 줄을 묻는다</text>
+<rect x="40" y="468" width="1320" height="92" rx="6" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="700" y="502" font-size="17" fill="#333333" text-anchor="middle" font-weight="bold" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">canTail(I, TAIL_x, ctx)  =  (evtaTails(evtaGemmOf(I)) &amp; TAIL_x)  &amp;&amp;  ctx-&gt;tailFree(I)</text>
+<text x="700" y="538" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">어떤 생산자인가 → 그 호출이 이 꼬리를 하나 → 아직 꼬리가 없나 (fusions · poolFusions · outLutConv 세 기록 모두 빔)</text>
+<text x="700" y="600" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">꼬리마다 다른 조건 (scale, 모양, tile, relu)은 각 finder에 그대로 남는다. 다섯 모델 번들은 바이트까지 같다.</text>
+</svg>

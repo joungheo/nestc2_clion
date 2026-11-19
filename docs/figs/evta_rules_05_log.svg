@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="700" viewBox="0 0 1400 700" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif">
+<title>그림 R5. VTA_FUSION_LOG=1: 어디서 무엇을 적나</title>
+<defs><marker id="ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#333333"/></marker><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f5f98"/></marker><marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c06a10"/></marker><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3c8a35"/></marker><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker><marker id="ap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6d4596"/></marker><marker id="ay" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9a7b00"/></marker><marker id="agr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#888888"/></marker></defs>
+<rect x="0" y="0" width="1400" height="700" fill="#ffffff"/>
+<text x="700.0" y="34" font-size="19" fill="#333333" text-anchor="middle" font-weight="bold">그림 R5. VTA_FUSION_LOG=1: 어디서 무엇을 적나</text>
+<rect x="40" y="80" width="250" height="70" rx="6" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.6"/>
+<text x="165.0" y="110.45" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">finder들</text>
+<text x="165.0" y="129.35" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">(find…Fusions 등)</text>
+<polyline points="290,115 340,115" fill="none" stroke="#333333" stroke-width="1.8" marker-end="url(#ak)"/>
+<rect x="340" y="80" width="300" height="70" rx="6" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="490.0" y="110.45" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">reportFusions</text>
+<text x="490.0" y="129.35" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">생산자 · 꼬리 · 빠진 꼬리</text>
+<polyline points="640,115 690,115" fill="none" stroke="#333333" stroke-width="1.8" marker-end="url(#ak)"/>
+<rect x="690" y="80" width="670" height="70" rx="6" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.6"/>
+<text x="1025.0" y="110.45" font-size="14" fill="#333333" text-anchor="middle" font-weight="bold">번들 코드 내기 (명령마다 save…Inst)</text>
+<text x="1025.0" y="129.35" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">EVTA 조건이 안 맞으면 noteCpuGemm(I, 이유)</text>
+<text x="40" y="196" font-size="15" fill="#333333" text-anchor="start" font-weight="bold">① 생산자 줄 (finder 뒤, 2026-11-19)</text>
+<rect x="40" y="210" width="600" height="200" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="56" y="236" font-size="13" fill="#333333" text-anchor="start" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">Conv_2__2 (conv): max pool</text>
+<text x="56" y="264" font-size="13" fill="#333333" text-anchor="start" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">Conv_28__2 (conv): no tail; read by</text>
+<text x="56" y="292" font-size="13" fill="#333333" text-anchor="start" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">  MaxPool_30__2 (maxpool)</text>
+<text x="56" y="320" font-size="13" fill="#333333" text-anchor="start" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">  &lt;- a tail op not fused (a CPU pool)</text>
+<text x="56" y="348" font-size="13" fill="#333333" text-anchor="start" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">13 EVTA producers, 4 with a tail,</text>
+<text x="56" y="376" font-size="13" fill="#333333" text-anchor="start" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">  1 read by a tail op not fused</text>
+<text x="40" y="446" font-size="15" fill="#333333" text-anchor="start" font-weight="bold">② CPU GEMM 줄 (번들을 다 낸 뒤, 2026-11-20 추가)</text>
+<rect x="40" y="460" width="1320" height="110" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="56" y="488" font-size="13" fill="#333333" text-anchor="start" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">cpu …layer_11_attention_MatMul_MatMul_0__2: matmul 2 x 64 x 198: 2 rows: no H x W with W &gt;= 7 (largest W 1)</text>
+<text x="56" y="516" font-size="13" fill="#333333" text-anchor="start" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">cpu Conv_…expanded_conv_2_expand…: conv: input channels 24 not a multiple of 16   (-vta-pad-channels=0일 때)</text>
+<text x="56" y="544" font-size="13" fill="#333333" text-anchor="start" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">6 GEMMs on the CPU</text>
+<rect x="690" y="210" width="160" height="90" rx="6" fill="#fbf6dc" stroke="#9a7b00" stroke-width="1.6"/>
+<text x="770.0" y="251.42499999999998" font-size="11" fill="#333333" text-anchor="middle" font-weight="bold">saveConvolutionInst</text>
+<text x="770.0" y="266.275" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">getConvPath(I, &amp;why)</text>
+<polyline points="770,150 770,210" fill="none" stroke="#c06a10" stroke-width="1.4" marker-end="url(#ao)"/>
+<polyline points="770,300 770,360" fill="none" stroke="#c06a10" stroke-width="1.4" marker-end="url(#ao)"/>
+<rect x="860" y="210" width="160" height="90" rx="6" fill="#fbf6dc" stroke="#9a7b00" stroke-width="1.6"/>
+<text x="940.0" y="251.42499999999998" font-size="11" fill="#333333" text-anchor="middle" font-weight="bold">saveFullyConnectedInst</text>
+<text x="940.0" y="266.275" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">saveEvtaFcPacked(…, &amp;why)</text>
+<polyline points="940,150 940,210" fill="none" stroke="#c06a10" stroke-width="1.4" marker-end="url(#ao)"/>
+<polyline points="940,300 940,360" fill="none" stroke="#c06a10" stroke-width="1.4" marker-end="url(#ao)"/>
+<rect x="1030" y="210" width="160" height="90" rx="6" fill="#fbf6dc" stroke="#9a7b00" stroke-width="1.6"/>
+<text x="1110.0" y="251.42499999999998" font-size="11" fill="#333333" text-anchor="middle" font-weight="bold">MatMul (generic CPU)</text>
+<text x="1110.0" y="266.275" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">matmul_evta 조건</text>
+<polyline points="1110,150 1110,210" fill="none" stroke="#c06a10" stroke-width="1.4" marker-end="url(#ao)"/>
+<polyline points="1110,300 1110,360" fill="none" stroke="#c06a10" stroke-width="1.4" marker-end="url(#ao)"/>
+<rect x="1200" y="210" width="160" height="90" rx="6" fill="#fbf6dc" stroke="#9a7b00" stroke-width="1.6"/>
+<text x="1280.0" y="251.42499999999998" font-size="11" fill="#333333" text-anchor="middle" font-weight="bold">saveChannelwiseConv…</text>
+<text x="1280.0" y="266.275" font-size="11" fill="#333333" text-anchor="middle" font-weight="normal">dw_convolution_evta 조건</text>
+<polyline points="1280,150 1280,210" fill="none" stroke="#c06a10" stroke-width="1.4" marker-end="url(#ao)"/>
+<polyline points="1280,300 1280,360" fill="none" stroke="#c06a10" stroke-width="1.4" marker-end="url(#ao)"/>
+<rect x="690" y="360" width="670" height="50" rx="6" fill="#fbf6dc" stroke="#9a7b00" stroke-width="1.6"/>
+<text x="1025.0" y="389.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">ctx.cpuGemms (명령, 이유) → 끝에 한꺼번에 출력</text>
+<polyline points="1025,410 1025,460" fill="none" stroke="#c06a10" stroke-width="1.6" marker-end="url(#ao)"/>
+<text x="700" y="620" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">①은 &quot;EVTA에서 돌지만 꼬리를 못 받은 것&quot;, ②는 &quot;EVTA에서 아예 안 도는 GEMM&quot;을 보여 준다. 둘 다 stderr에만 쓰고 번들은 같다.</text>
+<text x="700" y="650" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">이유는 조건을 다시 쓰지 않고 실제로 EVTA 길을 떠나는 자리에서 적는다 (판정과 로그가 어긋나지 않게).</text>
+</svg>

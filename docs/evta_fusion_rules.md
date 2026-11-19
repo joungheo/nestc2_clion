@@ -6,6 +6,7 @@ VGG16의 2x2 pool이 빠져 있던 일([evta_conv_pool_guide.md](evta_conv_pool_
 
 - 코드: `lib/Backends/VTA/VTASave.cpp` (`EvtaGemm`, `evtaGemmOf`, `evtaTails`, `canTail`, `VTASaveContext::tailFree`, `IrSeq`, `reportFusions`)
 - 점검 로그: `VTA_FUSION_LOG=1`로 `model-compiler`를 돌리면 stderr에 나온다(§5).
+- 코드 전 / 후와 그림 5개로 본 설명: [evta_fusion_rules_guide.md](evta_fusion_rules_guide.md).
 
 ## 1. 규칙 한 줄
 
@@ -88,6 +89,11 @@ VTA_FUSION_LOG=1 ../vtabundles_xcmpl/gen_deit_bundle.sh;        grep VTA_FUSION_
 | DeiT | 73 | 13 | 24 | out-proj / fc2 + residual add. `-vta-fuse-elemadd-mul`(기본 off)이면 융합되지만 `elemadd_evta`가 더 빠르다(§8.18) |
 
 DeiT의 Q K^T 출력 표 12개는 생산자가 matmul 묶음이라 이 표에 세지 않았다(`findOutLutMatMuls`, 12개 모두 융합됨).
+
+2026-11-20부터 번들을 다 낸 뒤 **EVTA에서 돌지 않는 GEMM**(conv / channelwise conv / fc / matmul)도 이유와 함께 적는다
+(`VTA_FUSION_LOG cpu <명령>: <이유>`, 마지막 줄 `N GEMMs on the CPU`). 이유는 EVTA 경로를 떠나는 자리의 판정 코드가 낸다
+(`getConvPath(I, &why)`, `saveEvtaFcPacked(…, &why)`, `matmul_evta` / `dw_convolution_evta` 조건; `VTASaveContext::noteCpuGemm`).
+지금은 DeiT 마지막 블록의 2행 attention 곱 6개뿐이다(`2 rows: no H x W with W >= 7`); 다른 네 모델은 0.
 
 ## 6. 이번에 바꾼 것
 

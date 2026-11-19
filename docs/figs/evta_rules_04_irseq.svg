@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="520" viewBox="0 0 1400 520" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif">
+<title>그림 R4. IrSeq: 세 finder에 복사돼 있던 IR 순회를 하나로</title>
+<defs><marker id="ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#333333"/></marker><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f5f98"/></marker><marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c06a10"/></marker><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3c8a35"/></marker><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker><marker id="ap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6d4596"/></marker><marker id="ay" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9a7b00"/></marker><marker id="agr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#888888"/></marker></defs>
+<rect x="0" y="0" width="1400" height="520" fill="#ffffff"/>
+<text x="700.0" y="34" font-size="19" fill="#333333" text-anchor="middle" font-weight="bold">그림 R4. IrSeq: 세 finder에 복사돼 있던 IR 순회를 하나로</text>
+<text x="40" y="80" font-size="15" fill="#333333" text-anchor="start" font-weight="bold">IR 명령 열 (예: VGG16 conv → pool)</text>
+<rect x="40" y="96" width="50" height="40" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="65.0" y="120.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">0</text>
+<rect x="96" y="96" width="300" height="40" rx="6" fill="#f2f2f2" stroke="#888888" stroke-width="1.6"/>
+<text x="106" y="120.55" font-size="13" fill="#333333" text-anchor="start" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">alloc  A</text>
+<rect x="40" y="142" width="50" height="40" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="65.0" y="166.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">1</text>
+<rect x="96" y="142" width="300" height="40" rx="6" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.6"/>
+<text x="106" y="166.55" font-size="13" fill="#333333" text-anchor="start" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">conv   C : src → A</text>
+<rect x="40" y="188" width="50" height="40" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="65.0" y="212.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">2</text>
+<rect x="96" y="188" width="300" height="40" rx="6" fill="#f2f2f2" stroke="#888888" stroke-width="1.6"/>
+<text x="106" y="212.55" font-size="13" fill="#333333" text-anchor="start" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">alloc  B</text>
+<rect x="40" y="234" width="50" height="40" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="65.0" y="258.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">3</text>
+<rect x="96" y="234" width="300" height="40" rx="6" fill="#f2f2f2" stroke="#888888" stroke-width="1.6"/>
+<text x="106" y="258.55" font-size="13" fill="#333333" text-anchor="start" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">dealloc src</text>
+<rect x="40" y="280" width="50" height="40" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="65.0" y="304.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">4</text>
+<rect x="96" y="280" width="300" height="40" rx="6" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="106" y="304.55" font-size="13" fill="#333333" text-anchor="start" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">maxpool P : A → B</text>
+<rect x="40" y="326" width="50" height="40" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="65.0" y="350.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">5</text>
+<rect x="96" y="326" width="300" height="40" rx="6" fill="#f2f2f2" stroke="#888888" stroke-width="1.6"/>
+<text x="106" y="350.55" font-size="13" fill="#333333" text-anchor="start" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">dealloc A</text>
+<rect x="40" y="372" width="50" height="40" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="65.0" y="396.55" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">6</text>
+<rect x="96" y="372" width="300" height="40" rx="6" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.6"/>
+<text x="106" y="396.55" font-size="13" fill="#333333" text-anchor="start" font-weight="normal" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">conv   C2 : B → …</text>
+<rect x="470" y="96" width="420" height="120" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="490" y="122" font-size="14" fill="#333333" text-anchor="start" font-weight="bold" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">ins</text>
+<text x="560" y="122" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">명령 순서 그대로 (0 … 6)</text>
+<text x="490" y="152" font-size="14" fill="#333333" text-anchor="start" font-weight="bold" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">allocAt</text>
+<text x="580" y="152" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">A → 0, B → 2 (할당 위치)</text>
+<text x="490" y="182" font-size="14" fill="#333333" text-anchor="start" font-weight="bold" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">users</text>
+<text x="560" y="182" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">A → 2 (C, P), B → 2 (P, C2)</text>
+<text x="490" y="204" font-size="12" fill="#888888" text-anchor="start" font-weight="normal">          alloc / dealloc은 세지 않음</text>
+<rect x="470" y="232" width="420" height="70" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="490" y="260" font-size="14" fill="#333333" text-anchor="start" font-weight="bold" font-family="DejaVu Sans Mono, Consolas, monospace" xml:space="preserve">next(1) = 4</text>
+<text x="490" y="286" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">alloc / dealloc을 건너뛴 다음 명령</text>
+<polyline points="396,142 430,142 430,280 460,280" fill="none" stroke="#2f5f98" stroke-width="1.4" marker-end="url(#ab)"/>
+<polyline points="396,280 440,280" fill="none" stroke="#3c8a35" stroke-width="1.4" stroke-dasharray="6,4" marker-end="url(#ag)"/>
+<rect x="940" y="96" width="420" height="206" rx="6" fill="#fbf6dc" stroke="#9a7b00" stroke-width="1.6"/>
+<text x="960" y="124" font-size="14" fill="#333333" text-anchor="start" font-weight="bold">finder가 이 값으로 묻는 것</text>
+<text x="960" y="154" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">• users[A] == 2: conv 출력을 pool만 읽나</text>
+<text x="960" y="178" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">  (합치면 A는 DRAM에 없다)</text>
+<text x="960" y="202" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">• allocAt[B] &gt; 1: pool 출력 B가 conv 뒤에</text>
+<text x="960" y="226" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">  할당됨 → 앞으로 당긴다 (hoist)</text>
+<text x="960" y="250" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">• next(1): conv 바로 뒤 명령이 꼬리인가</text>
+<text x="40" y="450" font-size="14" fill="#c0392b" text-anchor="start" font-weight="normal">전: findResidualFusions, findPoolFusions, findMulResidualFusions에 같은 20줄이 세 벌 (주석만 조금씩 다름)</text>
+<text x="40" y="482" font-size="14" fill="#3c8a35" text-anchor="start" font-weight="bold">후: struct IrSeq 하나. reportFusions (VTA_FUSION_LOG)도 같은 것을 쓴다.</text>
+</svg>

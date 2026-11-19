@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="600" viewBox="0 0 1400 600" font-family="'Noto Sans CJK KR', 'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif">
+<title>그림 R2. canTail이 답을 내는 순서 (두 예)</title>
+<defs><marker id="ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#333333"/></marker><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2f5f98"/></marker><marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c06a10"/></marker><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3c8a35"/></marker><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c0392b"/></marker><marker id="ap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6d4596"/></marker><marker id="ay" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9a7b00"/></marker><marker id="agr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#888888"/></marker></defs>
+<rect x="0" y="0" width="1400" height="600" fill="#ffffff"/>
+<text x="700.0" y="34" font-size="19" fill="#333333" text-anchor="middle" font-weight="bold">그림 R2. canTail이 답을 내는 순서 (두 예)</text>
+<text x="40" y="80" font-size="16" fill="#333333" text-anchor="start" font-weight="bold">생산자 종류별 꼬리 표 evtaTails (비트 하나 = 꼬리 하나)</text>
+<rect x="300" y="96" width="100" height="44" rx="6" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="350.0" y="114.10000000000001" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">CHAIN</text>
+<text x="350.0" y="130.3" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">1</text>
+<rect x="404" y="96" width="100" height="44" rx="6" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="454.0" y="114.10000000000001" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">MUL_ADD</text>
+<text x="454.0" y="130.3" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">1</text>
+<rect x="508" y="96" width="100" height="44" rx="6" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="558.0" y="114.10000000000001" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">CONST_ADD</text>
+<text x="558.0" y="130.3" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">1</text>
+<rect x="612" y="96" width="100" height="44" rx="6" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="662.0" y="114.10000000000001" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">POOL3</text>
+<text x="662.0" y="130.3" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">1</text>
+<rect x="716" y="96" width="100" height="44" rx="6" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="766.0" y="114.10000000000001" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">POOL2</text>
+<text x="766.0" y="130.3" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">1</text>
+<rect x="820" y="96" width="100" height="44" rx="6" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="870.0" y="114.10000000000001" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">OUT_LUT</text>
+<text x="870.0" y="130.3" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">1</text>
+<text x="288" y="124" font-size="13" fill="#333333" text-anchor="end" font-weight="bold">EvtaGemm::Conv</text>
+<rect x="300" y="150" width="100" height="44" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="350.0" y="168.1" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">CHAIN</text>
+<text x="350.0" y="184.3" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">0</text>
+<rect x="404" y="150" width="100" height="44" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="454.0" y="168.1" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">MUL_ADD</text>
+<text x="454.0" y="184.3" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">0</text>
+<rect x="508" y="150" width="100" height="44" rx="6" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="558.0" y="168.1" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">CONST_ADD</text>
+<text x="558.0" y="184.3" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">1</text>
+<rect x="612" y="150" width="100" height="44" rx="6" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="662.0" y="168.1" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">POOL3</text>
+<text x="662.0" y="184.3" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">1</text>
+<rect x="716" y="150" width="100" height="44" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="766.0" y="168.1" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">POOL2</text>
+<text x="766.0" y="184.3" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">0</text>
+<rect x="820" y="150" width="100" height="44" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="870.0" y="168.1" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">OUT_LUT</text>
+<text x="870.0" y="184.3" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">0</text>
+<text x="288" y="178" font-size="13" fill="#333333" text-anchor="end" font-weight="bold">EvtaGemm::FirstConv</text>
+<rect x="300" y="204" width="100" height="44" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="350.0" y="222.1" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">CHAIN</text>
+<text x="350.0" y="238.3" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">0</text>
+<rect x="404" y="204" width="100" height="44" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="454.0" y="222.1" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">MUL_ADD</text>
+<text x="454.0" y="238.3" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">0</text>
+<rect x="508" y="204" width="100" height="44" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="558.0" y="222.1" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">CONST_ADD</text>
+<text x="558.0" y="238.3" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">0</text>
+<rect x="612" y="204" width="100" height="44" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="662.0" y="222.1" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">POOL3</text>
+<text x="662.0" y="238.3" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">0</text>
+<rect x="716" y="204" width="100" height="44" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="766.0" y="222.1" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">POOL2</text>
+<text x="766.0" y="238.3" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">0</text>
+<rect x="820" y="204" width="100" height="44" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="870.0" y="222.1" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">OUT_LUT</text>
+<text x="870.0" y="238.3" font-size="12" fill="#333333" text-anchor="middle" font-weight="normal">0</text>
+<text x="288" y="232" font-size="13" fill="#333333" text-anchor="end" font-weight="bold">EvtaGemm::None</text>
+<text x="960" y="112" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">Conv: convolution_wo_tr[_res|_pool]</text>
+<text x="960" y="166" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">FirstConv: conv0 pack / zero-fill 첫 conv</text>
+<text x="960" y="220" font-size="13" fill="#333333" text-anchor="start" font-weight="normal">None: CPU conv, conv 아닌 명령</text>
+<text x="40" y="300" font-size="15" fill="#333333" text-anchor="start" font-weight="bold">예 ① VGG16 Conv_2__2 (보통 EVTA conv) 뒤의 2x2 pool: findPoolFusions가 TAIL_POOL2를 묻는다</text>
+<rect x="40" y="318" width="220" height="60" rx="6" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.6"/>
+<text x="150.0" y="343.77500000000003" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">Conv_2__2</text>
+<text x="150.0" y="361.32500000000005" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">getConvPath = VTA</text>
+<polyline points="260,348 300,348" fill="none" stroke="#333333" stroke-width="1.8" marker-end="url(#ak)"/>
+<rect x="300" y="318" width="150" height="60" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="375.0" y="343.77500000000003" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">evtaGemmOf</text>
+<text x="375.0" y="361.32500000000005" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">→ Conv</text>
+<polyline points="450,348 490,348" fill="none" stroke="#333333" stroke-width="1.8" marker-end="url(#ak)"/>
+<rect x="490" y="318" width="240" height="60" rx="6" fill="#fbf6dc" stroke="#9a7b00" stroke-width="1.6"/>
+<text x="610.0" y="343.77500000000003" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">evtaTails(Conv) &amp; POOL2</text>
+<text x="610.0" y="361.32500000000005" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">= 16 ≠ 0  ✔</text>
+<polyline points="730,348 770,348" fill="none" stroke="#333333" stroke-width="1.8" marker-end="url(#ak)"/>
+<rect x="770" y="318" width="230" height="60" rx="6" fill="#fbf6dc" stroke="#9a7b00" stroke-width="1.6"/>
+<text x="885.0" y="343.77500000000003" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">tailFree(Conv_2__2)</text>
+<text x="885.0" y="361.32500000000005" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">세 기록에 없음  ✔</text>
+<polyline points="1000,348 1040,348" fill="none" stroke="#3c8a35" stroke-width="2.2" marker-end="url(#ag)"/>
+<rect x="1040" y="318" width="320" height="60" rx="6" fill="#e9f5e7" stroke="#3c8a35" stroke-width="1.6"/>
+<text x="1200.0" y="343.77500000000003" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">true → 모양 · tile 조건 확인 후</text>
+<text x="1200.0" y="361.32500000000005" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">poolFusions[Conv_2__2] 기록</text>
+<text x="40" y="430" font-size="15" fill="#333333" text-anchor="start" font-weight="bold">예 ② Resnet18 첫 conv (conv0 pack) 뒤에 2x2 pool이 왔다면</text>
+<rect x="40" y="448" width="220" height="60" rx="6" fill="#e8f0fa" stroke="#2f5f98" stroke-width="1.6"/>
+<text x="150.0" y="473.77500000000003" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">conv0</text>
+<text x="150.0" y="491.32500000000005" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">getConvPath = FirstBNN</text>
+<polyline points="260,478 300,478" fill="none" stroke="#333333" stroke-width="1.8" marker-end="url(#ak)"/>
+<rect x="300" y="448" width="150" height="60" rx="6" fill="#ffffff" stroke="#333333" stroke-width="1.6"/>
+<text x="375.0" y="473.77500000000003" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">evtaGemmOf</text>
+<text x="375.0" y="491.32500000000005" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">→ FirstConv</text>
+<polyline points="450,478 490,478" fill="none" stroke="#333333" stroke-width="1.8" marker-end="url(#ak)"/>
+<rect x="490" y="448" width="240" height="60" rx="6" fill="#fbe9e7" stroke="#c0392b" stroke-width="1.6"/>
+<text x="610.0" y="473.77500000000003" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">evtaTails(FirstConv) &amp; POOL2</text>
+<text x="610.0" y="491.32500000000005" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">= 0  ✘</text>
+<polyline points="730,478 1040,478" fill="none" stroke="#c0392b" stroke-width="2.2" marker-end="url(#ar)"/>
+<rect x="1040" y="448" width="320" height="60" rx="6" fill="#fbe9e7" stroke="#c0392b" stroke-width="1.6"/>
+<text x="1200.0" y="473.77500000000003" font-size="13" fill="#333333" text-anchor="middle" font-weight="bold">false → 합치지 않음</text>
+<text x="1200.0" y="491.32500000000005" font-size="13" fill="#333333" text-anchor="middle" font-weight="normal">(conv0 pack + 2x2는 시험 안 함)</text>
+<text x="700" y="570" font-size="14" fill="#333333" text-anchor="middle" font-weight="normal">새 생산자나 꼬리를 더할 때는 vtalib 호출과 번들 생성이 받는지 확인한 뒤 evtaTails에 비트 하나를 켠다.</text>
+</svg>

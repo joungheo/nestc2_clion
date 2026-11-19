@@ -398,6 +398,9 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   producer takes the chain / mul-add / const-add / pool 3 / pool 2 / output LUT; `VTASaveContext::tailFree`; `IrSeq` the shared IR walk).
   The five bundles are byte-identical. `VTA_FUSION_LOG=1` on model-compiler lists every producer, its tail, and a tail op it does not fuse
   with the known reason (now: VGG16's last CPU pool, MobileNetV2's avgpool, DeiT's 24 adds with `-vta-fuse-elemadd-mul` off).
+  Since 2026-11-20 it also lists every conv / fc / matmul left on the CPU with the EVTA condition it failed (`noteCpuGemm`, the reason
+  from the deciding code: `getConvPath(I, &why)`, `saveEvtaFcPacked`; now only DeiT's six 2-row last-block attention matmuls, W < 7).
+  Before / after code with 5 figures: [docs/evta_fusion_rules_guide.md](docs/evta_fusion_rules_guide.md).
 - Other models (2026-11-05, `docs/evta_runtime_compare.md` §7.19): Resnet50 res2_0 residual fused (relu to a 2^q smaller scale), schedules of the
   Resnet50 / VGG16 shapes in `VTASchedules.h` (found with vtalib-systolic `EVTA_SCHED`), conv tiles below 7 x 7: the dummy-padded store
   used the wrong channel block with nVirtualThread 2 (fixed in both vtalibs) and the systolic vtalib's minimum tile is 1 on an `_sa_` bitstream
