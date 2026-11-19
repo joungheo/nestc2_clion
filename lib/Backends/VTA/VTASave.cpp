@@ -280,6 +280,10 @@ public:
   bool tailFree(const Instruction *I) const {
     return !fusions.count(I) && !poolFusions.count(I) && !outLutConv.count(I);
   }
+  //#### JO added (2026-11-20, docs/evta_fusion_rules.md 5): the GEMM-shaped instructions (conv, fc, matmul) the emission
+  //#### leaves on the CPU, with the reason, noted where it leaves the EVTA path; VTA_FUSION_LOG prints them at the end
+  std::vector<std::pair<const Instruction *, std::string>> cpuGemms;
+  void noteCpuGemm(const Instruction *I, const std::string &why) { cpuGemms.emplace_back(I, why); }
   std::map<const Instruction *, std::string> lutNames;
   //#### JO added (2026-11-09): softmax of a dequantized int8 tensor emitted at the dequantize (findSoftmaxI8)
   std::map<const Instruction *, const SoftMaxInst *> softmaxAtDq;
@@ -1050,6 +1054,18 @@ static void saveChannelwiseConvolutionInst(const glow::ChannelwiseQuantizedConvo
     bundle->append(");\n");
     ctx->getEvtaDepthwise()->insert(Inst);
     return;
+  }
+  //#### JO added (2026-11-20, VTA_FUSION_LOG): why not dw_convolution_evta
+  {
+    std::string why = !vtaEvtaDepthwise ? "-vta-evta-depthwise is off"
+                      : !dw ? "group " + std::to_string(group) + " conv (not depthwise)"
+                      : C % 16 ? "channels " + std::to_string(C) + " not a multiple of 16"
+                      : N != 1 ? "batch " + std::to_string(N)
+                      : !ctx->isPacked(src) || !ctx->isPacked(dest) ? std::string("input / output not in the EVTA layout")
+                      : std::any_of(sh.begin(), sh.end(), [](int32_t k) { return k < 0; })
+                          ? std::string("a channel's scale ratio not a power of two")
+                          : std::string("pads / strides / dilation");
+    ctx->noteCpuGemm(Inst, "channelwise conv: " + why);
   }
 
   auto fos = ctx->getWeightFileStream();
@@ -3920,8 +3936,11 @@ void saveFirstBNNVTAConvolutionInst(const glow::ConvolutionInst *Inst,
 
 //#### JO changed (2026-10-31): the choice of saveConvolutionInst as a function, also used by findPackedActivations
 enum class ConvPath { Float, VTA, DepthwiseCPU, FirstBNN, Other };
+ConvPath getConvPath(const glow::ConvolutionInst *Inst, std::string *why = nullptr);
 
-ConvPath getConvPath(const glow::ConvolutionInst *Inst) {
+//#### JO changed (2026-11-20, docs/evta_fusion_rules.md 5): why, when given, gets the reason a conv is not on the EVTA
+//#### (VTA_FUSION_LOG): the first condition of the EVTA paths it fails, in the order below
+ConvPath getConvPath(const glow::ConvolutionInst *Inst, std::string *why) {
   auto src = Inst->getSrc();
   auto srcDims = src->dims();
   auto filter = Inst->getFilter();
@@ -3930,8 +3949,11 @@ ConvPath getConvPath(const glow::ConvolutionInst *Inst) {
   auto bias = Inst->getBias();
   assert(bias->dims()[0] == filterDims[0]);
 
-  if (!Inst->getSrc()->getType()->isQuantizedType())
+  if (!Inst->getSrc()->getType()->isQuantizedType()) {
+    if (why)
+      *why = "float (not quantized)";
     return ConvPath::Float;
+  }
 
   float inScale = src->getType()->getScale();
   float filterScale = filter->getType()->getScale();
@@ -3964,6 +3986,8 @@ ConvPath getConvPath(const glow::ConvolutionInst *Inst) {
   } else if (Inst->getGroup() == srcDims[3] && scale > 1 &&
              sameScale(biasScale, matMulScale) && outOffset == 0 && inOffset == 0 &&
              filterOffset == 0 && biasOffset == 0 && shift >= 0) {
+    if (why)
+      *why = "depthwise as a ConvolutionInst (dw_convolution_evta takes the channelwise one)";
     return ConvPath::DepthwiseCPU;
   //#### JO added (2026-10-29): a quantized 3-channel conv (the image conv0 when it is not skipped from
   //#### quantization) runs on EVTA with its input and filter zero-filled to 16 channels, the path of the
@@ -3974,6 +3998,25 @@ ConvPath getConvPath(const glow::ConvolutionInst *Inst) {
              sameScale(biasScale, matMulScale) && outOffset == 0 && inOffset == 0 &&
              filterOffset == 0 && biasOffset == 0 && shift >= 0) {
     return ConvPath::FirstBNN;
+  }
+  if (why) {
+    char b[160];
+    if (outOffset || inOffset || filterOffset || biasOffset)
+      snprintf(b, sizeof(b), "offset not 0 (in %d, filter %d, bias %d, out %d)", (int)inOffset, (int)filterOffset,
+               (int)biasOffset, (int)outOffset);
+    else if (!sameScale(biasScale, matMulScale))
+      snprintf(b, sizeof(b), "bias scale != in * filter scale");
+    else if (!(scale > 1) || shift < 0)
+      snprintf(b, sizeof(b), "scale ratio out / (in * filter) = %g, not a power of two >= 2", scale);
+    else if (Inst->getGroup() != 1)
+      snprintf(b, sizeof(b), "group %u conv", (unsigned)Inst->getGroup());
+    else if (!symPad)
+      snprintf(b, sizeof(b), "pads %u %u %u %u not all equal", P[0], P[1], P[2], P[3]);
+    else if (filterDims[0] % 16)
+      snprintf(b, sizeof(b), "output channels %u not a multiple of 16", (unsigned)filterDims[0]);
+    else
+      snprintf(b, sizeof(b), "input channels %u not a multiple of 16 (nor the 3 of a first conv)", (unsigned)srcDims[3]);
+    *why = b;
   }
   return ConvPath::Other;
 }
@@ -4042,7 +4085,11 @@ void saveConvolutionInst(const glow::ConvolutionInst *Inst, std::string *bundle,
       bundle->append("  VTASetActivationClip(127);\n");
     return;
   }
-  switch (getConvPath(Inst)) {
+  std::string why;
+  const ConvPath path = getConvPath(Inst, &why);
+  if (path != ConvPath::VTA && path != ConvPath::FirstBNN)
+    ctx->noteCpuGemm(Inst, "conv: " + why);
+  switch (path) {
   case ConvPath::Float:
     saveFloatConvolutionInst(Inst, bundle, ctx);
     break;
@@ -4777,12 +4824,20 @@ void saveBNNConvolutionInst(const glow::BNNConvolutionInst *Inst,
 //#### JO changed (2026-11-08): the body as saveEvtaFcPacked for the fc and for a 1x1 conv over a 1x1 input (convFilter:
 //#### filter [OUT][1][1][IN] instead of the fc's [IN][OUT]; MobileNetV2's logits 1280 -> 1001)
 static bool saveEvtaFcPacked(Value *src, Value *dest, Value *filter, Value *bias, uint32_t IN, uint32_t OUT,
-                             bool convFilter, std::string *bundle, VTASaveContext *ctx) {
-  if (filter->getElementType() != ElemKind::Int8QTy || bias->getElementType() != ElemKind::Int32QTy || IN % 16)
+                             bool convFilter, std::string *bundle, VTASaveContext *ctx, std::string *why = nullptr) {
+  //#### JO added (2026-11-20): why = the reason it is not on the EVTA (VTA_FUSION_LOG)
+  auto no = [&](const std::string &r) {
+    if (why)
+      *why = r;
     return false;
+  };
+  if (filter->getElementType() != ElemKind::Int8QTy || bias->getElementType() != ElemKind::Int32QTy)
+    return no("not int8 weights / int32 bias");
+  if (IN % 16)
+    return no("inputs " + std::to_string(IN) + " not a multiple of 16");
   if (src->getType()->getOffset() || filter->getType()->getOffset() || dest->getType()->getOffset() ||
       bias->getType()->getOffset())
-    return false;
+    return no("offset not 0");
   const float matMulScale = src->getType()->getScale() * filter->getType()->getScale();
   const float ratio = matMulScale / dest->getType()->getScale();
   int shift = -1;
@@ -4791,8 +4846,12 @@ static bool saveEvtaFcPacked(Value *src, Value *dest, Value *filter, Value *bias
       shift = k;
   const uint32_t CIN = IN / 16, NB = (OUT + 15) / 16, g = std::min<uint32_t>(NB, 512 / CIN);
   const uint32_t nChunks = g ? (NB + g - 1) / g : 0, gEven = nChunks ? (NB + nChunks - 1) / nChunks : 0;
-  if (shift < 0 || gEven < 1 || 2 * NB > 2048 || hasConstantSymbol(filter, ctx) || hasConstantSymbol(bias, ctx))
-    return false;
+  if (shift < 0)
+    return no("scale ratio not 2^-k with 0 <= k <= 15");
+  if (gEven < 1 || 2 * NB > 2048)
+    return no("too many outputs for the acc (" + std::to_string(OUT) + ")");
+  if (hasConstantSymbol(filter, ctx) || hasConstantSymbol(bias, ctx))
+    return no("weights shared with another constant symbol");
 
   const Tensor *tensor = nullptr, *tensorBias = nullptr;
   auto vMap = ctx->getVariableMap();
@@ -4805,7 +4864,7 @@ static bool saveEvtaFcPacked(Value *src, Value *dest, Value *filter, Value *bias
       tensorBias = &(llvm::cast<Constant>(it->first)->getPayload());
   }
   if (!tensor || !tensorBias)
-    return false;
+    return no("weights / bias not constant");
   auto handle = tensor->getHandle<int8_t>();
   auto handleBias = tensorBias->getHandle<int32_t>();
   const float biasRatio = bias->getType()->getScale() / matMulScale;
@@ -4858,13 +4917,16 @@ static bool saveEvtaFcPacked(Value *src, Value *dest, Value *filter, Value *bias
 static bool saveEvtaFullyConnectedInst(const glow::FullyConnectedInst *Inst, std::string *bundle,
                                        VTASaveContext *ctx) {
   auto src = Inst->getSrc(), dest = Inst->getDest(), filter = Inst->getWeights();
+  std::string why;
   if (src->dims().size() != 2 || dest->dims().size() != 2 || filter->dims().size() != 2 || src->dims()[0] != 1 ||
       dest->dims()[0] != 1)
-    return false;
-  const uint32_t IN = src->dims()[1], OUT = dest->dims()[1];
-  if (filter->dims()[0] != IN || filter->dims()[1] != OUT)
-    return false;
-  return saveEvtaFcPacked(src, dest, filter, Inst->getBias(), IN, OUT, false, bundle, ctx);
+    why = "batch " + std::to_string(src->dims()[0]) + " (the EVTA fc takes 1 row)";
+  else if (filter->dims()[0] != src->dims()[1] || filter->dims()[1] != dest->dims()[1])
+    why = "weights not IN x OUT";
+  else if (saveEvtaFcPacked(src, dest, filter, Inst->getBias(), src->dims()[1], dest->dims()[1], false, bundle, ctx, &why))
+    return true;
+  ctx->noteCpuGemm(Inst, "fc: " + why);
+  return false;
 }
 
 //#### JO added (2026-11-08): a 1x1 conv over a 1x1 input without activation (N = 1, group 1, stride / dilation
@@ -4885,7 +4947,9 @@ static bool saveEvtaConvAsFc(const glow::ConvolutionInst *Inst, std::string *bun
 
 void saveFullyConnectedInst(const glow::FullyConnectedInst *Inst,
                             std::string *bundle, VTASaveContext *ctx) {
-  if (vtaEvtaFc && saveEvtaFullyConnectedInst(Inst, bundle, ctx))
+  if (!vtaEvtaFc)
+    ctx->noteCpuGemm(Inst, "fc: -vta-evta-fc is off");
+  else if (saveEvtaFullyConnectedInst(Inst, bundle, ctx))
     return;
   auto src = Inst->getSrc();
   auto srcDims = src->dims();
@@ -7631,6 +7695,18 @@ static bool saveGenericCpuInst(const Instruction &I, std::string *bundle, VTASav
                matMulCallTail(ctx, matMulSchedArgs(ld[0], ld[1], rd[1])) + ");";
         break;
       }
+      //#### JO added (2026-11-20, VTA_FUSION_LOG): why not matmul_evta
+      {
+        char why[160];
+        if (!vtaEvtaMatMul)
+          snprintf(why, sizeof(why), "-vta-evta-matmul is off");
+        else if (mant != 0.5f || shift < 1 || shift > 15)
+          snprintf(why, sizeof(why), "scale ratio %g not 2^-s with 1 <= s <= 15", ratio);
+        else
+          snprintf(why, sizeof(why), "%u rows: no H x W with W >= 7 (largest W %u)", (unsigned)ld[0], (unsigned)w);
+        ctx->noteCpuGemm(&I, "matmul " + std::to_string(ld[0]) + " x " + std::to_string(ld[1]) + " x " +
+                                 std::to_string(rd[1]) + ": " + why);
+      }
       char sc[32];
       snprintf(sc, sizeof(sc), "%.9g", ratio);
       call = "nestc_cpu::matmulI8(" + d + ", " + a + ", " + b + ", " + std::to_string(ld[0]) + ", " +
@@ -7638,6 +7714,7 @@ static bool saveGenericCpuInst(const Instruction &I, std::string *bundle, VTASav
       break;
     }
     requireFloat(&I, {C->getDest(), C->getLHS(), C->getRHS()});
+    ctx->noteCpuGemm(&I, "matmul: float (or int8 with an offset)");
     std::string d = P(C->getDest()), a = P(C->getLHS()), b = P(C->getRHS());
     call = "nestc_cpu::matmul(" + d + ", " + a + ", " + b + ", " + std::to_string(ld[0]) + ", " +
            std::to_string(ld[1]) + ", " + std::to_string(rd[1]) + ");";
@@ -10157,6 +10234,12 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
 #ifdef VTA_PROFILE
   bundle.append("  prof_out.close();\n");
 #endif
+  //#### JO added (2026-11-20, docs/evta_fusion_rules.md 5): the GEMMs left on the CPU and why (noteCpuGemm)
+  if (getenv("VTA_FUSION_LOG")) {
+    for (const auto &c : ctx.cpuGemms)
+      llvm::errs() << "VTA_FUSION_LOG cpu " << c.first->getName() << ": " << c.second << "\n";
+    llvm::errs() << "VTA_FUSION_LOG " << ctx.cpuGemms.size() << " GEMMs on the CPU\n";
+  }
   wfos.close();
   finalizeBundleEntrySave(bundleCtx, bundleName, mainEntryName, ctx);
   exportBundleEntry(outputDir, bundleName, bundleCtx);
