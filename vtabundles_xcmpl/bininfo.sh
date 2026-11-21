@@ -11,6 +11,12 @@ bin_info() {
   case $b in *_sa_*alu1*|*_sa_*bias*|*_sa_*_rq*) f="$f ALU-imm-II1";; esac
   case $b in *bias*|*_rq*) f="$f bias-reset";; esac
   case $b in *_rq*) f="$f requantize";; esac
+  #### JO added (2026-11-22): the ALU extension the systolic vtalib reads from "_alux<k>" (VTABundle.cpp VTAHasAluExt / 2 / 3,
+  #### docs/evta_isa_ext.md 5.2): 1 = MUL..CLZ, LUT (layer norm / softmax / GELU table / avgpool on the EVTA), 2 = + II 1 slot loop,
+  #### MADD / MULSHR / SHRV / SHRR, 3 = + SQACC / LUTC
+  if [[ $b =~ _alux([0-9]*) ]]; then
+    case ${BASH_REMATCH[1]:-1} in 1) f="$f ALU-ext1";; 2) f="$f ALU-ext2(+slot-II1,MADD..SHRR)";; *) f="$f ALU-ext${BASH_REMATCH[1]}(+slot-II1,MADD..SHRR,SQACC,LUTC)";; esac
+  fi
   case $b in *_prof*) f="$f AXI-perf-monitor";; esac
   case $b in *hp333*) f="$f HP-333MHz";; esac
   echo "  bitstream : /lib/firmware/$b"

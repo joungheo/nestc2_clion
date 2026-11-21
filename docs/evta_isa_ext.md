@@ -142,19 +142,41 @@ GEMM과 ALU 명령에 그 값이 들어가고, `en = 0`으로 다시 끈다(`cmd
 
 ## 5. bitstream과 vtalib의 짝
 
-| bitstream (`/lib/firmware`) | EVTA | bias reset | requantize | 실행 파일 |
-|---|---|---|---|---|
-| `zcu102_1x16_i8w8a32_16_16_19_18.bin` (etri) | 1 | × | × | `build/`, `build_prof/`, `build_timed/` (`vta/vtalib`) |
-| `vtahw_zcu102_1x16_i8w8a32_16_16_19_18_380mhz.bin` 등 HLS GEMM | 1~4 | × | × | 위와 같음 |
-| `..._16_16_19_18_sa_400mhz_alu1_epr.bin` | 1 | × | × | `build_sys*` (`vtalib-zcu102-systolic`) |
-| `..._16_16_19_18_sa_400mhz_bias.bin` | 1 | ○ | × | `build_sys*` |
-| `..._16_16_19_18_sa_400mhz_rq.bin` | 1 | ○ | ○ | `build_sys*` |
-| `..._16_15_18_17_4evta_sa_400mhz_alu1.bin` | 4 | × | × | `build_multievtax4_sys*` |
-| `..._16_15_18_17_4evta_sa_400mhz_bias.bin` | 4 | ○ | × | `build_multievtax4_sys*` |
-| `..._16_15_18_17_4evta_sa_396mhz_rq.bin` (395.8 MHz) | 4 | ○ | ○ | `build_multievtax4_sys*` |
-| `..._16_15_18_17_4evta_sa_400mhz_rq.bin` | 4 | ○ | ○ | `build_multievtax4_sys*` |
+| bitstream (`/lib/firmware`) | EVTA | bias reset | requantize | ALU 확장 | vtalib | vtalib가 그 기능을 쓰기 시작한 commit | 실행 파일 |
+|---|---|---|---|---|---|---|---|
+| `zcu102_1x16_i8w8a32_16_16_19_18.bin` (etri) | 1 | × | × | × | `vta/vtalib` | | `build/`, `build_prof/`, `build_timed/` |
+| `vtahw_zcu102_1x16_i8w8a32_16_16_19_18_380mhz.bin` 등 HLS GEMM | 1~4 | × | × | × | `vta/vtalib` | | 위와 같음 |
+| `..._16_16_19_18_sa_380mhz.bin`, `_sa_400mhz.bin` | 1 | × | × | × | systolic | `3982d46` 10-27 (systolic uop 순서) | `build_sys*` |
+| `..._16_16_19_18_sa_400mhz_alu1_epr.bin` | 1 | × | × | × | systolic | (vtalib 변경 없음, 하드웨어만) | `build_sys*` |
+| `..._16_16_19_18_sa_400mhz_bias.bin` | 1 | ○ | × | × | systolic | `76aa60e` 11-04 | `build_sys*` |
+| `..._16_16_19_18_sa_400mhz_rq.bin` | 1 | ○ | ○ | × | systolic | `d26c3e3` 11-04 | `build_sys*` |
+| `..._16_16_19_18_sa_alux_380mhz_rq.bin` | 1 | ○ | ○ | 1단계 | systolic | `55bad81` 11-12 (`VTAHasAluExt`), `bf20900` / `e1a7924` 11-14 (avgpool, epilogue) | `_pcsys*` |
+| `..._16_16_19_18_sa_alux_400mhz_rq.bin` | 1 | ○ | ○ | 1단계 | systolic | (vtalib 변경 없음, 하드웨어 레지스터만) | `_pcsys*` |
+| `..._16_16_19_18_sa_alux2_400mhz_rq.bin` | 1 | ○ | ○ | 2단계 | systolic | `c50e968` 11-15 (`VTAHasAluExt2`) | `_pcsys2` 이후 |
+| `..._16_16_19_18_sa_alux3_400mhz_rq.bin` | 1 | ○ | ○ | 3단계 | systolic | `8191320` 11-15 (`VTAHasAluExt3`) | `_pcsys4` 이후 |
+| `..._16_15_18_17_4evta_sa_400mhz_alu1.bin` | 4 | × | × | × | systolic | (vtalib 변경 없음) | `build_multievtax4_sys*` |
+| `..._16_15_18_17_4evta_sa_400mhz_bias.bin` | 4 | ○ | × | × | systolic | `76aa60e` 11-04 | `build_multievtax4_sys*` |
+| `..._16_15_18_17_4evta_sa_396mhz_rq.bin` (395.8 MHz) | 4 | ○ | ○ | × | systolic | `d26c3e3` 11-04 | `build_multievtax4_sys*` |
+| `..._16_15_18_17_4evta_sa_400mhz_rq.bin` | 4 | ○ | ○ | × | systolic | `d26c3e3` 11-04 | `build_multievtax4_sys*` |
 
+- "systolic"은 `vtalib-zcu102-systolic`이다. **판 번호는 없고, 그 commit 뒤의 vtalib면 된다.**
+  - 새 vtalib는 옛 bitstream에서도 돈다. bitstream 이름에 없는 기능은 쓰지 않는다.
+  - 옛 vtalib는 새 bitstream에서 돌지만 새 기능을 쓰지 않는다.
+  - 그래서 `_alux3`의 짝은 "`8191320`(11-15 08:48) 뒤의 `vtalib-zcu102-systolic`으로 빌드한 실행 파일"이다.
+- **보드의 `build_sys*` 실행 파일은 `_alux3`의 짝이 아니다**(2026-11-21 확인).
+  - 마지막 빌드: `_systimed` 11-14 09:47, DeiT `_sys` 11-12. 둘 다 ALU 확장 vtalib(`bf20900` 11-14 10:37) 전이다.
+  - 그래서 `_alux*` bitstream에서도 ALU 확장을 쓰지 않는다.
+  - `_alux*` 측정은 모두 PC에서 빌드한 `_pcsys*`로 했다. 최신은 다섯 모델 모두 `_pcsys27`(11-21 빌드, §5.3 표 D)이다.
+  - 보드의 `_sys*`를 짝으로 쓰려면 보드에서 다시 빌드하거나, PC에서 `_pcsystimed`를 다시 빌드해 보낸다([evta_user_manual.md](evta_user_manual.md) §4.2). 보드에 있는 `_pcsystimed`도 11-14 / 11-16 판이라 최신이 아니다.
 - **`vtalib-zcu102-systolic`은 systolic bitstream에만 쓴다.** uop 순서가 HLS GEMM과 다르다.
+- **빌드 dir과 vtalib:** PC의 `vtabundles_xcmpl/build_pc_systimed`가 `VTALIB=<tree>/vtalib-zcu102-systolic`, `BUNDLE_SET=single`, `BUNDLE_TIMED=ON`,
+  `BUNDLE_EXE_SUFFIX=_pcsystimed`로 설정된 systolic용 빌드 dir이다. 실행 파일은 `vtabundles_xcmpl/hw/<Dir>/`에 생긴다. `make`가 vtalib 소스와 bundle의
+  변경을 보고 필요한 것만 다시 빌드하므로, 이것이 늘 최신 소스로 만든 실행 파일이다.
+- **`vta/vtalib`(HLS GEMM용)는 ALU 확장 / bias reset / requantize를 넣지 않아도 된다.** 그 짝인 HLS bitstream에 이 기능이 없다.
+  - bundle은 systolic 전용 호출(`layernorm_evta`, `softmax_evta`, `elemadd_evta`, `avgpool_evta`, `VTASetOutputLut`)을 `#ifdef VTA_OUTPUT_LUT`로 감싼다.
+    이 매크로는 systolic vtalib의 header에만 있다. 그래서 같은 bundle을 `vta/vtalib`로 빌드하면 CPU 함수를 부른다.
+  - 양쪽이 같이 써야 하는 API(epilogue, `convolution_wo_tr_pool`, `matmul_evta_av`)는 두 vtalib에 다 있다.
+  - 소프트웨어만의 개선(`EVTA_CONV_BURST`, `EVTA_LOAD_AHEAD` 등)은 `vta/vtalib`에 없다. HLS bitstream을 다시 쓸 때만 필요하다.
 - **기능은 bitstream 이름으로 켠다.** `run_all.sh`, `run_prof.sh`, `load_bit.sh`, `hwtest/*.sh`가 `/tmp/evta_bitstream`에 이름을 쓴다.
   vtalib이 그 이름에서 `bias` / `_rq`를 찾는다. 다른 방법으로 bitstream을 올렸으면 이름을 직접 쓰거나 환경 변수로 강제한다.
   - 이름에 `bias`나 `_rq`가 있으면 bias reset, `_rq`가 있으면 requantize가 켜진다.
@@ -163,6 +185,232 @@ GEMM과 ALU 명령에 그 값이 들어가고, `en = 0`으로 다시 끈다(`cmd
   반대로 켤 수 있는 bitstream에서 `=0`으로 끄는 것은 안전하다. 이전 경로와 비교할 때 쓴다.
 - 기본 bitstream은 `vtabundles_xcmpl/hw*/script/run_all.sh` 맨 위의 `BIN`(HLS GEMM)과 `SYS_BIN`(systolic, `-s _sys*`)이다.
   다른 것은 `BIN=<file>`로 준다(`-s _sys*`에서도 `BIN`이 우선).
+
+### 5.1 systolic bitstream을 만든 순서, 지금의 최신판 (2026-11-21에 정리)
+
+같은 소스(`vta-hw-zcu102-systolic`, multi4는 `vta-hw-zcu102-multi4`)에 기능을 하나씩 더하며 만들었다. 그래서 **아래 판은 위 판의 기능을 모두 가진다.**
+ALU 확장 판(`_alux*`)은 같은 실행 파일(`build_sys*`, `_pcsys*`)로 돌고, 없는 기능은 vtalib이 bitstream 이름을 보고 쓰지 않는다.
+
+**single EVTA (16/16/19/18)**
+
+| 날짜 | 파일 (`/lib/firmware/vtahw_zcu102_1x16_i8w8a32_16_16_19_18` 뒤) | MHz | 더한 것 | WNS (ns) | 자세히 |
+|---|---|---|---|---|---|
+| 10-28 | `_sa_380mhz.bin`, `_sa_400mhz.bin` | 380, 400 | systolic GEMM `gemm_sa`(weight-stationary) 첫 판 | | [evta_systolic.md](evta_systolic.md) |
+| 11-03 | `_sa_400mhz_alu1_epr.bin` | 400 | ALU immediate 연산 II = 1 | +0.001 | compare §7.15 |
+| 11-04 | `_sa_400mhz_bias.bin` | 400 | bias reset(§3.2) | +0.000 | compare §7.16 |
+| 11-04 | **`_sa_400mhz_rq.bin`** | 400 | requantize(§3.1). 11-04 ~ 11-21의 `SYS_BIN` 기본 | +0.039 | compare §7.18 |
+| 11-14 | `_sa_alux_380mhz_rq.bin` | 380 | ALU 확장 1단계(MUL, SUB, CPY, LUT, LUTSET, RSUM, RMAX, CLZ, §8) | +0.002 | §8.12 |
+| 11-14 | `_sa_alux_400mhz_rq.bin` | 400 | 같은 기능을 400 MHz로: ALU / requantize / RMW register, queue register slice | +0.014 | §8.13 |
+| 11-15 | `_sa_alux2_400mhz_rq.bin` | 400 | ALU 확장 2단계: II 1 slot 루프, MADD / MULSHR / SHRV / SHRR | +0.026 | §8.14, [evta_alux_hw.md](evta_alux_hw.md) |
+| 11-15 | **`_sa_alux3_400mhz_rq.bin`** | 400 | ALU 확장 3단계: SQACC(제곱 누적), LUTC(clamp LUT). **가장 최근이자 11-22부터 `SYS_BIN` 기본** | +0.022 | §8.15 |
+
+**EVTA 4개 (16/15/18/17)**
+
+| 날짜 | 파일 (`..._16_15_18_17_4evta` 뒤) | MHz | 더한 것 | WNS (ns) |
+|---|---|---|---|---|
+| 10-28 | `_sa_400mhz.bin` | 400 | systolic 첫 판 | |
+| 11-04 | `_sa_400mhz_alu1.bin`, `_sa_400mhz_bias.bin` | 400 | ALU immediate II = 1, bias reset | +0.037 (bias) |
+| 11-04 | `_sa_396mhz_rq.bin` | 395.8 | requantize. 400 MHz가 맞기 전의 판 | |
+| 11-04 | **`_sa_400mhz_rq.bin`** | 400 | requantize. **multi4의 최신이자 `SYS_BIN` 기본**. ALU 확장은 없다 | +0.002 |
+
+- WNS를 비운 판은 기록을 찾지 못했다.
+- PC에서 합성한 결과와 보드 파일의 짝(md5): `_alux_380mhz_rq` = PC build dir `..._sa_alux_380mhz_rq`, `_alux_400mhz_rq` = `..._rq_qrs`,
+  `_alux2` = `..._rq_alux2_eto`, `_alux3` = `..._rq_alux3`(모두 `vta-hw-zcu102-systolic/build/hardware/xilinx/vivado/`).
+  같은 이름의 다른 판(`_eto`, `_mc`, `_pipe` 등)은 timing을 맞추려고 전략과 register를 바꿔 본 것이다. WNS가 음수인 것은 쓰지 않는다.
+- 11-15 `_alux3` 뒤로 `vta-hw-zcu102-systolic`의 하드웨어 소스는 바뀌지 않았다(git, 2026-11-21). 그래서 지금 소스와 `_alux3`는 같다.
+
+**`_alux3`가 최종판인가: 최신판이지만 최종은 아니다.**
+- **지금 쓸 판:** 모든 모델에 `_alux3`를 쓰면 된다. 실행 파일은 `8191320` 뒤 vtalib로 빌드한 것(`_pcsys4` 이후, 또는 PC에서 새로 빌드한 `_pcsystimed`)이어야 한다(§5 표 아래).
+  - CNN의 EVTA conv dump는 `_rq`와 같았다.
+  - DeiT의 layer norm / softmax, MobileNetV2의 avgpool은 ALU 확장이 있어야 EVTA에서 돈다. `_rq`에서는 같은 실행 파일이 CPU 경로로 간다.
+- **`SYS_BIN` 기본은 2026-11-22부터 `_alux3`다**(그 전 `_sa_400mhz_rq`). 확장 없는 판과 비교할 때는 `BIN=vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_400mhz_rq.bin`을 준다.
+  ALU 확장 vtalib 전에 빌드한 실행 파일(보드의 옛 `_sys*`)도 `_alux3`에서 `_rq`에서처럼 돈다(확장을 쓰지 않는다).
+- **다음 판의 후보(아직 만들지 않음):**
+  - conv requantize를 한 번에 하는 ALU RQ 연산: 미리 재 보니 지금은 이득이 없어 합성하지 않기로 했다(§8.20).
+  - multi4에 ALU 확장 넣기: 아직 하지 않았다.
+  - GEMM `lut_en`: 자리만 잡아 두었고(§8), 지금은 ALU pass로 한다.
+  - KV260(XCK26)용 판: 아직 합성하지 않았다.
+
+### 5.2 판마다 더한 것: 하드웨어, vtalib, 컴파일러 (2026-11-21에 정리)
+
+- 판마다 세 곳을 적었다.
+  - **하드웨어:** bitstream 소스를 바꾼 곳
+  - **vtalib:** `vtalib-zcu102-systolic`이 그 기능을 쓰게 된 곳과 그 commit
+  - **컴파일러:** VTASave / VTA.cpp에서 번들에 새 호출을 내게 한 곳
+- 시간은 그 판을 처음 올린 날 같은 실행 파일로 잰 값이다(OMP 1, 25회 중앙값).
+- 이 절에서 "EVTA"는 EVTA가 바쁜 시간, "전체"는 1장 추론 시간이다.
+
+**① `_sa_380mhz` / `_sa_400mhz` (10-28): systolic GEMM 첫 판**
+- 하드웨어: HLS의 broadcast GEMM을 RTL `gemm_sa`로 바꿨다. 16×16 weight-stationary 어레이로, weight를 어레이에 두고 입력을 흘린다.
+  ALU, LOAD / STORE는 HLS 그대로다. 자세히: [evta_systolic.md](evta_systolic.md), [evta_systolic_design.md](evta_systolic_design.md).
+- vtalib: `vtalib-zcu102-systolic`을 따로 만들었다(`2b81b77`, `3982d46`, 10-27). uop 순서를 weight-stationary에 맞췄다(`gemmop_mxn` / `gemmop_1x1`).
+  11-05부터 `_sa_` bitstream에서는 conv 출력 tile을 1까지 작게 쓴다(`EVTA_MIN_TILE`). HLS GEMM의 7×7 하한은 acc hazard 때문인데, `sa_rmw.v`는 forwarding을 한다.
+- 컴파일러: 바꾸지 않았다. 실행 파일 끝은 `_sys*`다.
+
+**② `_sa_400mhz_alu1_epr` (11-03): ALU immediate 연산 II = 1**
+- 하드웨어: HLS `vta.cc` `alu()`에서 immediate 연산은 acc를 한 번 읽고 한 번 쓴다. 그래서 II(한 단계에 걸리는 cycle 수)를 2에서 1로 줄였다.
+  즉시값을 쓰는 bias ADD, SHR, clip MIN / MAX, relu, pool이 두 배 빠르다. Vivado 전략은 `Performance_ExplorePostRoutePhysOpt`(`_epr`)다.
+- vtalib / 컴파일러: 바꾸지 않았다. 같은 실행 파일이다.
+- 시간: Resnet18 EVTA 26.42 → 24.89, 전체 28.98 → 27.32 ms.
+
+**③ `_sa_400mhz_bias` (11-04): bias reset**
+- 하드웨어: `sa_rmw.v` / `sa_ctrl.v`. GEMM reset 단계가 acc를 0 대신 acc[src]로 채운다. ISA는 `VTAGemInsn.bias_reset` 비트다(§2.2, §3.2).
+- vtalib: `conv_kernel`이 bias를 acc에 LOAD하고, reset GEMM이 그것을 tile에 깐다. bias ALU ADD가 없어진다(`76aa60e`).
+  이름에 `bias`나 `_rq`가 있으면 켠다. `EVTA_BIAS_RESET=0|1`로 강제한다.
+- 시간: Resnet18 EVTA 24.89 → 24.15, 전체 27.30 → 26.59 ms. multi4 판의 EVTA는 copy당 25.23–25.37 → 24.49–24.62 ms다.
+
+**④ `_sa_400mhz_rq` (11-04): out에 쓸 때 requantize — 11-21까지 `SYS_BIN` 기본**
+- 하드웨어: GEMM / ALU 명령의 `rq_*` 필드(en, round, shift, lo, hi). `sa_rmw.v` S4–S6과 `vta.cc` `requant()`가 out에 clip((acc + round) >> shift)를 쓴다(§3.1).
+- vtalib: `VTARequant`. ALU의 SHR / MAX / MIN 세 pass 대신 쓴다(`d26c3e3`, `2feb536`). 이름에 `_rq`가 있으면 켠다. `EVTA_REQUANT=0|1`로 강제한다.
+  같은 때 명령의 pad 비트를 0으로 채우게 했다(`NextInsn`). 전에는 초기화되지 않은 값이 들어갔다.
+- 시간: Resnet18 EVTA 24.15 → 23.05, 전체 26.61 → 25.49 ms. multi4 판의 EVTA는 copy당 24.49–24.62 → 23.44–23.56 ms이고, 4개 동시 처리량은 583.8 → 610.4 GOPS다.
+- 이 판에서 11-05 ~ 11-10에 소프트웨어만으로 많이 줄였다(아래 §5.3 표 B). 하드웨어는 그대로다.
+
+**⑤ `_sa_alux_380mhz_rq` (11-14): ALU 확장 1단계**
+- 하드웨어: ALU 명령의 pad 비트에 `alu_op_ext`, `lut_en`을 넣었다(§8.1). 연산 4–11을 더했다.
+  - 4–11: MUL, SUB, CPY, LUT, LUTSET, RSUM(행 합), RMAX(행 최대), CLZ(앞 0 개수)
+  - 확장 연산은 vector 루프에서 II 2, 파이프라인 깊이 33이다. LUT용 LUT RAM이 붙었다.
+  - 400 MHz는 timing이 맞지 않아 380 MHz로 냈다.
+- vtalib: 기능을 이름의 `_alux`로 판단한다(`VTAHasAluExt`, `55bad81` 11-12). `EVTA_ALUX=0|1`로 강제한다.
+  - conv 출력 표: `VTASetOutputLut` / `VTAAluLut`. DeiT의 GELU 표를 fc1 conv의 출력 LUT로 쓴다.
+  - `layernorm_evta`, `softmax_evta`
+  - `avgpool_evta`(`bf20900`): identity GEMM, ALU ADD 한 번, rq가 붙은 MUL 한 번.
+  - conv epilogue 프로그램(`lowerEpilogue`, `e1a7924`)
+  - 확장이 없는 bitstream에서는 이 함수들이 0을 돌려준다. 그러면 번들이 CPU 함수를 부른다.
+- 컴파일러: 다음 옵션을 더했다.
+  - `-vta-alu-output-lut`, `-vta-alu-layernorm`, `-vta-alu-softmax`
+  - `-vta-fuse-residual-norelu`(MobileNetV2의 relu 없는 add 10개)
+  - `-vta-evta-avgpool`, `-vta-conv-epilogue`
+- 시간(380 MHz, 옛 실행 파일 → 새 실행 파일): MobileNetV2 19.22 → 18.00, Resnet50 72.04 → 71.20, Resnet18 24.37 → 24.16 ms, VGG16 7.17 그대로.
+  DeiT는 76.05(`_rq`, CPU LN) → 85.57 ms로 **느려졌다**. EVTA layer norm이 19.3 ms로 CPU의 8.0 ms보다 느렸다.
+
+**⑥ `_sa_alux_400mhz_rq` (11-14): 같은 기능을 400 MHz로**
+- 하드웨어(§8.13): 400 MHz timing을 맞추려고 레지스터를 더했다.
+  - `vta.cc` `alu_reg`: uop / index, 피연산자, 연산 결과, requantize 사이
+  - `sa_rmw.v`: forward 비교를 한 단계 앞으로 당겼다(RMW 3 → 4 cycle)
+  - `vivado.tcl`: command queue 뒤에 AXIS register slice(`VTA_QUEUE_RS`), reset 경로에 multicycle(`reset_multicycle.xdc`)
+  - ALU 파이프라인 깊이가 33 → 39가 됐다. 그래도 "17단계 안에 쓴 entry를 읽지 않는다"는 규칙은 그대로다.
+- vtalib / 컴파일러: 바꾸지 않았다. 같은 실행 파일이다.
+  같은 날 vtalib만으로 `layernorm_evta`를 다시 했다(`cc0e7b9`: replay, 버퍼 유지, NEON 입력). 호출 하나가 780 → 400 us가 됐다.
+- 시간(380 → 400 MHz): MobileNetV2 18.05 → 17.56, Resnet18 24.10 → 23.05, Resnet50 71.28 → 68.82, VGG16 7.17 → 7.02 ms.
+  DeiT는 85.57 → 84.84 ms이고, LN replay 뒤 75.07 ms다(OMP 4 57.31). CPU LN의 `_rq` 판 76.05와 거의 같다.
+
+**⑦ `_sa_alux2_400mhz_rq` (11-15): II 1 slot 루프와 결합 연산**
+- 하드웨어(§8.14, [evta_alux_hw.md](evta_alux_hw.md)):
+  - 확장 ALU 루프를 slot 단위 II 1로 돌린다. slot마다 acc를 한 번 읽고, src를 broadcast한다.
+  - 결합 연산 12–15를 더했다: MADD(곱하고 더하기), MULSHR(곱하고 shift), SHRV(vector shift), SHRR(반올림 shift).
+  - hazard 규칙이 34 slot이 됐다(`hazard_slots`, 시뮬레이터 `EVTA_ALU_SLOTS=34`).
+  - 비용은 LUT +12.5k, FF +16.4k다.
+- vtalib: 이름에 `_alux2` 이상이 있으면 결합 연산을 쓰는 layer norm 프로그램을 쓴다(`VTAHasAluExt2`, `c50e968`). ALU cycle이 약 0.5배가 된다. `EVTA_ALUX2=0`이면 이전 프로그램이다.
+- 컴파일러: 바꾸지 않았다.
+- 시간: DeiT OMP 1 76.14 → 71.73, OMP 4 57.40 → 53.82 ms. LN 호출 하나는 340 → 약 200 us다. CNN 네 모델은 그대로다.
+
+**⑧ `_sa_alux3_400mhz_rq` (11-15): 제곱 누적, clamp LUT — 가장 최근, 11-22부터 `SYS_BIN` 기본**
+- 하드웨어(§8.15): 명령의 pad 비트 하나를 더 써서(`alu_op_ext2`, `VTA_ALU_FULL_OP`) 연산을 둘 더했다.
+  - 16 SQACC: dst += src²
+  - 17 LUTC: 표의 범위를 넘는 index를 끝 값으로 자르는 LUT
+- vtalib: `VTAHasAluExt3`(`_alux<k>`, k ≥ 3; `8191320`)이 다음을 켠다.
+  - layer norm의 Σx²를 SQACC 한 번으로 한다.
+  - `softmax_evta`: 버퍼 유지, replay, 결합 프로그램(`EVTA_SM_TIME=1`로 시간을 나눠 본다)
+  - 두 함수의 int8 입력을 inp + identity GEMM으로 넣는다. 다음 LOAD가 ALU와 겹친다(`AluInp`). `EVTA_ALU_INP=0`이면 int32를 acc에 바로 넣는다.
+  - `EVTA_ALUX3=0`이면 `_alux2` 경로다.
+- 컴파일러: 바꾸지 않았다. 11-15 측정은 `-vta-alu-softmax`로 만든 DeiT 번들이다. 이 옵션은 11-17부터 기본이다.
+- 시간(같은 실행 파일, `_alux2` → `_alux3`): DeiT OMP 1 60.82 → 60.14, OMP 4 51.77 → 51.12 ms.
+  - 호출 하나: LN 173 → 154 us, softmax 358 → 334 us(EVTA 실행)
+  - CNN: MobileNetV2 17.26, Resnet18 23.08, Resnet50 68.81, VGG16 7.02 ms. `_alux2`와 같다.
+- 이 판 뒤로 하드웨어는 그대로다. 11-15 ~ 11-17의 줄어든 시간은 모두 vtalib / 컴파일러다(§5.3 표 B).
+
+**multi4 (EVTA 4개, 16/15/18/17)**
+- 10-28 첫 판 → 11-04 ALU imm II 1 → bias reset → requantize(395.8 MHz, 다음 400 MHz) 순서다. 하드웨어 변경은 single의 ②–④와 같다.
+- vtalib는 single과 같은 `vtalib-zcu102-systolic`을 `BUNDLE_SET=multievtax4`로 빌드한다(buffer 16/15/18/17, acc 2048 entry).
+- ALU 확장(⑤–⑧)은 아직 multi4 판에 없다.
+
+### 5.3 판별 성능 표 (2026-11-21에 정리)
+
+**표 A. bitstream만 바꾼 효과.** 바꾸기 전과 후를 같은 날 같은 실행 파일로 쟀다. OMP 1, 25회 중앙값, 전체 ms. 빈칸은 그날 재지 않은 것이다.
+
+| 바꿈 | Resnet18 | Resnet50 | VGG16 | MobileNetV2 | DeiT | 자세히 |
+|---|---|---|---|---|---|---|
+| ① → ② `_sa_400mhz` → `_alu1_epr` | 28.98 → 27.32 | | | | | compare §7.15 |
+| ② → ③ `_alu1_epr` → `_bias` | 27.30 → 26.59 | | | | | compare §7.16 |
+| ③ → ④ `_bias` → `_rq` | 26.61 → 25.49 | | | | | compare §7.18 |
+| ⑤ → ⑥ `_alux` 380 → 400 MHz | 24.10 → 23.05 | 71.28 → 68.82 | 7.17 → 7.02 | 18.05 → 17.56 | 85.57 → 84.84 | §8.13 |
+| ⑥ → ⑦ `_alux` 400 → `_alux2` | 23.08 → 23.07 | 68.82 → 68.81 | 7.02 → 7.02 | 17.59 → 17.38 | 76.14 → 71.73 (OMP 4 57.40 → 53.82) | §8.14 |
+| ⑦ → ⑧ `_alux2` → `_alux3` | 23.04 → 23.08 | 68.79 → 68.81 | 7.02 → 7.02 | 17.28 → 17.26 | 60.82 → 60.14 (OMP 4 51.77 → 51.12) | §8.15 |
+| 참고: `_rq`(확장 없음) vs `_alux` 400 | | | | | 76.05 vs 75.07 (OMP 4 53.29 vs 57.31) | §8.13 |
+
+- ④ → ⑤는 바꾸기 전과 후를 같은 실행 파일로 재지 않았다. ⑤는 실행 파일도 함께 바뀌었다(위 ⑤의 "시간").
+- "compare"는 [evta_runtime_compare.md](evta_runtime_compare.md)다.
+- CNN은 ⑥ 뒤로 bitstream을 바꿔도 거의 같다. ALU 확장 2·3단계는 DeiT의 layer norm / softmax용이다.
+
+**표 B. 판마다 그 위에서 소프트웨어가 줄인 시간.** 그 판을 쓰던 동안의 처음과 끝이다. OMP 1, 전체 ms. 화살표 하나에 여러 변경이 들어 있다.
+
+| bitstream (쓴 기간) | Resnet18 | Resnet50 | VGG16 | MobileNetV2 | DeiT | 이 기간의 주된 소프트웨어 변경 |
+|---|---|---|---|---|---|---|
+| ④ `_rq` (11-04 ~ 11-13) | 25.49 → 23.3 | 147.9 → 69.6 | 15.5 → 7.3 | 1048 → 18.8 | 184.4 → 88.5 (OMP 4 55.7) | Resnet50 / VGG16 schedule, 작은 tile, conv0 입력 겹침, MobileNetV2 depthwise EVTA, DeiT 전체, `EVTA_CONV_BURST` |
+| ⑤ / ⑥ `_alux` (11-14) | 24.16 / 23.05 | 71.20 / 68.82 | 7.17 / 7.02 | 18.00 / 17.56 | 85.57 → 75.07 (400 MHz) | avgpool, relu 없는 residual, epilogue, LN replay |
+| ⑦ `_alux2` (11-15 새벽) | 23.07 | 68.81 | 7.02 | 17.38 | 71.73 → 60.55 | EVTA softmax, int8 입력 |
+| ⑧ `_alux3` (11-15 ~ 지금) | 23.08 → **22.55** | 68.81 → **65.41** | 7.02 → **6.75** | 17.26 → **15.29** | 60.14 → **37.03** (OMP 4 51.12 → **35.92**) | 아래 표 C |
+
+- ④의 Resnet50 / VGG16 / MobileNetV2 시작 값은 그 모델이 처음 EVTA에서 돈 날의 값이다(11-05, 11-05, 11-07).
+- 처음 DeiT 184.4는 11-10 systolic `_rq`에서 잰 값이다. 그 전(11-09, HLS GEMM)은 3,770 ms에서 시작했다([deit_optimization.md](deit_optimization.md) §2).
+
+**표 C. `_alux3`에서 한 일 (11-15 ~ 11-17, 하드웨어는 그대로).** OMP 1, 전체 ms. 모든 단계에서 conv dump나 출력 hash가 같은지 보드에서 확인했다.
+
+| 날짜 | 변경 | 실행 파일 | DeiT | 그 밖의 모델 | 자세히 |
+|---|---|---|---|---|---|
+| 11-15 | `_alux3` 첫 측정 | `_pcsys4` | 60.14 | MobileNetV2 17.26, Resnet18 23.08, Resnet50 68.81, VGG16 7.02 | §8.15 |
+| 11-15 | `-vta-pack-rows` | `_pcsys5` | 59.82 → 49.93 | 그대로 | §8.16 |
+| 11-15 | `-vta-evta-elemadd` | `_pcsys6`–`8` | 49.85 → 47.01 | 그대로 | §8.17 |
+| 11-15 | `-vta-fuse-elemadd-mul`, `EVTA_RES_PREFETCH`, `EVTA_TIME_NO_CONV_CLIP` | `_pcsys9`–`12` | 이득 없음, 기본 꺼짐 | | §8.18–§8.20 |
+| 11-16 | `EVTA_LOAD_AHEAD=2` | `_pcsys15`–`17` | 47.09 → 46.23 | MobileNetV2 17.29 → 15.29, Resnet18 23.05 → 22.55, Resnet50 68.85 → 65.41, VGG16 7.01 | §8.21 |
+| 11-16 | Q K^T의 `Div` 표를 출력 LUT로 | `_pcsys18` | 46.17 → 44.21 | 그대로 | §8.22 |
+| 11-16 | 마지막 블록 2행만 | `_pcsys19`–`22` | 44.28 → 41.07 | | deit §6.7 |
+| 11-16 | A x V를 EVTA 배치로 | `_pcsys23` | 41.00 → 37.82 | | deit §6.8 |
+| 11-16 | patch embedding add를 conv epilogue로 | `_pcsys24` | 37.79 → 37.35 | | deit §6.9 |
+| 11-17 | 앞 행 slice 복사 | `_pcsys25` | 37.37 → **37.03** (OMP 4 **35.92**) | | deit §6.10 |
+| 11-17 | conv + 2x2 max pool | `_pcsys26` | | VGG16 7.01 → **6.75**, Resnet18 / 50 dump 그대로 | [vgg16_optimization.md](vgg16_optimization.md) §3.7 |
+
+- `deit`는 [deit_optimization.md](deit_optimization.md)다. 같은 단계의 "전"과 앞 단계의 "후"가 조금 다른 것은 날마다 잰 값의 차이(±0.1 ms 정도)다.
+- **`_alux3`에서 다섯 모델 모두 시험했다.**
+  - ALU 시험 4종(`epi_conv_test` 39개 포함): 기본, `EVTA_ALUX3=0`, `EVTA_ALUX2=0`, `EVTA_ALU_INP=0`, `EVTA_REQUANT=0`에서 모두 통과
+  - CNN conv dump: `_alux2`와 byte 단위로 같다(MobileNetV2 5,200 / Resnet18 40 / Resnet50 106 / VGG16 34개).
+  - DeiT: LN 2,400번, softmax 1,200번 비교 0 differ. 세 그림 281 / 207 / 340.
+  - replay dump의 hazard 검사(34 slot): 다섯 모델 모두 위반 0
+  - DeiT ImageNetV2 앞 9,000장 top-1: 60.13 %(11-17 번들; float 62.34 %). 바이트가 바뀐 단계마다 잰 기록은 deit §6.10이다.
+
+**표 D. 지금 실행 파일을 `_rq`(확장 없음)와 `_alux3`에서 (2026-11-22).** 같은 실행 파일 `_pcsys27`로 쟀다.
+- 실행 파일: PC `build_pc_systimed`에서 11-21에 `make`. vtalib `186e53d`, bundle은 11-21에 만든 것(11-17 판과 code·weights 같음).
+- 측정: `BIN=<bitstream> hw/script/run_prof.sh -s _pcsys27 -n 25`, 2–25회 중앙값, 전체 ms.
+
+| 모델 | `_rq` | `_alux3` | 차이 | 분류 (두 bitstream 같음) |
+|---|---|---|---|---|
+| DeiT OMP 1 | 83.18 | **37.06** | −55 % | 281 (logit 11.560089) |
+| DeiT OMP 4 | 50.10 | **35.95** | −28 % | |
+| MobileNetV2 | 16.06 | **15.31** | −4.7 % | 282 (0.944157) |
+| Resnet18 | 22.75 | **22.58** | −0.8 % | 281 |
+| Resnet50 | 66.23 | **65.45** | −1.2 % | 281 |
+| VGG16 CIFAR-10 | 6.74 | 6.75 | 0 | 0 |
+
+DeiT OMP 1에서 시간이 어디서 줄었나(문장별 시간을 호출 이름으로 묶음, 25번째 run, ms):
+
+| 호출 | `_rq` | `_alux3` | `_rq`에서 하는 일 |
+|---|---|---|---|
+| `softmax_evta` | 36.91 | 5.27 | CPU 정수 softmax(`nestc_cpu::softmaxIntQ`) |
+| `convolution_wo_tr` | 19.37 | 16.67 | GELU 표 없이 conv만 |
+| `layernorm_evta2` | 9.93 | 4.20 | CPU `layerNormI8Rows` |
+| GELU 표(`VTAHasAluExt` 줄) | 4.91 | 0 | CPU `lut8` |
+| `elemadd_evta` | 2.79 | 1.43 | CPU `elemaddInt` |
+| `matmul_evta_qk` / `_av` | 3.71 / 3.17 | 4.03 / 3.20 | 같다(EVTA). `_alux3`의 qk에는 `Div` 표가 붙는다 |
+
+- **DeiT는 ALU 확장이 크게 줄인다.** OMP 1 83.18 → 37.06 ms.
+  - 가장 큰 몫은 softmax다. 11-17부터 기본인 `-vta-alu-softmax` 번들은 `_rq`에서 CPU 정수 softmax로 간다.
+  - 이 CPU 함수는 EVTA 경로의 대체로만 만들어 빠르게 다듬지 않았다(36.9 ms; float softmax는 11-15에 약 5.7 ms였다).
+  - 그래서 `_rq`의 83 ms는 "확장 없는 bitstream에서 낼 수 있는 가장 빠른 값"이 아니다. 확장 없는 판을 쓸 거라면 `-vta-alu-softmax=0`으로 만든 번들로 재야 한다.
+- **CNN은 거의 같다.** MobileNetV2만 −0.75 ms다. avgpool과 relu 없는 residual 융합이 ALU 확장을 쓰기 때문이다. Resnet은 avgpool 몫만 줄고, VGG16은 쓰는 곳이 없다.
+- `run_prof.sh` / `run_all.sh` 머리말의 `features` 줄은 11-22부터 ALU 확장도 보여 준다(`bininfo.sh`: `ALU-ext1`, `ALU-ext2(...)`, `ALU-ext3(...)`).
+- 결과 파일은 보드의 `/home/xilinx/JO/meas_pcsys27/`에 있다(`<bitstream>.omp1.out` 등).
+- 보드의 `hw/DeiTTest/deit.weights.bin`을 이번에 11-16 판(마지막 블록 2행, 11,391,936 B)으로 바꿨다. 11-12 판은 `deit.weights.bin.1112`로 남겼다.
 
 ## 6. 다른 모델 돌리기 (VGG, Resnet50, MobileNet 등)
 

@@ -395,7 +395,7 @@ hw/script/run_prof.sh --help
 
 | 옵션 | 뜻 |
 |---|---|
-| `-s _prof` (기본) / `_timed` / `_sysprof` / `_systimed` / `_sys` | 어느 build 디렉터리의 실행 파일인지. `_sys*`면 `SYS_BIN`(systolic `_rq`)을 올린다 |
+| `-s _prof` (기본) / `_timed` / `_sysprof` / `_systimed` / `_sys` | 어느 build 디렉터리의 실행 파일인지. `_sys*`면 `SYS_BIN`(systolic, 11-22부터 `_alux3`)을 올린다 |
 | `-n <runs>` | 추론 수(기본 25). multi4는 copy당 |
 | `-r` | `chrt -f 10`(실시간 우선순위). **시간을 잴 때는 붙인다** |
 | `-t <n>` | `OMP_NUM_THREADS`(기본 1) |

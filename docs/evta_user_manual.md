@@ -287,7 +287,18 @@ sudo cp /home/xilinx/JO/npuprg/bit/<목적>_<YYMMDD>/vtahw_<dir>.bin /lib/firmwa
 - `.bit`만 있으면 `vtabundles_xcmpl/hwtest/bit2bin.py <x>.bit`로 `.bin`을 만든다.
 - JTAG(ILA, hw_server)를 쓰기 전에는 보드가 부팅될 때마다 `sudo vtabundles_xcmpl/hwtest/nocpuidle.sh`를 먼저 실행한다. 안 하면 Linux가 멈춘다.
 
-### 2.4 HLS 시험 (bitstream 없이)
+### 2.4 지금까지 만든 bitstream과 어느 것을 쓰나
+
+- **HLS GEMM:** `vtahw_zcu102_1x16_i8w8a32_16_16_19_18_380mhz.bin`(10-28, `BIN` 기본). `vta/vtalib` 실행 파일(`build`, `build_prof`, `build_timed`)용.
+- **systolic, single EVTA:** 가장 최근은 `..._sa_alux3_400mhz_rq.bin`(11-15)이다. 모든 기능(requantize, bias reset, ALU 확장 1~3단계)이 들어 있다.
+  - `SYS_BIN` 기본은 2026-11-22부터 이 판이다(그 전 `..._sa_400mhz_rq.bin`, ALU 확장 없음). 옛 판은 `BIN=`으로 준다.
+- **systolic, EVTA 4개:** 가장 최근은 `..._16_15_18_17_4evta_sa_400mhz_rq.bin`(11-04, ALU 확장 없음, `SYS_BIN` 기본)이다.
+- **최종판은 아니다.** 다음 판의 후보(RQ ALU 연산, multi4 ALU 확장, KV260)가 있다.
+- **짝이 되는 vtalib:** `_alux3`의 기능은 `vtalib-zcu102-systolic` commit `8191320`(11-15) 뒤로 빌드한 실행 파일만 쓴다. 보드의 `_sys*`는 그 전 판이다(§4.3).
+- 판마다 날짜, 클럭, 더한 기능, WNS, 지금 소스와의 관계: [evta_isa_ext.md](evta_isa_ext.md) §5.1.
+  판마다 하드웨어 / vtalib / 컴파일러에서 더한 것: §5.2. 판별 성능 표(bitstream만 바꾼 효과, 판마다 소프트웨어가 줄인 시간, `_alux3`에서 한 일): §5.3.
+
+### 2.5 HLS 시험 (bitstream 없이)
 
 | 명령 (PC, `vta-hw-zcu102-systolic/hardware/xilinx`) | 하는 일 | 시간 |
 |---|---|---|
@@ -593,6 +604,71 @@ sudo /bin/sh -c "hw/script/run_prof.sh -s _pcsystimed -r MobileNetV2Test"      #
 - toolchain file을 바꾸면 **새 build dir**에서 configure한다. `cmake .`는 처음의 `*_INIT` 플래그를 그대로 쓴다.
 - 맞춘 내용(libgomp, hash style 등)은 [host_pc_build.md](host_pc_build.md) §4에 있다.
 
+### 4.3 vtalib 판과 지금까지 빌드한 실행 파일 (2026-11-21에 정리)
+
+**vtalib 소스(두 벌)**
+
+| 소스 | 쓰는 bitstream | 빌드하는 build dir | 비고 |
+|---|---|---|---|
+| `vta/vtalib` (submodule) | HLS GEMM(`BIN`, 이름에 `_sa_` 없음) | `build`, `build_prof`, `build_timed`, `build_multievtax2*`, `build_multievtax4`, `_prof`, `_timed` | 원래 EVTA runtime. 공통 수정만 들어간다 |
+| `vtalib-zcu102-systolic` | systolic(`SYS_BIN`, 이름에 `_sa_`) | `build_sys*`, `build_multievtax4_sys*`, PC `build_pc_systimed` | uop 순서가 systolic GEMM용이다. ALU 확장, epilogue, LOAD_AHEAD, layer norm / softmax / elemadd / matmul 등 10월 말 이후 기능은 여기에만 있다 |
+| (지움) `vtalib-zcu102-single`, `-multi2`, `-multi4` | | | 2026-10-29에 지웠다. 지금은 `BUNDLE_SET`(buffer, queue 크기)으로 나눈다 |
+
+- **vtalib의 "판"은 따로 번호가 없다. git commit이 판이다.** 같은 build dir에서 다시 빌드하면 실행 파일이 덮인다.
+- 어느 vtalib로 빌드한 실행 파일인지는 이름 끝(`<suffix>`)으로 안다.
+
+**보드의 build dir (`vtabundles_xcmpl/`, git 밖, 보드에서 빌드)**
+
+| build dir | vtalib | `BUNDLE_SET` | 측정 | 실행 파일 끝 |
+|---|---|---|---|---|
+| `build` | `vta/vtalib` | single | 없음 | (없음) |
+| `build_prof` / `build_timed` | `vta/vtalib` | single | EVTA 호출마다 / 문장마다 | `_prof` / `_timed` |
+| `build_sys` / `build_sysprof` / `build_systimed` | systolic | single | 없음 / 호출마다 / 문장마다 | `_sys` / `_sysprof` / `_systimed` |
+| `build_multievtax2`, `_prof`, `_timed` | `vta/vtalib` | multievtax2 (`MAX_XFER` 8 MB) | 위와 같음 | |
+| `build_multievtax4`, `_prof`, `_timed` | `vta/vtalib` | multievtax4 (`MAX_XFER` 4 MB) | 위와 같음 | |
+| `build_multievtax4_sys`, `_sysprof`, `_systimed` | systolic | multievtax4 | 위와 같음 | `_sys` 등 |
+
+**PC의 build dir:** `build_pc_systimed` 하나(systolic vtalib, single, 문장마다 시간, 끝 `_pcsystimed`).
+
+**PC에서 빌드해 보드에 보낸 실행 파일 (`hw/<Dir>/<target>_pc…`)**
+- 실험할 때마다 `_pcsystimed`를 빌드했다. 그것을 `_pcsys<번호>`로 이름을 바꿔 보드에 보냈다. 이전 판과 나란히 두고 A/B 비교를 하려는 것이다.
+- 번호는 만든 순서다. 뜻은 보드 파일의 시각을 commit 시각과 맞춰 적었다. 문서에 이름이 나오지 않는 것은 **(추정)** 이라고 적었다.
+- 모델 칸이 "5개"면 DeiT, MobileNetV2, Resnet18, Resnet50, VGG16이다.
+- 이 파일들은 git 밖이고 보드에만 있다. 비교가 끝난 판은 지워도 된다. 다시 필요하면 그 commit에서 다시 빌드한다.
+
+| 이름 끝 | 보드에 놓은 때 | 모델 | 무엇을 비교하려고 | 자세히 |
+|---|---|---|---|---|
+| `_pcsystimed` | 11-14 ~ | 5개 | PC build dir의 최신 출력. 빌드할 때마다 덮인다 | §4.2 |
+| `_pclntime` | 11-15 00:43 | DeiT | `layernorm_evta` replay + NEON 입력, `EVTA_LN_TIME` 시간 분해 | isa_ext §8.13 끝 |
+| `_pcsys2` | 11-15 01:14 | 5개 | `_alux2` vtalib(결합 layer norm 프로그램). softmax는 CPU float | isa_ext §8.14, §8.15 표 |
+| `_pcsys3` | 11-15 08:40 | 5개 | `-vta-alu-softmax`, EVTA softmax(int32 입력) | isa_ext §8.15 |
+| `_pcsys4` | 11-15 08:45 | 5개 | + int8 입력 경로(`AluInp`), `_alux3` vtalib | isa_ext §8.15 |
+| `_pcsys5` | 11-15 10:18 | DeiT | `-vta-pack-rows`(행 텐서를 EVTA 배치로). elemadd는 CPU float | isa_ext §8.16, §8.17 |
+| `_pcsys6` | 11-15 12:29 | DeiT | `-vta-evta-elemadd` 15비트 정수 | isa_ext §8.17 |
+| `_pcsys7` | 11-15 12:38 | DeiT | `-vta-elemadd-precise` 22비트 | isa_ext §8.17 |
+| `_pcsys8` | 11-15 13:34 | DeiT | elemadd_evta 기본(결과는 `_pcsys6`와 같다) | isa_ext §8.17, §8.20 |
+| `_pcsys9` | 11-15 16:43 | DeiT | `-vta-fuse-elemadd-mul` 첫 판 **(추정)** | isa_ext §8.18 |
+| `_pcsys10` | 11-15 16:52 | DeiT | `-vta-fuse-elemadd-mul`: epilogue, residual을 acc 위쪽에 | isa_ext §8.18 |
+| `_pcsys11` | 11-15 17:50 | DeiT, MobileNetV2, Resnet18 / 50 | `EVTA_RES_PREFETCH` **(추정)** | isa_ext §8.19 |
+| `_pcsys12` | 11-15 21:20 | DeiT | fused add + `EVTA_TIME_NO_CONV_CLIP` 시간 측정 | isa_ext §8.20 |
+| `_pcsys13`, `_pcsys14` | 11-16 01:00 | DeiT | LOAD_AHEAD 전의 기준: 13 = 그때까지의 실행 파일, 14 = 새 vtalib + 기본 번들 **(추정)** | isa_ext §8.21 |
+| `_pcsys15`, `_pcsys16`, `_pcsys17` | 11-16 01:17 | 16은 5개, 15·17은 DeiT | `EVTA_LOAD_AHEAD`. 17은 fused add 없이 EVTA softmax인 DeiT **(15는 추정)** | isa_ext §8.21 |
+| `_pcsys18` | 11-16 10:26 | 5개 | Q K^T 출력 LUT(vtalib: epilogue가 conv batch 전체에 적용) **(추정)** | isa_ext §8.22 |
+| `_pcsys19` ~ `_pcsys21` | 11-16 11:29 ~ 11:44 | DeiT | 마지막 블록 2행만 계산(`PRUNE_ROWS`): 19 첫 판, 20 mixed layout add 수정, 21 반올림 수정 | deit §6.7 |
+| `_pcsys22`, `_pcsys22r` | 11-16 11:49 | DeiT | 2행 판과 전체 행 판을 `EVAL_HASH`로 비교(어느 쪽이 `r`인지는 **추정**: `r` = 전체 행 기준) | deit §6.7 |
+| `_pcsys23` | 11-16 19:41 | DeiT | A x V에서 V와 출력을 EVTA 배치로 | deit §6.8 |
+| `_pcsys24` | 11-16 22:54 | DeiT | patch embedding add를 patch conv의 epilogue로 | deit §6.9 |
+| `_pcsys25` | 11-17 00:34 | DeiT | packed 텐서의 행 slice 복사 **(추정)** | deit §6.10 |
+| `_pcsys26` | 11-17 18:51 | Resnet18 / 50, VGG16 | conv + 2x2 max pool 한 호출 | [vgg16_optimization.md](vgg16_optimization.md) §3.7 |
+| `_pcsys27` | 11-21 23:45 | 5개 | 11-21의 최신 소스 전부(vtalib `186e53d`). `_rq`와 `_alux3`에서 나란히 잼 | isa_ext §5.3 표 D |
+
+- `isa_ext`는 [evta_isa_ext.md](evta_isa_ext.md), `deit`는 [deit_optimization.md](deit_optimization.md)다.
+- 지금 기본으로 쓰는 것은 보드 build dir의 `_sys*`, `_sysprof`, `_systimed`와 PC의 `_pcsystimed`다. 번호 판은 비교 기록용이다.
+- **주의: 보드의 `_sys*`는 옛 vtalib다**(마지막 빌드 `_systimed` 11-14 09:47, DeiT `_sys` 11-12). ALU 확장 vtalib(11-14 10:37 뒤) 전이라 `_alux*` bitstream에서도 확장을 쓰지 않는다.
+  `_alux3`의 기능을 쓰는 최신 실행 파일은 다섯 모델 모두 `_pcsys27`(11-21)이다. 새로 재려면 PC에서 `_pcsystimed`를 다시 빌드해 보낸다.
+  bitstream과 vtalib commit의 짝, 판마다 더한 것과 성능 표: [evta_isa_ext.md](evta_isa_ext.md) §5, §5.2, §5.3.
+- bitstream 판은 [evta_isa_ext.md](evta_isa_ext.md) §5.1에 있다. 실행 파일은 vtalib가 bitstream 이름을 보고 기능을 고르므로, 같은 실행 파일이 여러 bitstream에서 돈다.
+
 ## 5. 실행과 측정 (보드, sudo)
 
 **무엇을 하나:** §4의 실행 파일을 보드의 EVTA에서 돌린다.
@@ -630,8 +706,8 @@ sudo /bin/sh -c "BIN=<file in /lib/firmware> hw/script/run_all.sh Resnet18Test" 
 - `[Dir ...]`: §4의 `<Dir>`. 빼면 run 줄 전부(시험 번들 포함, 수 분). 이름이 틀리면 비슷한 이름을 알려 주고 아무것도 돌리지 않는다.
 - `<file in /lib/firmware>`: `<bin>`. 보드에서 `ls /lib/firmware | grep vtahw`로 본다. 예:
   - `vtahw_zcu102_1x16_i8w8a32_16_16_19_18_380mhz.bin`: HLS GEMM 380 MHz(`BIN` 기본)
-  - `vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_400mhz_rq.bin`: systolic 400 MHz, requantize(`SYS_BIN` 기본)
-  - `vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_alux3_400mhz_rq.bin`: 위 + ALU 확장 3단계(DeiT layer norm / softmax on EVTA)
+  - `vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_400mhz_rq.bin`: systolic 400 MHz, requantize(11-21까지 `SYS_BIN` 기본)
+  - `vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_alux3_400mhz_rq.bin`: 위 + ALU 확장 3단계(DeiT layer norm / softmax on EVTA). 11-22부터 `SYS_BIN` 기본
   - `vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz_rq.bin`: EVTA 4개(hw_multievtax4/)
 
 출력 예: `hw/result/results.txt`에 Dir마다 한 줄씩 남는다.
