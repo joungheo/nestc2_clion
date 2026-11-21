@@ -88,7 +88,7 @@ sudo cp /home/xilinx/JO/npuprg/bit/<목적>_<YYMMDD>/vtahw_<dir>.bin /lib/firmwa
 
 ```bash
 cd ~/JO/npuprg/nestc2_clion/nest-compiler/Debug2_remote
-../vtabundles_xcmpl/build_sim_bundles.sh [target ...]   # 예: ... vtaMxnetResnet18Bundle (./build_sim_bundles.sh = 이것을 부르는 한 줄)
+../vtabundles_xcmpl/build_sim_bundles.sh [target ...]   # 예: ... vtaMxnetResnet18Bundle
 ```
 
 - 출력은 `Debug2_remote/vta/bundles/<Dir>/`, 로그는 `bundle_logs/<target>.log`(요약 `summary.txt`)에 남는다.

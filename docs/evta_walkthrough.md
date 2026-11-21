@@ -143,7 +143,7 @@ cat bundle_logs/summary.txt                                    # target마다 OK
 less bundle_logs/vtaMxnetResnet18Bundle.log                    # 실패 원인
 ```
 
-- 스크립트는 2026-11-21부터 git에 있는 `vtabundles_xcmpl/build_sim_bundles.sh`다. `Debug2_remote/build_sim_bundles.sh`는 그것을 부르는 한 줄짜리라 `./build_sim_bundles.sh`도 된다(보드의 Debug2_remote에 옛 스크립트가 있으면 그것도 같은 일을 한다).
+- 스크립트는 2026-11-21부터 git에 있는 `vtabundles_xcmpl/build_sim_bundles.sh`다. 전에 쓰던 `Debug2_remote/build_sim_bundles.sh`(git 밖)는 지운다.
 - target마다 시작할 때 로그 경로를 찍고, make가 끝날 때까지는 조용하다. 보드에서 모델 하나에 약 2분, cmake가 다시 돌면 Glow 전체를 다시 빌드해 약 1시간이다. 진행은 `tail -f bundle_logs/<target>.log`로 본다.
 - 모델 target 뒤에는 무엇이 EVTA / CPU에서 도는지 요약이 나온다(`VTA_FUSION_LOG`, [evta_fusion_rules.md](evta_fusion_rules.md) §5). make가 번들이 최신이라 model-compiler를 다시 돌리지 않으면 요약도 없다. 같은 요약이 번들 `.cpp` 맨 위 주석에도 있다.
 

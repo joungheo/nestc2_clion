@@ -22,7 +22,7 @@ Bundle sources are generated in the simulator build, then compiled for the board
 
 | Step | Where | Command |
 |---|---|---|
-| 1. Generate bundle sources (simulator, `NESTC_USE_VTASIM=ON`) | `nest-compiler/Debug2_remote/` | `../vtabundles_xcmpl/build_sim_bundles.sh [target ...]` (in git since 2026-11-21; `./build_sim_bundles.sh` there calls it) |
+| 1. Generate bundle sources (simulator, `NESTC_USE_VTASIM=ON`) | `nest-compiler/Debug2_remote/` | `../vtabundles_xcmpl/build_sim_bundles.sh [target ...]` (in git since 2026-11-21; was the untracked `Debug2_remote/build_sim_bundles.sh`, deleted) |
 | 2. Copy them into `hw/<Dir>/` (no compile) | `vtabundles_xcmpl/` | `./collect_hw_bundles.py [Dir ...]` |
 | 3a. Compile for the board | `vtabundles_xcmpl/build/` | `make -j2` (= `make -j2 hw_bundles`, every bundle; since 2026-11-04) or `make -j2 <target>` |
 | 3b. Compile with HW profiling | `vtabundles_xcmpl/build_prof/` | `make -j2 <target>` → `hw/<Dir>/<target>_prof` |

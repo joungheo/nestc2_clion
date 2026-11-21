@@ -163,7 +163,7 @@ the KV260 DPU (price, power, size, interfaces, published numbers, which advantag
   model-compiler are not built there: generate bundle sources in the simulator build (`Debug2_remote`) and
   build them for the board with the standalone CMake project in `vtabundles_xcmpl/` (not part of the NEST-C
   CMake; its build dirs are git-ignored; see its `README.md`:
-  `build_sim_bundles.sh` (in `vtabundles_xcmpl/` since 2026-11-21; `Debug2_remote/build_sim_bundles.sh` is a one-line wrapper) → `collect_hw_bundles.py` → `make` in `build/` → `hw/script/run_all.sh`; of `hw/` and `hw_<set>/` only `script/` is in git).
+  `build_sim_bundles.sh` (in `vtabundles_xcmpl/` since 2026-11-21; the old untracked `Debug2_remote/build_sim_bundles.sh` is deleted) → `collect_hw_bundles.py` → `make` in `build/` → `hw/script/run_all.sh`; of `hw/` and `hw_<set>/` only `script/` is in git).
 
 ### EVTA bitstreams (host PC, Vivado 2020.1 in docker)
 

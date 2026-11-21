@@ -6,7 +6,7 @@
 #### A target's make is quiet until it ends (on the board ~2 min for a model, ~1 h if cmake re-runs: Glow is rebuilt);
 #### follow it with tail -f on the log printed at its start. The model-compiler summary of what runs where (VTA_FUSION_LOG
 #### lines, docs/evta_fusion_rules.md) is printed after each model target.
-#### usage (from anywhere): vtabundles_xcmpl/build_sim_bundles.sh [target ...]   (Debug2_remote/build_sim_bundles.sh calls this)
+#### usage (from anywhere): vtabundles_xcmpl/build_sim_bundles.sh [target ...]
 set -u
 H=$(cd "$(dirname "$0")" && pwd)
 B=${NESTC_SIM_BUILD:-$(cd "$H/../Debug2_remote" && pwd)}
