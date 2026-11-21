@@ -10,7 +10,7 @@
 | 장 | 내용 | 주로 어디서 |
 |---|---|---|
 | 0 | 기계와 dir | |
-| 1 | 환경 만들기 (docker, sysroot) | 호스트 PC |
+| 1 | 환경 만들기, **PC에서 docker 안에서 명령 치는 법** | 호스트 PC |
 | 2 | bitstream 만들기와 HLS 시험 | PC docker `vivado2020-build` |
 | 3 | bundle 소스 만들기, VTA backend 옵션, `VTA_FUSION_LOG` | PC docker `nestc-build` 또는 보드 |
 | 4 | 보드용 실행 파일 빌드 | 보드, 또는 PC cross build |
@@ -21,6 +21,19 @@
 | 9 | 하드웨어 시험 (`hwtest/`) | 보드 |
 | 10 | 그 밖의 도구 | |
 | 11 | 자주 하는 일의 순서 | |
+
+**읽는 법:**
+- 명령 안의 `<이름>`은 **골라서 넣는 값**이다. 각 명령 아래 "넣을 것"에 무엇이 들어가는지와 예를 적었다. 꺾쇠는 쓰지 않는다.
+- `[...]`는 **빼도 되는** 인자다. `a|b`는 둘 중 하나를 쓴다는 뜻이다.
+- 여러 장에 나오는 값:
+
+| 자리 | 뜻 | 예 |
+|---|---|---|
+| `<tree>` | nest-compiler 소스 dir | PC `/home/jerry/npuprg/nestc2_clion/nest-compiler`, 보드 `/home/xilinx/JO/npuprg/nestc2_clion/nest-compiler` |
+| `<Dir>` | 모델 / 시험 하나의 dir 이름. `vta/bundles/<Dir>`, `vtabundles_xcmpl/hw/<Dir>`가 같은 이름이다. 대소문자를 구분한다 | `Resnet18Test`, `Resnet50Test`, `Vgg16Cifar10Test`, `MobileNetV2Test`, `DeiTTest`, `Conv3Test` |
+| `<target>` | 그 `<Dir>`의 make target(= 실행 파일 이름) | `vtaMxnetResnet18Bundle` (표는 §4.1) |
+| `<bin>` | 보드 `/lib/firmware/`의 bitstream 파일 이름(경로 없이) | `vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_alux3_400mhz_rq.bin` |
+| `<suffix>` | 실행 파일 이름 끝 = 어느 build dir에서 빌드했나(§4.1) | `_sysprof`, `_systimed` |
 
 ## 0. 기계와 dir
 
@@ -55,39 +68,180 @@ cd ~/JO/npuprg/nestc2_clion/nest-compiler && git pull && (cd vta/vtalib && git p
 | `vtabundles_xcmpl/` | 보드 실행 파일을 빌드하는 독립 CMake 프로젝트, bundle 생성 / 실행 / 측정 스크립트 |
 | `utils/docker_vivado2020/`, `utils/docker_nestc/` | PC docker 환경(§1) |
 
-## 1. 환경 만들기 (호스트 PC)
+## 1. 환경 만들기와 PC에서 docker로 작업하는 법 (호스트 PC)
 
 자세한 배경은 [host_pc_build.md](host_pc_build.md)에 있다.
 
+**무엇을 하나:** PC에 docker 컨테이너 두 개를 만든다. 하나는 bitstream을 만드는 Vivado용이고, 하나는 bundle을 만드는 NEST-C용이다.
+보드와 같은 컴파일러와 라이브러리를 넣어서, PC에서 만든 결과가 보드에서 만든 것과 같게 한다. 만드는 것(§1.3)은 **PC마다 한 번만** 하면 된다.
+매일 하는 일은 §1.1~§1.2의 "켜기, 들어가기, 명령 치기"다.
+
+### 1.1 컨테이너란, 그리고 어디서 무엇을 치나
+
+- **컨테이너**는 PC 안에서 따로 도는 작은 Linux다. 여기서는 Ubuntu 18.04다. PC는 Ubuntu 20.04라서, 보드(18.04)와 같은 clang-8, cmake 3.10이나 Vivado 2020.1을 PC에 바로 깔 수 없다. 그래서 컨테이너 안에 깔았다.
+- **파일은 같다.** PC의 `$HOME`(`/home/jerry`)이 컨테이너 안에도 **같은 경로**로 보인다(mount). 그래서 소스 경로가 안과 밖에서 같다.
+  - 안에서 만든 파일은 밖에서 바로 보인다. 밖에서 고친 소스도 안에서 바로 보인다.
+  - Vivado 컨테이너에는 `/tools/Xilinx`도 mount돼 있다.
+- **사용자:** 컨테이너 안의 사용자 `ubuntu`는 PC의 `jerry`와 번호(uid 1000)가 같다. 그래서 만든 파일의 주인이 `jerry`가 된다.
+  - **`-u ubuntu`를 빼면 root로 돈다.** 그러면 만든 파일이 root 소유가 되어, 밖에서 지우거나 고칠 수 없다. 항상 `-u ubuntu`를 붙인다.
+- **PC(`ubuntu2`)에서는 `docker`에 `sudo`가 필요하다.** `jerry`가 docker 그룹에 없기 때문이다.
+  - `sudo` 없이 치면 `permission denied while trying to connect to the Docker daemon socket`이 나온다.
+  - 첫 PC에서 sudo 없이 되면 빼도 된다.
+
+| 어디서 | 무엇을 | 왜 |
+|---|---|---|
+| PC 셸(컨테이너 밖) | 소스 고치기, `git` commit / push / pull, `ssh` / `scp`로 보드에 보내기, `sync_sysroot.sh`, `docker` 명령 자체 | 컨테이너 안에는 `ssh`가 없고, git 인증도 밖에 있다 |
+| `nestc-build` 안 | `make model-compiler`, `build_sim_bundles.sh`, `gen_*_bundle.sh`, `gen_multi4_bundles.sh`, `collect_hw_bundles.py`, PC cross build(§4.2), vtalib 시험(§8) | 보드와 같은 clang-8 / cmake / protobuf가 여기 있다 |
+| `vivado2020-build` 안 | `make ip`, `make bin`, `run_cosim.sh`(§2) | Vivado 2020.1이 여기 있다 |
+
+ONNX 도구(`fold_onnx.py`, `float_ref.py`, `fakequant.py`)는 onnx 1.13 이상과 onnxruntime이 필요하다.
+지금 `nestc-build`에는 onnx 1.11이 있고, `ubuntu2` 셸에는 onnx가 없다(2026-11-21). 처음 쓸 때 PC 셸에서 venv를 하나 만든다.
+아래 명령은 아직 이 PC에서 돌려 보지 않았다.
+```bash
+python3 -m venv ~/.venvs/onnx && ~/.venvs/onnx/bin/pip install onnx onnxruntime numpy pillow
+~/.venvs/onnx/bin/python vtabundles_xcmpl/fold_onnx.py ...      # 이 python으로 부른다
+```
+
+### 1.2 켜기, 들어가기, 명령 치기
+
+**1) 켜져 있는지 본다.** PC 셸에서 친다.
+```bash
+sudo docker ps -a --format '{{.Names}}  {{.Status}}'
+#   nestc-build  Up 7 days          <- Up이면 켜져 있다
+#   vivado2020-build  Up 7 days
+```
+- 두 컨테이너는 `--restart unless-stopped`로 만들어서 PC를 다시 켜면 저절로 켜진다.
+- `Exited`이면 켠다: `sudo docker start nestc-build vivado2020-build`
+- 목록에 없으면 아직 안 만든 것이다(§1.3).
+
+**2) 명령을 치는 방법은 두 가지다.**
+
+**(가) 안으로 들어가서 친다.** 여러 명령을 이어서 칠 때 쓴다.
+```bash
+sudo docker exec -it -u ubuntu nestc-build bash       # PC 셸에서. 들어가면 프롬프트가 바뀐다
+ubuntu@nestc-build:/$ cd /home/jerry/npuprg/nestc2_clion/nest-compiler     # 처음 위치는 / 이다. 먼저 cd
+ubuntu@nestc-build:.../nest-compiler$ vtabundles_xcmpl/build_sim_bundles.sh -f vtaMxnetResnet18Bundle
+ubuntu@nestc-build:.../nest-compiler$ exit             # 나온다. 컨테이너는 계속 켜져 있다
+jerry@ubuntu2:~$                                       # 다시 PC 셸
+```
+- `-it`는 키보드 입력을 받는 터미널을 연다는 뜻이다. 들어가서 칠 때는 꼭 붙인다.
+- **지금 어디에 있는지는 프롬프트의 `@` 앞뒤로 안다.**
+  - `ubuntu@nestc-build`: nestc-build 안
+  - `jerry@ubuntu2`: PC 셸
+  - `ubuntu@ubuntu2`: **vivado2020-build 안.** 이 컨테이너는 PC와 같은 hostname을 써서, 사용자 이름(`ubuntu`)으로만 구분된다.
+- Vivado 컨테이너는 들어갈 때마다 먼저 `source /tools/Xilinx/v2020.1/Vivado/2020.1/settings64.sh`를 친다. 이걸 쳐야 `vivado`와 `vivado_hls`를 찾는다.
+
+**(나) 밖에서 명령 하나만 안에서 돌린다.** 한 줄로 끝날 때, 스크립트나 nohup으로 돌릴 때 쓴다.
+```bash
+sudo docker exec -u ubuntu -w /home/jerry/npuprg/nestc2_clion/nest-compiler nestc-build \
+    vtabundles_xcmpl/build_sim_bundles.sh -f vtaMxnetResnet18Bundle
+```
+- `docker exec ... nestc-build <명령>`은 `<명령>` **하나만** 안에서 돌리고 PC 셸로 돌아온다. 그다음 줄에 치는 것은 다시 **PC에서** 돈다.
+  - `sudo docker exec -u ubuntu nestc-build`처럼 명령 없이 치면 아무 데도 들어가지 않는다. 인자가 모자란다는 오류만 난다.
+  - 들어가서 계속 치려면 (가)처럼 `-it ... bash`로 들어간다.
+- `-w <dir>`: 안에서 그 dir에서 시작한다. 빼면 `/`에서 시작하므로 상대 경로가 맞지 않는다.
+- 파이프(`|`), `&&`, `cd`, 환경 변수를 쓰려면 `bash -c '...'`로 감싼다. 감싸지 않으면 `|` 뒤는 PC에서 돈다.
+```bash
+sudo docker exec -u ubuntu -w /home/jerry/npuprg/nestc2_clion/nest-compiler nestc-build bash -c \
+    'cd Debug2_remote && make -j16 model-compiler && cd .. && VTA_FUSION_LOG=1 vtabundles_xcmpl/gen_deit_bundle.sh'
+```
+- 오래 걸리는 일은 PC 셸에서 `nohup`으로 띄우고 로그를 본다. 터미널을 닫아도 계속 돈다.
+```bash
+nohup sudo docker exec -u ubuntu vivado2020-build bash -c \
+  'source /tools/Xilinx/v2020.1/Vivado/2020.1/settings64.sh && cd /home/jerry/npuprg/nestc2_clion/nest-compiler/vta-hw-zcu102-systolic/hardware/xilinx && make bin SYSTOLIC=1 FREQ=400 JOBS=4' \
+  > ~/vivado_bin.log 2>&1 < /dev/null &
+tail -f ~/vivado_bin.log            # Ctrl-C는 tail만 끝낸다. make는 계속 돈다
+```
+  - `ubuntu2`의 `jerry`는 비밀번호 없이 sudo가 된다. 비밀번호를 묻는 PC에서는 nohup 뒤에서 멈추므로, 먼저 `sudo -v`를 한 번 쳐 둔다.
+
+**3) 하루 작업의 예: backend를 고치고, bundle을 만들고, 보드에서 돌리기**
+```bash
+# --- PC 셸 ---
+cd /home/jerry/npuprg/nestc2_clion/nest-compiler
+vi lib/Backends/VTA/VTASave.cpp                                   # 소스 고치기(밖에서)
+sudo docker exec -it -u ubuntu nestc-build bash                   # 들어가기
+# --- nestc-build 안 ---
+cd /home/jerry/npuprg/nestc2_clion/nest-compiler/Debug2_remote
+make -j16 model-compiler                                          # 바뀐 파일만 다시 컴파일
+cd .. && vtabundles_xcmpl/build_sim_bundles.sh -f vtaMxnetResnet18Bundle     # bundle 다시 만들기(§3)
+cd vtabundles_xcmpl && ./collect_hw_bundles.py Resnet18Test       # hw/Resnet18Test/로 모으기(§4)
+cd build_pc_systimed && make -j16 vtaMxnetResnet18Bundle          # 보드용 cross build(§4.2, 처음엔 build dir부터)
+exit
+# --- PC 셸 ---
+git checkout vtabundles_xcmpl/hw/script/run_all.sh                # PC에서 collect하면 그림 경로가 PC 경로로 바뀐다. 되돌린다
+scp vtabundles_xcmpl/hw/Resnet18Test/vtaMxnetResnet18Bundle_systimed \
+    vtabundles_xcmpl/hw/Resnet18Test/mxnet_exported_resnet18.weights.bin \
+    xilinx@192.168.20.2:JO/npuprg/nestc2_clion/nest-compiler/vtabundles_xcmpl/hw/Resnet18Test/
+ssh xilinx@192.168.20.2                                            # 보드로
+# --- 보드 ---
+cd ~/JO/npuprg/nestc2_clion/nest-compiler/vtabundles_xcmpl
+sudo /bin/sh -c "hw/script/run_prof.sh -s _systimed -r Resnet18Test"     # §5
+```
+- 소스를 바꿨으면 보드에도 같은 소스가 있도록 PC 셸에서 `git commit`, `git push`하고 보드에서 `git pull`한다(§0).
+- **weights 파일도 같이 보낸다.** 실행 파일은 실행할 때 같은 dir의 `<모델>.weights.bin`을 읽는다. bundle을 다시 만들면 이 파일도 바뀔 수 있다.
+- `run_all.sh`를 되돌리는 것은 PC에서만 한다. 보드에서는 `git checkout`으로 되돌리지 않는다(§4.1).
+- PC cross build를 보드에서 확인한 것은 MobileNetV2뿐이다([host_pc_build.md](host_pc_build.md) §6). 다른 모델은 처음 한 번 보드 빌드와 결과를 비교한다.
+- 보드에서 만들고 빌드해도 된다(§3, §4.1). 느리지만 scp와 되돌리기가 필요 없다.
+
+### 1.3 처음 한 번: 컨테이너 만들기
+
+PC 셸(컨테이너 밖)에서 친다. 스크립트 안의 `docker` 명령에 권한이 필요하므로 `sudo`로 부른다.
+스크립트가 `SUDO_UID`로 원래 사용자(`jerry`)의 번호와 `$HOME`을 찾아 컨테이너 사용자 `ubuntu`를 만든다.
+
 | 일 | 명령 | 비고 |
 |---|---|---|
-| Vivado 컨테이너 만들기 | `utils/docker_vivado2020/setup.sh` | ubuntu:18.04 이미지와 `vivado2020-build` 컨테이너. `--init`이 없으면 합성이 `synth_design` 뒤에 멈춘다 |
-| Vivado 설치 | 컨테이너 안에서 `utils/docker_vivado2020/install_vivado.sh <Xilinx_Unified_2020.1_0602_1208.tar.gz> [y2k22_patch-1.2.zip]` | MD5 확인, Zynq UltraScale+만 설치, Y2K22 HLS 패치. license `~/.Xilinx/xilinx.lic` |
-| NEST-C 컨테이너 만들기 | `utils/docker_nestc/setup.sh` | `nestc-build`. 보드와 같은 clang-8, cmake 3.10, protobuf 3.0 |
-| 시뮬레이터 빌드 configure + make | `docker exec -u ubuntu nestc-build <tree>/utils/docker_nestc/configure.sh [targets]` | `Debug2_remote`를 보드와 같은 옵션으로. 기본 target은 model-compiler, image-classifier(-j16, 약 10분). 모델 파일은 보드의 `Debug2_remote`에서 복사 |
-| 보드 sysroot 복사 | `utils/docker_nestc/sync_sysroot.sh [xilinx@192.168.20.2] [~/zcu102_sysroot]` | cross build용(약 2.1 GB). 보드에 라이브러리를 새로 깔면 다시 돌린다 |
+| Vivado 컨테이너 만들기 | `sudo utils/docker_vivado2020/setup.sh` | ubuntu:18.04 이미지와 `vivado2020-build` 컨테이너. `--init`이 없으면 합성이 `synth_design` 뒤에 멈춘다 |
+| Vivado 설치 | 컨테이너 안(§1.2 (가))에서 `utils/docker_vivado2020/install_vivado.sh <Xilinx_Unified_2020.1_0602_1208.tar.gz> [y2k22_patch-1.2.zip]` | MD5 확인, Zynq UltraScale+만 설치, Y2K22 HLS 패치. license `~/.Xilinx/xilinx.lic` |
+| NEST-C 컨테이너 만들기 | `sudo utils/docker_nestc/setup.sh` | `nestc-build`. 보드와 같은 clang-8, cmake 3.10, protobuf 3.0 |
+| 시뮬레이터 빌드 configure + make | `sudo docker exec -u ubuntu nestc-build <tree>/utils/docker_nestc/configure.sh [targets]` | `Debug2_remote`를 보드와 같은 옵션으로. 기본 target은 model-compiler, image-classifier(-j16, 약 10분). 모델 파일은 보드의 `Debug2_remote`에서 복사 |
+| 보드 sysroot 복사 (PC 셸) | `utils/docker_nestc/sync_sysroot.sh [xilinx@192.168.20.2] [~/zcu102_sysroot]` | cross build용(약 2.1 GB). 보드에 라이브러리를 새로 깔면 다시 돌린다 |
 
+넣을 것:
+- `<Xilinx_Unified_...tar.gz>`: Xilinx에서 받은 Vivado 2020.1 설치 파일. 예: `~/Downloads/Xilinx_Unified_2020.1_0602_1208.tar.gz`
+- `[targets]`(configure.sh): 빌드할 make target. 빼면 `model-compiler image-classifier`. 예: `model-compiler`
+- `[xilinx@192.168.20.2] [~/zcu102_sysroot]`(sync_sysroot.sh): 보드 주소, 복사할 곳. 보통 둘 다 뺀다.
+
+예(새 PC에서 처음):
 ```bash
-docker start vivado2020-build nestc-build        # PC 재부팅 뒤에는 꺼져 있을 수 있다
-docker exec -it -u ubuntu nestc-build bash       # 안에서 <tree>/Debug2_remote 로
+cd /home/jerry/npuprg/nestc2_clion/nest-compiler
+sudo utils/docker_nestc/setup.sh                                                 # 이미지 빌드 + 컨테이너, 수 분
+sudo docker exec -u ubuntu nestc-build $PWD/utils/docker_nestc/configure.sh      # 약 10분
+utils/docker_nestc/sync_sysroot.sh                                           # cross build를 할 때만
 ```
 
 ## 2. bitstream 만들기 (PC, docker `vivado2020-build`)
 
+**무엇을 하나:** EVTA 하드웨어 소스(HLS C++과 RTL)를 FPGA에 올릴 파일(`.bin`)로 만든다.
+- `make ip`: HLS로 EVTA의 네 블록(fetch, load, compute, store)을 회로로 바꾼다.
+- `make bin`: Vivado로 배치(place)하고 배선(route)해서 bitstream을 만든다.
+- 하드웨어(ISA, ALU, clock)를 바꿀 때만 한다. 소프트웨어만 바꿀 때는 하지 않는다.
+
 ### 2.1 명령
 
+PC 셸에서 들어가서(§1.2 (가)) 친다.
 ```bash
-docker exec -it -u ubuntu vivado2020-build bash
+sudo docker exec -it -u ubuntu vivado2020-build bash        # 프롬프트가 ubuntu@ubuntu2로 바뀐다
 source /tools/Xilinx/v2020.1/Vivado/2020.1/settings64.sh
 cd <tree>/vta-hw-zcu102-systolic/hardware/xilinx
 make ip CSIM=1 SYSTOLIC=1                      # HLS: C simulation + 4개 IP 합성 (약 10분)
 make bin SYSTOLIC=1 FREQ=400 JOBS=4 IMPL_STRATEGY=Performance_ExtraTimingOpt BUILD_TAG=<tag>   # Vivado (약 40분)
 ```
 
+넣을 것:
+- `<tree>`: 위 표.
+- `<tag>`: 같은 설정의 다른 판을 구분하는 짧은 이름. 빼도 된다. 예: `eto`(전략 이름), `try2`
+- 옵션 값은 §2.2.
+
+예: ALU 확장 3단계, systolic 400 MHz. 출력 이름은 `vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_alux3_400mhz_rq.bin` 꼴이 된다.
+```bash
+make ip CSIM=1 SYSTOLIC=1 ALUX=3
+make bin SYSTOLIC=1 ALUX=3 FREQ=400 JOBS=4 IMPL_STRATEGY=Performance_ExplorePostRoutePhysOpt
+```
+
 - 다른 copy도 같은 방법이다(`vta-hw-zcu102-single`, `-multi2`, `-multi4`의 `hardware/xilinx`).
 - **첫 PC에서는 `JOBS=4`로 돌린다.** Vivado 전체 부하 중에 PC가 세 번 꺼졌다(10-25, 10-28, 11-02).
   - 돌릴 때 온도를 남기려면 `templog.sh`를 백그라운드로 띄운다(§10).
-- 오래 걸리므로 PC 셸에서 `nohup docker exec -u ubuntu vivado2020-build bash -c "source ... && cd ... && make ..." > <log> 2>&1 &`로 돌려도 된다.
+- 오래 걸리므로 PC 셸에서 `nohup sudo docker exec ...`으로 띄워도 된다. 명령 전체는 §1.2 (나)의 예다.
 
 ### 2.2 make 옵션
 
@@ -124,6 +278,11 @@ scp <export>/vtahw_<dir>.{bin,bit,hwh,timing.rpt,utilization.rpt} xilinx@192.168
 sudo cp /home/xilinx/JO/npuprg/bit/<목적>_<YYMMDD>/vtahw_<dir>.bin /lib/firmware/
 ```
 
+넣을 것:
+- `<export>`: `make bin`의 출력 dir. 예: `vta-hw-zcu102-systolic/build/hardware/xilinx/vivado/zcu102_1x16_i8w8a32_16_16_19_18_sa_alux3_400mhz_rq/export`
+- `<dir>`: 그 vivado dir 이름. 예: `zcu102_1x16_i8w8a32_16_16_19_18_sa_alux3_400mhz_rq`
+- `<목적>_<YYMMDD>`: 무엇을 위한 판인지와 날짜. 예: `alux3_261115`. 보드에서 통과하면 `400mhz_pass_alux3_261115`
+
 - `.bit`만 있으면 `vtabundles_xcmpl/hwtest/bit2bin.py <x>.bit`로 `.bin`을 만든다.
 - JTAG(ILA, hw_server)를 쓰기 전에는 보드가 부팅될 때마다 `sudo vtabundles_xcmpl/hwtest/nocpuidle.sh`를 먼저 실행한다. 안 하면 Linux가 멈춘다.
 
@@ -143,8 +302,31 @@ sudo cp /home/xilinx/JO/npuprg/bit/<목적>_<YYMMDD>/vtahw_<dir>.bin /lib/firmwa
 
 ## 3. bundle 소스 만들기 (시뮬레이터 빌드 `Debug2_remote`)
 
+**무엇을 하나:** 모델(ONNX, Caffe2)을 EVTA에서 도는 C++ 코드로 바꾼다. 이 코드를 **bundle**이라고 한다.
+- 순서: `image-classifier`가 이미지 몇 장을 돌려 양자화 범위(profile yaml)를 잰다.
+- 그다음 `model-compiler`가 그 profile로 int8 bundle을 만든다. 만드는 파일은 `<모델>.cpp`, `<모델>.weights.bin`, main이다.
+- 이 장의 스크립트가 두 도구를 순서대로 불러 준다.
+- 결과 `.cpp`는 §4에서 보드 실행 파일로 빌드한다.
+
 PC 컨테이너 `nestc-build`에서 만드는 것을 권한다. 결과는 보드와 바이트까지 같고 훨씬 빠르다(bundle target 하나에 PC 4~7초, 보드 약 2분).
 보드에서도 같은 명령이 돈다.
+
+```bash
+# PC에서 (컨테이너 밖에서 한 줄로, §1.2 (나))
+sudo docker exec -u ubuntu -w /home/jerry/npuprg/nestc2_clion/nest-compiler nestc-build \
+    vtabundles_xcmpl/build_sim_bundles.sh -f vtaMxnetResnet18Bundle
+# 보드에서
+cd ~/JO/npuprg/nestc2_clion/nest-compiler && vtabundles_xcmpl/build_sim_bundles.sh -f vtaMxnetResnet18Bundle
+```
+
+출력 예(끝부분):
+```
+vtaMxnetResnet18Bundle: -f: deleting vta/bundles/Resnet18Test/mxnet_exported_resnet18.cpp (made again)
+vtaMxnetResnet18Bundle: make -j2 (log: .../Debug2_remote/bundle_logs/vtaMxnetResnet18Bundle.log)
+vtaMxnetResnet18Bundle                   OK     6s
+  20 EVTA producers, 9 with a tail
+  0 GEMMs (conv / fc / matmul) on the CPU
+```
 
 ### 3.1 명령
 
@@ -155,6 +337,20 @@ PC 컨테이너 `nestc-build`에서 만드는 것을 권한다. 결과는 보드
 | DeiT-tiny | `vtabundles_xcmpl/gen_deit_bundle.sh [model-compiler 옵션]` | `Debug2_remote/vta/bundles/DeiTTest/` (`gen.log`) |
 | multi4 copy 4개 | `vtabundles_xcmpl/gen_multi4_bundles.sh <Dir> ...` (`MultiEVTAResnet18Test`, `MultiEVTAResnet50Test`, `MultiEVTAVgg16Cifar10Test`, `MultiEVTADeiTTest`) | `Debug2_remote/vta/multievta_bundles/<Dir>/` (`gen_<i>.log`). single bundle이 먼저 있어야 한다(모델과 profile을 거기서 읽음) |
 | model-compiler 다시 빌드 | `Debug2_remote`에서 `make -j16 model-compiler`(PC) / `make -j2 model-compiler`(보드) | VTASave.cpp 등을 바꾼 뒤 |
+
+넣을 것:
+- `[target ...]`(build_sim_bundles.sh): 하나 이상. 빼면 전부. 예:
+  - 모델: `vtaMxnetResnet18Bundle`, `vtaCaffe2Resnet50Bundle`, `vtaVGG16Cifar10Bundle`, `vtaMxnetResnet18PartitionBundle`
+  - 시험 번들: `vtaConvTestBundle`, `vtaConv2TestBundle` ~ `vtaConv5TestBundle`, `vtaResConv1TestBundle` ~ `vtaResConv10TestBundle`, `vtaFCTestBundle`, `vtaMaxPoolTestBundle`, `vtaElemAddTestBundle` 등. 전체 목록은 스크립트 맨 위 `TARGETS=`
+- `[model-compiler 옵션]`(gen_*_bundle.sh): §3.3의 옵션. 스크립트의 기본 옵션 뒤에 붙는다. 예: `-vta-alu-softmax=0`, `-vta-fuse-elemadd-mul`
+- `<Dir>`(gen_multi4_bundles.sh): `MultiEVTAResnet18Test`, `MultiEVTAResnet50Test`, `MultiEVTAVgg16Cifar10Test`, `MultiEVTADeiTTest`
+
+예:
+```bash
+vtabundles_xcmpl/build_sim_bundles.sh -f vtaVGG16Cifar10Bundle vtaCaffe2Resnet50Bundle   # 두 개를 다시
+vtabundles_xcmpl/gen_deit_bundle.sh -vta-alu-softmax=0                                  # float softmax로 DeiT
+vtabundles_xcmpl/gen_multi4_bundles.sh MultiEVTAResnet18Test                            # multi4 copy 4개
+```
 
 **`build_sim_bundles.sh`:**
 - target마다 시작할 때 로그 경로를 찍는다. make가 끝날 때까지는 화면이 조용하다. 진행은 `tail -f <로그>`로 본다.
@@ -187,6 +383,18 @@ PC 컨테이너 `nestc-build`에서 만드는 것을 권한다. 결과는 보드
 |---|---|
 | `vtabundles_xcmpl/fold_onnx.py in.onnx out.onnx N,C,H,W` | 입력 모양을 고정하고, 알 수 있는 노드를 모두 상수로 접는다(DeiT 1261 → 608 노드). onnx ≥ 1.13 필요 |
 | `vtabundles_xcmpl/prune_rows_onnx.py in.onnx out.onnx [in.yaml out.yaml [extra.yaml]]` | 출력이 읽는 행만 계산하게 Slice를 넣는다. yaml을 주면 profile도 맞춰 복사한다. `gen_deit_bundle.sh`가 부른다 |
+
+**무엇을 하나:** model-compiler에 넣기 전에 ONNX 모델을 손본다. 모양이 정해지지 않은 입력, 실행 중에 모양을 계산하는 노드처럼 Glow가 받지 못하는 부분을 미리 없앤다.
+
+넣을 것:
+- `in.onnx`, `out.onnx`: 원래 모델과 새로 쓸 파일
+- `N,C,H,W`: 입력 모양. 예: `1,3,224,224`(배치 1, RGB, 224 × 224)
+- `in.yaml out.yaml`: 원래 모델의 profile(§3 첫 단계 결과)과 새 profile
+
+예:
+```bash
+python3 vtabundles_xcmpl/fold_onnx.py deit_tiny.onnx deit_fold.onnx 1,3,224,224
+```
 
 ### 3.3 VTA backend 옵션 (`model-compiler`, `VTA.cpp` / `VTASave.cpp`)
 
@@ -279,12 +487,43 @@ VTA_FUSION_LOG=1 vtabundles_xcmpl/gen_deit_bundle.sh
 
 ## 4. 보드용 실행 파일 빌드 (`vtabundles_xcmpl/`)
 
+**무엇을 하나:** §3의 bundle `.cpp`를 vtalib(EVTA runtime 라이브러리)와 묶어 보드에서 도는 실행 파일로 만든다.
+- `collect_hw_bundles.py`: `Debug2_remote`의 bundle 소스를 `hw/<Dir>/`로 모은다.
+- `make <target>`: 그 소스를 빌드한다. 실행 파일은 `hw/<Dir>/<target><suffix>`에 생긴다.
+- build dir마다 같은 bundle을 다른 vtalib나 측정 방식으로 빌드한다(아래 표). 같은 bundle을 여러 build dir에서 빌드해도 된다.
+
+`<Dir>`와 `<target>`의 짝(실행할 때 입력은 `run_all.sh`의 run 줄이 정한다):
+
+| `<Dir>` | `<target>` | 입력 |
+|---|---|---|
+| `Resnet18Test` | `vtaMxnetResnet18Bundle` | `glow/tests/images/imagenet/cat_285.png` |
+| `Resnet18PartitionTest` | `vtaMxnetResnet18PartitionBundle` | 같은 그림 |
+| `Resnet50Test` | `vtaCaffe2Resnet50Bundle` | 같은 그림 |
+| `Vgg16Cifar10Test` | `vtaVGG16Cifar10Bundle` | `examples/bundles/vgg16_cifar10/cifar10/test/airplane/0001.png` |
+| `MobileNetV2Test` | `vtaMobileNetV2Bundle` | `cat_285.png` |
+| `DeiTTest` | `vtaDeiTBundle` | `cat_285.png` |
+| `Conv3Test` 등 시험 | `vtaConv3TestBundle` 등(`vta<Dir에서 Test 앞>TestBundle`) | `<...>Input.bin`, golden `<...>Golden.bin` |
+| `MultiEVTAResnet18Test` (hw_multievtax4/) | `multivtaMxnetResnet18Bundle`, `singlevtaMxnetResnet18Bundle` | |
+| `MultiEVTAResnet50Test`, `MultiEVTAVgg16Cifar10Test`, `MultiEVTADeiTTest` | `multivta<모델>Bundle`, `singlevta<모델>Bundle` | |
+
 ### 4.1 보드에서
 
 ```bash
 cd ~/JO/npuprg/nestc2_clion/nest-compiler/vtabundles_xcmpl
 ./collect_hw_bundles.py [--set multievtax2|multievtax4] [Dir ...]   # Debug2_remote의 소스를 hw[_<set>]/<Dir>/로 복사, run_all.sh 다시 생성
 cd build_sysprof && make -j2 vtaMxnetResnet18Bundle                   # 또는 make -j2 hw_bundles (전부)
+```
+
+넣을 것:
+- `[--set ...]`: 빼면 single EVTA(`hw/`). `multievtax4`면 `vta/multievta_bundles` → `hw_multievtax4/`
+- `[Dir ...]`: 모을 `<Dir>`. 빼면 전부. 예: `DeiTTest MobileNetV2Test`
+- `build_sysprof`: 빌드할 build dir(아래 표). 예: `build_sys`, `build_systimed`
+- `vtaMxnetResnet18Bundle`: 위 표의 `<target>`
+
+예: DeiT를 다시 만든 뒤 systolic 문장별 시간 측정용으로 빌드. 결과는 `hw/DeiTTest/vtaDeiTBundle_systimed`다.
+```bash
+./collect_hw_bundles.py DeiTTest
+cd build_systimed && make -j2 vtaDeiTBundle
 ```
 
 - `collect_hw_bundles.py`는 `hw/script/run_all.sh`를 다시 만든다.
@@ -326,6 +565,12 @@ scp ../hw/MobileNetV2Test/vtaMobileNetV2Bundle_systimed xilinx@192.168.20.2:<tre
 
 ## 5. 실행과 측정 (보드, sudo)
 
+**무엇을 하나:** §4의 실행 파일을 보드의 EVTA에서 돌린다.
+- `run_all.sh`: 결과가 맞는지 본다. 출력을 golden(정답 파일)과 비교하고 PASS / MISMATCH를 낸다.
+- `run_prof.sh`: 몇 번 돌려 시간을 잰다.
+- 둘 다 실행 전에 bitstream을 다시 올리고, 한 번에 하나만 돌도록 lock을 잡는다.
+- 실행 파일을 직접 부를 수도 있지만, bitstream 올리기와 lock 때문에 스크립트로 돌린다.
+
 ### 5.1 실행 전에
 
 - **다른 사용자의 EVTA 실행을 확인한다:** `ps aux | grep -E "[r]un_prof|[r]un_all|Bundle"`.
@@ -351,6 +596,21 @@ sudo hw_multievtax4/script/run_all.sh                    # multi4 (multi2도 같
 sudo /bin/sh -c "BIN=<file in /lib/firmware> hw/script/run_all.sh Resnet18Test"   # 다른 bitstream으로
 ```
 
+넣을 것:
+- `[Dir ...]`: §4의 `<Dir>`. 빼면 run 줄 전부(시험 번들 포함, 수 분). 이름이 틀리면 비슷한 이름을 알려 주고 아무것도 돌리지 않는다.
+- `<file in /lib/firmware>`: `<bin>`. 보드에서 `ls /lib/firmware | grep vtahw`로 본다. 예:
+  - `vtahw_zcu102_1x16_i8w8a32_16_16_19_18_380mhz.bin`: HLS GEMM 380 MHz(`BIN` 기본)
+  - `vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_400mhz_rq.bin`: systolic 400 MHz, requantize(`SYS_BIN` 기본)
+  - `vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_alux3_400mhz_rq.bin`: 위 + ALU 확장 3단계(DeiT layer norm / softmax on EVTA)
+  - `vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz_rq.bin`: EVTA 4개(hw_multievtax4/)
+
+출력 예: `hw/result/results.txt`에 Dir마다 한 줄씩 남는다.
+```
+Resnet18Test                   vtaMxnetResnet18Bundle             RAN (no golden; see Resnet18Test/run.log)
+Conv3Test                      vtaConv3TestBundle                 PASS
+```
+모델(golden 없음)은 `hw/<Dir>/run.log`의 끝에서 분류 결과를 본다. 예: Resnet18 `Result: 281`(cat_285.png), `Inference time: 29.925ms`.
+
 - 기본 bitstream은 `run_all.sh` 맨 위의 `BIN`(HLS 380 MHz)이다. `SYS_BIN`(systolic 400 MHz)은 `run_prof.sh -s _sys*`가 쓴다.
 - `OMP_NUM_THREADS` 기본값은 1이다.
 
@@ -374,13 +634,25 @@ sudo /bin/sh -c "hw_multievtax4/script/run_prof.sh -s _sysprof -n 25 -l -r Multi
 | 환경 `BIN=<file>` | bitstream 바꾸기 |
 | `-h`, `--help` | 옵션 설명을 출력하고 끝난다(sudo 없이 된다). `run_all.sh --help`, `load_bit.sh --help`도 있다 |
 
+넣을 것:
+- `<suffix>`: 실행 파일을 빌드한 build dir(§4.1 표). systolic bitstream이면 `_sysprof`(EVTA 호출마다 시간) 또는 `_systimed`(문장마다 시간)
+- `<runs>`: 추론 횟수. 예: `25`, 빨리 볼 때 `5`
+- `<threads>`: CPU 코어 수. `1` 또는 `4`
+- `Dir`: §4의 `<Dir>`. 여러 개 가능
+
+예: ALU 확장 bitstream에서 DeiT를 4코어로 문장별 시간 측정.
+```bash
+sudo /bin/sh -c "BIN=vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_alux3_400mhz_rq.bin hw/script/run_prof.sh -s _systimed -r -t 4 DeiTTest"
+```
+끝에 `hw/result/_systimed_summary.txt`의 줄과, 로그 `hw/DeiTTest/systimed.log`의 요약(추론마다 ms, 중앙값)이 나온다.
+
 - **실행 시작 때 출력:** 어느 bitstream으로 도는지와 그 설정을 먼저 출력하고, summary 파일 맨 앞에도 넣는다(`vtabundles_xcmpl/bininfo.sh`). 나오는 항목은 다음과 같다.
   - bitstream: 파일 이름, 어디서 왔는지(`BIN` / `SYS_BIN` / 환경 `BIN=`), 날짜, md5 앞 8자리.
   - 이름에서 읽은 것: EVTA 수, clock, GEMM 종류(HLS / systolic), 기능(ALU imm II = 1, bias reset, requantize, ALU 확장, AXI perf monitor).
   - 실행 설정: `EVTA_*` / `MULTI_*` / `BUNDLE_*` 환경 변수, `-s`의 build dir과 무엇을 재는지, 횟수, lockstep, `chrt`, `OMP_NUM_THREADS`, Dir 목록.
   - 경고: `-s`와 bitstream이 맞지 않으면 `WARNING`을 출력한다.
 - **결과:**
-  - 로그는 `hw/<Dir>/<suffix>.log`다.
+  - 로그는 `hw/<Dir>/<suffix에서 앞의 _를 뺀 이름>.log`다. 예: `-s _systimed` → `hw/DeiTTest/systimed.log`. 한 Dir에 실행 파일이 여럿이면 `systimed_<실행 파일>.log`.
   - `_prof` 로그에는 `prof_summary.py` 요약(`<log>.sum`, conv마다 시간과 GOPS)이 붙는다.
   - `_timed` 로그에는 `run_times.py` 요약(추론마다 시간, 중앙값, GOPS)이 붙고, 문장별 시간은 `timing.csv`에 남는다.
   - Dir마다 한 줄씩 `hw/result/<suffix>_summary.txt`에 남는다(exit, golden, 전체 시간).
@@ -389,10 +661,27 @@ sudo /bin/sh -c "hw_multievtax4/script/run_prof.sh -s _sysprof -n 25 -l -r Multi
 
 ## 6. 정확도 (ImageNetV2, `vtabundles_xcmpl/imagenet_eval/`)
 
+**무엇을 하나:** 그림 한 장의 분류(§5)가 아니라 ImageNetV2 수천 장의 top-1 정확도를 잰다.
+- 양자화나 반올림을 바꾸는 단계(`-vta-round-shift`, 정수 softmax 등)가 정확도를 얼마나 떨어뜨리는지 본다.
+- 보드 결과는 PC의 float 기준(`float_ref.py`)과 비교한다.
+
+넣을 것:
+- `<exe>`: `vtabundles_xcmpl/`에서 본 실행 파일 경로. 실행 파일은 `hw/<Dir>/`에 있다. 예: `hw/DeiTTest/vtaDeiTBundle_sys`, `hw/DeiTTest/vtaDeiTBundle_sysprof`
+- `<name>`: 결과 로그 이름(아무 이름). 예: `base`, `softmax_float`
+- `[n]`: 그림 수(빼면 전부). 예: `2000`(빠른 비교), `9000`
+- `<model.onnx>`, `<png dir>`(PC): 예: `Debug2_remote/vta/bundles/DeiTTest/deit_fold.onnx`, `~/imagenetv2_png224`
+
+예:
+```bash
+# 보드, vtabundles_xcmpl/
+sudo /bin/sh -c "BIN=vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_alux3_400mhz_rq.bin imagenet_eval/eval_board.sh hw/DeiTTest/vtaDeiTBundle_sys base 2000"
+tail -1 imagenet_eval/result/base.log      # 마지막 EVAL 줄에 top-1
+```
+
 | 일 | 어디서 | 명령 |
 |---|---|---|
 | 이미지 준비 (10,000장 → 224 × 224 PNG, `list.txt`) | PC | `prep_imagenetv2.py <imagenetv2-matched-frequency-format-val> <out>`. 보드 `~xilinx/JO/imagenetv2_png224`로 복사 |
-| bundle top-1 | 보드 | `sudo /bin/sh -c "imagenet_eval/eval_board.sh <exe> <name> [n]"`. 예: `build_sys/DeiTTest/vtaDeiTBundle_sys base 10000`. 결과 `imagenet_eval/result/<name>.log` |
+| bundle top-1 | 보드 | `sudo /bin/sh -c "imagenet_eval/eval_board.sh <exe> <name> [n]"`. 예: `hw/DeiTTest/vtaDeiTBundle_sys base 10000`. 결과 `imagenet_eval/result/<name>.log` |
 | float 기준 | PC | `float_ref.py <model.onnx> <png dir> [n] [out]` (onnxruntime) |
 | int8 흉내 (보드 없이 양자화 시도) | PC | `fakequant.py <model.onnx> <png dir> [--n 9000] [--pow2] [--ln-float] [--gelu-float] [--softmax-float] [--skip s]` |
 
@@ -404,7 +693,51 @@ sudo /bin/sh -c "hw_multievtax4/script/run_prof.sh -s _sysprof -n 25 -l -r Multi
 
 ## 7. runtime 환경 변수 (vtalib, 실행할 때)
 
-"systolic"이라고 적은 것은 `vtalib-zcu102-systolic`에만 있다.
+**무엇을 하나:** 이미 빌드한 실행 파일의 동작을 **다시 빌드하지 않고** 바꾼다.
+- 이 변수들은 vtalib(EVTA runtime)과 bundle main이 실행을 시작할 때 읽는다. model-compiler 옵션(§3.3)이나 cmake 옵션(§4)과 다르다.
+- 쓰는 곳:
+  - 새 기능을 끄고 켜서 시간을 비교한다(`EVTA_LOAD_AHEAD=0` 등).
+  - EVTA 결과를 CPU 계산과 비교해 맞는지 본다(`_CHECK`).
+  - 층 출력을 파일로 남긴다(`EVTA_DUMP_CONV`).
+  - bitstream 이름이 켜는 기능을 강제로 끄거나 켠다(`EVTA_REQUANT` 등).
+- 변수를 주지 않으면 표의 "기본"대로 돈다. 보통은 아무것도 주지 않는다.
+
+**어떻게 주나:**
+- 스크립트 앞에 `이름=값`을 붙인다. **sudo를 쓰므로 `sudo /bin/sh -c "..."`의 따옴표 안에** 넣는다. `sudo VAR=1 cmd`는 비밀번호를 묻는다.
+- 여러 개는 빈칸으로 이어 쓴다.
+- `run_all.sh`, `run_prof.sh`, `eval_board.sh`는 받은 변수를 실행 파일에 그대로 넘긴다. 실행 시작 때 출력에 어떤 `EVTA_*`가 설정됐는지도 찍는다(§5.3).
+
+예 1: LOAD를 앞당기는 기능(`EVTA_LOAD_AHEAD`)이 얼마나 빨라지게 했나 보기. 같은 실행 파일을 두 번 돌려 시간을 비교한다.
+```bash
+cd ~/JO/npuprg/nestc2_clion/nest-compiler/vtabundles_xcmpl
+sudo /bin/sh -c "hw/script/run_prof.sh -s _systimed -r Resnet50Test"                     # 기본(2)
+sudo /bin/sh -c "EVTA_LOAD_AHEAD=0 hw/script/run_prof.sh -s _systimed -r Resnet50Test"   # 끔
+```
+
+예 2: fused conv(residual, pool, depthwise)의 EVTA 결과가 CPU 계산과 같은지 실행 중에 확인.
+```bash
+sudo /bin/sh -c "EVTA_RES_CHECK=1 hw/script/run_prof.sh -s _sysprof -n 1 MobileNetV2Test"
+grep EVTA_RES_CHECK hw/MobileNetV2Test/sysprof.log | head -3
+#   EVTA_RES_CHECK <H>x<W>x<C> -> <KN>, shl ... shr ...: 0 of <개수> differ    <- 0 of 이면 EVTA와 CPU가 같다
+```
+`_CHECK`는 CPU 계산을 더 하므로 시간 측정에는 쓰지 않는다.
+
+예 3: 변경 전후 층 출력이 바이트까지 같은지 보기. 실행 파일 두 개를 각각 돌려 dump하고 비교한다.
+```bash
+sudo /bin/sh -c "EVTA_DUMP_CONV=/tmp/dumpA hw/script/run_prof.sh -s _sysprof -n 1 Resnet18Test"   # 바꾸기 전 실행 파일
+# ... 실행 파일을 다시 빌드한 뒤
+sudo /bin/sh -c "EVTA_DUMP_CONV=/tmp/dumpB hw/script/run_prof.sh -s _sysprof -n 1 Resnet18Test"
+diff -r /tmp/dumpA /tmp/dumpB && echo same; sudo rm -rf /tmp/dumpA /tmp/dumpB              # root 디스크가 차지 않게 지운다
+```
+
+넣을 것(아래 표의 `<...>`):
+- `<dir>`: 쓸 수 있는 빈 dir. 예: `/tmp/dumpA`
+- `<n>`(`EVTA_MIN_TILE`): conv 출력 tile의 가장 작은 높이 / 폭. 예: `7`
+- `<mask>`(`EVTA_MEMEXP`): 비트 0 inp, 1 wgt, 2 acc LOAD, 3 STORE. 예: `1`(inp만), `15`(전부)
+- `<bits>`(`MULTI_MASK`): 돌릴 copy의 비트. 예: `1`(copy 0만), `5`(copy 0, 2)
+- `EVTA_SCHED`의 값: `<H>,<W>,<C>,<KN>,<K>,<stride>`는 conv 모양(입력 H, W, 입력 채널, 출력 채널, kernel, stride)이다. `<vt>,<tileH>,<tileW>`는 virtual thread 수와 tile 크기다. `EVTA_SCHED_LOG=1`로 먼저 모양을 찍어 보고 쓴다. 예: `EVTA_SCHED=56,56,64,64,3,1:2,14,14`
+
+"systolic"이라고 적은 것은 `vtalib-zcu102-systolic`에만 있다. 이 vtalib로 빌드한 실행 파일(`_sys*`)에서만 듣는다.
 
 **동작 바꾸기**
 
@@ -467,6 +800,27 @@ sudo /bin/sh -c "hw_multievtax4/script/run_prof.sh -s _sysprof -n 25 -l -r Multi
 
 ## 8. vtalib 시험 (`vtalib-zcu102-systolic/tests/`)
 
+**무엇을 하나:** 모델 전체가 아니라 vtalib 함수 하나(conv epilogue, layer norm, softmax, 출력 LUT)를 작은 입력으로 돌린다. 그 결과를 같은 계산의 CPU 판과 바이트 단위로 비교한다.
+- vtalib를 고친 뒤 보드에 가기 전에 PC에서 먼저 돌린다. PC에서는 vtalib의 **시뮬레이터**(EVTA를 C++로 흉내 내는 판)로 돈다.
+- 마지막 줄에 통과 수가 나온다(예: `39/39`). 하나라도 틀리면 그 경우의 모양과 다른 칸 수를 찍는다.
+
+넣을 것:
+- `[rows] [seed]`: 시험할 행 수와 난수 seed. 빼면 스크립트 기본값. 예: `197 1`
+- `[build|run|all]`(보드): `build`는 빌드만, `run`은 실행만, `all`(기본)은 둘 다
+- `<EVTA_REPLAY_DUMP dir>`: §7의 `EVTA_REPLAY_DUMP=<dir>`로 남긴 dir. 예: `/tmp/rd`
+
+예:
+```bash
+# PC
+cd /home/jerry/npuprg/nestc2_clion/nest-compiler/vtalib-zcu102-systolic/tests
+./run_epi_test.sh                    # conv epilogue 세 방식
+# 보드 (먼저 _alux bitstream: sudo vtabundles_xcmpl/hw/script/load_bit.sh vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_alux3_400mhz_rq.bin)
+sudo -n /bin/sh -c "./run_alux_board_tests.sh all"
+# ALU hazard 검사: 먼저 replay dump를 남기고 검사
+sudo /bin/sh -c "EVTA_REPLAY_DUMP=/tmp/rd ../../vtabundles_xcmpl/hw/script/run_prof.sh -s _sysprof -n 1 DeiTTest"
+WS=7,17 python3 hazard_dump.py /tmp/rd
+```
+
 | 명령 | 어디서 | 하는 일 |
 |---|---|---|
 | `run_alu_ext_test.sh [rows] [seed]` | g++ 있는 아무 기계 | 정수 layer norm ALU 프로그램 vs bundle CPU 함수(수 초) |
@@ -477,12 +831,23 @@ sudo /bin/sh -c "hw_multievtax4/script/run_prof.sh -s _sysprof -n 25 -l -r Multi
 
 ## 9. 하드웨어 시험 (보드, `vtabundles_xcmpl/hwtest/`)
 
+**무엇을 하나:** NEST-C나 bundle 없이 EVTA 하드웨어 자체를 시험한다.
+- 새 bitstream이 명령을 제대로 읽는지(ISA 비트폭), GEMM / LOAD / STORE가 맞는지, 명령 하나에 시간이 얼마나 드는지 본다.
+- 실행이 멈췄을 때 하드웨어 레지스터를 읽는 도구도 여기 있다.
+- 새 bitstream을 처음 올렸을 때, 모델이 0이나 쓰레기를 낼 때 먼저 돌린다.
+
 ```bash
 cd ~/JO/npuprg/nestc2_clion/nest-compiler/vtabundles_xcmpl/hwtest
 SUFFIX=_rb ./build.sh runbench                 # vtalib ZCU102 -D 세트로 빌드 (BUFF, UOP, ISA 등은 build.sh 머리말)
 sudo ./runbench_rb base 0 1 aluimm 16 2048 load 16 4096 ...   # 여러 case를 한 프로세스에서 (REPS=200)
 sudo ./gemmprobe ident                         # 새 bitstream의 GEMM 기본 확인 (reset, zero, ident, perm, ones)
 ```
+
+넣을 것:
+- `SUFFIX=<이름>`, `[test ...]`(build.sh): 실행 파일 이름 끝과 빌드할 시험. 시험을 빼면 `add_test gemm`. 예: `SUFFIX=_rb ./build.sh runbench` → `runbench_rb`
+- build.sh의 환경: 다른 bitstream이면 `BUFF="15 18 17"`(EVTA 2 / 4개용 buffer), `ISA="3 3"` 등. 전부 머리말에 있다
+- runbench case: `<case> <N> <K>`를 이어 쓴다. `N`은 명령 수, `K`는 명령당 반복 수다(`load` / `store`는 `N`이 LOAD / STORE 수, `K`가 block 수). `base`만 `N K` 없이 `base 0 1`로 쓴다. 예: `gemm 16 256 aluimm 16 2048`. 결과는 case마다 run 시간 중앙값이다
+- `<bin>`(probes.sh): 시험할 bitstream. 예: `vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz_rq.bin`
 
 | 명령 | 하는 일 |
 |---|---|
@@ -509,6 +874,10 @@ sudo ./gemmprobe ident                         # 새 bitstream의 GEMM 기본 �
 | bundle 문장마다 시간 재는 사본 | (CMake가 부름) | `vtabundles_xcmpl/timed_bundle.py <in.cpp> <out.cpp> [csv]` |
 | `_timed` 로그 요약 | (run_prof.sh가 부름) | `vtabundles_xcmpl/run_times.py <Dir> <log>` |
 | PC 온도 기록 | 첫 PC | `nohup /home/ubuntu/npuprg/templog/templog.sh &` → `templog/temp_<날짜_시각>.log` |
+
+넣을 것:
+- `[YYMMDD ...]`(daily_report.sh): 다시 만들 날짜. 빼면 가장 최근 일지 다음 날부터 어제까지. 예: `261120`
+- `<이름>`(그림): `docs/figs/gen_evta_<이름>_figs.py`의 이름. 예: `rules`(`gen_evta_rules_figs.py`, 퓨전 규칙 그림)
 
 ## 11. 자주 하는 일의 순서
 

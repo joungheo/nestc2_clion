@@ -3,7 +3,7 @@
 #### with its EVAL_LIST mode (vta/bundles/DeiTTest/multi_threads_main.cpp). Loads the bitstream first as the run scripts do
 #### (SYS_BIN of hw/script/run_all.sh unless BIN=<file>), holds /tmp/evta_run.lock while it runs.
 #### usage (board, vtabundles_xcmpl/): sudo /bin/sh -c "imagenet_eval/eval_board.sh <exe> <name> [n images]"
-####   e.g. imagenet_eval/eval_board.sh build_sys/DeiTTest/vtaDeiTBundle_sys base 10000
+####   e.g. imagenet_eval/eval_board.sh hw/DeiTTest/vtaDeiTBundle_sys base 10000
 ####   env: PNG=<png dir> (default ~xilinx/JO/imagenetv2_png224), OMP_NUM_THREADS (default 4), any EVTA_* / bundle switch
 #### Result: imagenet_eval/result/<name>.log (one EV line every 500 images, the EVAL line last).
 set -u
