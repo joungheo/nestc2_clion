@@ -47,7 +47,8 @@ options:
                   _sysprof   ${BLD}_sysprof   as _prof, systolic vtalib (vtalib-zcu102-systolic), on SYS_BIN
                   _systimed  ${BLD}_systimed  as _timed, systolic vtalib, on SYS_BIN
                   _sys       ${BLD}_sys       systolic vtalib without timing, on SYS_BIN
-                -s _sys* loads SYS_BIN of $RUN_ALL, the others BIN of $RUN_ALL
+                  _pcsys*    (any)            systolic vtalib executables cross-built on the host PC, on SYS_BIN
+                -s _sys* and _pcsys* load SYS_BIN of $RUN_ALL, the others BIN of $RUN_ALL
   -n <runs>     inferences per executable (default 25): hw/ BUNDLE_RUNS, hw_<set>/ MULTI_RUNS per EVTA copy
   -l            lockstep: the multi-EVTA copies start every EVTA call together (MULTI_LOCKSTEP=1)
   -r            real time: chrt -f 10 (no other process takes a core from the EVTA polling threads)
@@ -121,7 +122,9 @@ export OMP_NUM_THREADS=$OMP
 if [ "$HWD" = hw ]; then export BUNDLE_RUNS=$RUNS; unset MULTI_RUNS; else export MULTI_RUNS=$RUNS; unset BUNDLE_RUNS; fi
 #### JO added (2026-10-28): _sys* executables are built with vtalib-zcu102-systolic (weight-stationary uop order)
 #### -> run them on the systolic bitstream SYS_BIN of run_all.sh; BIN=<file> in the environment still wins
-V=BIN; case $SUFFIX in _sys*) V=SYS_BIN;; esac
+#### JO changed (2026-11-21): also _pcsys* (systolic vtalib executables cross-built on the host PC, docs/evta_user_manual.md 4.2)
+#V=BIN; case $SUFFIX in _sys*) V=SYS_BIN;; esac
+V=BIN; case $SUFFIX in _sys*|_pcsys*) V=SYS_BIN;; esac
 #### JO added (2026-11-04): where the bitstream came from (printed at the start)
 [ -n "${BIN:-}" ] && BSRC="BIN= in the environment" || BSRC="$V of $RUN_ALL"
 BIN=${BIN:-$(sed -n 's/^'$V'=\${'$V':-\(.*\)}$/\1/p; s/^'$V'=\([^$].*\)$/\1/p' $RUN_ALL)}
@@ -142,7 +145,7 @@ mkdir -p result trace; chown --reference=. result trace; SUM=result/${SUFFIX#_}_
 case $SUFFIX in
   _prof) SD="EVTA time per EVTA call (VTA_SYNC events), HLS vtalib";;  _timed) SD="wall time per bundle statement, HLS vtalib";;
   _sysprof) SD="EVTA time per EVTA call (VTA_SYNC events), systolic vtalib";;  _systimed) SD="wall time per bundle statement, systolic vtalib";;
-  _sys) SD="no timing, systolic vtalib";;  *) SD="";; esac
+  _sys) SD="no timing, systolic vtalib";;  _pcsys*) SD="systolic vtalib, cross-built on the host PC";;  *) SD="";; esac
 [ "$HWD" = hw ] && RD="$RUNS inferences per executable (BUNDLE_RUNS)" || RD="$RUNS runs per EVTA copy (MULTI_RUNS)"
 { echo "== run_prof.sh $HWD $(date '+%F %T')"
   echo "  bitstream from $BSRC"; bin_info $BIN
@@ -152,7 +155,7 @@ case $SUFFIX in
   echo "  Dirs      : $*"
   echo "  logs      : <Dir>/${SUFFIX#_}.log (or ${SUFFIX#_}_<exe>.log), summary $SUM"
   # the systolic vtalib orders the uops for gemm_sa: an HLS bitstream with _sys* executables (or the reverse) gives wrong results
-  case "$SUFFIX:$BIN" in _sys*:*_sa_*|_prof:*|_timed:*) ;; *) echo "  WARNING   : -s $SUFFIX executables on a bitstream without _sa_ (systolic vtalib on an HLS GEMM)";; esac
+  case "$SUFFIX:$BIN" in _sys*:*_sa_*|_pcsys*:*_sa_*|_prof:*|_timed:*) ;; *) echo "  WARNING   : -s $SUFFIX executables on a bitstream without _sa_ (systolic vtalib on an HLS GEMM)";; esac
   case "$SUFFIX:$BIN" in _prof:*_sa_*|_timed:*_sa_*) echo "  WARNING   : -s $SUFFIX executables on a systolic (_sa_) bitstream (HLS vtalib on gemm_sa)";; esac
 } | tee -a $SUM
 echo

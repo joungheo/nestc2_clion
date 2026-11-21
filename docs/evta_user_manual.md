@@ -169,14 +169,15 @@ cd build_pc_systimed && make -j16 vtaMxnetResnet18Bundle          # 보드용 cr
 exit
 # --- PC 셸 ---
 git checkout vtabundles_xcmpl/hw/script/run_all.sh                # PC에서 collect하면 그림 경로가 PC 경로로 바뀐다. 되돌린다
-scp vtabundles_xcmpl/hw/Resnet18Test/vtaMxnetResnet18Bundle_systimed \
+scp vtabundles_xcmpl/hw/Resnet18Test/vtaMxnetResnet18Bundle_pcsystimed \
     vtabundles_xcmpl/hw/Resnet18Test/mxnet_exported_resnet18.weights.bin \
     xilinx@192.168.20.2:JO/npuprg/nestc2_clion/nest-compiler/vtabundles_xcmpl/hw/Resnet18Test/
 ssh xilinx@192.168.20.2                                            # 보드로
 # --- 보드 ---
 cd ~/JO/npuprg/nestc2_clion/nest-compiler/vtabundles_xcmpl
-sudo /bin/sh -c "hw/script/run_prof.sh -s _systimed -r Resnet18Test"     # §5
+sudo /bin/sh -c "hw/script/run_prof.sh -s _pcsystimed -r Resnet18Test"   # §4.2, §5
 ```
+- **보드로 보내는 것은 실행 파일과 weights뿐이다.** build dir(`build_pc_systimed/`)은 옮기지 않는다(§4.2).
 - 소스를 바꿨으면 보드에도 같은 소스가 있도록 PC 셸에서 `git commit`, `git push`하고 보드에서 `git pull`한다(§0).
 - **weights 파일도 같이 보낸다.** 실행 파일은 실행할 때 같은 dir의 `<모델>.weights.bin`을 읽는다. bundle을 다시 만들면 이 파일도 바뀔 수 있다.
 - `run_all.sh`를 되돌리는 것은 PC에서만 한다. 보드에서는 `git checkout`으로 되돌리지 않는다(§4.1).
@@ -549,16 +550,45 @@ build dir마다 cmake 옵션이 정해져 있다. 처음 한 번만 `mkdir <dir>
 
 ### 4.2 PC에서 cross build
 
-결과는 보드에서 빌드한 것과 기계어까지 같다. 먼저 §1의 `sync_sysroot.sh`를 해 둔다.
+**무엇을 하나:** 보드용(aarch64) 실행 파일을 PC에서 빌드한다. 보드의 `make -j2`보다 훨씬 빠르다. 결과는 보드에서 빌드한 것과 기계어까지 같다.
+먼저 §1의 `sync_sysroot.sh`로 보드의 헤더와 라이브러리를 PC에 복사해 둔다.
+
+**build dir과 보드에 보내는 것:**
+- `vtabundles_xcmpl/build*/`는 git 밖이다. 그래서 보드에 있는 `build`, `build_sys`, `build_sysprof`, … 는 PC에 없고, PC의 `build_pc_systimed`는 보드에 없다. 각 기계가 자기 build dir을 따로 만든다.
+- **build dir은 옮기지 않는다.**
+  - `CMakeCache.txt`에 그 기계의 절대 경로와 컴파일러(PC는 toolchain file)가 적혀 있어서, 다른 기계에서는 쓸 수 없다.
+  - 안의 object 파일도 실행에는 필요 없다.
+- **보드에 보내는 것은 `hw/<Dir>/`의 실행 파일 하나와, bundle을 다시 만들었으면 `<모델>.weights.bin`이다.**
+  - vtalib는 실행 파일 안에 정적으로 들어간다. 나머지 라이브러리(libpng, glog, libcma, libgomp 등)는 보드에 이미 있는 것을 쓴다(`readelf -d`의 NEEDED).
+  - 실행 파일은 build dir이 아니라 `hw/<Dir>/<target><suffix>`에 생긴다.
+- **이름 끝은 `_pcsystimed`처럼 보드와 다르게 한다.** PC 실행 파일이 보드에서 빌드한 `_systimed`를 덮지 않게 하려는 것이다.
+  - 지금 PC의 `build_pc_systimed`도 `-DBUNDLE_EXE_SUFFIX=_pcsystimed`다.
+  - 판을 여럿 비교할 때는 `_pcsys2`, `_pcsys3`, … 처럼 번호를 붙였다(`docs/evta_isa_ext.md` §8.15).
+- **이름은 `_pcsys`로 시작하게 한다.** `run_prof.sh`는 `-s`가 `_sys` 또는 `_pcsys`로 시작하면 systolic bitstream(`SYS_BIN`)을 올린다(2026-11-21부터).
+  - 그래서 `BIN=`을 따로 주지 않아도 된다. 다른 systolic bitstream으로 돌릴 때만 `BIN=<file>`을 준다.
+  - 그 전에는 `_pcsys…`에 HLS bitstream(`BIN`)을 올렸다. 그 위에서 systolic vtalib가 돌면 결과가 틀린다.
+  - 시간 표(`_timed` 계열)는 이름과 상관없이 정리된다.
 
 ```bash
-# PC, nestc-build 컨테이너 안
+# PC, nestc-build 컨테이너 안 (처음 한 번: build dir 만들기)
 cd <tree>/vtabundles_xcmpl && mkdir build_pc_systimed && cd build_pc_systimed
 cmake -DCMAKE_TOOLCHAIN_FILE=<tree>/utils/docker_nestc/zcu102_toolchain.cmake \
-      -DBUNDLE_TIMED=ON -DBUNDLE_EXE_SUFFIX=_systimed -DVTALIB=$PWD/../../vtalib-zcu102-systolic ..
-make -j16 vtaMobileNetV2Bundle
-scp ../hw/MobileNetV2Test/vtaMobileNetV2Bundle_systimed xilinx@192.168.20.2:<tree>/vtabundles_xcmpl/hw/MobileNetV2Test/
+      -DBUNDLE_TIMED=ON -DBUNDLE_EXE_SUFFIX=_pcsystimed -DVTALIB=$PWD/../../vtalib-zcu102-systolic ..
+# 그다음부터 (bundle은 §3, §4.1의 collect_hw_bundles.py로 hw/<Dir>/에 모아 둔 뒤)
+make -j16 vtaMobileNetV2Bundle                                   # -> ../hw/MobileNetV2Test/vtaMobileNetV2Bundle_pcsystimed
+exit
+# PC 셸
+cd <tree>/vtabundles_xcmpl
+scp hw/MobileNetV2Test/vtaMobileNetV2Bundle_pcsystimed hw/MobileNetV2Test/mobilenetv2.weights.bin \
+    xilinx@192.168.20.2:JO/npuprg/nestc2_clion/nest-compiler/vtabundles_xcmpl/hw/MobileNetV2Test/
+# 보드, vtabundles_xcmpl/
+sudo /bin/sh -c "hw/script/run_prof.sh -s _pcsystimed -r MobileNetV2Test"      # SYS_BIN을 올린다
 ```
+
+넣을 것:
+- `<tree>`: §0 표의 PC 경로
+- `_pcsystimed`: `_pcsys`로 시작하고 보드 실행 파일과 겹치지 않는 이름. 측정 방식은 `-DBUNDLE_TIMED=ON`(문장마다 시간) 또는 `-DNESTC_EVTA_PROFILE=ON`(EVTA 호출마다 시간)이 정한다. 예: `_pcsysprof`
+- `BIN=<file>`(빼도 됨): `SYS_BIN`이 아닌 다른 systolic bitstream으로 돌릴 때. 이름에 `_sa_`가 든 것(§5.2). 예: `vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_alux3_400mhz_rq.bin`
 
 - toolchain file을 바꾸면 **새 build dir**에서 configure한다. `cmake .`는 처음의 `*_INIT` 플래그를 그대로 쓴다.
 - 맞춘 내용(libgomp, hash style 등)은 [host_pc_build.md](host_pc_build.md) §4에 있다.
@@ -626,7 +656,7 @@ sudo /bin/sh -c "hw_multievtax4/script/run_prof.sh -s _sysprof -n 25 -l -r Multi
 
 | 옵션 | 뜻 |
 |---|---|
-| `-s _prof` (기본) / `_timed` / `_sysprof` / `_systimed` / `_sys` | 어느 build dir의 실행 파일인지. `_sys*`는 `SYS_BIN`(systolic)을 올린다 |
+| `-s _prof` (기본) / `_timed` / `_sysprof` / `_systimed` / `_sys` / `_pcsys…` | 어느 build dir의 실행 파일인지. `_sys*`와 PC cross build `_pcsys*`(§4.2)는 `SYS_BIN`(systolic)을 올린다 |
 | `-n <runs>` | 추론 횟수(기본 25). multi는 copy당 |
 | `-l` | multi-EVTA lockstep: 모든 EVTA 호출 앞에서 copy들이 barrier로 만나 같은 conv를 동시에 돈다 |
 | `-r` | `chrt -f 10`(SCHED_FIFO). 4 ms scheduler tick 때문에 흔들리는 run이 없어진다. 시간 측정에는 붙인다 |

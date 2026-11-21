@@ -221,7 +221,7 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   `SYS_BIN` = systolic 400 MHz (single, multi4), used by `run_prof.sh -s _sys*` (executables built with `-DVTALIB=<vtalib-zcu102-systolic>`);
   single `SYS_BIN` is the requantize build `..._sa_400mhz_rq.bin` since 2026-11-04 (before: bias reset `..._sa_400mhz_bias.bin`, ALU imm II = 1 `..._alu1_epr.bin`), multi4 the requantize build `..._4evta_sa_400mhz_rq.bin` since 2026-11-04 (before: `..._4evta_sa_396mhz_rq.bin` at 395.8 MHz, bias reset `..._4evta_sa_400mhz_bias.bin`, ALU imm II = 1 `..._4evta_sa_400mhz_alu1.bin`, §7.15).
   The 333 MHz `vtahw_*_y219.bin` stay usable with `BIN=<file>`.
-- Measuring (2026-10-29, `vtabundles_xcmpl/README.md`): `hw*/script/run_prof.sh -s _prof|_timed|_sysprof|_systimed` (build dirs
+- Measuring (2026-10-29, `vtabundles_xcmpl/README.md`): `hw*/script/run_prof.sh -s _prof|_timed|_sysprof|_systimed|_pcsys*` (`_pcsys*`: PC cross builds, on SYS_BIN like `_sys*` since 2026-11-21; build dirs
   `build[_<set>]<suffix>`), `-n <runs>` (default 25), `-l` lockstep of the multi-EVTA copies, `-r` `chrt -f 10`, `-t <threads>`
   `OMP_NUM_THREADS` (default **1 for every set**, single EVTA too, since 2026-10-31; `-t 4` for 4 cores; `run_all.sh` the same).
   `_prof` = EVTA time per conv (`prof_summary.py` adds GOPS), `_timed` = wall time per statement.
