@@ -62,6 +62,6 @@ for i in 1 2 3 4; do
   sed -i "s/^GraphPreLowerHash: .*/GraphPreLowerHash: $h/" deit_calib_mc.yaml
 done
 echo "DeiTTest rc=$r"
-#### JO added (2026-11-21): what runs where (the VTA_FUSION_LOG summary, docs/evta_fusion_rules.md)
-grep "^VTA_FUSION_LOG [0-9 ]" gen.log | sed 's/^VTA_FUSION_LOG /  /'
+#### JO added (2026-11-21): what runs where (the VTA_FUSION_LOG summary; every line with VTA_FUSION_LOG=1; docs/evta_fusion_rules.md)
+if [ -n "${VTA_FUSION_LOG:-}" ]; then grep "^VTA_FUSION_LOG " gen.log; else grep "^VTA_FUSION_LOG [0-9 ]" gen.log; fi | sed 's/^VTA_FUSION_LOG /  /'
 exit $r

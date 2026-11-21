@@ -27,6 +27,6 @@ fi
 $B/glow/bin/model-compiler -g -model=$M -backend=VTA -emit-bundle=$O -bundle-api=dynamic -network-name=mobilenetv2 \
   -model-input=input,float,[1,3,224,224] -load-profile=mobilenetv2_calib.yaml $Q -enable-channelwise-depthwise -vta-round-shift -vta-evta-depthwise "$@" > gen.log 2>&1
 r=$?; echo "MobileNetV2Test rc=$r"
-#### JO added (2026-11-21): what runs where (the VTA_FUSION_LOG summary, docs/evta_fusion_rules.md)
-grep "^VTA_FUSION_LOG [0-9 ]" gen.log | sed 's/^VTA_FUSION_LOG /  /'
+#### JO added (2026-11-21): what runs where (the VTA_FUSION_LOG summary; every line with VTA_FUSION_LOG=1; docs/evta_fusion_rules.md)
+if [ -n "${VTA_FUSION_LOG:-}" ]; then grep "^VTA_FUSION_LOG " gen.log; else grep "^VTA_FUSION_LOG [0-9 ]" gen.log; fi | sed 's/^VTA_FUSION_LOG /  /'
 exit $r

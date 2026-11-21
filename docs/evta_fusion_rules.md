@@ -88,7 +88,7 @@ finder의 순서는 `VTASave.cpp`의 호출 순서다: Residual → EvtaMaxPools
 
 ```bash
 # 시뮬레이터 빌드(Debug2_remote)에서
-VTA_FUSION_LOG=1 ../vtabundles_xcmpl/build_sim_bundles.sh vtaVGG16Cifar10Bundle;  grep VTA_FUSION_LOG bundle_logs/vtaVGG16Cifar10Bundle.log
+VTA_FUSION_LOG=1 ../vtabundles_xcmpl/build_sim_bundles.sh -f vtaVGG16Cifar10Bundle;   # -f: 번들이 최신이어도 model-compiler를 다시 돌림;  grep VTA_FUSION_LOG bundle_logs/vtaVGG16Cifar10Bundle.log
 VTA_FUSION_LOG=1 ../vtabundles_xcmpl/gen_deit_bundle.sh;        grep VTA_FUSION_LOG vta/bundles/DeiTTest/gen.log
 ```
 

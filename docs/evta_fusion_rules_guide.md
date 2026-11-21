@@ -404,7 +404,7 @@ cpu ChannelwiseQuantizedConv__3:    channelwise conv: input / output not in the 
 
 ```bash
 # 호스트 PC 컨테이너 nestc-build (또는 보드 Debug2_remote)
-VTA_FUSION_LOG=1 ../vtabundles_xcmpl/build_sim_bundles.sh vtaVGG16Cifar10Bundle;  grep VTA_FUSION_LOG bundle_logs/vtaVGG16Cifar10Bundle.log
+VTA_FUSION_LOG=1 ../vtabundles_xcmpl/build_sim_bundles.sh -f vtaVGG16Cifar10Bundle;   # -f: 번들이 최신이어도 model-compiler를 다시 돌림;  grep VTA_FUSION_LOG bundle_logs/vtaVGG16Cifar10Bundle.log
 VTA_FUSION_LOG=1 ../vtabundles_xcmpl/gen_deit_bundle.sh;        grep VTA_FUSION_LOG vta/bundles/DeiTTest/gen.log
 # 요약만
 grep "VTA_FUSION_LOG [0-9]" <log>
