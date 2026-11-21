@@ -242,7 +242,7 @@ head -20 $O/mxnet_exported_resnet18.cpp      # 어떤 옵션으로 만들어졌�
 | `-index-multi-evta=<mask>` | 번들을 EVTA 하나에 고정(1, 2, 4, 8 = EVTA 0–3). multi4 copy를 만들 때 |
 | `-dump-graph-DAG=<file.dot>` | 최적화된 그래프를 dot으로 |
 
-**VTA backend 옵션 (`-vta-*`):** 모두 켜고 끄는 스위치다(`=false` / `=0` / `=true` / `=1`). 기본값과 뜻의 전체 표는 [evta_user_manual.md](evta_user_manual.md) §2.2에 있다. 자주 쓰는 것은 이렇다.
+**VTA backend 옵션 (`-vta-*`):** 모두 켜고 끄는 스위치다(`=false` / `=0` / `=true` / `=1`). 기본값과 뜻의 전체 표는 [evta_user_manual.md](evta_user_manual.md) §3.3에 있다. 자주 쓰는 것은 이렇다.
 
 | 옵션 | 기본 | 언제 |
 |---|---|---|
@@ -428,7 +428,7 @@ sudo /bin/sh -c "BUNDLE_RUNS=5 EVTA_DUMP_CONV=/tmp/dump_a ./vtaMxnetResnet18Bund
 | 비트스트림 | `sudo /bin/sh -c "BIN=..._bias.bin hw/script/run_prof.sh ..."` | 없음 |
 
 - 자세한 절차: [resnet18_optimization.md](resnet18_optimization.md) §9
-- 모든 환경변수: [evta_user_manual.md](evta_user_manual.md) §5
+- 모든 환경변수: [evta_user_manual.md](evta_user_manual.md) §7
 - 자주 쓰는 검증용 환경변수:
 
 | 변수 | 하는 일 |

@@ -11,7 +11,7 @@
 
 - 기준: 2026-11-07 `main`. 코드: `lib/Backends/VTA/`(`VTA.cpp`, `VTASave.cpp`), `include/Backends/VTA/`(`VTA.h`, `VTASchedules.h`).
 - 그림: `python3 docs/figs/src/make_evta_compiler_figs.py` → `docs/figs/evta_cc_*.svg`.
-- 옵션과 생성 명령: [evta_user_manual.md](evta_user_manual.md) §2.2. 바꾼 이유와 측정은 [evta_runtime_compare.md](evta_runtime_compare.md) §7.
+- 옵션과 생성 명령: [evta_user_manual.md](evta_user_manual.md) §3. 바꾼 이유와 측정은 [evta_runtime_compare.md](evta_runtime_compare.md) §7.
 
 ## 1. backend의 모양
 

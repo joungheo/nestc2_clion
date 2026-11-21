@@ -128,7 +128,8 @@ static llvm::cl::opt<bool> vtaConv0Pack(
 //#### with relu done by that conv's call (convolution_wo_tr_pool, findPoolFusions): no conv output in DRAM, no pool call
 static llvm::cl::opt<bool> vtaFusePool(
     "vta-fuse-pool",
-    llvm::cl::desc("Do the EVTA max pool after the packed first conv in that conv's call (convolution_wo_tr_pool)"),
+    llvm::cl::desc("Do a max pool (2x2 / 2 / 0 or 3x3 / 2 / 1) after an EVTA conv with relu in that conv's call "
+                   "(convolution_wo_tr_pool)"),
     llvm::cl::init(true));
 
 //#### JO added (2026-11-08): a depthwise channelwise conv whose input and output are kept in the EVTA layout on the EVTA

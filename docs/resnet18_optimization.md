@@ -592,9 +592,9 @@ python3 $X/collect_hw_bundles.py Resnet18Test
 
 - **옵션 형식:** `-vta-fuse-pool=false`, `=0`, `=true`, `=1` 모두 된다.
 - **옵션 여러 개:** 한 줄에 함께 줘도 된다. 앞 단계를 끄면 뒤 단계는 조건이 안 맞아 저절로 빠진다. 예를 들어 `-vta-keep-layout=false`이면 residual fusion, maxpool EVTA, conv0 + pool도 함께 빠진다(모두 EVTA layout을 전제로 한다).
-- **어떤 옵션으로 만든 번들인지 확인하기:** 생성된 `.cpp` 맨 앞 주석에 모든 `-vta-*` 값이 기본값까지 찍힌다(`head -20 hw/Resnet18Test/mxnet_exported_resnet18.cpp`). 옵션 이름과 뜻의 전체 목록은 `docs/evta_user_manual.md` §2.2에 있다.
+- **어떤 옵션으로 만든 번들인지 확인하기:** 생성된 `.cpp` 맨 앞 주석에 모든 `-vta-*` 값이 기본값까지 찍힌다(`head -20 hw/Resnet18Test/mxnet_exported_resnet18.cpp`). 옵션 이름과 뜻의 전체 목록은 `docs/evta_user_manual.md` §3.3에 있다.
 - **`collect_hw_bundles.py`의 부작용:** `hw/script/run_all.sh`도 다시 쓰지만, 템플릿이 git의 파일과 같으므로(11-10) 바뀌는 것은 없다.
-- **multi4 copy:** `vta/multievta_bundles/MultiEVTAResnet18Test/CMakeLists.txt`의 플래그(copy i는 `-index-multi-evta=$((1<<i))`, `-network-name=mxnet_exported_resnet18_<i>`)에 같은 옵션을 붙여 4번 만든다(`docs/evta_user_manual.md` §2.1).
+- **multi4 copy:** `vta/multievta_bundles/MultiEVTAResnet18Test/CMakeLists.txt`의 플래그(copy i는 `-index-multi-evta=$((1<<i))`, `-network-name=mxnet_exported_resnet18_<i>`)에 같은 옵션을 붙여 4번 만든다(`docs/evta_user_manual.md` §3.1).
 - **다른 모델:** MobileNetV2 / DeiT는 생성 스크립트가 옵션을 그대로 넘긴다(`vtabundles_xcmpl/gen_mobilenetv2_bundle.sh -vta-evta-depthwise=0`, `gen_deit_bundle.sh -vta-matmul-heads=false` 식). 다만 결과는 `Debug2_remote/vta/bundles/<Dir>`에 바로 쓰이므로, 비교가 끝나면 옵션 없이 다시 생성해 둔다. Resnet50 / VGG16의 직접 호출 명령은 `~/JO/deit_tmp/regen2.sh`에 있다.
 
 ### 9.4 B. 실행 환경변수: 실행할 때 준다 (다시 빌드하지 않음)
@@ -625,7 +625,7 @@ sudo /bin/sh -c "hw/script/load_bit.sh vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_
 | `EVTA_CONV_BURST=0` | DMA 묶기 | – (묶기 없음) | ○ |
 | `EVTA_SCHED=...` | (schedule 바꿔 끼우기) | – | ○ |
 
-- 검증용 변수(`EVTA_DUMP_CONV=<dir>`, `EVTA_RES_CHECK=1`, `EVTA_REPLAY_LOG=2`, `EVTA_REPLAY_DUMP=<dir>`, `EVTA_MEMEXP=<mask>`)도 같은 방식으로 준다. 전체 목록은 `docs/evta_user_manual.md` §5에 있다.
+- 검증용 변수(`EVTA_DUMP_CONV=<dir>`, `EVTA_RES_CHECK=1`, `EVTA_REPLAY_LOG=2`, `EVTA_REPLAY_DUMP=<dir>`, `EVTA_MEMEXP=<mask>`)도 같은 방식으로 준다. 전체 목록은 `docs/evta_user_manual.md` §7에 있다.
 - `EVTA_DUMP_CONV=<dir>`의 디렉터리는 실행 위치(`hw/Resnet18Test/`) 기준이다. 미리 만들어 두거나 절대 경로를 쓴다.
 
 ### 9.5 C. 비트스트림: `BIN=`으로 고른다

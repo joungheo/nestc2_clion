@@ -169,7 +169,7 @@ GEMM과 ALU 명령에 그 값이 들어가고, `en = 0`으로 다시 끈다(`cmd
 ### 6.1 순서
 
 1. **bundle 소스 만들기**(보드, simulator 빌드): `cd Debug2_remote && ./build_sim_bundles.sh <target>`
-   ([evta_user_manual.md](evta_user_manual.md) §2). 컴파일러 옵션은 같은 문서 §2.2. 조건이 안 맞는 층은 옵션과 상관없이 이전 경로로 간다.
+   ([evta_user_manual.md](evta_user_manual.md) §3.1). 컴파일러 옵션은 같은 문서 §3.3. 조건이 안 맞는 층은 옵션과 상관없이 이전 경로로 간다.
 2. **보드용으로 복사, 빌드:** `vtabundles_xcmpl/collect_hw_bundles.py [Dir]`, 그다음 `build_sysprof` / `build_systimed`에서
    `make -j2 <target>`(§3). 이 dir들은 `-DVTALIB=<root>/vtalib-zcu102-systolic`로 만들어져 있다.
 3. **기준값 만들기:** 같은 실행 파일을 기능이 없는 systolic bitstream(또는 같은 bitstream에서 `EVTA_REQUANT=0 EVTA_BIAS_RESET=0`)으로 돌려

@@ -9,7 +9,7 @@
   - [evta_runtime_arch.md](evta_runtime_arch.md): 그 bundle이 보드에서 도는 runtime / driver.
   - 셋을 그림 중심으로 한 번에 훑는 문서: [evta_stack_arch.md](evta_stack_arch.md).
 - 기준: 2026-11-07 `main`. 그림: `python3 docs/figs/src/make_evta_compiler_figs.py` → `docs/figs/evta_cc_*.svg`.
-- 저장소 구조와 빌드: [CLAUDE.md](../CLAUDE.md). 명령과 옵션: [evta_user_manual.md](evta_user_manual.md) §2.
+- 저장소 구조와 빌드: [CLAUDE.md](../CLAUDE.md). 명령과 옵션: [evta_user_manual.md](evta_user_manual.md) §3.
 
 ## 0. 용어
 

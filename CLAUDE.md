@@ -129,7 +129,7 @@ the same for Resnet50 (160.3 -> 69.6 ms) [docs/resnet50_optimization.md](docs/re
 how the whole stack works, for readers new to Glow / VTA (11 figures, entry: [docs/evta_stack_arch.md](docs/evta_stack_arch.md);
 frontend / lowering / quantization [docs/evta_compiler_frontend.md](docs/evta_compiler_frontend.md), VTA backend
 [docs/evta_compiler_backend.md](docs/evta_compiler_backend.md), runtime / driver [docs/evta_runtime_arch.md](docs/evta_runtime_arch.md));
-commands, options and where to run them: [docs/evta_user_manual.md](docs/evta_user_manual.md).
+every command, script and option in one place, by kind of work (environment, bitstream, bundle generation with all `-vta-*` options and `VTA_FUSION_LOG`, board / cross build, runs, accuracy, runtime variables, vtalib and hardware tests; add a line there for a new script): [docs/evta_user_manual.md](docs/evta_user_manual.md).
 Step by step from the compiler build to logs (cmake / make of Debug2_remote, VTASaverTest, image-classifier profile,
 model-compiler with its options, collect_hw_bundles.py, vtabundles_xcmpl build dirs, run_all / run_prof, where the logs are and how to read them):
 [docs/evta_walkthrough.md](docs/evta_walkthrough.md).
