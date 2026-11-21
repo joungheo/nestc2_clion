@@ -284,6 +284,7 @@ public:
   //#### leaves on the CPU, with the reason, noted where it leaves the EVTA path; VTA_FUSION_LOG prints them at the end
   std::vector<std::pair<const Instruction *, std::string>> cpuGemms;
   void noteCpuGemm(const Instruction *I, const std::string &why) { cpuGemms.emplace_back(I, why); }
+  std::vector<std::string> fusionSummary;   //#### JO added (2026-11-21): the summary lines (log and the bundle's top comment)
   std::map<const Instruction *, std::string> lutNames;
   //#### JO added (2026-11-09): softmax of a dequantized int8 tensor emitted at the dequantize (findSoftmaxI8)
   std::map<const Instruction *, const SoftMaxInst *> softmaxAtDq;
@@ -7801,6 +7802,7 @@ static bool saveGenericCpuInst(const Instruction &I, std::string *bundle, VTASav
 }
 
 struct BundleSaveCtx {
+  std::string summaryComment;   //#### JO added (2026-11-21): the VTA_FUSION_LOG summary, after the options comment
   std::string bundle;
   std::string initConst;
   std::string destroyConst;
@@ -9092,11 +9094,34 @@ static void findMulResidualFusions(const IRFunction *IR, VTASaveContext *ctx, bo
 //#### its call does, and for one without a tail the first instruction that reads its output: a max pool, an add, a relu /
 //#### clip or a table region there is a fusion the rules miss (VGG16's 2 x 2 pools were such a case); anything else
 //#### (a conv, a transpose, ...) is not a tail. Only stderr; the bundle does not change.
+//#### JO changed (2026-11-21): levels. VTA_FUSION_LOG unset or empty = the summary (always on: what stays on the CPU shows
+//#### for any model), "0" = nothing, any other value ("1") = also a line per producer and per CPU GEMM. The summary is
+//#### also the bundle .cpp's top comment whatever the level (the bundle does not depend on the environment).
+static int fusionLogLevel() {
+  const char *e = getenv("VTA_FUSION_LOG");
+  if (!e || !*e)
+    return 1;
+  return std::string(e) == "0" ? 0 : 2;
+}
+// "n x reason" for each distinct reason, the most frequent first
+static std::vector<std::string> countReasons(const std::vector<std::string> &rs) {
+  std::map<std::string, int> n;
+  for (const auto &r : rs)
+    n[r]++;
+  std::vector<std::pair<int, std::string>> v;
+  for (const auto &kv : n)
+    v.emplace_back(-kv.second, kv.first);
+  std::sort(v.begin(), v.end());
+  std::vector<std::string> out;
+  for (const auto &x : v)
+    out.push_back(std::to_string(-x.first) + " x " + x.second);
+  return out;
+}
 static void reportFusions(const IRFunction *IR, VTASaveContext *ctx) {
-  if (!getenv("VTA_FUSION_LOG"))
-    return;
+  const bool detail = fusionLogLevel() == 2;
   const IrSeq seq(IR);
   int nProd = 0, nTail = 0, nMiss = 0;
+  std::vector<std::string> missWhy;
   for (size_t i = 0; i < seq.ins.size(); i++) {
     const Instruction *C = seq.ins[i];
     const EvtaGemm k = evtaGemmOf(C);
@@ -9107,7 +9132,8 @@ static void reportFusions(const IRFunction *IR, VTASaveContext *ctx) {
     std::string tail = ctx->getFusion(C) ? "epilogue" : ctx->getPoolFusion(C) ? "max pool" : ctx->outLutConv.count(C) ? "out LUT" : "";
     if (!tail.empty()) {
       nTail++;
-      llvm::errs() << "VTA_FUSION_LOG " << C->getName() << " (" << kn << "): " << tail << "\n";
+      if (detail)
+        llvm::errs() << "VTA_FUSION_LOG " << C->getName() << " (" << kn << "): " << tail << "\n";
       continue;
     }
     const Value *D = getOrigin(const_cast<Value *>(llvm::cast<ConvolutionInst>(C)->getDest()));
@@ -9126,22 +9152,31 @@ static void reportFusions(const IRFunction *IR, VTASaveContext *ctx) {
     // an add fused into another producer's epilogue reads this output as its residual: not a miss
     const bool elsewhere = tailOp && ctx->isFusedAway(R);
     nMiss += tailOp && !elsewhere;
-    llvm::errs() << "VTA_FUSION_LOG " << C->getName() << " (" << kn << "): no tail; read by "
-                 << (R ? R->getName().str() + " (" + R->getKindName() + ")" : std::string("nothing"))
-                 << (elsewhere ? "  (the residual of another producer's epilogue)" : tailOp ? "  <- a tail op not fused" : "");
     // the known reasons (docs/evta_fusion_rules.md 5)
+    std::string why;
     if (tailOp && !elsewhere) {
       if (auto *P = llvm::dyn_cast<MaxPoolInst>(R))
-        llvm::errs() << (ctx->isEvtaMaxPool(P) ? " (an EVTA pool: see findPoolFusions' conditions)" : " (a CPU pool)");
+        why = ctx->isEvtaMaxPool(P) ? "an EVTA pool: see findPoolFusions' conditions" : "a CPU pool";
       else if (llvm::isa<AvgPoolInst>(R))
-        llvm::errs() << " (avgpool_evta on its own)";
+        why = "avgpool_evta on its own";
       else if (llvm::isa<ElementAddInst>(R) && !vtaFuseElemAddMul)
-        llvm::errs() << " (-vta-fuse-elemadd-mul is off: elemadd_evta is faster)";
+        why = "an add: -vta-fuse-elemadd-mul is off (elemadd_evta is faster)";
+      else
+        why = std::string(R->getKindName()) + " (no known reason)";
+      missWhy.push_back(why);
     }
-    llvm::errs() << "\n";
+    if (detail)
+      llvm::errs() << "VTA_FUSION_LOG " << C->getName() << " (" << kn << "): no tail; read by "
+                   << (R ? R->getName().str() + " (" + R->getKindName() + ")" : std::string("nothing"))
+                   << (elsewhere ? "  (the residual of another producer's epilogue)" : tailOp ? "  <- a tail op not fused" : "")
+                   << (why.empty() ? "" : " (" + why + ")") << "\n";
   }
-  llvm::errs() << "VTA_FUSION_LOG " << nProd << " EVTA producers, " << nTail << " with a tail, " << nMiss
-               << " read by a tail op not fused\n";
+  auto &sum = ctx->fusionSummary;
+  sum.clear();
+  sum.push_back(std::to_string(nProd) + " EVTA producers, " + std::to_string(nTail) + " with a tail, " +
+                std::to_string(nMiss) + " read by a tail op not fused");
+  for (const auto &r : countReasons(missWhy))
+    sum.push_back("  not fused: " + r);
 }
 
 //#### JO added (2026-11-12, ALU extension step 7): -vta-alu-layernorm
@@ -9752,6 +9787,7 @@ void exportBundleEntry(llvm::StringRef outputDir, llvm::StringRef bundleName,
   std::ofstream fos(outputFile.c_str(), std::ios::out);
   const std::string optionsComment = vtaOptionsComment();
   fos.write(optionsComment.c_str(), optionsComment.size());
+  fos.write(bundleCtx.summaryComment.c_str(), bundleCtx.summaryComment.size());
   fos.write(VTA_SAVE_COMMON.c_str(), VTA_SAVE_COMMON.size());
   fos.write(bundleCtx.includeHeader.c_str(), bundleCtx.includeHeader.size());
   auto &symbolTable = bundleCtx.symbolTable;
@@ -10235,10 +10271,25 @@ void VTA::save(Function *F, llvm::StringRef outputDir,
   bundle.append("  prof_out.close();\n");
 #endif
   //#### JO added (2026-11-20, docs/evta_fusion_rules.md 5): the GEMMs left on the CPU and why (noteCpuGemm)
-  if (getenv("VTA_FUSION_LOG")) {
-    for (const auto &c : ctx.cpuGemms)
-      llvm::errs() << "VTA_FUSION_LOG cpu " << c.first->getName() << ": " << c.second << "\n";
-    llvm::errs() << "VTA_FUSION_LOG " << ctx.cpuGemms.size() << " GEMMs on the CPU\n";
+  //#### JO changed (2026-11-21): the summary always (fusionLogLevel), the reasons counted, also as the bundle's top comment
+  {
+    const int level = fusionLogLevel();
+    std::vector<std::string> why;
+    for (const auto &c : ctx.cpuGemms) {
+      why.push_back(c.second);
+      if (level == 2)
+        llvm::errs() << "VTA_FUSION_LOG cpu " << c.first->getName() << ": " << c.second << "\n";
+    }
+    auto sum = ctx.fusionSummary;
+    sum.push_back(std::to_string(ctx.cpuGemms.size()) + " GEMMs (conv / fc / matmul) on the CPU");
+    for (const auto &r : countReasons(why))
+      sum.push_back("  on the CPU: " + r);
+    bundleCtx.summaryComment = "// EVTA fusion summary (VTA_FUSION_LOG=1 for every instruction; docs/evta_fusion_rules.md):\n";
+    for (const auto &l : sum) {
+      bundleCtx.summaryComment += "//   " + l + "\n";
+      if (level >= 1)
+        llvm::errs() << "VTA_FUSION_LOG " << l << "\n";
+    }
   }
   wfos.close();
   finalizeBundleEntrySave(bundleCtx, bundleName, mainEntryName, ctx);

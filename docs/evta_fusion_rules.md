@@ -65,8 +65,22 @@ finder는 다음 세 가지만 묻는다.
 finder의 순서는 `VTASave.cpp`의 호출 순서다: Residual → EvtaMaxPools → InputPreprocess → **Pool** → LutRegions → **OutLutConvs** →
 … → **OutLutMatMuls** → PackedRows → **MulResidual** → **Embed**. 앞에서 꼬리를 받은 생산자는 뒤 finder가 건너뛴다.
 
-## 5. 점검: `VTA_FUSION_LOG=1`
+## 5. 점검: `VTA_FUSION_LOG`
 
+**단계 (2026-11-21):** 값으로 정한다. 변수가 없거나 비어 있으면 **요약만**(기본, 늘 켜짐), `0`이면 아무것도 안 찍고, 그 밖의 값(`1` 등)이면 명령마다 자세히 찍는다.
+요약은 생산자 수 / 꼬리 있음 / 빠진 꼬리, CPU로 간 GEMM 수와 그 이유별 개수다. 같은 요약이 번들 `.cpp` 맨 위(옵션 주석 바로 뒤)에 `// EVTA fusion summary` 주석으로 **값과 상관없이** 늘 들어간다(번들이 환경 변수에 따라 달라지지 않게).
+`build_sim_bundles.sh`, `gen_deit_bundle.sh`, `gen_mobilenetv2_bundle.sh`는 끝에 요약을 화면에 찍는다.
+
+```
+// EVTA fusion summary (VTA_FUSION_LOG=1 for every instruction; docs/evta_fusion_rules.md):
+//   73 EVTA producers, 13 with a tail, 24 read by a tail op not fused
+//     not fused: 24 x an add: -vta-fuse-elemadd-mul is off (elemadd_evta is faster)
+//   6 GEMMs (conv / fc / matmul) on the CPU
+//     on the CPU: 3 x matmul 2 x 198 x 64: 2 rows: no H x W with W >= 7 (largest W 1)
+//     on the CPU: 3 x matmul 2 x 64 x 198: 2 rows: no H x W with W >= 7 (largest W 1)
+```
+
+아래는 `VTA_FUSION_LOG=1`의 자세한 줄이다.
 모든 생산자에 대해 받은 꼬리를 적는다. 꼬리가 없으면 그 출력을 처음 읽는 명령을 적는다.
 그 명령이 꼬리가 될 수 있는 연산(max / avg pool, add, relu, clip, 표 구간)인데 융합되지 않았으면 `<- a tail op not fused`가 붙는다.
 이유를 아는 경우에는 그 이유도 함께 적는다.
@@ -74,7 +88,7 @@ finder의 순서는 `VTASave.cpp`의 호출 순서다: Residual → EvtaMaxPools
 
 ```bash
 # 시뮬레이터 빌드(Debug2_remote)에서
-VTA_FUSION_LOG=1 ./build_sim_bundles.sh vtaVGG16Cifar10Bundle;  grep VTA_FUSION_LOG bundle_logs/vtaVGG16Cifar10Bundle.log
+VTA_FUSION_LOG=1 ../vtabundles_xcmpl/build_sim_bundles.sh vtaVGG16Cifar10Bundle;  grep VTA_FUSION_LOG bundle_logs/vtaVGG16Cifar10Bundle.log
 VTA_FUSION_LOG=1 ../vtabundles_xcmpl/gen_deit_bundle.sh;        grep VTA_FUSION_LOG vta/bundles/DeiTTest/gen.log
 ```
 

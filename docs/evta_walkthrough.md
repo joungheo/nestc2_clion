@@ -136,12 +136,16 @@ make -j2 VTASaverTest              # 작은 시험 번들 생성기(§3.2)
 
 ```bash
 cd $D
-./build_sim_bundles.sh vtaMxnetResnet18Bundle                  # 하나
-./build_sim_bundles.sh vtaConvTestBundle vtaFCTestBundle       # 여러 개
-./build_sim_bundles.sh                                         # 전부 (시험 번들 + Resnet18 / 50 / VGG16, 수십 분)
+../vtabundles_xcmpl/build_sim_bundles.sh vtaMxnetResnet18Bundle             # 하나
+../vtabundles_xcmpl/build_sim_bundles.sh vtaConvTestBundle vtaFCTestBundle  # 여러 개
+../vtabundles_xcmpl/build_sim_bundles.sh                                    # 전부 (시험 번들 + Resnet18 / 50 / VGG16, 수십 분)
 cat bundle_logs/summary.txt                                    # target마다 OK / FAIL, 걸린 시간
 less bundle_logs/vtaMxnetResnet18Bundle.log                    # 실패 원인
 ```
+
+- 스크립트는 2026-11-21부터 git에 있는 `vtabundles_xcmpl/build_sim_bundles.sh`다. `Debug2_remote/build_sim_bundles.sh`는 그것을 부르는 한 줄짜리라 `./build_sim_bundles.sh`도 된다(보드의 Debug2_remote에 옛 스크립트가 있으면 그것도 같은 일을 한다).
+- target마다 시작할 때 로그 경로를 찍고, make가 끝날 때까지는 조용하다. 보드에서 모델 하나에 약 2분, cmake가 다시 돌면 Glow 전체를 다시 빌드해 약 1시간이다. 진행은 `tail -f bundle_logs/<target>.log`로 본다.
+- 모델 target 뒤에는 무엇이 EVTA / CPU에서 도는지 요약이 나온다(`VTA_FUSION_LOG`, [evta_fusion_rules.md](evta_fusion_rules.md) §5). make가 번들이 최신이라 model-compiler를 다시 돌리지 않으면 요약도 없다. 같은 요약이 번들 `.cpp` 맨 위 주석에도 있다.
 
 - 이 스크립트는 target마다 `make -j2 <target>`을 부른다. make는 각 모델의 `vta/bundles/<Dir>/CMakeLists.txt`에 적힌 순서대로 profile → model-compiler → 시뮬레이터용 실행 파일을 만든다.
 - TVM 환경변수는 스크립트가 넣는다.

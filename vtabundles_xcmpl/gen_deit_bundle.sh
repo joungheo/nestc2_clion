@@ -61,4 +61,7 @@ for i in 1 2 3 4; do
   echo "graph hash mismatch (run $i): profile hash set to $h"
   sed -i "s/^GraphPreLowerHash: .*/GraphPreLowerHash: $h/" deit_calib_mc.yaml
 done
-echo "DeiTTest rc=$r"; exit $r
+echo "DeiTTest rc=$r"
+#### JO added (2026-11-21): what runs where (the VTA_FUSION_LOG summary, docs/evta_fusion_rules.md)
+grep "^VTA_FUSION_LOG [0-9 ]" gen.log | sed 's/^VTA_FUSION_LOG /  /'
+exit $r

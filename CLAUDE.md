@@ -163,7 +163,7 @@ the KV260 DPU (price, power, size, interfaces, published numbers, which advantag
   model-compiler are not built there: generate bundle sources in the simulator build (`Debug2_remote`) and
   build them for the board with the standalone CMake project in `vtabundles_xcmpl/` (not part of the NEST-C
   CMake; its build dirs are git-ignored; see its `README.md`:
-  `build_sim_bundles.sh` → `collect_hw_bundles.py` → `make` in `build/` → `hw/script/run_all.sh`; of `hw/` and `hw_<set>/` only `script/` is in git).
+  `build_sim_bundles.sh` (in `vtabundles_xcmpl/` since 2026-11-21; `Debug2_remote/build_sim_bundles.sh` is a one-line wrapper) → `collect_hw_bundles.py` → `make` in `build/` → `hw/script/run_all.sh`; of `hw/` and `hw_<set>/` only `script/` is in git).
 
 ### EVTA bitstreams (host PC, Vivado 2020.1 in docker)
 
@@ -400,6 +400,8 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   with the known reason (now: VGG16's last CPU pool, MobileNetV2's avgpool, DeiT's 24 adds with `-vta-fuse-elemadd-mul` off).
   Since 2026-11-20 it also lists every conv / fc / matmul left on the CPU with the EVTA condition it failed (`noteCpuGemm`, the reason
   from the deciding code: `getConvPath(I, &why)`, `saveEvtaFcPacked`; now only DeiT's six 2-row last-block attention matmuls, W < 7).
+  Since 2026-11-21 the summary (counts, reasons counted) is printed by default and is the bundle `.cpp`'s top comment after the options
+  (whatever the variable); `VTA_FUSION_LOG=0` prints nothing, any other value a line per instruction.
   Before / after code with 5 figures: [docs/evta_fusion_rules_guide.md](docs/evta_fusion_rules_guide.md).
 - Other models (2026-11-05, `docs/evta_runtime_compare.md` §7.19): Resnet50 res2_0 residual fused (relu to a 2^q smaller scale), schedules of the
   Resnet50 / VGG16 shapes in `VTASchedules.h` (found with vtalib-systolic `EVTA_SCHED`), conv tiles below 7 x 7: the dummy-padded store

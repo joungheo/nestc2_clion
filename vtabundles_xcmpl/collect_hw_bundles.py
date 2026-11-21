@@ -2,7 +2,7 @@
 """Collect every vta/bundles bundle into hw/<Dir> for the ZCU102 EVTA build (copy only, no compile).
 
 Bundle sources/data are taken from the simulator build (Debug2_remote/vta/bundles/<Dir>, produced by
-Debug2_remote/build_sim_bundles.sh) and from the source tree (vta/bundles/<Dir>); the build dir wins
+vtabundles_xcmpl/build_sim_bundles.sh) and from the source tree (vta/bundles/<Dir>); the build dir wins
 when both have a file, except sources add_executable names from the source dir (as NEST-C compiles them). Files already in hw/<Dir> (executables, *_prof, logs, output.bin) are kept;
 copied files overwrite older copies.
 
@@ -220,7 +220,7 @@ def main():
         for exe in sel:
             missing = [os.path.basename(s) for s in exes[exe] if not os.path.exists(f'{out}/{os.path.basename(s)}')]
             if missing:
-                report.append(f'{d:30s} MISSING {", ".join(missing)}  (run Debug2_remote/build_sim_bundles.sh {exe})')
+                report.append(f'{d:30s} MISSING {", ".join(missing)}  (run vtabundles_xcmpl/build_sim_bundles.sh {exe})')
             else:
                 report.append(f'{d:30s} OK   {n:3d} updated  {exe}')
                 params, golden = tests.get(exe, ('', ''))

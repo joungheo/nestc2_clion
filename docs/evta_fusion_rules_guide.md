@@ -389,9 +389,22 @@ cpu ChannelwiseQuantizedConv__3:    channelwise conv: input / output not in the 
 
 ### 7.3 쓰는 법
 
+**단계 (2026-11-21):** 값으로 정한다. 변수가 없거나 비어 있으면 **요약만**(기본, 늘 켜짐), `0`이면 아무것도 안 찍고, 그 밖의 값(`1` 등)이면 명령마다 자세히 찍는다.
+요약은 생산자 수 / 꼬리 있음 / 빠진 꼬리, CPU로 간 GEMM 수와 그 이유별 개수다. 같은 요약이 번들 `.cpp` 맨 위(옵션 주석 바로 뒤)에 `// EVTA fusion summary` 주석으로 **값과 상관없이** 늘 들어간다(번들이 환경 변수에 따라 달라지지 않게).
+`build_sim_bundles.sh`, `gen_deit_bundle.sh`, `gen_mobilenetv2_bundle.sh`는 끝에 요약을 화면에 찍는다.
+
+```
+// EVTA fusion summary (VTA_FUSION_LOG=1 for every instruction; docs/evta_fusion_rules.md):
+//   73 EVTA producers, 13 with a tail, 24 read by a tail op not fused
+//     not fused: 24 x an add: -vta-fuse-elemadd-mul is off (elemadd_evta is faster)
+//   6 GEMMs (conv / fc / matmul) on the CPU
+//     on the CPU: 3 x matmul 2 x 198 x 64: 2 rows: no H x W with W >= 7 (largest W 1)
+//     on the CPU: 3 x matmul 2 x 64 x 198: 2 rows: no H x W with W >= 7 (largest W 1)
+```
+
 ```bash
 # 호스트 PC 컨테이너 nestc-build (또는 보드 Debug2_remote)
-VTA_FUSION_LOG=1 ./build_sim_bundles.sh vtaVGG16Cifar10Bundle;  grep VTA_FUSION_LOG bundle_logs/vtaVGG16Cifar10Bundle.log
+VTA_FUSION_LOG=1 ../vtabundles_xcmpl/build_sim_bundles.sh vtaVGG16Cifar10Bundle;  grep VTA_FUSION_LOG bundle_logs/vtaVGG16Cifar10Bundle.log
 VTA_FUSION_LOG=1 ../vtabundles_xcmpl/gen_deit_bundle.sh;        grep VTA_FUSION_LOG vta/bundles/DeiTTest/gen.log
 # 요약만
 grep "VTA_FUSION_LOG [0-9]" <log>

@@ -196,4 +196,4 @@ Glow backend 인터페이스(`glow/include/glow/Backend/Backend.h`)를 따른다
 | `lib/Backends/VTA/VTANodes.cpp`, `VTAFunction.cpp` | in-process 해석 실행 (`-backend=VTA`로 image-classifier) |
 | `lib/Backends/VTA/ClassGen/VTASpecific*.h` | VTA 고유 노드·명령 정의 |
 | `lib/Backends/VTAInterpreter/` | profile과 정확도 확인용 참조 backend |
-| `vtabundles_xcmpl/gen_*_bundles.sh`, `Debug2_remote/build_sim_bundles.sh` | bundle 생성 명령 (NEST-C CMake를 다시 돌리지 않고) |
+| `vtabundles_xcmpl/gen_*_bundles.sh`, `vtabundles_xcmpl/build_sim_bundles.sh` | bundle 생성 명령 (NEST-C CMake를 다시 돌리지 않고) |
