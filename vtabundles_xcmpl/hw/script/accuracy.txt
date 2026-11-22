@@ -1,0 +1,9 @@
+# <Dir> <dataset accuracy of the current bundle> (run_prof.sh prints it after the class of its one image; 2026-11-22)
+# run_prof.sh runs one image: these come from imagenet_eval/eval_board.sh (board, EVTA) and float_ref_cnn.py (PC, float ONNX),
+# docs/evta_accuracy.md. Keep them up to date when a change alters output bytes.
+DeiTTest          ImageNetV2 10,000 top-1 60.37 % (float 62.41 %; 2026-11-22)
+MultiEVTADeiTTest ImageNetV2 10,000 top-1 60.37 % (DeiTTest's bundle; float 62.41 %)
+MobileNetV2Test   ImageNetV2 10,000 top-1 56.19 % (float 58.71 %; 2026-11-22)
+Resnet18Test      ImageNetV2 10,000 top-1 52.61 % (float 58.16 %; 2026-11-22; calibrated on one image)
+Resnet50Test      ImageNetV2 10,000 top-1 44.66 % (float 57.50 %; 2026-11-22; calibrated on one image)
+Vgg16Cifar10Test  CIFAR-10 test 10,000 top-1 29.27 % (float 30.07 % with this input; the model wants mean / std normalized input: 87 %, docs/evta_accuracy.md)

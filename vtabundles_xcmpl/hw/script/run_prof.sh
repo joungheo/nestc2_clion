@@ -243,6 +243,14 @@ for D in "$@"; do
   # printf "%-30s exit=%-3s %-10s %s\n" $D $rc "$res" "$t" >> $SUM
   #### JO changed (2026-10-31): + omp=<OMP_NUM_THREADS>
   # printf "%-30s %-34s exit=%-3s %-10s %s\n" $D $EXE $rc "$res" "$t" >> $SUM
+  #### JO added (2026-11-22): the class of this image (top-1 and its confidence, or logit for DeiT) and the dataset accuracy
+  #### recorded for the Dir in script/accuracy.txt (run_prof.sh runs one image: a dataset accuracy is measured elsewhere,
+  #### e.g. imagenet_eval/eval_board.sh)
+  cls=$(awk '/^Result: [0-9]+$/ {c=$2} /^Confidence: / {p=$2} /Result: [0-9]+ Confidence: / {for (i = 1; i < NF; i++) {if ($i == "Result:") c=$(i+1); if ($i == "Confidence:") p=$(i+1)}; sub(",", "", p)}
+             /^ *top1: / {c=$2; p="logit " $3} END {if (c != "") printf "top-1 %s (%s)", c, p}' $D/$LOG)
+  acc=$(awk -v d=$D '$1 == d {$1 = ""; sub(/^ /, ""); print; exit}' script/accuracy.txt 2>/dev/null)
+  [ -n "$cls" ] && t="$t; $cls"
+  [ -n "$acc" ] && t="$t; accuracy: $acc"
   printf "%-30s %-34s exit=%-3s omp=%-2s %-10s %s\n" $D $EXE $rc $OMP "$res" "$t" >> $SUM
   [ -n "$more" ] && echo "$more" >> $SUM
   done 3< <(grep -E "^run $D " $RUN_ALL)

@@ -18,6 +18,8 @@
 
 //#### JO added (2026-11-09): DeiTTest copy of MobileNetV2Test/multi_threads_main.cpp with MODEL_MEAN / MODEL_STD (per channel
 //#### normalization of the input) and MODEL_PRINT_TOP5.
+//#### JO changed (2026-11-22): the one copy for every single-EVTA model main (DeiT, MobileNetV2, and the eval mains of Resnet18 /
+//#### Resnet50 / VGG16, <x>EvalMain.cpp): the same file in each vta/bundles/<Dir>/, the model in its multi_model.h.
 //#### JO added (2026-11-06): one bundle copy per EVTA in its own pthread for any image classifier (multi_model.h names
 //#### the copies' entries, the input and the output, MultiEVTAResnet50Test / MultiEVTAVgg16Cifar10Test); the same as
 //#### MultiEVTAResnet18Test/multi_threads_main.cpp: every copy runs MULTI_RUNS (default 25) inferences, the copies start
@@ -256,6 +258,9 @@ int main(int argc, char **argv) {
     printf("usage: %s <image.png>\n", argv[0]);
     return 1;
   }
+#ifndef MODEL_LABEL_OFFSET
+#define MODEL_LABEL_OFFSET 0
+#endif
 #ifdef MULTI_SINGLE
   //#### JO added (2026-11-10): accuracy over a labeled image set. EVAL_LIST=<file> with one "<image.png> <class>" per line
   //#### (vtabundles_xcmpl/imagenet_eval/): copy 0 loads its weights once and classifies every image; prints one
@@ -286,7 +291,9 @@ int main(int argc, char **argv) {
       m.run(cw, mw, act);
       float conf = 0;
       const int pred = classify(c, mw, &conf);
-      ok += pred == label;
+      //#### JO added (2026-11-22): MODEL_LABEL_OFFSET (multi_model.h) = model class - list class (MobileNetV2: 1, class 0 is
+      //#### the background); the EV line prints the list class
+      ok += pred == label + MODEL_LABEL_OFFSET;
       n++;
       if (!quiet || n % 500 == 0)
         printf("EV %d %d %d  top1 %d/%d\n", n, pred, label, ok, n);

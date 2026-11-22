@@ -762,14 +762,24 @@ sudo /bin/sh -c "BIN=vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_alux3_400mhz_rq.bi
   - `_prof` 로그에는 `prof_summary.py` 요약(`<log>.sum`, conv마다 시간과 GOPS)이 붙는다.
   - `_timed` 로그에는 `run_times.py` 요약(추론마다 시간, 중앙값, GOPS)이 붙고, 문장별 시간은 `timing.csv`에 남는다.
   - Dir마다 한 줄씩 `hw/result/<suffix>_summary.txt`에 남는다(exit, golden, 전체 시간).
+  - `_timed` / `_systimed`의 요약 줄(2026-11-22부터):
+    - 1장의 연산량과 fps: `whole run median 22.537 ms, 164.19 GOPS (3.700 GOP), 44.4 fps`
+      - fps = 1000 / 2–25회 중앙값(ms)이다. 1초 동안 돌릴 필요는 없다. 첫 회는 준비 시간이 섞여 빼고 잰다.
+      - copy k개를 동시에 돌리면 fps는 k × 1000 / 가장 느린 copy의 시간이다.
+      - GOPS = GOP × fps다.
+    - 그 실행의 분류: `top-1 281 (0.655530)`
+    - 데이터셋 정확도 기록: `script/accuracy.txt`의 그 Dir 줄(§6). 그림 한 장으로는 정확도를 잴 수 없어, 따로 잰 값을 보여 준다.
 - multi-EVTA 실행 파일은 copy마다 표를 따로 출력한다.
   - `multi4conv4Bundle <mask> [iters] [conv]` 같은 GOPS 측정은 [vtabundles_xcmpl/README.md](../vtabundles_xcmpl/README.md)를 본다.
 
-## 6. 정확도 (ImageNetV2, `vtabundles_xcmpl/imagenet_eval/`)
+## 6. 정확도 (ImageNetV2 / CIFAR-10, `vtabundles_xcmpl/imagenet_eval/`)
 
 **무엇을 하나:** 그림 한 장의 분류(§5)가 아니라 ImageNetV2 수천 장의 top-1 정확도를 잰다.
 - 양자화나 반올림을 바꾸는 단계(`-vta-round-shift`, 정수 softmax 등)가 정확도를 얼마나 떨어뜨리는지 본다.
-- 보드 결과는 PC의 float 기준(`float_ref.py`)과 비교한다.
+- 보드 결과는 PC의 float 기준(`float_ref.py`, CNN은 `float_ref_cnn.py`)과 비교한다.
+- 지금의 기록(다섯 모델, 2026-11-22)과 잰 방법: [evta_accuracy.md](evta_accuracy.md). Dir마다의 값은 `hw/script/accuracy.txt`에 두고 `run_prof.sh`가 보여 준다.
+- 실행 파일: DeiT / MobileNetV2는 `vtaDeiTBundle_sys` / `vtaMobileNetV2Bundle_sys`. Resnet18 / Resnet50 / VGG16은 eval 실행 파일
+  `vtaMxnetResnet18Eval_sys` / `vtaCaffe2Resnet50Eval_sys` / `vtaVGG16Cifar10Eval_sys`(공통 main, 입력은 원래 main과 같음; `build_sys`에서 `make <이름>`).
 
 넣을 것:
 - `<exe>`: `vtabundles_xcmpl/`에서 본 실행 파일 경로. 실행 파일은 `hw/<Dir>/`에 있다. 예: `hw/DeiTTest/vtaDeiTBundle_sys`, `hw/DeiTTest/vtaDeiTBundle_sysprof`
@@ -788,7 +798,8 @@ tail -1 imagenet_eval/result/base.log      # 마지막 EVAL 줄에 top-1
 |---|---|---|
 | 이미지 준비 (10,000장 → 224 × 224 PNG, `list.txt`) | PC | `prep_imagenetv2.py <imagenetv2-matched-frequency-format-val> <out>`. 보드 `~xilinx/JO/imagenetv2_png224`로 복사 |
 | bundle top-1 | 보드 | `sudo /bin/sh -c "imagenet_eval/eval_board.sh <exe> <name> [n]"`. 예: `hw/DeiTTest/vtaDeiTBundle_sys base 10000`. 결과 `imagenet_eval/result/<name>.log` |
-| float 기준 | PC | `float_ref.py <model.onnx> <png dir> [n] [out]` (onnxruntime) |
+| float 기준 | PC | `float_ref.py <model.onnx> <png dir> [n] [out]` (DeiT), `float_ref_cnn.py <resnet18\|resnet50\|vgg16\|mobilenetv2\|deit> <model.onnx> <png dir> [n] [out]` (bundle main과 같은 입력; venv `~/.venvs/onnxeval`) |
+| CIFAR-10 준비 (VGG16) | PC | `prep_cifar10.py <cifar-10-python.tar.gz> <out>`. 보드 `~xilinx/JO/cifar10_png`로 복사, `PNG=~xilinx/JO/cifar10_png eval_board.sh ...` |
 | int8 흉내 (보드 없이 양자화 시도) | PC | `fakequant.py <model.onnx> <png dir> [--n 9000] [--pow2] [--ln-float] [--gelu-float] [--softmax-float] [--skip s]` |
 
 - `eval_board.sh`는 bitstream을 올리고 lock을 잡는다(`BIN=`, 기본 `SYS_BIN`).
@@ -972,6 +983,9 @@ sudo ./gemmprobe ident                         # 새 bitstream의 GEMM 기본 �
 결함 행(Y219) 조사와 multi4 route는 `log/BOARD_TODO.md`, `vta-hw-zcu102-multi4/hardware/xilinx/scripts/y219route/README.md`에 있다.
 
 ## 10. 그 밖의 도구
+
+- **conv schedule 다시 찾기:** `vtabundles_xcmpl/sched_search.py`(`cands` → 보드 `run` → `pick` / `final`). 모든 모양에 후보를 하나씩 동시에 끼워
+  run 수를 줄이고, 고른 값은 dump 비교 후 `VTASchedules.h`에 넣는다. 방법과 2026-11-22 결과: [evta_sched_search.md](evta_sched_search.md).
 
 | 일 | 어디서 | 명령 |
 |---|---|---|

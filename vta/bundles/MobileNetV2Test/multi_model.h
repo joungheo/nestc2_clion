@@ -35,5 +35,7 @@
 #define MODEL_SOFTMAX 1
 // 1001 classes, 0 = background: ImageNet class + 1 (cat_285.png: 281 tabby, as the fp32 / TFLite models)
 #define MODEL_EXPECT 282
+//#### JO added (2026-11-22): model class = ImageNet class + 1 (EVAL_LIST lists ImageNet classes)
+#define MODEL_LABEL_OFFSET 1
 #define MODEL_COPY0 \
     {&mobilenetv2_config, mobilenetv2_load_module, mobilenetv2_destroy_module, mobilenetv2, "mobilenetv2.weights.bin", initVTARuntime, destroyVTARuntime}

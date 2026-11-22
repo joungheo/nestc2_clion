@@ -5,6 +5,7 @@ Reads the timing csv(s) the log names ("per statement and run: <csv>", one per t
 "total" row of each run (whole run, CPU included) and the EVTA conv calls (convolution_wo_tr*, fullyconnected_evta, the statements
 with vtaCmdH). Run 1 is the warm-up of the stock mains, so medians are over runs 2..n (all runs if there is
 only one); GOPS = ops / median ms (whole run: ops of all statements, conv: ops of the EVTA calls).
+The whole run also has the ops of one inference (GOP) and the frame rate (fps = 1000 / median ms, k copies at once: k x).
 Several csv with the same runs = the copies of a multi-EVTA executable, run at once (each run starts at a
 barrier of the copies, multi_threads_main.cpp): per run
   whole run = the slowest copy, GOPS = ops of all copies / that;
@@ -80,11 +81,15 @@ def gops(o, ms):
     return o / (ms * 1e6) if ms > 0 and o > 0 else 0.0
 
 
-def stat(name, per, o):
+#### JO changed (2026-11-22): whole run: + ops of one inference (GOP) and the frame rate, fps = inferences / median s
+#### (k copies at once: k inferences per median run); no need to run for a second, the median of runs 2..n is the steady state
+def stat(name, per, o, fps_k=0):
     """(median, long text, short text) over runs 2..n."""
     rr = per[1:] if len(per) > 1 else per
     m = median(rr)
     g = f', {gops(o, m):.2f} GOPS' if o > 0 else ''
+    if fps_k and m > 0:
+        g += (f' ({o / 1e9:.3f} GOP)' if o > 0 else '') + f', {fps_k * 1000.0 / m:.1f} fps'
     return m, f'{name} median {m:.3f} ms (min {min(rr):.3f}, max {max(rr):.3f}){g}', f'{name} median {m:.3f} ms{g}'
 
 
@@ -120,7 +125,7 @@ def main():
         cv = [sum(m for _, m in conv.get(r, [])) for r in rs]
         print(f'{tag}whole run ms per run: ' + runs_str(whole))
         print(f'{tag}conv (EVTA calls) ms per run: ' + runs_str(cv))
-        _, lw, sw = stat('whole run', whole, ops)
+        _, lw, sw = stat('whole run', whole, ops, 1)
         _, lc, sc = stat('conv', cv, eops)
         cc = [cpu.get(r, 0.0) for r in rs]
         _, lp, sp = stat('cpu conv/fc', cc, cops)
@@ -147,7 +152,7 @@ def main():
         print(f'---- {k} copies at once ----')
         print(f'whole run (slowest copy) ms per run: ' + runs_str(whole))
         print(f'conv busy union of the {k} EVTAs ms per run: ' + runs_str(cu))
-        _, lw, sw = stat(f'whole run x{k}', whole, ops)
+        _, lw, sw = stat(f'whole run x{k}', whole, ops, k)
         _, lc, sc = stat(f'conv x{k} (busy union)', cu, eops)
         mu = median(cu[1:] if len(cu) > 1 else cu)
         mo = median(cs[1:] if len(cs) > 1 else cs) / mu if mu > 0 else 0.0

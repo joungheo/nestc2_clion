@@ -16,6 +16,10 @@
 *
 *****************************************************************************/
 
+//#### JO added (2026-11-09): DeiTTest copy of MobileNetV2Test/multi_threads_main.cpp with MODEL_MEAN / MODEL_STD (per channel
+//#### normalization of the input) and MODEL_PRINT_TOP5.
+//#### JO changed (2026-11-22): the one copy for every single-EVTA model main (DeiT, MobileNetV2, and the eval mains of Resnet18 /
+//#### Resnet50 / VGG16, <x>EvalMain.cpp): the same file in each vta/bundles/<Dir>/, the model in its multi_model.h.
 //#### JO added (2026-11-06): one bundle copy per EVTA in its own pthread for any image classifier (multi_model.h names
 //#### the copies' entries, the input and the output, MultiEVTAResnet50Test / MultiEVTAVgg16Cifar10Test); the same as
 //#### MultiEVTAResnet18Test/multi_threads_main.cpp: every copy runs MULTI_RUNS (default 25) inferences, the copies start
@@ -36,6 +40,7 @@
 #include <string.h>
 #include <string>
 #include <vector>
+#include <algorithm>
 
 #include "multi_model.h"
 #include "vta/runtime.h"
@@ -102,16 +107,16 @@ static bool readPngImage(const char *filename, float lo, float hi, float *&image
     free(rows[y]);
   png_destroy_read_struct(&png_ptr, &info_ptr, (png_infopp)NULL);
   fclose(fp);
-  printf("Loaded image: %s\n", filename);
+  if (!getenv("EVAL_LIST")) printf("Loaded image: %s\n", filename);
   return false;
 }
 
 /// The input tensor as the single bundles' mains make it: BGR, N x C x H x W (MODEL_NHWC: N x H x W x C)
-static float *loadInput() {
+static float *loadInput(const char *filename) {
   const size_t H = MODEL_HEIGHT, W = MODEL_WIDTH;
   float *imageT = nullptr;
   size_t dims[3];
-  bool failed = readPngImage(inputImageFilenames[0].c_str(), MODEL_RANGE_LO, MODEL_RANGE_HI, imageT, dims);
+  bool failed = readPngImage(filename, MODEL_RANGE_LO, MODEL_RANGE_HI, imageT, dims);
   assert(!failed && dims[0] == W && dims[1] == H && "Error reading input image.");
   (void)failed;
   float *t = static_cast<float *>(malloc(3 * H * W * sizeof(float)));
@@ -126,6 +131,17 @@ static float *loadInput() {
           t[((2 - z) * H + x) * W + y] = v;
       }
   free(imageT);
+#ifdef MODEL_MEAN
+  //#### JO added (2026-11-09): per channel (x - mean) / std after the [lo, hi] mapping (DeiT: ImageNet mean / std, NCHW)
+  {
+    const float mean[3] = MODEL_MEAN, sd[3] = MODEL_STD;
+    for (size_t c = 0; c < 3; c++)
+      for (size_t i = 0; i < H * W; i++) {
+        float &v = MODEL_NHWC ? t[i * 3 + c] : t[c * H * W + i];
+        v = (v - mean[c]) / sd[c];
+      }
+  }
+#endif
   return t;
 }
 
@@ -180,6 +196,17 @@ static int classify(const BundleConfig &config, uint8_t *mutableWeightVars, floa
   for (int i = 1; i < n; i++)
     if (p[i] > p[best]) best = i;
   *conf = p[best];
+#ifdef MODEL_PRINT_TOP5
+  //#### JO added (2026-11-09): the 5 largest outputs (before the softmax) once, to compare with image-classifier
+  static bool printed = false;
+  if (!printed) {
+    printed = true;
+    std::vector<int> ix(n);
+    for (int i = 0; i < n; i++) ix[i] = i;
+    std::partial_sort(ix.begin(), ix.begin() + 5, ix.end(), [&](int a, int b) { return r[a] > r[b]; });
+    for (int k = 0; k < 5; k++) printf("  top%d: %d  %f\n", k + 1, ix[k], r[ix[k]]);
+  }
+#endif
   return best;
 }
 
@@ -227,11 +254,70 @@ static void *threadMain(void *a) {
 int main(int argc, char **argv) {
   for (int i = 1; i < argc; i++)
     inputImageFilenames.push_back(argv[i]);
-  if (inputImageFilenames.empty()) {
+  if (inputImageFilenames.empty() && !getenv("EVAL_LIST")) {
     printf("usage: %s <image.png>\n", argv[0]);
     return 1;
   }
-  float *input = loadInput();
+#ifndef MODEL_LABEL_OFFSET
+#define MODEL_LABEL_OFFSET 0
+#endif
+#ifdef MULTI_SINGLE
+  //#### JO added (2026-11-10): accuracy over a labeled image set. EVAL_LIST=<file> with one "<image.png> <class>" per line
+  //#### (vtabundles_xcmpl/imagenet_eval/): copy 0 loads its weights once and classifies every image; prints one
+  //#### "EV <n> <pred> <class>" line per image (EVAL_QUIET=1: only every 500th) and the top-1 count at the end.
+  if (const char *el = getenv("EVAL_LIST")) {
+    FILE *lf = fopen(el, "r");
+    if (!lf) {
+      printf("cannot open EVAL_LIST %s\n", el);
+      return 1;
+    }
+    const bool quiet = getenv("EVAL_QUIET") && atoi(getenv("EVAL_QUIET")) > 0;
+    ModelCopy &m = copies[0];
+    const BundleConfig &c = *m.config;
+    uint8_t *cw = initConstantWeights(m.weights, c);
+    uint8_t *mw = static_cast<uint8_t *>(alignedAlloc(c, c.mutableWeightVarsMemSize));
+    uint8_t *act = static_cast<uint8_t *>(alignedAlloc(c, c.activationsMemSize));
+    const SymbolTableEntry &in = getMutableWeightVar(c, MODEL_INPUT);
+    m.initRuntime();
+    m.load(cw);
+    char path[4096];
+    int label, n = 0, ok = 0;
+    timeval t1, t2;
+    gettimeofday(&t1, NULL);
+    while (fscanf(lf, "%4095s %d", path, &label) == 2) {
+      float *x = loadInput(path);
+      memcpy(mw + in.offset, x, 3 * MODEL_HEIGHT * MODEL_WIDTH * sizeof(float));
+      free(x);
+      m.run(cw, mw, act);
+      float conf = 0;
+      const int pred = classify(c, mw, &conf);
+      //#### JO added (2026-11-22): MODEL_LABEL_OFFSET (multi_model.h) = model class - list class (MobileNetV2: 1, class 0 is
+      //#### the background); the EV line prints the list class
+      ok += pred == label + MODEL_LABEL_OFFSET;
+      n++;
+      if (!quiet || n % 500 == 0)
+        printf("EV %d %d %d  top1 %d/%d\n", n, pred, label, ok, n);
+      //#### JO added (2026-11-16): EVAL_HASH=1 prints a hash (FNV-1a) of the output's bytes per image, to compare two
+      //#### builds byte for byte over an image set (prune_rows_onnx.py)
+      static const bool hashOut = getenv("EVAL_HASH") && atoi(getenv("EVAL_HASH")) > 0;
+      if (hashOut) {
+        const SymbolTableEntry &out = getMutableWeightVar(c, MODEL_OUTPUT);
+        const uint8_t *ob = mw + out.offset;
+        uint64_t h = 1469598103934665603ull;
+        for (size_t i = 0; i < out.size * sizeof(float); i++) h = (h ^ ob[i]) * 1099511628211ull;
+        printf("EH %d %016llx\n", n, (unsigned long long)h);
+      }
+    }
+    gettimeofday(&t2, NULL);
+    fclose(lf);
+    printf("EVAL top1 %d / %d = %.2f %%  (%.1f s)\n", ok, n, n ? 100.0 * ok / n : 0.0,
+           (t2.tv_sec - t1.tv_sec) + (t2.tv_usec - t1.tv_usec) / 1e6);
+    m.destroy();
+    m.destroyRuntime();
+    return 0;
+  }
+#endif
+  float *input = loadInput(inputImageFilenames[0].c_str());
 #ifdef MULTI_SINGLE
   //#### JO changed (2026-11-10): with BUNDLE_RUNS=<n> (run_prof.sh -n, the _timed / _prof builds: the timed_bundle.py wrapper runs
   //#### the first call n - 1 times) two calls here, so n inferences in all (it was 4 x MULTI_RUNS + n - 2 = 123 for n = 25)

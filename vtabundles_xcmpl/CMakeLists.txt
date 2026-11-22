@@ -183,6 +183,17 @@ add_bundle_if_present(DeiTTest vtaDeiTBundle deitMain.cpp deit.cpp)
 if(TARGET vtaDeiTBundle)
   target_link_libraries(vtaDeiTBundle pthread)
 endif()
+#### JO added (2026-11-22): eval executables (dataset accuracy, imagenet_eval/eval_board.sh: EVAL_LIST of the generic main with the
+#### model in multi_model.h); the stock mains stay for run_all.sh / run_prof.sh. MobileNetV2 / DeiT: their executable is the eval one.
+foreach(e "Resnet18Test;vtaMxnetResnet18Eval;resnet18EvalMain.cpp;mxnet_exported_resnet18.cpp"
+          "Resnet50Test;vtaCaffe2Resnet50Eval;resnet50EvalMain.cpp;resnet50.cpp"
+          "Vgg16Cifar10Test;vtaVGG16Cifar10Eval;vgg16EvalMain.cpp;vgg16_cifar10.cpp")
+  list(GET e 1 t)
+  add_bundle_if_present(${e})
+  if(TARGET ${t})
+    target_link_libraries(${t} pthread)
+  endif()
+endforeach()
 #### JO added: multi-EVTA (x2) bundles (sources as in nest-compiler/vta/multievtax2_bundles/<dir>/CMakeLists.txt);
 #### only present in hw_multievtax2/
 add_bundle_if_present(MultiEVTAx2ConvTest multievtax2ConvTestBundle multievtax2ConvTestBundleMain.cpp

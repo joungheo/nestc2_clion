@@ -129,6 +129,9 @@ the same for Resnet50 (160.3 -> 69.6 ms) [docs/resnet50_optimization.md](docs/re
 how the whole stack works, for readers new to Glow / VTA (11 figures, entry: [docs/evta_stack_arch.md](docs/evta_stack_arch.md);
 frontend / lowering / quantization [docs/evta_compiler_frontend.md](docs/evta_compiler_frontend.md), VTA backend
 [docs/evta_compiler_backend.md](docs/evta_compiler_backend.md), runtime / driver [docs/evta_runtime_arch.md](docs/evta_runtime_arch.md));
+dataset accuracy of the five bundles on the board against the float ONNX (ImageNetV2 / CIFAR-10 10,000; until 2026-11-22 the CNNs were checked on one image + byte-identical dumps only; VGG16's input lacks the normalization its model needs) and how to measure it: [docs/evta_accuracy.md](docs/evta_accuracy.md);
+the conv schedule search after the DMA / load-ahead changes (`sched_search.py`, all shapes one candidate per run; MobileNetV2 15.29 -> 14.45, Resnet50 65.46 -> 64.18 ms): [docs/evta_sched_search.md](docs/evta_sched_search.md);
+what is left in software / hardware, the order chosen on 2026-11-22 and the AMD DPU B4096 structure / peak / utilization against ours: [docs/evta_todo.md](docs/evta_todo.md);
 every command, script and option in one place, by kind of work (environment, bitstream, bundle generation with all `-vta-*` options and `VTA_FUSION_LOG`, board / cross build, runs, accuracy, runtime variables, vtalib and hardware tests; add a line there for a new script): [docs/evta_user_manual.md](docs/evta_user_manual.md).
 Step by step from the compiler build to logs (cmake / make of Debug2_remote, VTASaverTest, image-classifier profile,
 model-compiler with its options, collect_hw_bundles.py, vtabundles_xcmpl build dirs, run_all / run_prof, where the logs are and how to read them):

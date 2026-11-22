@@ -66,8 +66,8 @@ convTune.ConvolutionTune_.push_back({1, 56, 56, 64, 64, 3, 3, 64, 1, 1, 2, 8,
                                      56});
 convTune.ConvolutionTune_.push_back({1, 56, 56, 64, 128, 1, 1, 64, 2, 0, 2, 7,
                                      28});
-convTune.ConvolutionTune_.push_back({1, 56, 56, 64, 128, 3, 3, 64, 2, 1, 2, 8,
-                                     28});
+//#### JO changed (2026-11-22, sched_search.py): was 2, 8, 28
+convTune.ConvolutionTune_.push_back({1, 56, 56, 64, 128, 3, 3, 64, 2, 1, 2, 7, 28});
 convTune.ConvolutionTune_.push_back({1, 28, 28, 128, 128, 3, 3, 128, 1, 1, 2,
                                      14, 28});
 convTune.ConvolutionTune_.push_back({1, 28, 28, 128, 256, 1, 1, 128, 2, 0, 2, 7,
@@ -84,6 +84,9 @@ convTune.ConvolutionTune_.push_back({1, 14, 14, 256, 512, 3, 3, 256, 2, 1, 2, 7,
                                      7});
 convTune.ConvolutionTune_.push_back({1, 7, 7, 512, 512, 3, 3, 512, 1, 1, 2, 7,
                                      7});
+//#### JO changed (2026-11-22): searched again after EVTA_CONV_BURST / EVTA_LOAD_AHEAD / minimum tile 1 (vtabundles_xcmpl/sched_search.py:
+//#### every shape one candidate per run, per-statement time of _systimed, docs/evta_sched_search.md), "was" on each changed line;
+//#### layer dumps byte-identical, OMP 1 on _alux3: MobileNetV2 15.35 -> 14.42, Resnet50 65.46 -> 64.11 ms, Resnet18 / VGG16 unchanged
 //#### JO added (2026-11-05): Resnet50 and VGG16 (CIFAR-10) shapes, measured on the board (systolic _rq bitstream, single EVTA):
 //#### the bundle schedule replaced at run time (vtalib-zcu102-systolic EVTA_SCHED) by candidates nVirtualThread 1 / 2 x output
 //#### tiles that divide the output, per-conv time from _sysprof, fastest kept; layer dumps byte-identical to the default
@@ -97,22 +100,29 @@ convTune.ConvolutionTune_.push_back({1, 56, 56, 256, 64, 1, 1, 256, 1, 0, 2, 8, 
 convTune.ConvolutionTune_.push_back({1, 56, 56, 256, 128, 1, 1, 256, 1, 0, 2, 8, 56});
 convTune.ConvolutionTune_.push_back({1, 56, 56, 128, 128, 3, 3, 128, 2, 1, 2, 7, 28});
 convTune.ConvolutionTune_.push_back({1, 28, 28, 128, 512, 1, 1, 128, 1, 0, 2, 7, 28});
-convTune.ConvolutionTune_.push_back({1, 56, 56, 256, 512, 1, 1, 256, 2, 0, 2, 7, 28});
+//#### JO changed (2026-11-22, sched_search.py): was 2, 7, 28
+convTune.ConvolutionTune_.push_back({1, 56, 56, 256, 512, 1, 1, 256, 2, 0, 2, 2, 28});
 convTune.ConvolutionTune_.push_back({1, 28, 28, 512, 128, 1, 1, 512, 1, 0, 2, 7, 28});
-convTune.ConvolutionTune_.push_back({1, 28, 28, 512, 256, 1, 1, 512, 1, 0, 2, 7, 28});
+//#### JO changed (2026-11-22, sched_search.py): was 2, 7, 28
+convTune.ConvolutionTune_.push_back({1, 28, 28, 512, 256, 1, 1, 512, 1, 0, 2, 14, 28});
 convTune.ConvolutionTune_.push_back({1, 28, 28, 256, 256, 3, 3, 256, 2, 1, 2, 7, 14});
-convTune.ConvolutionTune_.push_back({1, 14, 14, 256, 1024, 1, 1, 256, 1, 0, 2, 7, 14});
+//#### JO changed (2026-11-22, sched_search.py): was 2, 7, 14
+convTune.ConvolutionTune_.push_back({1, 14, 14, 256, 1024, 1, 1, 256, 1, 0, 2, 14, 14});
 convTune.ConvolutionTune_.push_back({1, 28, 28, 512, 1024, 1, 1, 512, 2, 0, 2, 7, 14});
-convTune.ConvolutionTune_.push_back({1, 14, 14, 1024, 256, 1, 1, 1024, 1, 0, 2, 7, 14});
-convTune.ConvolutionTune_.push_back({1, 14, 14, 1024, 512, 1, 1, 1024, 1, 0, 2, 7, 14});
+//#### JO changed (2026-11-22, sched_search.py): was 2, 7, 14
+convTune.ConvolutionTune_.push_back({1, 14, 14, 1024, 256, 1, 1, 1024, 1, 0, 2, 14, 14});
+//#### JO changed (2026-11-22, sched_search.py): was 2, 7, 14
+convTune.ConvolutionTune_.push_back({1, 14, 14, 1024, 512, 1, 1, 1024, 1, 0, 2, 14, 14});
 convTune.ConvolutionTune_.push_back({1, 14, 14, 512, 512, 3, 3, 512, 2, 1, 2, 7, 7});
 convTune.ConvolutionTune_.push_back({1, 7, 7, 512, 2048, 1, 1, 512, 1, 0, 2, 7, 7});
 convTune.ConvolutionTune_.push_back({1, 14, 14, 1024, 2048, 1, 1, 1024, 2, 0, 2, 7, 7});
 convTune.ConvolutionTune_.push_back({1, 7, 7, 2048, 512, 1, 1, 2048, 1, 0, 2, 7, 7});
-convTune.ConvolutionTune_.push_back({1, 34, 32, 16, 64, 3, 1, 16, 1, 0, 2, 16, 32});
+//#### JO changed (2026-11-22, sched_search.py): was 2, 16, 32
+convTune.ConvolutionTune_.push_back({1, 34, 32, 16, 64, 3, 1, 16, 1, 0, 1, 16, 32});
 convTune.ConvolutionTune_.push_back({1, 32, 32, 64, 64, 3, 3, 64, 1, 1, 2, 8, 32});
 convTune.ConvolutionTune_.push_back({1, 16, 16, 64, 128, 3, 3, 64, 1, 1, 2, 16, 16});
-convTune.ConvolutionTune_.push_back({1, 16, 16, 128, 128, 3, 3, 128, 1, 1, 2, 16, 16});
+//#### JO changed (2026-11-22, sched_search.py): was 2, 16, 16
+convTune.ConvolutionTune_.push_back({1, 16, 16, 128, 128, 3, 3, 128, 1, 1, 2, 8, 16});
 convTune.ConvolutionTune_.push_back({1, 8, 8, 128, 256, 3, 3, 128, 1, 1, 2, 8, 8});
 convTune.ConvolutionTune_.push_back({1, 8, 8, 256, 256, 3, 3, 256, 1, 1, 2, 8, 8});
 convTune.ConvolutionTune_.push_back({1, 4, 4, 256, 512, 3, 3, 256, 1, 1, 2, 4, 4});
@@ -122,6 +132,8 @@ convTune.ConvolutionTune_.push_back({1, 2, 2, 512, 512, 3, 3, 512, 1, 1, 2, 2, 2
 //#### time of _systimed; nVirtualThread 2 only with an even number of output channel blocks, an odd one does not run);
 //#### layer dumps byte-identical to the default schedule; EVTA convs 20.0 -> 13.4 ms (docs/evta_runtime_compare.md 7.20).
 //#### The first is conv0 over its packed input (3x3 / 2 as 2 x 1 / 1 over 113 x 112 x 32; input tile 17 x 28 x 2 = 952).
+//#### (2026-11-22: sched_search.py found 1, 16, 112 0.02 ms faster, not taken: its input tile 17 x 112 is more than the 1024
+//#### entries VTASave getConv0Pack allows, the bundle would fall back to the zero-filled conv0)
 convTune.ConvolutionTune_.push_back({1, 113, 112, 32, 32, 2, 1, 32, 1, 0, 2, 16, 28});
 //#### JO added (2026-11-09): DeiT-tiny patch embedding (16x16 / 16 over 224 x 224 x 3) over its packed input: 1x1 over
 //#### 14 x 14 x 768 -> 192; input tile 7 x 2 x 48 = 672 entries (the HLS GEMM pads it to 7 x 7: 2352, single-EVTA inp SRAM)
@@ -138,19 +150,28 @@ convTune.ConvolutionTune_.push_back({1, 18, 11, 768, 192, 1, 1, 768, 1, 0, 2, 9,
 convTune.ConvolutionTune_.push_back({1, 18, 11, 208, 64, 1, 1, 208, 1, 0, 2, 18, 11});
 //#### Q K^T (64 -> 208, 13 blocks, padded to 14 for 2 threads): 2, 18, 11 took 0.77 ms per call, 2, 9, 11 0.44 -> ~0.36 ms
 convTune.ConvolutionTune_.push_back({1, 18, 11, 64, 208, 1, 1, 64, 1, 0, 2, 9, 11});
-convTune.ConvolutionTune_.push_back({1, 112, 112, 32, 16, 1, 1, 32, 1, 0, 1, 16, 56});
-convTune.ConvolutionTune_.push_back({1, 112, 112, 16, 96, 1, 1, 16, 1, 0, 2, 16, 28});
-convTune.ConvolutionTune_.push_back({1, 56, 56, 96, 32, 1, 1, 96, 1, 0, 2, 8, 56});
-convTune.ConvolutionTune_.push_back({1, 56, 56, 32, 144, 1, 1, 32, 1, 0, 1, 8, 56});
-convTune.ConvolutionTune_.push_back({1, 56, 56, 144, 32, 1, 1, 144, 1, 0, 2, 8, 56});
-convTune.ConvolutionTune_.push_back({1, 28, 28, 144, 32, 1, 1, 144, 1, 0, 2, 14, 28});
-convTune.ConvolutionTune_.push_back({1, 28, 28, 32, 192, 1, 1, 32, 1, 0, 2, 7, 28});
-convTune.ConvolutionTune_.push_back({1, 28, 28, 192, 32, 1, 1, 192, 1, 0, 2, 14, 28});
+//#### JO changed (2026-11-22, sched_search.py): was 1, 16, 56
+convTune.ConvolutionTune_.push_back({1, 112, 112, 32, 16, 1, 1, 32, 1, 0, 1, 14, 112});
+//#### JO changed (2026-11-22, sched_search.py): was 2, 16, 28
+convTune.ConvolutionTune_.push_back({1, 112, 112, 16, 96, 1, 1, 16, 1, 0, 2, 8, 112});
+//#### JO changed (2026-11-22, sched_search.py): was 2, 8, 56
+convTune.ConvolutionTune_.push_back({1, 56, 56, 96, 32, 1, 1, 96, 1, 0, 2, 14, 56});
+//#### JO changed (2026-11-22, sched_search.py): was 1, 8, 56
+convTune.ConvolutionTune_.push_back({1, 56, 56, 32, 144, 1, 1, 32, 1, 0, 1, 4, 56});
+//#### JO changed (2026-11-22, sched_search.py): was 2, 8, 56
+convTune.ConvolutionTune_.push_back({1, 56, 56, 144, 32, 1, 1, 144, 1, 0, 2, 14, 56});
+//#### JO changed (2026-11-22, sched_search.py): was 2, 14, 28
+convTune.ConvolutionTune_.push_back({1, 28, 28, 144, 32, 1, 1, 144, 1, 0, 2, 28, 28});
+//#### JO changed (2026-11-22, sched_search.py): was 2, 7, 28
+convTune.ConvolutionTune_.push_back({1, 28, 28, 32, 192, 1, 1, 32, 1, 0, 2, 14, 28});
+//#### JO changed (2026-11-22, sched_search.py): was 2, 14, 28
+convTune.ConvolutionTune_.push_back({1, 28, 28, 192, 32, 1, 1, 192, 1, 0, 2, 28, 28});
 convTune.ConvolutionTune_.push_back({1, 14, 14, 192, 64, 1, 1, 192, 1, 0, 2, 14, 14});
 convTune.ConvolutionTune_.push_back({1, 14, 14, 64, 384, 1, 1, 64, 1, 0, 2, 14, 14});
 convTune.ConvolutionTune_.push_back({1, 14, 14, 384, 64, 1, 1, 384, 1, 0, 2, 14, 14});
 convTune.ConvolutionTune_.push_back({1, 14, 14, 384, 96, 1, 1, 384, 1, 0, 2, 14, 14});
-convTune.ConvolutionTune_.push_back({1, 14, 14, 96, 576, 1, 1, 96, 1, 0, 2, 7, 14});
+//#### JO changed (2026-11-22, sched_search.py): was 2, 7, 14
+convTune.ConvolutionTune_.push_back({1, 14, 14, 96, 576, 1, 1, 96, 1, 0, 2, 14, 14});
 convTune.ConvolutionTune_.push_back({1, 14, 14, 576, 96, 1, 1, 576, 1, 0, 2, 14, 14});
 convTune.ConvolutionTune_.push_back({1, 7, 7, 576, 160, 1, 1, 576, 1, 0, 2, 7, 7});
 convTune.ConvolutionTune_.push_back({1, 7, 7, 160, 960, 1, 1, 160, 1, 0, 2, 7, 7});

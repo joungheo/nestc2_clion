@@ -546,6 +546,8 @@ norm의 x LOAD와 identity GEMM을 아끼지만, add 결과는 rq로 out에만 �
 
 ## 6.11 연구 과제: softmax를 Q K^T의 epilogue로
 
+2026-11-22: 지금은 하지 않기로 했다(연구 과제로 둠). 2장을 엇갈려 처리하는 것(§6.1 "EVTA와 CPU 겹치기")도 같다. H5(완료 interrupt + 명령 링)의 1장 시간 상한: [unified_runtime_plan.md](unified_runtime_plan.md) §4.5.
+
 softmax(`softmax_evta`, 층마다 0.44 ms, 합 5.2 ms)는 Q K^T 결과를 DRAM에서 다시 읽고 쓴다. Q K^T conv(198행을 18 x 11 그림으로, 출력 채널 =
 key 198 → 224)의 tile 안에서 softmax까지 끝내면 그 왕복과 run 하나가 빠진다. 어려운 점:
 - softmax는 한 행(query 하나)의 198개 key에 걸친 최대값과 합이 필요하다. 그 198값은 출력 채널 쪽이라, tile에서 14개 채널 블록이 두 virtual

@@ -250,6 +250,47 @@ IREE HAL의 객체 모양과 qaic의 최소 uAPI를 따른다. 확정은 A단계
 
 **두 번째 하드웨어로 검증하는 방법** (G단계): 가장 싼 후보는 VTA 원본이나 우리 EVTA의 다른 구성이다. multi-EVTA, 다른 버퍼 크기, 32×32를 서로 다른 "장치"로 열거해 같은 runtime에서 돌린다. 진짜 다른 구조(NVDLA나 DPU)는 그 다음이다.
 
+### 4.5 H5(완료 interrupt + 명령 링 + doorbell)가 1장 시간을 얼마나 줄일 수 있나: 상한 측정 (2026-11-22)
+
+**결론: 1장 시간은 거의 줄지 않는다.** H5는 속도보다 구조를 위한 일이다(CPU를 기다림에서 풀기, 여러 사용자, 공통 driver).
+
+- **무엇을 쟀나:** EVTA가 쉬는 시간 = 1장 시간 − EVTA가 일한 시간. H5로 줄일 수 있는 것은 이 안에 들어 있다.
+  - 링에 다음 run을 미리 넣어 두면, 그 사이의 CPU 일(입력 배치 변환, flush, 레지스터 쓰기, CPU 연산)이 EVTA와 겹칠 수 있다.
+- **측정:** 보드 `_alux3`, 1코어, 25회 중앙값.
+  - 1장 시간: `run_prof.sh -s _systimed`(문장별 시간을 재는 실행 파일)
+  - EVTA가 일한 시간: `-s _sysprof`의 `VTA_SYNC`. `pynq_driver.cc` `RunStart`부터 CPU가 done을 본 때까지다.
+  - 실행 파일: 11-22에 PC에서 빌드(vtalib `186e53d`).
+
+| 모델 | 1장 (ms) | EVTA가 일한 시간 (ms) | EVTA가 쉬는 시간 (ms) | 1장의 EVTA run 수 | run 하나 사이의 평균 (us) |
+|---|---|---|---|---|---|
+| DeiT-tiny | 37.12 | 27.19 | **9.9** (27 %) | 123 | 81 |
+| Resnet50 | 65.41 | 62.91 | 2.5 (3.8 %) | 55 | 45 |
+| MobileNetV2 | 15.28 | 13.99 | 1.3 (8.4 %) | 54 | 24 |
+| Resnet18 | 22.58 | 21.72 | 0.86 (3.8 %) | 22 | 39 |
+| VGG16 CIFAR-10 | 6.75 | (8.16, 믿을 수 없음) | ≤ 0.2 | 19 | |
+
+- **VGG16의 EVTA 시간은 1장보다 길게 나왔다.**
+  - conv0 입력을 run과 겹쳐 만드는 경로(`InputStream`)에서는 CPU가 run 중에 다음 행을 준비하고 나서 done을 본다. 그래서 `VTA_SYNC`가 EVTA 시간보다 길게 잡힌다.
+  - `_sysprof`는 run마다 counter를 읽는 부담도 있다. VGG16 `_sysprof` 1장 8.64 ms 대 `_systimed` 6.75 ms다.
+  - VGG16의 상한은 EVTA 호출이 아닌 문장 시간(0.2 ms) 정도로 본다.
+  - 같은 이유로 다른 모델의 "EVTA가 일한 시간"도 실제보다 조금 길 수 있다. 쉬는 시간은 표보다 조금 더 클 수 있다.
+- **표의 쉬는 시간은 상한이다.** 실제로 겹칠 수 있는 양은 더 작다.
+  - run 사이 CPU 일의 대부분은 앞 run의 출력을 읽어 다음 run의 입력을 만든다(DeiT: softmax / layer norm 앞뒤, Q K^T → softmax → A x V). 앞 run이 끝나기 전에는 시작할 수 없다.
+  - 겹칠 수 있는 것은 다음 run과 상관없는 준비(명령 flush, 레지스터 쓰기, replay의 주소 바꾸기)뿐이다. run 하나에 수 us 정도로 본다.
+  - 그래서 DeiT에서도 1 ms 안팎, CNN에서는 0.1–0.3 ms로 추정한다.
+- **interrupt로 기다리면 run마다 지연이 붙는다.** Linux가 잠든 thread를 깨우는 데 보통 수–수십 us가 걸린다.
+  - DeiT 123 run이면 1–4 ms 느려질 수 있다.
+  - 그래서 짧은 run은 지금처럼 polling하고, 긴 run만 interrupt로 기다리는 혼합 방식이 필요하다.
+- **1장 시간을 줄이는 것은 H5가 아니라 다음 둘이다.**
+  - **DeiT의 run 사이 CPU 일 9.9 ms를 줄이는 소프트웨어.** 호출을 묶어 run 수를 줄이고, CPU 연산을 EVTA로 옮긴다.
+  - **2장을 엇갈려 처리하기**(처리량만). 이것은 H5가 있어야 깔끔하다. 지금은 연구 과제로 두었다.
+- **H5가 주는 것:**
+  - CPU 코어 하나가 polling에서 풀린다(전력, 다른 일).
+  - 여러 프로그램이 EVTA를 나눠 쓸 수 있다(지금은 lock으로 한 번에 하나).
+  - hang을 driver가 다룬다.
+  - 공통 제어 규약의 첫 구현이 된다(§3).
+- 결과 파일은 보드의 `/home/xilinx/JO/meas_h5/`에 있다(`_systimed.out`, `_sysprof.out`).
+
 ## 7. 지금까지 한 것과 아직 안 한 것
 
 **한 것** (runtime 쪽, `evta_runtime_compare.md` §7, `evta_runtime_aot.md` §5.4):
