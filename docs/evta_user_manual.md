@@ -250,6 +250,8 @@ make bin SYSTOLIC=1 ALUX=3 FREQ=400 JOBS=4 IMPL_STRATEGY=Performance_ExplorePost
 |---|---|---|
 | `SYSTOLIC=1` | 0 | GEMM을 RTL systolic 어레이 `gemm_sa`로(`-DVTA_SYSTOLIC`, dir 이름에 `_sa`). `vta-hw-zcu102-systolic`, `-multi4`에서 |
 | `ALUX=1` / `ALUX=2` / `ALUX=3` | 0 | ALU 확장(`_alux`, `_alux2`, `_alux3`; [evta_isa_ext.md](evta_isa_ext.md) §8). systolic copy에서 |
+| `ALUX_NOIMM=1` | 0 | ALU의 immediate 전용 루프를 빼고 slot 루프만 쓴다(`VTA_ALUX_NO_IMM_LOOP`, IP 이름에 `_ni`). compute LUT 49.5k → 38.5k, multi4 ALU 확장 판이 칩에 들어가게 한다. `sim/run_csim.sh NOIMM=1`로 C 시뮬레이션 |
+| 환경 `VTA_DATA_IC=1` | 0 | multi4: data master를 SmartConnect 대신 AXI Interconnect로. LUT가 줄지 않고 BRAM이 늘어(580 → 742) 쓰지 않는다 |
 | `FREQ=<MHz>` | copy 기본값 | EVTA PLL 클럭(dir 이름에 `_<FREQ>mhz`) |
 | 환경 `VTA_HP_FREQ` | 333 | 333 MHz보다 높게 빌드할 때 HP 포트 쪽 클럭(`hp_pll`). PS8 HP 포트는 333 MHz가 한계다 |
 | `PROFILE=1` | 0 | compute 카운터와 AXI perf monitor(`_prof`). 보드에서는 vtalib `-DNESTC_EVTA_PROFILE_AXI_MONITOR=ON`과 같이 쓴다 |
@@ -347,7 +349,9 @@ vtaMxnetResnet18Bundle                   OK     6s
 | NEST-C CMake에 있는 bundle (시험 번들, Resnet18 / 50, VGG16) | `vtabundles_xcmpl/build_sim_bundles.sh [-f] [target ...]` | `Debug2_remote/vta/bundles/<Dir>/`, 로그 `Debug2_remote/bundle_logs/<target>.log`, `summary.txt` |
 | MobileNetV2 | `vtabundles_xcmpl/gen_mobilenetv2_bundle.sh [model-compiler 옵션]` | `Debug2_remote/vta/bundles/MobileNetV2Test/` (`gen.log`, `prof.log`) |
 | DeiT-tiny | `vtabundles_xcmpl/gen_deit_bundle.sh [model-compiler 옵션]` | `Debug2_remote/vta/bundles/DeiTTest/` (`gen.log`) |
-| multi4 copy 4개 | `vtabundles_xcmpl/gen_multi4_bundles.sh <Dir> ...` (`MultiEVTAResnet18Test`, `MultiEVTAResnet50Test`, `MultiEVTAVgg16Cifar10Test`, `MultiEVTADeiTTest`) | `Debug2_remote/vta/multievta_bundles/<Dir>/` (`gen_<i>.log`). single bundle이 먼저 있어야 한다(모델과 profile을 거기서 읽음) |
+| CNN 네 모델을 여러 그림의 profile로 | `vtabundles_xcmpl/gen_calib_bundle.sh <Dir> <그림 목록 \| profile.yaml[.gz]> [model-compiler 옵션]` (`BINS=2048` histogram 칸, `R50=tv` torchvision ResNet-50) | `Debug2_remote/vta/bundles/<Dir>/` (`prof.log`, `gen.log`). [evta_accuracy.md](evta_accuracy.md) §6, §7 |
+| torchvision ResNet-50 ONNX | `~/.venvs/onnxeval/bin/python vtabundles_xcmpl/export_tv_resnet50.py Debug2_remote/vta/bundles/Resnet50Test/tv/resnet50.onnx` (torch, torchvision 필요) | Caffe2 resnet50.onnx와 입력 / 출력이 같은 ONNX |
+| multi4 copy 4개 | `[MODEL=<onnx>] [PROF=<yaml>] [MCX="<옵션>"] vtabundles_xcmpl/gen_multi4_bundles.sh <Dir> ...` (`MultiEVTAResnet18Test`, `MultiEVTAResnet50Test`, `MultiEVTAVgg16Cifar10Test`, `MultiEVTADeiTTest`, `MultiEVTAMobileNetV2Test`) | `Debug2_remote/vta/multievta_bundles/<Dir>/` (`gen_<i>.log`). single bundle이 먼저 있어야 한다(모델과 profile을 거기서 읽음) |
 | model-compiler 다시 빌드 | `Debug2_remote`에서 `make -j16 model-compiler`(PC) / `make -j2 model-compiler`(보드) | VTASave.cpp 등을 바꾼 뒤 |
 
 넣을 것:
@@ -355,7 +359,8 @@ vtaMxnetResnet18Bundle                   OK     6s
   - 모델: `vtaMxnetResnet18Bundle`, `vtaCaffe2Resnet50Bundle`, `vtaVGG16Cifar10Bundle`, `vtaMxnetResnet18PartitionBundle`
   - 시험 번들: `vtaConvTestBundle`, `vtaConv2TestBundle` ~ `vtaConv5TestBundle`, `vtaResConv1TestBundle` ~ `vtaResConv10TestBundle`, `vtaFCTestBundle`, `vtaMaxPoolTestBundle`, `vtaElemAddTestBundle` 등. 전체 목록은 스크립트 맨 위 `TARGETS=`
 - `[model-compiler 옵션]`(gen_*_bundle.sh): §3.3의 옵션. 스크립트의 기본 옵션 뒤에 붙는다. 예: `-vta-alu-softmax=0`, `-vta-fuse-elemadd-mul`
-- `<Dir>`(gen_multi4_bundles.sh): `MultiEVTAResnet18Test`, `MultiEVTAResnet50Test`, `MultiEVTAVgg16Cifar10Test`, `MultiEVTADeiTTest`
+- `<Dir>`(gen_multi4_bundles.sh): `MultiEVTAResnet18Test`, `MultiEVTAResnet50Test`, `MultiEVTAVgg16Cifar10Test`, `MultiEVTADeiTTest`, `MultiEVTAMobileNetV2Test`
+- model-compiler `-quantization-pow2-mse=<k>`(NEST-C `lib/Quantization/Quantization.cpp`): 거듭제곱 scale을 s, s/2, …, s/2^k 가운데 histogram 오차가 가장 작은 것으로. `-quantization-calibration=KL`과 함께 쓰고, profile은 `-num-histogram-bins=2048`로 만든다(evta_accuracy.md §7)
 
 예:
 ```bash

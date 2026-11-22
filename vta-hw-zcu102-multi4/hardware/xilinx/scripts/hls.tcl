@@ -59,6 +59,9 @@ if {[info exists ::env(VTA_SYSTOLIC)] && $::env(VTA_SYSTOLIC) eq "1"} {
 if {[info exists ::env(VTA_ALUX)] && $::env(VTA_ALUX) eq "1"} {
     append cflags " -DVTA_ALUX"
 }
+if {[info exists ::env(VTA_ALUX_NOIMM)] && $::env(VTA_ALUX_NOIMM) eq "1"} {
+    append cflags " -DVTA_ALUX_NO_IMM_LOOP"
+}
 
 # Get the VTA configuration paramters
 set ::device $FPGA_DEVICE

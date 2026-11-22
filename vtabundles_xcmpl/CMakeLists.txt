@@ -220,8 +220,13 @@ add_bundle_if_present(MultiEVTAVgg16Cifar10Test multivtaVGG16Cifar10Bundle multi
 add_bundle_if_present(MultiEVTADeiTTest singlevtaDeiTBundle single_thread_main.cpp deit.cpp)
 add_bundle_if_present(MultiEVTADeiTTest multivtaDeiTBundle multi_threads_main.cpp
   deit.cpp deit_1.cpp deit_2.cpp deit_3.cpp)
+#### JO added (2026-11-22): MobileNetV2 on 4 EVTAs (vta/multievta_bundles/MultiEVTAMobileNetV2Test, gen_multi4_bundles.sh)
+add_bundle_if_present(MultiEVTAMobileNetV2Test singlevtaMobileNetV2Bundle single_thread_main.cpp mobilenetv2.cpp)
+add_bundle_if_present(MultiEVTAMobileNetV2Test multivtaMobileNetV2Bundle multi_threads_main.cpp
+  mobilenetv2.cpp mobilenetv2_1.cpp mobilenetv2_2.cpp mobilenetv2_3.cpp)
 # foreach(t multivtaCaffe2Resnet50Bundle multivtaVGG16Cifar10Bundle)
-foreach(t multivtaCaffe2Resnet50Bundle multivtaVGG16Cifar10Bundle singlevtaDeiTBundle multivtaDeiTBundle)
+foreach(t multivtaCaffe2Resnet50Bundle multivtaVGG16Cifar10Bundle singlevtaDeiTBundle multivtaDeiTBundle
+          singlevtaMobileNetV2Bundle multivtaMobileNetV2Bundle)
   if(TARGET ${t})
     target_link_libraries(${t} pthread)
   endif()

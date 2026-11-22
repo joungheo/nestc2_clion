@@ -109,3 +109,47 @@
 **다시 만들기.** `vtabundles_xcmpl/gen_calib_bundle.sh <Dir> ../vta/bundles/<Dir>/calib/<profile>.yaml`(PC 컨테이너 `nestc-build`, 또는 보드). 그다음 `collect_hw_bundles.py <Dir>`.
 - 위 네 bundle은 저장한 profile에서 byte까지 같게 다시 나온다.
 - CMake 규칙(`build_sim_bundles.sh`)은 아직 그림 1장 profile을 만든다. 그것으로 다시 만들면 §3의 bundle로 돌아간다.
+
+## 7. calibration을 DPU처럼: KL + 거듭제곱 MSE (2026-11-22)
+
+**왜.** DPU(Vitis AI)도 scale이 2의 거듭제곱(fix position)인데 ResNet50 손실이 0.1 %p다. 우리는 4.6 %p였다. 차이는 scale을 고르는 방법이었다.
+- Glow는 거듭제곱 schema에서 scale을 늘 큰 쪽 거듭제곱으로 올린다(`std::exp2(std::ceil(std::log2(scale)))`, `glow/lib/Quantization/Base/Base.cpp`). 잘라내는 값은 없지만 최대 1비트의 해상도를 버린다.
+- Vitis AI 양자화기는 tensor마다 오차가 가장 작은 지수를 고른다. 일부를 잘라내는(clip) 쪽이 될 수 있다.
+- 그리고 profile의 histogram이 Glow 기본 **10칸**이었다. KL calibration은 칸이 255개보다 많아야 동작한다(`-num-histogram-bins` 설명). 그래서 §6 ②의 "KL도 byte까지 같다"는 KL이 실제로는 꺼져 있었던 것이다.
+
+**바꾼 것.**
+- `image-classifier -num-histogram-bins=2048`로 profile을 만든다(`gen_calib_bundle.sh` `BINS=2048`).
+- NEST-C `lib/Quantization/Quantization.cpp`에 `-quantization-pow2-mse=<k>`를 넣었다. Glow가 고른 거듭제곱 scale s와 s/2, …, s/2^k 가운데 profile histogram의 제곱 오차가 가장 작은 것을 쓴다. 0(기본)이면 Glow 그대로다.
+- `-quantization-calibration=KL`(Glow에 있던 것)과 함께 쓴다. KL이 범위를 정하고, 그다음 거듭제곱 MSE가 지수를 다시 고른다.
+- 2048칸 profile은 `vta/bundles/<Dir>/calib/*_b2048.yaml.gz`(그림은 §6과 같다). `gen_calib_bundle.sh`가 `.yaml.gz`를 받는다.
+
+**결과 1: 평가와 겹치지 않는 1,000장(`hold1000`, 보드 `_alux3`), torchvision ResNet-50 (float 65.9 %).**
+
+| 방식 | top-1 |
+|---|---|
+| 지금 방식 (Glow의 올림) | 61.6 % |
+| KL | 63.3 % |
+| 거듭제곱 MSE k = 1 / 2 / 3 | 63.2 / 63.8 / 63.8 % (k = 2와 3은 같은 bundle) |
+| KL + 거듭제곱 MSE k = 1 / 2 | 64.3 / **64.9 %** |
+
+**결과 2: 10,000장 (보드 `_alux3`).**
+
+| 모델 | float | 지금 방식 | KL + MSE k = 2 | 손실 |
+|---|---|---|---|---|
+| ResNet-50 torchvision (DPU의 pt_resnet50과 같은 float 모델) | 63.34 % | (1,000장 −4.3 %p) | **62.53 %** | −0.81 %p |
+| MobileNetV2 | 58.71 % | 56.27 % | **56.66 %** | −2.05 %p |
+| VGG16 CIFAR-10 | 86.58 % | 86.41 % | **86.64 %** | +0.06 %p (MSE만 써도 같다) |
+| Resnet18 (1,000장) | 60.1 % | 57.8 % | 57.7 % | 바뀌지 않음 (MSE만 57.7 %, KL만 57.5 %) |
+
+- DPU 표(ImageNet val): ResNet-50 76.1 → 76.0 %(−0.1 %p), MobileNetV2 70.13 → 67.67 %(−2.46 %p). 데이터셋이 달라(우리는 ImageNetV2) 손실 크기만 견준다.
+- MobileNetV2는 1,000장에서는 −2.2 → −0.6 %p였는데 10,000장에서는 +0.39 %p만 늘었다.
+- 시간은 scale만 바뀌므로 같다(shift 값만 다르다).
+
+**torchvision ResNet-50 (`vtabundles_xcmpl/export_tv_resnet50.py`).**
+- `torchvision.models.resnet50(IMAGENET1K_V1)`, ImageNet top-1 76.13 %. Vitis AI `pt_resnet50_imagenet_224_224_8.2G`의 float 모델이다.
+- 지금의 Caffe2 resnet50.onnx와 입력 / 출력이 같게 내보낸다(`gpu_0/data_0` BGR 0..1 NCHW, `gpu_0/softmax_1`). BGR은 conv1 weight의 입력 채널을 뒤집어 맞추고(정확), mean / std는 입력 앞의 Sub / Div다(conv0 입력 복사에 합쳐진다). 그래서 main과 `multi_model.h`를 그대로 쓴다.
+- ImageNetV2 float 63.34 %(문헌값 63.3 %). Caffe2 판은 57.50 %였다.
+- `R50=tv gen_calib_bundle.sh Resnet50Test …`가 `Debug2_remote/vta/bundles/Resnet50Test/tv/resnet50.onnx`를 쓴다.
+- 1장 68.4 ms(`_pcsystimed` OMP 1). Caffe2 판은 64.6 ms다. torchvision(v1.5)은 stride 2가 1x1이 아니라 3x3 conv에 있어 conv 모양이 다르고, `sched_search.py`로 23개 모양을 다시 찾았지만 거의 그대로였다(conv 합 61.74 → 61.68 ms, `SCHED_SUFFIX=_pcsystimed`). 차이는 모델 구조에서 온다.
+
+**아직 기본이 아닌 것.** 저장소의 bundle(§6)은 그대로다. 위 설정으로 바꾸려면 그 Dir의 보드 실행 파일을 모두 다시 빌드해야 한다(bundle `.cpp`의 shift 값이 바뀐다).

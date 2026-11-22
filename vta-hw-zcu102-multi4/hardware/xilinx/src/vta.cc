@@ -682,7 +682,9 @@ void alu(
   af.lut_en = insn.lut_en;
 #endif
 
-#ifdef VTA_SYSTOLIC
+#if defined(VTA_SYSTOLIC) && !(defined(VTA_ALUX) && !defined(VTA_ALUX_II2) && defined(VTA_ALUX_NO_IMM_LOOP))
+  //#### JO (2026-11-22): VTA_ALUX_NO_IMM_LOOP leaves this loop out with the slot loop below: an imm step takes one slot there
+  //#### (II 1 as here), so only the pipeline depth per instruction differs; saves this loop's 16-lane ALU + requantize (multi4 LUTs)
   //#### JO added (2026-11-02, docs/evta_runtime_compare.md 7.14): an op with an immediate reads only dst. One acc read and
   //#### one acc write per step fit the two ports of acc_mem, so this loop runs at II = 1; the loop below reads src and dst
   //#### and needs II = 2. Like that loop (DEPENDENCE inter false on acc_mem), it assumes that no step reads a dst written

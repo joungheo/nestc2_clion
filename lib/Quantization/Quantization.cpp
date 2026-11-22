@@ -37,7 +37,56 @@ static llvm::cl::opt<bool> enableChannelwiseDepthwise(
     llvm::cl::desc("Channelwise quantized Convolution for the grouped (depthwise) convs only"),
     llvm::cl::init(false));
 
+//#### JO added (2026-11-22, docs/evta_accuracy.md §7): with the power-of-two schema Glow rounds every scale up to the next
+//#### power of two (no clipping, up to one bit of resolution lost). -quantization-pow2-mse=<k> tries the scales s, s/2, ...,
+//#### s/2^k and keeps the one with the smallest squared error over the profile histogram (as the Vitis AI quantizer picks a
+//#### fix position); needs a profile with many bins (image-classifier -num-histogram-bins=2048). 0 = Glow's choice.
+static llvm::cl::opt<unsigned> pow2MseSteps(
+    "quantization-pow2-mse",
+    llvm::cl::desc("Power-of-two schema: pick the scale among s .. s/2^k with the least histogram MSE (0 = off)"),
+    llvm::cl::init(0));
+
 namespace {
+
+using namespace glow;
+using namespace glow::quantization;
+
+/// Squared quantization error of \p TPP's histogram (bin centres) with \p scale, offset 0, range [qmin, qmax].
+static double histQuantMse(const TensorProfilingParams &TPP, double scale, double qmin, double qmax) {
+  const auto &h = TPP.histogram;
+  const double w = ((double)TPP.max - TPP.min) / h.size();
+  double e = 0;
+  for (size_t i = 0; i < h.size(); i++) {
+    if (h[i] == 0)
+      continue;
+    const double x = TPP.min + (i + 0.5) * w;
+    const double q = std::min(qmax, std::max(qmin, std::round(x / scale))) * scale;
+    e += h[i] * (x - q) * (x - q);
+  }
+  return e;
+}
+
+/// -quantization-pow2-mse: the power-of-two scale at or below \p TQP's with the least histogram error.
+static TensorQuantizationParams pow2MseScale(const TensorProfilingParams &TPP, TensorQuantizationParams TQP,
+                                             Schema schema, ElemKind precision) {
+  if (!pow2MseSteps || schema != Schema::SymmetricWithPower2Scale || TQP.offset != 0 || TPP.histogram.size() < 256 ||
+      !(TPP.max > TPP.min))
+    return TQP;
+  const double qmin = precision == ElemKind::Int8QTy ? -128 : (precision == ElemKind::Int16QTy ? -32768 : 0);
+  const double qmax = precision == ElemKind::Int8QTy ? 127 : (precision == ElemKind::Int16QTy ? 32767 : 255);
+  double best = histQuantMse(TPP, TQP.scale, qmin, qmax);
+  float bestScale = TQP.scale;
+  for (unsigned k = 1; k <= pow2MseSteps; k++) {
+    const float sc = TQP.scale / (float)(1u << k);
+    const double e = histQuantMse(TPP, sc, qmin, qmax);
+    if (e < best) {
+      best = e;
+      bestScale = sc;
+    }
+  }
+  TQP.scale = bestScale;
+  return TQP;
+}
 
 using namespace glow;
 using namespace glow::quantization;
@@ -1134,6 +1183,8 @@ generateNodeQuantizationInfos(Function *F,
     TensorProfilingParams TPP = profilingInfo.tensorProfilingParams_;
     TensorQuantizationParams TQP =
         chooseQuantizationParams(TPP, schema, precision, calibration);
+    //#### JO added (2026-11-22): -quantization-pow2-mse
+    TQP = pow2MseScale(TPP, TQP, schema, precision);
 
     quantizationInfos.emplace_back(nodeOutputName, TQP);
   }

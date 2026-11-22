@@ -64,10 +64,13 @@ BUILD_TAG ?=
 #### JO changed (2026-11-22, as vta-hw-zcu102-systolic): ALUX=1 -> the ALU extension (-DVTA_ALUX, needs SYSTOLIC=1; _alux in
 #### the dirs and the bitstream name, which vtalib checks)
 ALUX ?= 0
-IP_NAME := $(CONF)_$(NUM_EVTA)evta$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(SYSTOLIC)),_sa)$(if $(filter 1,$(ALUX)),_alux)
+#### JO added (2026-11-22): ALUX_NOIMM=1 -> vta.cc VTA_ALUX_NO_IMM_LOOP (imm ops in the slot loop only; fewer LUTs), _ni in the IP name
+ALUX_NOIMM ?= 0
+IP_NAME := $(CONF)_$(NUM_EVTA)evta$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(SYSTOLIC)),_sa)$(if $(filter 1,$(ALUX)),_alux)$(if $(filter 1,$(ALUX_NOIMM)),_ni)
 BUILD_NAME := $(IP_NAME)$(if $(FREQ),_$(FREQ)mhz)$(if $(BUILD_TAG),_$(BUILD_TAG))
 export VTA_SYSTOLIC := $(SYSTOLIC)
 export VTA_ALUX := $(ALUX)
+export VTA_ALUX_NOIMM := $(ALUX_NOIMM)
 export VTA_IMPL_STRATEGY := $(IMPL_STRATEGY)
 #### JO added (2026-11-04): IMPL_TO_STEP=opt_design stops impl_1 after opt_design (multi4 Y219 flow input)
 IMPL_TO_STEP ?=

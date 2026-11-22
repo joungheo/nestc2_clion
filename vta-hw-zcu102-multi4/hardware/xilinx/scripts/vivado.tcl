@@ -69,6 +69,9 @@ set hp_split [expr {$pll_freq > $hp_freq}]
 set queue_rs [expr {$pll_freq > 380}]
 if {[info exists ::env(VTA_QUEUE_RS)] && $::env(VTA_QUEUE_RS) ne ""} { set queue_rs [expr {$::env(VTA_QUEUE_RS) eq "1"}] }
 if {$queue_rs} { puts "command queue register slices" }
+#### JO added (2026-11-22): VTA_DATA_IC=1 -> AXI Interconnect instead of SmartConnect for the data masters (smc_<i>, below)
+set data_ic [expr {[info exists ::env(VTA_DATA_IC)] && $::env(VTA_DATA_IC) eq "1"}]
+if {$data_ic} { puts "data masters through axi_interconnect" }
 set hp_clk  [expr {$hp_split ? "hp_clk" : "evta_clk"}]
 set hp_rstn [expr {$hp_split ? "hp_rstn" : "evta_rstn"}]
 if {$hp_split} { puts "HP ports on their own clock, $hp_freq MHz" }
@@ -340,9 +343,18 @@ proc add_evta {i} {
   }
 
   # data: 5 masters -> smc_i -> S_AXI_HP<i>_FPD
+  #### JO added (2026-11-22): VTA_DATA_IC=1 -> smc_i is an AXI Interconnect (crossbar SAMD, clock converter on M00) instead of a
+  #### SmartConnect, meant to save LUTs (11.5k per EVTA) for multi4 with the ALU extension. Same cell name, so the pblocks, the
+  #### reset multicycle list and the Y219 flow are unchanged. Tried 2026-11-22 (multi4 alux3 _ni): LUT 243.9k -> 245.1k,
+  #### BRAM 580 -> 742 (its clock converter / FIFOs); not used.
+  if {$::data_ic} {
+    set smc [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_interconnect:2.1 smc_$i ]
+    set_property -dict [ list CONFIG.NUM_MI {1} CONFIG.NUM_SI {5} CONFIG.STRATEGY {2} ] $smc
+  } else {
   set smc [ create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 smc_$i ]
   set_property -dict [ list CONFIG.NUM_MI {1} CONFIG.NUM_SI {5} ] $smc
   if {$hp_split} { set_property CONFIG.NUM_CLKS {2} $smc }
+  }
   set k 0
   foreach m [list fetch_$i/m_axi_ins_port load_$i/m_axi_data_port compute_$i/m_axi_uop_port \
                   compute_$i/m_axi_data_port store_$i/m_axi_data_port] {
@@ -398,10 +410,21 @@ proc add_evta {i} {
     }
   }
   #### JO changed (2026-10-27): HP port (and smc aclk1) on $hp_clk
+  if {$::data_ic} {
+    connect_bd_net -net evta_clk [get_bd_pins smc_$i/ACLK]
+    connect_bd_net -net evta_rstn_$i [get_bd_pins smc_$i/ARESETN]
+    for {set k 0} {$k < 5} {incr k} {
+      connect_bd_net -net evta_clk [get_bd_pins smc_$i/S0${k}_ACLK]
+      connect_bd_net -net evta_rstn_$i [get_bd_pins smc_$i/S0${k}_ARESETN]
+    }
+    connect_bd_net -net $hp_clk [get_bd_pins smc_$i/M00_ACLK]
+    connect_bd_net -net [expr {$hp_split ? $hp_rstn : "evta_rstn_$i"}] [get_bd_pins smc_$i/M00_ARESETN]
+  } else {
   connect_bd_net -net evta_clk [get_bd_pins smc_$i/aclk]
   if {$hp_split} { connect_bd_net -net hp_clk [get_bd_pins smc_$i/aclk1] }
-  connect_bd_net -net $hp_clk [get_bd_pins processing_system/saxihp${i}_fpd_aclk]
   connect_bd_net -net evta_rstn_$i [get_bd_pins smc_$i/aresetn]
+  }
+  connect_bd_net -net $hp_clk [get_bd_pins processing_system/saxihp${i}_fpd_aclk]
 
   # address map: control registers of EVTA i, and the low 2 GB of DDR through HP<i>
   foreach {s base} [list fetch_$i $FETCH_BASE_ADDR load_$i $LOAD_BASE_ADDR \

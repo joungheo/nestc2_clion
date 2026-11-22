@@ -19,6 +19,7 @@ divide the output can change the result), vt 1 or 2 (vtalib uses 1 when 2 does n
 the tile + one entry in a thread's acc half (2048 / vt entries) and one channel block's input tile in a thread's inp
 half (2048 / vt). Results are checked afterwards (EVTA_DUMP_CONV dumps against the bundle's schedules).
 """
+#### JO added (2026-11-22): SCHED_SUFFIX=<suffix> runs that executable instead of _systimed (e.g. _pcsystimed, a PC cross build)
 import csv, glob, json, os, re, statistics, sys
 
 CALL = re.compile(r'^\s*(convolution_wo_tr(?:_pool)?)\((.*)\);')
@@ -137,7 +138,7 @@ def run_all(sh, d, D, R):
     def one(name, pairs):
         envs = ';'.join(f'{k}:{",".join(map(str, c))}' for k, c in pairs)
         open(f'{d}/{name}.env', 'w').write(envs)
-        o = subprocess.run(['hw/script/run_prof.sh', '-s', '_systimed', '-n', str(R), D], env=dict(os.environ, EVTA_SCHED=envs),
+        o = subprocess.run(['hw/script/run_prof.sh', '-s', os.environ.get('SCHED_SUFFIX', '_systimed'), '-n', str(R), D], env=dict(os.environ, EVTA_SCHED=envs),
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout.decode(errors='replace')
         open(f'{d}/{name}.out', 'w').write(o)
         ok = re.search(r'exit=0 ', o) is not None

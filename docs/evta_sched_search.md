@@ -69,4 +69,6 @@ python3 sched_search.py pick Resnet50Test.json /home/xilinx/JO/sched/Resnet50Tes
 python3 sched_search.py final Resnet50Test.json /home/xilinx/JO/sched/Resnet50Test
 ```
 
+PC cross build 실행 파일로 찾으려면 `sudo /bin/sh -c 'SCHED_SUFFIX=_pcsystimed python3 sched_search.py run …'`(sudo는 환경 변수를 넘기지 않으므로 sh 안에서 준다; 2026-11-22 torchvision ResNet-50).
+
 같은 보드 lock(`/tmp/evta_run.lock`)을 `run_prof.sh`가 잡는다. 두 탐색을 동시에 돌리면 서로 lock을 못 잡아 모두 실패한다.

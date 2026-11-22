@@ -13,6 +13,11 @@
 ####     the first 100 CIFAR-10 training images, prep_cifar10.py train 100)
 #### -vta-round-shift is always on here (EVTA conv shifts round as Glow's Interpreter; the first conv's bias got the rounding
 #### term only since 2026-11-22: docs/evta_accuracy.md §6).
+#### KL + power-of-two MSE (2026-11-22, docs/evta_accuracy.md §7; the DPU comparison bundles): BINS=2048 when profiling, then
+####   gen_calib_bundle.sh <Dir> <profile> -quantization-calibration=KL -quantization-pow2-mse=2 (R50=tv for the torchvision ResNet-50)
+####   e.g. R50=tv gen_calib_bundle.sh Resnet50Test ../vta/bundles/Resnet50Test/calib/resnet50_tv_calib_n200_b2048.yaml.gz \
+####          -quantization-calibration=KL -quantization-pow2-mse=2
+####   BINS=<n>: -num-histogram-bins (Glow's default 10 is too few for KL: it needs > 255 bins, else no calibration happens).
 ####   QSCHEMA=<schema> (default symmetric_with_power2_scale), CALIB=<suffix> names the profile <net>_calib_<suffix>.yaml (default "n"); QCAL=KL adds -quantization-calibration=KL.
 set -u
 D=$1; L=$2; shift 2
@@ -20,7 +25,7 @@ H=$(cd "$(dirname "$0")" && pwd)
 B=$(cd "$H/../Debug2_remote" && pwd)
 O=$B/vta/bundles/$D
 case $L in
-  *.yaml) IMGS="" ;;
+  *.yaml|*.yaml.gz) IMGS="" ;;
   *) IMGS=$(awk -v d="${IMGDIR:-}" '{ print (d != "" && substr($1, 1, 1) != "/") ? d "/" $1 : $1 }' "$L") ;;
 esac
 #### QSCHEMA=symmetric: free scales, VTA.cpp -vta-pow2-ratio (default on) keeps every EVTA ratio in * w / out a power of two (as DeiT)
@@ -31,7 +36,8 @@ case $D in
     NET=mxnet_exported_resnet18; M=$B/models/mxnet_exported_resnet18.onnx; IN=data; SHAPE=[1,224,224,3]
     PF="-image-layout=NHWC -image-mode=0to255 -image-channel-order=RGB"; MC="-vta-round-shift" ;;
   Resnet50Test)
-    NET=resnet50; M=$O/resnet50.onnx; IN=gpu_0/data_0; SHAPE=[1,3,224,224]
+    #### R50=tv: torchvision ResNet-50 (export_tv_resnet50.py -> $O/tv/resnet50.onnx; same input / output as the Caffe2 one)
+    NET=resnet50; M=$O/${R50:+$R50/}resnet50.onnx; IN=gpu_0/data_0; SHAPE=[1,3,224,224]
     PF="-image-layout=NCHW -image-mode=0to1 -image-channel-order=BGR"; MC="-vta-round-shift" ;;
   MobileNetV2Test)
     NET=mobilenetv2; M=$O/mobilenetv2_qat_f32.onnx; IN=input; SHAPE=[1,3,224,224]
@@ -47,13 +53,15 @@ case $D in
     PF="-image-layout=NCHW -image-mode=0to1 -image-channel-order=RGB"; MC="-network-name=vgg16_cifar10 -vta-round-shift" ;;
   *) echo "unknown $D"; exit 2 ;;
 esac
-P=$O/${NET}_calib_${CALIB:-n}${QCAL:+_$QCAL}.yaml
+P=$O/${NET}${R50:+_$R50}_calib_${CALIB:-n}${QCAL:+_$QCAL}.yaml
 case $L in *.yaml) P=$(readlink -f "$L") ;; esac
+#### JO added (2026-11-22): a gzipped profile (the 2048-bin ones in vta/bundles/<Dir>/calib/) is unpacked next to the bundle
+case $L in *.yaml.gz) P=$O/$(basename "$L" .gz); gzip -dc "$L" > $P || exit 1 ;; esac
 cd $O
 if [ -n "$IMGS" ]; then
   echo "$D: $(echo $IMGS | wc -w) images -> $P"
   $B/glow/bin/image-classifier $IMGS -m=$M -model-input-name=$IN -backend=VTAInterpreter -minibatch=1 $PF -compute-softmax -topk=1 \
-    -dump-profile=$P $Q > prof.log 2>&1 || { echo "profile failed ($O/prof.log)"; exit 1; }
+    -dump-profile=$P $Q ${BINS:+-num-histogram-bins=$BINS} > prof.log 2>&1 || { echo "profile failed ($O/prof.log)"; exit 1; }
 else
   echo "$D: profile $P"
 fi

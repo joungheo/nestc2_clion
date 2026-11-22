@@ -23,8 +23,8 @@ CNN은 CPU에 남은 일이 거의 없다. 더 빨라지려면 EVTA 자체(sched
 | 3 | HW H5: 명령 링 + interrupt | 할 일. 상한은 쟀다 (`unified_runtime_plan.md` §4.5: DeiT 9.9 ms 중 실제 이득 약 1 ms) |
 | 5 | Resnet50 / Resnet18 / MobileNetV2 calibration을 그림 여러 장으로 | 끝 (11-22, `evta_accuracy.md` §6): 첫 conv 반올림 버그도 찾음. Resnet50 44.66 → 52.92 %, Resnet18 52.61 → 55.67 %, MobileNetV2 56.19 → 56.27 %. symmetric scale은 남은 후보 |
 | 6 | VGG16 CIFAR-10 입력 정규화 | 끝 (11-22): 29.27 → 86.41 % (float 86.58 %), 시간 같음 |
-| 4 | AMD DPU와 비교: ResNet50, MobileNetV2 | 할 일. 아래 §5 |
-| 7 | multi4 bitstream 다시 만들기 (ALU 확장 포함) | 막힘 (11-22): 소스는 옮겼으나 EVTA 4개 × ALU 확장에 LUT 287,909개가 필요하다(칩 271,752개). compute 하나가 49.5k LUT. 방법을 정해야 한다 |
+| 4 | AMD DPU와 비교: ResNet50, MobileNetV2 | 끝 (11-22, 아래 §5): 가동률은 같거나 높고, 절대 성능은 DPU가 4–5배다. calibration을 바꿔 정확도 손실도 DPU 수준이다(`evta_accuracy.md` §7). multi4는 ALU 확장 판으로 다시 잰다 |
+| 7 | multi4 bitstream 다시 만들기 (ALU 확장 3단계까지) | 배치 / 배선 중 (11-22). 처음 판은 LUT 287,909개가 필요했다(칩 271,752개; compute 하나 49.5k LUT). ALU에 경로가 둘 있었다: immediate 연산만 하는 II 1 루프와, 확장 연산을 모두 하는 II 1 slot 루프다. slot 루프도 immediate 연산을 한 slot에 하므로 앞 루프를 뺐다(`vta.cc` `VTA_ALUX_NO_IMM_LOOP`, `make ALUX_NOIMM=1`, `_ni`). compute 49.5k → 38.5k, 전체 243,945개(89.3 %), BRAM 580. C 시뮬레이션 무작위 시험 모두 통과. SmartConnect를 AXI Interconnect로 바꾸는 것(`VTA_DATA_IC=1`)은 LUT 245.1k, BRAM 742로 더 나빠 쓰지 않는다 |
 
 ## 3. SW에 남은 일
 
@@ -99,14 +99,28 @@ host PC 냉각이 고쳐질 때까지 그 PC에서는 모든 코어를 쓰는 �
 - 표의 S 열(thread 1개)은 DPU 하나를 쓰고, T 열(여러 thread)은 DPU 3개를 함께 쓴다. 그래서 우리 EVTA 1개와 S, 우리 multi4와 T를 견주는 것이 맞다. 둘 다 "그 칩 전체로 몇 장을 처리하나"다.
 - peak가 다르니 fps와 함께 가동률(실측 GOPS / peak)을 적는다. 이것이 구조끼리의 비교다.
 
-| 모델 | | fps | GOPS | 가동률 |
-|---|---|---|---|---|
-| ResNet50 (DPU 8.2 GOP, 우리 8.25) | DPU S | 79.9 | 655 | 57 % |
-| | DPU T | 189.7 | 1,556 | 45 % |
-| | 우리 EVTA 1개 | 15.6 | 128.5 | 63 % |
-| MobileNetV2 (DPU 0.602 GOP, 우리 0.657) | DPU S | 270 | 163 | 14 % |
-| | DPU T | 764 | 460 | 13 % |
-| | 우리 EVTA 1개 | 69.2 | 45.5 | 22 % |
+| 모델 | | fps | GOPS | 가동률 | 정확도: float → int8 |
+|---|---|---|---|---|---|
+| ResNet50 (DPU 8.2 GOP, 우리 8.18) | DPU S (B4096 1개) | 79.9 | 655 | 57 % | ImageNet val 76.1 → 76.0 % (−0.1 %p) |
+| | DPU T (B4096 3개) | 189.7 | 1,556 | 45 % | |
+| | 우리 EVTA 1개 (`_alux3`, 68.4 ms) | 14.6 | 119.6 | 58 % | ImageNetV2 63.34 → 62.53 % (−0.81 %p) |
+| | 우리 multi4 (`_rq`, 4장 동시, 78.5 ms) | 50.9 | 416.7 | 51 % | 같은 bundle |
+| MobileNetV2 (DPU 0.602 GOP, 우리 0.658) | DPU S | 270 | 163 | 14 % | ImageNet val 70.13 → 67.67 % (−2.46 %p) |
+| | DPU T | 764 | 460 | 13 % | |
+| | 우리 EVTA 1개 (`_alux3`, 14.44 ms) | 69.2 | 45.5 | 22 % | ImageNetV2 58.71 → 56.66 % (−2.05 %p) |
+| | 우리 multi4 (`_rq`, 4장 동시, 19.1 ms) | 209.1 | 137.5 | 17 % | 같은 bundle |
 
-- 우리 multi4는 순서 4에서 같은 모델로 잰다(11-06의 Resnet50 4개 동시 86.0 ms / 장은 그 뒤 바뀐 것이 많다).
-- 모델과 정확도가 다르다. DPU 표는 PyTorch / TF 모델을 Vitis AI로 양자화한 것이다(ResNet50 ImageNet top-1 0.760, MobileNetV2 0.677). 순서 4에서 `pt_resnet50_imagenet_224_224_8.2G`를 받아 우리 흐름으로 돌리고, 같은 데이터셋으로 정확도도 잰다.
+**순서 4의 결과 (11-22).**
+- 같은 모델로 잰다.
+  - ResNet50은 DPU의 `pt_resnet50`과 같은 float 모델인 torchvision ResNet-50(IMAGENET1K_V1, `vtabundles_xcmpl/export_tv_resnet50.py`)이다.
+  - MobileNetV2는 우리 TFLite QAT 모델(1.0, 224)로, DPU의 `tf_mobilenetv2_1.0`과 같은 구조다.
+- **정확도:** calibration을 DPU 양자화기처럼 바꿔 손실을 DPU 수준으로 줄였다. KL과, 거듭제곱 scale 가운데 오차가 가장 작은 것을 고르는 방법을 함께 쓴다(`evta_accuracy.md` §7). ResNet50은 −4.3 %p에서 −0.81 %p가 됐다. 데이터셋이 다르므로(DPU는 ImageNet val, 우리는 ImageNetV2) 손실 크기만 견준다.
+- **가동률**(실측 GOPS / peak):
+  - ResNet50: 우리 EVTA 1개 58 % 대 DPU 1개 57 %, multi4 51 % 대 DPU 3개 45 %다. 구조의 효율은 같거나 조금 낫다.
+  - MobileNetV2: 우리 17–22 % 대 DPU 13–14 %다. depthwise가 둘 다 약하다.
+- **절대 성능**은 peak 차이(EVTA 1개 204.8 대 1,151 GOPS, multi4 819 대 3,453 GOPS)만큼 DPU가 4–5배다.
+  - ResNet50: S 대 EVTA 1개 5.5배, T 대 multi4 3.7배.
+  - MobileNetV2: S 대 EVTA 1개 3.9배, T 대 multi4 3.7배.
+- **multi4는 아직 ALU 확장이 없는 `_rq` bitstream이다.** MobileNetV2의 residual add와 avgpool이 CPU에서 돈다(복사본마다 CPU 7.4 ms). 그래서 4장 동시가 장당 19.1 ms로, EVTA 1개 `_alux3`(14.44 ms)보다 느리다. ALU 확장 multi4(순서 7)로 다시 잰다.
+- ResNet50 torchvision은 Caffe2 판보다 느리다(68.4 대 64.6 ms). schedule을 다시 찾아도 거의 같았다(conv 합 61.74 → 61.68 ms).
+- multi4 bundle: `gen_multi4_bundles.sh MultiEVTAMobileNetV2Test`(새로 만듦), `MultiEVTAResnet50Test`. `MODEL=`, `PROF=`, `MCX=`로 모델, profile, 옵션을 바꾼다. PC cross build dir은 `build_pc_m4_systimed`다.

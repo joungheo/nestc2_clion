@@ -57,8 +57,10 @@ SYSTOLIC ?= 0
 #### JO changed (2026-11-11, ALU extension, docs/evta_isa_ext.md 8.8): ALUX=1 -> ALU operations 4-11 and the ALU lut_en
 #### (-DVTA_ALUX, needs SYSTOLIC=1; _alux dirs and bitstream name, which vtalib checks)
 ALUX ?= 0
+#### JO added (2026-11-22): ALUX_NOIMM=1 -> vta.cc VTA_ALUX_NO_IMM_LOOP (imm ops in the slot loop only; fewer LUTs), _ni in the IP name
+ALUX_NOIMM ?= 0
 #IP_NAME := $(CONF)$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(MEM_OREG)),_oreg)$(if $(filter 1,$(SYSTOLIC)),_sa)
-IP_NAME := $(CONF)$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(MEM_OREG)),_oreg)$(if $(filter 1,$(SYSTOLIC)),_sa)$(if $(filter 1,$(ALUX)),_alux)
+IP_NAME := $(CONF)$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(MEM_OREG)),_oreg)$(if $(filter 1,$(SYSTOLIC)),_sa)$(if $(filter 1,$(ALUX)),_alux)$(if $(filter 1,$(ALUX_NOIMM)),_ni)
 #### JO changed (2026-10-28, systolic D8): IMPL_STRATEGY=<Vivado impl strategy>, BUILD_TAG=<suffix of the vivado dir>
 #BUILD_NAME := $(IP_NAME)$(if $(FREQ),_$(FREQ)mhz)
 IMPL_STRATEGY ?=
@@ -69,6 +71,7 @@ IP_BUILD_PATH := $(BUILD_DIR)/hls/$(IP_NAME)
 export VTA_MEM_OREG := $(MEM_OREG)
 export VTA_SYSTOLIC := $(SYSTOLIC)
 export VTA_ALUX := $(ALUX)
+export VTA_ALUX_NOIMM := $(ALUX_NOIMM)
 export VTA_FREQ := $(FREQ)
 HW_BUILD_PATH := $(BUILD_DIR)/vivado/$(BUILD_NAME)
 

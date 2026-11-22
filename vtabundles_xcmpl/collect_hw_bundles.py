@@ -30,6 +30,7 @@ import filecmp, os, re, shlex, shutil, subprocess, sys
 # R = '/home/xilinx/JO/npuprg/nestc2_clion/nest-compiler'
 HERE = os.path.dirname(os.path.abspath(__file__))
 R = os.path.dirname(HERE)
+BOARD_R = os.environ.get('NESTC_BOARD_ROOT', '/home/xilinx/JO/npuprg/nestc2_clion/nest-compiler')
 #### JO changed: per-set source/hw dirs and bitstream (see --set above)
 # SRC = f'{R}/vta/bundles'
 # BLD = f'{R}/Debug2_remote/vta/bundles'
@@ -177,7 +178,8 @@ def parse(d):
 
 def resolve(p, d):
     """Map a CMake path to (kind, value): 'local' file name in hw/<d> or an absolute path."""
-    p = p.replace('${GLOW_SOURCE_DIR}', f'{R}/glow').replace('${NESTC_ROOT_DIR}', R)
+    #### JO changed (2026-11-22): run lines with the board's tree (BOARD_R) also when collected on the PC (they run on the board)
+    p = p.replace('${GLOW_SOURCE_DIR}', f'{BOARD_R}/glow').replace('${NESTC_ROOT_DIR}', BOARD_R)
     for pre in ('${CMAKE_CURRENT_BINARY_DIR}/', '${CMAKE_CURRENT_SOURCE_DIR}/'):
         if p.startswith(pre):
             return os.path.basename(p)

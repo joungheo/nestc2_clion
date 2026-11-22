@@ -4,7 +4,7 @@
 #### CMake (a cmake re-run in Debug2_remote rebuilds all of Glow on a new day). Output in
 #### Debug2_remote/vta/multievta_bundles/<Dir>, log gen_<i>.log there; then collect_hw_bundles.py --set multievtax4 <Dir>.
 #### The single bundle (build_sim_bundles.sh) must exist: the model and its profile come from its build dir.
-#### usage (on the board): vtabundles_xcmpl/gen_multi4_bundles.sh MultiEVTAResnet18Test MultiEVTAResnet50Test MultiEVTAVgg16Cifar10Test MultiEVTADeiTTest
+#### usage (board, or PC in the nestc-build container): vtabundles_xcmpl/gen_multi4_bundles.sh MultiEVTAResnet18Test MultiEVTAResnet50Test MultiEVTAVgg16Cifar10Test MultiEVTADeiTTest MultiEVTAMobileNetV2Test
 set -u
 B=$(cd "$(dirname "$0")/../Debug2_remote" && pwd)
 export TVM_HOME=$B/../tvm PYTHONPATH=$B/../tvm/python TVM_LIBRARY_PATH=$B/tvm
@@ -24,8 +24,18 @@ for D in "$@"; do
     MultiEVTADeiTTest) base=deit; S=$B/vta/bundles/DeiTTest
       set -- -model=$S/deit_fold.onnx -model-input=pixel_values,float,[1,3,224,224] -load-profile=$S/deit_calib.yaml \
         -vta-round-shift ;;
+    #### JO added (2026-11-22): MobileNetV2 (the single bundle's model; copy 0 named mobilenetv2 below)
+    MultiEVTAMobileNetV2Test) base=mobilenetv2; S=$B/vta/bundles/MobileNetV2Test
+      set -- -model=$S/mobilenetv2_qat_f32.onnx -model-input=input,float,[1,3,224,224] \
+        -load-profile=$B/../vta/bundles/MobileNetV2Test/calib/mobilenetv2_calib_n200.yaml -enable-channelwise-depthwise -vta-round-shift -vta-evta-depthwise ;;
     *) echo "$D: unknown"; rc=1; continue ;;
   esac
+  #### JO added (2026-11-22): MODEL=<onnx> / PROF=<profile> replace the model / profile, MCX=<options> adds model-compiler options
+  #### (e.g. the torchvision ResNet-50 with its KL + power-of-two MSE profile: MODEL=$B/vta/bundles/Resnet50Test/tv/resnet50.onnx
+  #### PROF=<yaml> MCX="-vta-round-shift -quantization-calibration=KL -quantization-pow2-mse=2")
+  [ -n "${MODEL:-}" ] && set -- $(echo "$@" | sed "s|-model=[^ ]*|-model=$MODEL|")
+  [ -n "${PROF:-}" ] && set -- $(echo "$@" | sed "s|-load-profile=[^ ]*|-load-profile=$PROF|")
+  [ -n "${MCX:-}" ] && set -- "$@" $MCX
   O=$B/vta/multievta_bundles/$D
   mkdir -p $O && cd $O || exit 1
   # the single bundle's skip list (model-compiler reads ./VTASkipQuantizeNodes.txt)
@@ -34,7 +44,7 @@ for D in "$@"; do
   for i in 0 1 2 3; do
     # if [ $i = 0 ]; then extra=""; else n=${base}_$i; extra="-index-multi-evta=$((1 << i)) -network-name=$n -main-entry-name=$n"; fi
     #### JO changed (2026-11-10): DeiT copy 0 is named deit (-network-name) as the single bundle
-    if [ $i = 0 ]; then extra=""; [ $D = MultiEVTADeiTTest ] && extra="-network-name=deit"
+    if [ $i = 0 ]; then extra=""; [ $D = MultiEVTADeiTTest ] && extra="-network-name=deit"; [ $D = MultiEVTAMobileNetV2Test ] && extra="-network-name=mobilenetv2"
     else n=${base}_$i; extra="-index-multi-evta=$((1 << i)) -network-name=$n -main-entry-name=$n"; fi
     #### JO added (2026-11-10): DeiT's Glow graph hash is not stable: retry with the hash the failed run printed set in a copy
     #### of the profile (as gen_deit_bundle.sh), up to 6 times
