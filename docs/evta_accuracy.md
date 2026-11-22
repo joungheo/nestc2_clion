@@ -57,3 +57,55 @@
 
 - `vtabundles_xcmpl/hw*/script/accuracy.txt`: Dir마다 지금 bundle의 데이터셋 정확도. `run_prof.sh`가 요약 줄에 그 실행의 class(`top-1 281 (0.655530)`)와 함께 보여 준다.
 - 바이트가 바뀌는 변경을 하면 eval을 다시 돌려 이 문서와 `accuracy.txt`를 고친다.
+
+## 6. 손실 줄이기 (2026-11-22)
+
+**결과 (보드 `_alux3`, 10,000장).** 시간은 `_systimed` OMP 1, 25회 중앙값.
+
+| 모델 | float | 전 (§3) | 후 | 1장 시간 전 → 후 (ms) | 무엇을 바꿨나 |
+|---|---|---|---|---|---|
+| Resnet50 | 57.50 % | 44.66 % | **52.92 %** | 64.18 → 64.59 | conv0 반올림 버그, 그림 200장, `-vta-round-shift` |
+| Resnet18 | 58.16 % | 52.61 % | **55.67 %** | 22.55 → 22.72 | 같음 |
+| MobileNetV2 | 58.71 % | 56.19 % | **56.27 %** | 14.45 → 14.44 | conv0 반올림 버그, 그림 200장 |
+| VGG16 CIFAR-10 | 86.58 % (정규화한 입력) | 29.27 % | **86.41 %** | 6.75 → 6.75 | 입력 정규화, 학습 그림 100장, `-vta-round-shift` |
+| DeiT-tiny | 62.41 % | 60.37 % | **60.50 %** | 37.06 → 37.01 | conv0 반올림 버그만(그림, 설정은 그대로) |
+
+**① 가장 큰 원인: 첫 conv의 bias에 반올림 항이 빠져 있었다 (VTASave 버그).**
+- `-vta-round-shift`는 bias에 2^(shift−1)을 더해 conv 출력 shift를 반올림으로 만든다(`convRoundHalf`).
+- 첫 conv(conv0, packed 입력)는 bias를 다른 함수에서 weights 파일에 쓰는데, 그 함수가 이 항을 더하지 않았다. 호출 쪽은 "반올림한 bias가 있다"고 보고 bias를 넘겼다.
+- 그리고 pool을 합친 conv는 `convRoundHalf`가 아예 0을 돌려주었다. max pool과 채널마다 같은 상수 더하기는 순서를 바꿔도 같다(max(x + c) = max(x) + c). shift도 단조라서 막을 이유가 없었다.
+- 그래서 conv0 + pool 출력이 Glow Interpreter보다 평균 0.35 LSB 낮았다. 그 뒤 층으로 갈수록 오차가 커졌다.
+- 찾은 방법:
+  - Glow Interpreter의 층별 출력(`image-classifier -instrument-debug -instrument-debug-format=rawbin -minibatch=0`)과 보드의 `EVTA_DUMP_CONV`를 층마다 견줬다.
+  - 그리고 conv 하나를 보드의 입력으로 numpy에서 다시 계산했다. plain conv는 99.5–99.9 % 같았고, 첫 층만 어긋났다.
+- 고친 뒤 Resnet50(평가와 겹치지 않는 1,000장): 46.2 → 55.4 %. Glow Interpreter의 같은 양자화는 56.4 %다.
+- `-vta-round-shift`를 쓰는 MobileNetV2와 DeiT도 conv0 weights가 바뀐다(코드는 같다).
+
+**② calibration 그림 수.**
+- 그림 1장(`cat_285.png`) 대신 ImageNetV2 200장을 쓴다(`imagenet_eval/calib_imagenetv2_200.txt`, list.txt의 50장마다 1장). 평가 10,000장의 2 %와 겹친다.
+- VGG16은 CIFAR-10 학습 그림 100장이다(`calib_cifar10_train100.txt`). 시험 그림과 겹치지 않는다.
+- Glow Interpreter로 보면 Resnet50은 그림 1장 50.4 % → 200장 56.4 %로 효과가 크다(1,000장).
+- 하지만 scale이 2의 거듭제곱이라 그림 수가 더 늘면 대개 같은 scale로 떨어진다. VGG16은 100장, 500장, KL 방식이 byte까지 같은 bundle이었다.
+
+**③ VGG16 입력 정규화.**
+- `add_input_norm_onnx.py`가 ONNX 앞에 (x − 평균) / 표준편차(CIFAR-10 평균 0.4914, 0.4822, 0.4465, 표준편차 0.2470, 0.2435, 0.2616)를 넣는다.
+- main은 그대로 0..1 RGB를 넣는다. 정규화는 conv0의 입력 복사에 합쳐진다(`-vta-fuse-preprocess`, 256칸 표). 그래서 시간이 같다.
+- float 30.07 → 86.58 %(ImageNet 평균 / 표준편차로도 86.69 %).
+
+**④ 해 보았지만 기본으로 하지 않은 것: scale을 2의 거듭제곱으로 묶지 않기 (`QSCHEMA=symmetric`).**
+- DeiT에 쓴 방식이다. EVTA 비율(in × w / out)만 `-vta-pow2-ratio`로 2의 거듭제곱으로 맞춘다.
+- Glow Interpreter로는 Resnet50이 64 %로 float(62 %)만큼 나온다(100장). 그러나 보드에서는 Resnet18이 32.30 %였다.
+- 고친 것 두 가지:
+  - vtalib CPU `relu`의 scale 비율이 `(int)` 버림이었다(1.48 → 1, 0.5 → 0). 반올림한 고정소수점 곱으로 고쳤다. 정수 비율이면 byte가 전과 같다. 두 vtalib 모두 고쳤다. 32.30 → 47.65 %.
+  - `-vta-pow2-ratio`가 conv 출력 scale을 바꿀 때 뒤의 MaxPool / Relu가 따라가지 않아 컴파일이 멈췄다(`VTA.cpp` `follower`).
+- 남은 문제:
+  - 47.65 %는 아직 거듭제곱 판보다 낮다. residual add가 conv에 합쳐지지 않아 느리다(Resnet18 eval 330 → 465 s).
+  - ① 버그를 고치기 전에 잰 값이라 다시 재야 한다. 다음 후보로 둔다.
+
+**⑤ 측정 도구.**
+- `imagenet_eval/` 밖의 그림 목록으로 PC에서 Glow로 잰다: `image-classifier <PNGs> -backend=Interpreter -load-profile=<yaml> -quantization-schema=<schema>`. 1,000장에 몇 분이다.
+- `-backend=VTAInterpreter`는 relu를 2의 거듭제곱 shift(버림)로 계산하는 등 보드와 다르다. symmetric에서는 0 %가 나온다. 비교 기준으로 쓰지 않는다.
+
+**다시 만들기.** `vtabundles_xcmpl/gen_calib_bundle.sh <Dir> ../vta/bundles/<Dir>/calib/<profile>.yaml`(PC 컨테이너 `nestc-build`, 또는 보드). 그다음 `collect_hw_bundles.py <Dir>`.
+- 위 네 bundle은 저장한 profile에서 byte까지 같게 다시 나온다.
+- CMake 규칙(`build_sim_bundles.sh`)은 아직 그림 1장 profile을 만든다. 그것으로 다시 만들면 §3의 bundle로 돌아간다.

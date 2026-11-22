@@ -14,17 +14,17 @@
 
 CNN은 CPU에 남은 일이 거의 없다. 더 빨라지려면 EVTA 자체(schedule, DMA, 배열 크기)를 손봐야 한다. DeiT는 아직 conv가 아닌 일이 절반이다.
 
-## 2. 정한 순서 (11-22)
+## 2. 정한 순서 (11-22; 짧은 것부터 하고, 같이 돌릴 수 있는 것은 미리 돌린다)
 
 | 순서 | 일 | 상태 |
 |---|---|---|
 | 1 | 이 표를 문서로 | 끝 (이 문서) |
 | 2 | DeiT: softmax를 Q K^T의 epilogue로, 2장 엇갈려 처리(EVTA와 CPU 겹치기) | 할 일. 11-22에 한때 연구 과제로 미뤘다가 다시 하기로 함 (`deit_optimization.md` §6.11, §6.1) |
 | 3 | HW H5: 명령 링 + interrupt | 할 일. 상한은 쟀다 (`unified_runtime_plan.md` §4.5: DeiT 9.9 ms 중 실제 이득 약 1 ms) |
-| 5 | Resnet50 / Resnet18 / MobileNetV2 calibration을 그림 여러 장으로 | 할 일 (`evta_accuracy.md` §4) |
-| 6 | VGG16 CIFAR-10 입력 정규화 | 할 일 (`evta_accuracy.md` §4: float 30 → 87 %) |
+| 5 | Resnet50 / Resnet18 / MobileNetV2 calibration을 그림 여러 장으로 | 끝 (11-22, `evta_accuracy.md` §6): 첫 conv 반올림 버그도 찾음. Resnet50 44.66 → 52.92 %, Resnet18 52.61 → 55.67 %, MobileNetV2 56.19 → 56.27 %. symmetric scale은 남은 후보 |
+| 6 | VGG16 CIFAR-10 입력 정규화 | 끝 (11-22): 29.27 → 86.41 % (float 86.58 %), 시간 같음 |
 | 4 | AMD DPU와 비교: ResNet50, MobileNetV2 | 할 일. 아래 §5 |
-| 7 | multi4 bitstream 다시 만들기 (ALU 확장 포함) | 할 일 |
+| 7 | multi4 bitstream 다시 만들기 (ALU 확장 포함) | 막힘 (11-22): 소스는 옮겼으나 EVTA 4개 × ALU 확장에 LUT 287,909개가 필요하다(칩 271,752개). compute 하나가 49.5k LUT. 방법을 정해야 한다 |
 
 ## 3. SW에 남은 일
 

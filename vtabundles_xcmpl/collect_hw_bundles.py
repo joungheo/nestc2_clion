@@ -111,8 +111,11 @@ RUN_ALL_HDR = r'''#### JO added (2026-11-04): what this run is, at the start of 
 ####     SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz_bias.bin}
 ####     SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_396mhz_rq.bin}
 ####     JO changed (2026-11-04): SYS_BIN = the requantize build at 400 MHz (bit/evta_multi4_rq_400MHz_pass_261104; placer ExtraNetDelay_high)
+####   JO changed (2026-11-22): single = the ALU extension 3 build (docs/evta_isa_ext.md 5.1-5.3), was ..._sa_400mhz_rq.bin
+####     (fd1a93b set it in hw/script/run_all.sh by hand only, so the next collect wrote the old one back)
 SYS_BINS = {
-    'single': 'vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_400mhz_rq.bin',
+    #'single': 'vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_400mhz_rq.bin',
+    'single': 'vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_alux3_400mhz_rq.bin',
     'multievtax4': 'vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz_rq.bin',
 }
 #### JO added: per set, dirs made by a script here: (dir, executable, arguments, golden, generator command)

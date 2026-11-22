@@ -1325,7 +1325,11 @@ static int32_t convRoundHalf(const glow::ConvolutionInst *Inst, VTASaveContext *
   //#### JO changed (2026-11-14): also for a residual-fused conv (vtalib requantizes the conv, bias and shift, before the
   //#### add, as a plain conv; MobileNetV2's residual convs with -vta-fuse-residual-norelu)
   // if (!vtaRoundShift || ctx->getFusion(Inst) || ctx->getPoolFusion(Inst))
-  if (!vtaRoundShift || ctx->getPoolFusion(Inst))
+  //#### JO changed (2026-11-22): also for a pool-fused conv: the max pool and the per-channel constant 2^(shift-1) commute
+  //#### (max(x + c) = max(x) + c) and the shift is monotone, so the pooled output rounds as the CPU conv -> relu -> pool.
+  //#### Resnet50 conv0 + pool was 0.35 LSB low on average against Glow's Interpreter (truncated), the error grew downstream.
+  //if (!vtaRoundShift || ctx->getPoolFusion(Inst))
+  if (!vtaRoundShift)
     return 0;
   float scale = (1 / Inst->getSrc()->getType()->getScale()) * (1 / Inst->getFilter()->getType()->getScale()) /
                 (1 / Inst->getDest()->getType()->getScale());
@@ -1858,6 +1862,10 @@ void prepareFirstBNNVTAConvolutionInst(const glow::ConvolutionInst *Inst,
   }
   assert(tensorBias);
   auto handleBias = tensorBias->getHandle<int32_t>();
+  //#### JO added (2026-11-22): -vta-round-shift for the first conv too (its bias was written without convRoundHalf while the
+  //#### save side passed it as rounded: Resnet50 conv0 + pool 0.35 LSB low against Glow's Interpreter, the error grew downstream)
+  const int32_t roundHalf = convRoundHalf(Inst, ctx);
+  doBias = roundHalf != 0;
   {
     for (size_t i = 0, e = handleBias.size(); i < e; i++) {
       auto data = handleBias.raw(i);
@@ -1869,7 +1877,8 @@ void prepareFirstBNNVTAConvolutionInst(const glow::ConvolutionInst *Inst,
     if(doBias) {
       auto fos = ctx->getWeightFileStream();
       for (size_t i = 0, e = handleBias.size(); i < e; i++) {
-        auto data = handleBias.raw(i);
+        //auto data = handleBias.raw(i);
+        int32_t data = handleBias.raw(i) + roundHalf;
         fos->write((const char *) &data, 4);
       }
     }

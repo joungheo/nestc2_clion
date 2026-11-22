@@ -872,6 +872,16 @@ static bool isPow2Ratio(double r) {
 static bool layoutOnly(const Node *u) {
   return llvm::isa<ReshapeNode>(u) || llvm::isa<TransposeNode>(u) || llvm::isa<SliceNode>(u);
 }
+//#### JO added (2026-11-22): a MaxPool / Relu whose output has its input's scale keeps it (Glow's MaxPool verify wants the
+//#### same scale; the EVTA fuses relu / pool into the conv with one scale), so it follows a rescale like a layout-only node
+//#### (CNNs with -quantization-schema=symmetric: the convs' outputs before the pools were not rescaled and verify failed)
+static bool follower(const Node *u, TypeRef t) {
+  if (!llvm::isa<MaxPoolNode>(u) && !llvm::isa<ReluNode>(u))
+    return false;
+  NodeValue r = u->getNthResult(0);
+  return r.getElementType() == ElemKind::Int8QTy && t->getElementType() == ElemKind::Int8QTy &&
+         r.getType()->getScale() == t->getScale() && r.getType()->getOffset() == t->getOffset();
+}
 static bool isScaledOp(const Node *n) {
   return llvm::isa<ConvolutionNode>(n) || llvm::isa<FullyConnectedNode>(n) || llvm::isa<MatMulNode>(n);
 }
@@ -882,7 +892,8 @@ static bool canRescale(NodeValue v, std::set<const Node *> &seen) {
     Node *u = use.getUser();
     if (!seen.insert(u).second)
       continue;
-    if (layoutOnly(u)) {
+    //if (layoutOnly(u)) {
+    if (layoutOnly(u) || follower(u, v.getType())) {
       if (!canRescale(u->getNthResult(0), seen))
         return false;
     } else if (auto *C = llvm::dyn_cast<ConcatNode>(u)) {
@@ -902,13 +913,17 @@ static bool canRescale(NodeValue v, std::set<const Node *> &seen) {
   return true;
 }
 static void rescale(Function *F, NodeValue v, float s);
-static void rescaleUsers(Function *F, NodeValue v, float s) {
+//#### JO changed (2026-11-22): pre = v's type before the rescale (for the MaxPool / Relu followers), nullptr after a Concat
+//static void rescaleUsers(Function *F, NodeValue v, float s) {
+static void rescaleUsers(Function *F, NodeValue v, float s, TypeRef pre = nullptr) {
   auto *M = F->getParent();
   std::vector<Node *> users;
   for (auto &use : v.getUsers())
     users.push_back(use.getUser());
   for (Node *u : users) {
-    if (layoutOnly(u)) {
+    //if (layoutOnly(u)) {
+    // v has the new scale s already: a MaxPool / Relu follows when its output still has v's old scale
+    if (layoutOnly(u) || (pre && follower(u, pre))) {
       if (u->getNthResult(0).getType()->getScale() != s)
         rescale(F, u->getNthResult(0), s);
     } else if (auto *C = llvm::dyn_cast<ConcatNode>(u)) {
@@ -938,8 +953,10 @@ static void rescaleUsers(Function *F, NodeValue v, float s) {
   }
 }
 static void rescale(Function *F, NodeValue v, float s) {
+  TypeRef pre = v.getType();
   v.setType(F->getParent()->uniqueType(ElemKind::Int8QTy, v.dims(), s, 0));
-  rescaleUsers(F, v, s);
+  //rescaleUsers(F, v, s);
+  rescaleUsers(F, v, s, pre);
 }
 static bool pow2Ratios(Function *F) {
   bool changed = false, again = true;

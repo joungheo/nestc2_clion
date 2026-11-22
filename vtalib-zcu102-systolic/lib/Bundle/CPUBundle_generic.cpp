@@ -907,7 +907,11 @@ int maxpool(int8_t* input, int8_t *output, dim_t N, dim_t H, dim_t W, dim_t C, u
 //  return 0;
 //}
 int relu(int8_t* input, int8_t *output, unsigned_t size, float inputScale, float outputScale){
-  const int mul = (int)(inputScale/outputScale);
+  //#### JO changed (2026-11-22): the ratio in fixed point with rounding (was (int)(inputScale/outputScale): 1.48 -> 1,
+  //#### 0.5 -> 0, right only for integer ratios as with power-of-two scales; symmetric scales gave Resnet18 32 %).
+  //#### Integer ratios give the same bytes as before (x * 2^k exactly).
+  //const int mul = (int)(inputScale/outputScale);
+  const int64_t mul = (int64_t)std::llround((double)inputScale / outputScale * 65536.0);
   // chunks over the threads, plain simd loop inside (clang-8 does not vectorize int8 "parallel for simd")
   const ssize_t n = size, CH = 4096;
 //#### JO changed: small sizes run inline without any OpenMP call (elemmax calls quantize per element:
@@ -920,7 +924,8 @@ int relu(int8_t* input, int8_t *output, unsigned_t size, float inputScale, float
       //#### JO changed (2026-11-05): clip to 127 when the output scale is smaller (int8 v *= mul wrapped: 64 * 2 = -128)
       // int8_t v = input[i] > 0 ? input[i] : 0;
       // v *= mul;
-      int v = input[i] > 0 ? input[i] * mul : 0;
+      //int v = input[i] > 0 ? input[i] * mul : 0;
+      int64_t v = input[i] > 0 ? (input[i] * mul + 32768) >> 16 : 0;
       output[i] = (int8_t)(v > 127 ? 127 : v);
     }
   };

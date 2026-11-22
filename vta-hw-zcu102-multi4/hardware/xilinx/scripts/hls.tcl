@@ -55,6 +55,10 @@ if {[info exists ::env(VTA_MEM_OREG)] && $::env(VTA_MEM_OREG) eq "1"} {
 if {[info exists ::env(VTA_SYSTOLIC)] && $::env(VTA_SYSTOLIC) eq "1"} {
     append cflags " -DVTA_SYSTOLIC"
 }
+#### JO added (2026-11-11, ALU extension): Makefile ALUX=1 -> ALU operations 4-11 and lut_en (vta.cc VTA_ALUX)
+if {[info exists ::env(VTA_ALUX)] && $::env(VTA_ALUX) eq "1"} {
+    append cflags " -DVTA_ALUX"
+}
 
 # Get the VTA configuration paramters
 set ::device $FPGA_DEVICE

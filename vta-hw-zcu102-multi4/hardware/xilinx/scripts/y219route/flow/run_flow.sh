@@ -6,7 +6,9 @@
 set -e
 T=$1
 F=$(cd "$(dirname "$0")" && pwd)
-RW=/home/ubuntu/tools/rapidwright
+#RW=/home/ubuntu/tools/rapidwright
+#### JO changed (2026-11-22): RW=<dir> overrides (ubuntu2: $HOME/tools/rapidwright)
+RW=${RW:-$HOME/tools/rapidwright}
 #### JO changed (2026-10-27): VTA_IMPL_DIR (place_d.tcl input, relative to build/y219) is passed into docker
 #viv() { docker exec -u ubuntu -w $PWD vivado2020-build bash -c "source /tools/Xilinx/v2020.1/Vivado/2020.1/settings64.sh; vivado -mode batch -nojournal -log $1.log -source $2 -tclargs ${*:3} > /dev/null 2>&1"; }
 #### JO changed (2026-11-04): VTA_PLACE_DIRECTIVE too (place_d.tcl)

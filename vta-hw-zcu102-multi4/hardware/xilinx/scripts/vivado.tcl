@@ -65,6 +65,10 @@ puts "PLL $pll_freq MHz"
 #### and the master side of smc_<i> get their own clock (hp_pll, VTA_HP_FREQ, default 333); smc_<i> crosses.
 set hp_freq [expr {[info exists ::env(VTA_HP_FREQ)] && $::env(VTA_HP_FREQ) ne "" ? $::env(VTA_HP_FREQ) : 333}]
 set hp_split [expr {$pll_freq > $hp_freq}]
+#### JO added (2026-11-22): command queue register slices above 380 MHz (see the queues below)
+set queue_rs [expr {$pll_freq > 380}]
+if {[info exists ::env(VTA_QUEUE_RS)] && $::env(VTA_QUEUE_RS) ne ""} { set queue_rs [expr {$::env(VTA_QUEUE_RS) eq "1"}] }
+if {$queue_rs} { puts "command queue register slices" }
 set hp_clk  [expr {$hp_split ? "hp_clk" : "evta_clk"}]
 set hp_rstn [expr {$hp_split ? "hp_rstn" : "evta_rstn"}]
 if {$hp_split} { puts "HP ports on their own clock, $hp_freq MHz" }
@@ -296,7 +300,18 @@ proc add_evta {i} {
       g2s_queue   $g2s_src                     store_$i/g2s_dep_queue_V \
       s2g_queue   store_$i/s2g_dep_queue_V     compute_$i/s2g_dep_queue_V ] {
     connect_bd_intf_net [get_bd_intf_pins $src_pin] [get_bd_intf_pins ${q}_$i/S_AXIS]
-    connect_bd_intf_net [get_bd_intf_pins ${q}_$i/M_AXIS] [get_bd_intf_pins $dst_pin]
+    #### JO changed (2026-11-22, as vta-hw-zcu102-systolic 7a128c5): above 380 MHz a fully registered AXIS register slice
+    #### ${q}_rs_<i> (in pb_evta_<i> by its name) between each command queue and its consumer (VTA_QUEUE_RS=0|1 overrides):
+    #### the FIFO EMPTY -> HLS regslice TREADY -> RDEN path of the 8 cascaded FIFO36 missed 400 MHz on the single EVTA.
+    #connect_bd_intf_net [get_bd_intf_pins ${q}_$i/M_AXIS] [get_bd_intf_pins $dst_pin]
+    if {$::queue_rs && [lsearch {load_queue gemm_queue store_queue} $q] >= 0} {
+      set rs [ create_bd_cell -type ip -vlnv xilinx.com:ip:axis_register_slice:1.1 ${q}_rs_$i ]
+      set_property -dict [ list CONFIG.REG_CONFIG {8} ] $rs
+      connect_bd_intf_net [get_bd_intf_pins ${q}_$i/M_AXIS] [get_bd_intf_pins ${q}_rs_$i/S_AXIS]
+      connect_bd_intf_net [get_bd_intf_pins ${q}_rs_$i/M_AXIS] [get_bd_intf_pins $dst_pin]
+    } else {
+      connect_bd_intf_net [get_bd_intf_pins ${q}_$i/M_AXIS] [get_bd_intf_pins $dst_pin]
+    }
   }
 
   # SRAMs between the stages (pin names: <mem>_V_PORTA, or <mem>_<k>_V_PORTA when partitioned)
@@ -374,6 +389,13 @@ proc add_evta {i} {
   foreach q {load_queue gemm_queue store_queue l2g_queue g2l_queue g2s_queue s2g_queue} {
     connect_bd_net -net evta_clk [get_bd_pins ${q}_$i/s_aclk]
     connect_bd_net -net evta_rstn_$i [get_bd_pins ${q}_$i/s_aresetn]
+  }
+  #### JO added (2026-11-22): the command queue register slices (queue_rs)
+  if {$::queue_rs} {
+    foreach q {load_queue gemm_queue store_queue} {
+      connect_bd_net -net evta_clk [get_bd_pins ${q}_rs_$i/aclk]
+      connect_bd_net -net evta_rstn_$i [get_bd_pins ${q}_rs_$i/aresetn]
+    }
   }
   #### JO changed (2026-10-27): HP port (and smc aclk1) on $hp_clk
   connect_bd_net -net evta_clk [get_bd_pins smc_$i/aclk]
@@ -468,6 +490,19 @@ for {set i 0} {$i < $num_evta} {incr i} {
 close $f
 add_files -fileset constrs_1 $dt_xdc
 set_property used_in_synthesis false [get_files $dt_xdc]
+#### JO added (2026-11-22, as vta-hw-zcu102-systolic e1a7924): the resets as 2-cycle paths (setup 2, hold 1) from their
+#### reset flops (proc_sys_reset_<i> outputs drive every HLS block's ap_rst_n; DONT_TOUCH keeps Vivado from replicating
+#### them). The resets change only while the EVTAs are idle. Also the smartconnects' areset flops. VTA_RESET_MC=0 leaves it out.
+if {![info exists ::env(VTA_RESET_MC)] || $::env(VTA_RESET_MC) ne "0"} {
+  set mc_xdc $proj_path/$proj_name.srcs/constrs_1/new/reset_multicycle.xdc
+  set f [open $mc_xdc w]
+  puts $f {set rst_ffs [get_cells -quiet -hier -filter {IS_SEQUENTIAL && (NAME =~ vta_i/proc_sys_reset*/U0/ACTIVE_LOW_PR_OUT_DFF* || NAME =~ vta_i/hpslice_rst*/U0/ACTIVE_LOW_PR_OUT_DFF* || NAME =~ vta_i/smc_*/*areset_reg* || NAME =~ vta_i/axi_xbar*/*areset_reg*)}]}
+  puts $f {if {[llength $rst_ffs]} { set_multicycle_path -setup 2 -from $rst_ffs; set_multicycle_path -hold 1 -from $rst_ffs }}
+  close $f
+  add_files -fileset constrs_1 $mc_xdc
+  set_property used_in_synthesis false [get_files $mc_xdc]
+  puts "reset multicycle: $mc_xdc"
+}
 #### JO added (2026-10-24): fence for the lab ZCU102 (192.168.20.2), environment VTA_BRAM_FENCE. Its PL has one
 #### defective configuration row (vta-hw-zcu102-single, JTAG readback, hwtest/brambist/cfgdiff.py): clock-region
 #### row 3, tile row SLICE Y219 / RAMB36 Y43 / RAMB18 Y86-87 / DSP Y86-87, 8 cells per frame stuck at 0, so whatever

@@ -1,0 +1,1675 @@
+---
+GlowToolsVersion: '2026-11-19 (fe42776) (alux-step2-261111)'
+...
+---
+GraphPreLowerHash: 0x02AFA659B0D5F6D1
+...
+---
+- NodeOutputName:  'Add_MobilenetV2_expanded_conv_11_add_f__1:0'
+  Min:             -24.8010349273681640625
+  Max:             26.279209136962890625
+  Histogram:       [ 146, 3827, 56785, 457994, 1.58479e+06, 1.36588e+06, 
+                     268527, 23773, 1409, 67 ]
+- NodeOutputName:  'Add_MobilenetV2_expanded_conv_12_add_f__1:0'
+  Min:             -36.176265716552734375
+  Max:             33.187641143798828125
+  Histogram:       [ 15, 284, 6518, 136754, 1.29566e+06, 1.84679e+06, 444545, 
+                     31508, 1084, 38 ]
+- NodeOutputName:  'Add_MobilenetV2_expanded_conv_14_add_f__1:0'
+  Min:             -23.14502716064453125
+  Max:             20.2770137786865234375
+  Histogram:       [ 19, 282, 4805, 59113, 420996, 804672, 253215, 23442, 
+                     1390, 66 ]
+- NodeOutputName:  'Add_MobilenetV2_expanded_conv_15_add_f__1:0'
+  Min:             -32.250453948974609375
+  Max:             37.694427490234375
+  Histogram:       [ 41, 751, 15897, 251371, 886550, 376616, 35158, 1563, 
+                     52, 1 ]
+- NodeOutputName:  'Add_MobilenetV2_expanded_conv_2_add_f__1:0'
+  Min:             -60.10913848876953125
+  Max:             60.011566162109375
+  Histogram:       [ 184, 4007, 64693, 756309, 6.50876e+06, 6.85165e+06, 
+                     801473, 62373, 3214, 137 ]
+- NodeOutputName:  'Add_MobilenetV2_expanded_conv_4_add_f__1:0'
+  Min:             -39.527069091796875
+  Max:             39.540279388427734375
+  Histogram:       [ 43, 1371, 33576, 448290, 2.11756e+06, 1.96908e+06, 
+                     407411, 38437, 1801, 40 ]
+- NodeOutputName:  'Add_MobilenetV2_expanded_conv_5_add_f__1:0'
+  Min:             -48.445682525634765625
+  Max:             53.764965057373046875
+  Histogram:       [ 34, 1163, 30631, 570123, 2.86421e+06, 1.40383e+06, 
+                     141056, 6354, 191, 10 ]
+- NodeOutputName:  'Add_MobilenetV2_expanded_conv_7_add_f__1:0'
+  Min:             -25.51142120361328125
+  Max:             26.9642047882080078125
+  Histogram:       [ 162, 3189, 42145, 327869, 1.07541e+06, 842290, 190796, 
+                     24347, 2389, 204 ]
+- NodeOutputName:  'Add_MobilenetV2_expanded_conv_8_add_f__1:0'
+  Min:             -28.5184841156005859375
+  Max:             28.5733814239501953125
+  Histogram:       [ 63, 2020, 34123, 277571, 924479, 964088, 269798, 33579, 
+                     2920, 159 ]
+- NodeOutputName:  'Add_MobilenetV2_expanded_conv_9_add_f__1:0'
+  Min:             -30.6740779876708984375
+  Max:             31.6524410247802734375
+  Histogram:       [ 24, 866, 20275, 258530, 1.08516e+06, 946595, 180840, 
+                     15525, 918, 65 ]
+- NodeOutputName:  'Clip_MobilenetV2_Conv_1_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.07864e+07, 270776, 235742, 203444, 174910, 148429, 
+                     125640, 106098, 88499, 404092 ]
+- NodeOutputName:  'Clip_MobilenetV2_Conv_1_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 1.2544e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_Conv_1_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             38.373149871826171875
+  Histogram:       [ 1.18498e+07, 495034, 148468, 38943, 9225, 1994, 395, 
+                     75, 15, 2 ]
+- NodeOutputName:  'Clip_MobilenetV2_Conv_1_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 1.2544e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_Conv_1_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.07864e+07, 270776, 235742, 203444, 174910, 148429, 
+                     125640, 106098, 88499, 404092 ]
+- NodeOutputName:  'Clip_MobilenetV2_Conv_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 1.76002e+06, 3.41095e+06, 9.69571e+06, 
+                     1.15212e+07, 7.95823e+06, 3.59376e+06, 2.59182e+06, 
+                     1.73774e+06, 1.12414e+06 ]
+- NodeOutputName:  'Clip_MobilenetV2_Conv_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_Conv_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             27.79682159423828125
+  Histogram:       [ 1.75039e+07, 1.67772e+07, 1.0732e+06, 58199, 17514, 
+                     5968, 1865, 425, 83, 26 ]
+- NodeOutputName:  'Clip_MobilenetV2_Conv_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_Conv_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 1.76002e+06, 3.41095e+06, 9.69571e+06, 
+                     1.15212e+07, 7.95823e+06, 3.59376e+06, 2.59182e+06, 
+                     1.73774e+06, 1.12414e+06 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_10_depthwise_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 8.08704e+06, 2.31438e+06, 1.83844e+06, 1.04203e+06, 
+                     858564, 501734, 261586, 107966, 30112, 10958 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_10_depthwise_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 1.50528e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_10_depthwise_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             11.2450771331787109375
+  Histogram:       [ 1.00883e+07, 2.95437e+06, 1.43373e+06, 483125, 85883, 
+                     6424, 813, 132, 26, 6 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_10_depthwise_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 1.50528e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_10_depthwise_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 8.08704e+06, 2.31438e+06, 1.83844e+06, 1.04203e+06, 
+                     858564, 501734, 261586, 107966, 30112, 10958 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_10_expand_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 7.44877e+06, 2.52805e+06, 2.44859e+06, 1.55904e+06, 
+                     693672, 244701, 81532, 29212, 11398, 7827 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_10_expand_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 1.50528e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_10_expand_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             12.72893524169921875
+  Histogram:       [ 1.02629e+07, 3.88462e+06, 803029, 88596, 11511, 1723, 
+                     348, 83, 26, 5 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_10_expand_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 1.50528e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_10_expand_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 7.44877e+06, 2.52805e+06, 2.44859e+06, 1.55904e+06, 
+                     693672, 244701, 81532, 29212, 11398, 7827 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_11_depthwise_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 2.18514e+06, 1.69588e+06, 933348, 382340, 
+                     89885, 31708, 12107, 5028, 5064 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_11_depthwise_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_11_depthwise_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             12.5727100372314453125
+  Histogram:       [ 1.67772e+07, 2.55391e+06, 447692, 42667, 6703, 1925, 
+                     381, 82, 22, 6 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_11_depthwise_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_11_depthwise_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 2.18514e+06, 1.69588e+06, 933348, 382340, 
+                     89885, 31708, 12107, 5028, 5064 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_11_expand_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.44141e+07, 3.73306e+06, 2.67263e+06, 1.14558e+06, 
+                     382084, 132435, 49927, 22209, 11281, 15921 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_11_expand_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_11_expand_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             19.00046539306640625
+  Histogram:       [ 1.67956e+07, 1.585e+06, 76952, 10509, 2492, 759, 257, 
+                     76, 19, 4 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_11_expand_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_11_expand_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.44141e+07, 3.73306e+06, 2.67263e+06, 1.14558e+06, 
+                     382084, 132435, 49927, 22209, 11281, 15921 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_12_depthwise_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 2.28058e+06, 1.97558e+06, 1.00855e+06, 
+                     237373, 96059, 19112, 6873, 2967, 3375 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_12_depthwise_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_12_depthwise_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             24.6222820281982421875
+  Histogram:       [ 1.67772e+07, 375421, 5242, 555, 93, 29, 13, 6, 0, 
+                     1 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_12_depthwise_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_12_depthwise_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 2.28058e+06, 1.97558e+06, 1.00855e+06, 
+                     237373, 96059, 19112, 6873, 2967, 3375 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_12_expand_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.55466e+07, 3.31076e+06, 2.27758e+06, 966235, 324834, 
+                     97482, 32690, 12021, 5104, 5917 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_12_expand_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_12_expand_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             15.00590801239013671875
+  Histogram:       [ 1.67772e+07, 2.25273e+06, 141750, 12266, 2401, 720, 
+                     224, 55, 7, 4 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_12_expand_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_12_expand_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.55466e+07, 3.31076e+06, 2.27758e+06, 966235, 324834, 
+                     97482, 32690, 12021, 5104, 5917 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_13_depthwise_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 3.39879e+06, 574500, 464732, 274884, 329789, 320785, 
+                     244193, 29010, 6568, 1545 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_13_depthwise_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 5.6448e+06, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_13_depthwise_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             16.6505107879638671875
+  Histogram:       [ 4.32154e+06, 893400, 427451, 1778, 402, 127, 52, 27, 
+                     15, 6 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_13_depthwise_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 5.6448e+06, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_13_depthwise_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 3.39879e+06, 574500, 464732, 274884, 329789, 320785, 
+                     244193, 29010, 6568, 1545 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_13_expand_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 1.58424e+06, 1.07549e+06, 561765, 216209, 
+                     83031, 33064, 13613, 5677, 4448 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_13_expand_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_13_expand_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             14.9641094207763671875
+  Histogram:       [ 1.67772e+07, 1.25071e+06, 126841, 13856, 1698, 271, 
+                     61, 14, 2, 3 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_13_expand_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_13_expand_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 1.58424e+06, 1.07549e+06, 561765, 216209, 
+                     83031, 33064, 13613, 5677, 4448 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_14_depthwise_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 7.65963e+06, 919560, 434295, 242124, 107463, 27305, 
+                     9782, 3970, 1791, 2077 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_14_depthwise_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 9.408e+06, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_14_depthwise_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             19.5839595794677734375
+  Histogram:       [ 9.0466e+06, 344325, 15593, 1181, 224, 54, 18, 7, 1, 
+                     2 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_14_depthwise_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 9.408e+06, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_14_depthwise_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 7.65963e+06, 919560, 434295, 242124, 107463, 27305, 
+                     9782, 3970, 1791, 2077 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_14_expand_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 5.35159e+06, 1.77378e+06, 1.30067e+06, 603583, 220519, 
+                     83661, 35454, 16887, 8636, 13218 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_14_expand_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 9.408e+06, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_14_expand_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             20.5641994476318359375
+  Histogram:       [ 8.72847e+06, 635195, 36543, 5607, 1479, 480, 154, 
+                     52, 16, 5 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_14_expand_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 9.408e+06, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_14_expand_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 5.35159e+06, 1.77378e+06, 1.30067e+06, 603583, 220519, 
+                     83661, 35454, 16887, 8636, 13218 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_15_depthwise_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 7.99069e+06, 619513, 488923, 237521, 62678, 5491, 
+                     1517, 691, 371, 604 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_15_depthwise_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 9.408e+06, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_15_depthwise_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             17.349292755126953125
+  Histogram:       [ 9.00623e+06, 393473, 7534, 541, 142, 55, 18, 4, 4, 
+                     2 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_15_depthwise_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 9.408e+06, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_15_depthwise_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 7.99069e+06, 619513, 488923, 237521, 62678, 5491, 
+                     1517, 691, 371, 604 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_15_expand_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 6.22746e+06, 1.34902e+06, 1.0509e+06, 509922, 184467, 
+                     56806, 17760, 6272, 2459, 2934 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_15_expand_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 9.408e+06, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_15_expand_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             17.3685894012451171875
+  Histogram:       [ 8.51524e+06, 852533, 36632, 2624, 647, 195, 73, 38, 
+                     9, 6 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_15_expand_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 9.408e+06, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_15_expand_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 6.22746e+06, 1.34902e+06, 1.0509e+06, 509922, 184467, 
+                     56806, 17760, 6272, 2459, 2934 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_16_depthwise_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 6.68456e+06, 586878, 724983, 584823, 326200, 362934, 
+                     77369, 23790, 12680, 23779 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_16_depthwise_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 9.408e+06, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_16_depthwise_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             36.960235595703125
+  Histogram:       [ 9.26465e+06, 135591, 6286, 1000, 274, 131, 37, 20, 
+                     7, 7 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_16_depthwise_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 9.408e+06, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_16_depthwise_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 6.68456e+06, 586878, 724983, 584823, 326200, 362934, 
+                     77369, 23790, 12680, 23779 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_16_expand_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 8.21589e+06, 541747, 343725, 174643, 73918, 30645, 
+                     13762, 6474, 3176, 4021 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_16_expand_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 9.408e+06, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_16_expand_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             20.083629608154296875
+  Histogram:       [ 9.12363e+06, 259714, 21419, 2582, 472, 128, 42, 8, 
+                     2, 2 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_16_expand_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 9.408e+06, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_16_expand_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 8.21589e+06, 541747, 343725, 174643, 73918, 30645, 
+                     13762, 6474, 3176, 4021 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_1_depthwise_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 8.96936e+06, 4.58261e+06, 2.21263e+06, 
+                     2.10038e+06, 1.24452e+06, 534645, 419643, 384470, 
+                     94487 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_1_depthwise_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_1_depthwise_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             23.829524993896484375
+  Histogram:       [ 1.68572e+07, 4.37396e+06, 530671, 16889, 6785, 2941, 
+                     663, 206, 42, 7 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_1_depthwise_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_1_depthwise_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 8.96936e+06, 4.58261e+06, 2.21263e+06, 
+                     2.10038e+06, 1.24452e+06, 534645, 419643, 384470, 
+                     94487 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_1_expand_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 1.67772e+07, 1.67772e+07, 1.67772e+07, 
+                     1.67772e+07, 9.9808e+06, 6.72892e+06, 4.04971e+06, 
+                     3.03536e+06, 1.06693e+07 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_1_expand_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_1_expand_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             62.642208099365234375
+  Histogram:       [ 1.68433e+07, 5.32701e+06, 1.72939e+06, 700601, 399479, 
+                     172830, 43754, 9354, 1276, 62 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_1_expand_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_1_expand_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 1.67772e+07, 1.67772e+07, 1.67772e+07, 
+                     1.67772e+07, 9.9808e+06, 6.72892e+06, 4.04971e+06, 
+                     3.03536e+06, 1.06693e+07 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_2_depthwise_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 1.20651e+07, 5.61291e+06, 4.44512e+06, 
+                     3.7214e+06, 3.27763e+06, 2.00331e+06, 1.09249e+06, 
+                     595018, 643291 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_2_depthwise_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_2_depthwise_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             22.860988616943359375
+  Histogram:       [ 1.70559e+07, 1.06048e+07, 1.54612e+06, 150365, 33920, 
+                     8205, 1987, 496, 111, 18 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_2_depthwise_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_2_depthwise_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 1.20651e+07, 5.61291e+06, 4.44512e+06, 
+                     3.7214e+06, 3.27763e+06, 2.00331e+06, 1.09249e+06, 
+                     595018, 643291 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_2_expand_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 1.40655e+07, 1.4788e+07, 1.08951e+07, 
+                     5.91015e+06, 3.24295e+06, 1.66104e+06, 892150, 551083, 
+                     561013 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_2_expand_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_2_expand_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             30.24652099609375
+  Histogram:       [ 1.68752e+07, 6.73087e+06, 255457, 53829, 18751, 7354, 
+                     2911, 1003, 291, 61 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_2_expand_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_2_expand_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 1.40655e+07, 1.4788e+07, 1.08951e+07, 
+                     5.91015e+06, 3.24295e+06, 1.66104e+06, 892150, 551083, 
+                     561013 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_3_depthwise_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.19909e+07, 3.30138e+06, 2.96209e+06, 1.81998e+06, 
+                     858204, 596633, 470997, 253201, 192167, 133665 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_3_depthwise_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_3_depthwise_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             13.45048427581787109375
+  Histogram:       [ 1.59595e+07, 4.52186e+06, 1.41221e+06, 540141, 142367, 
+                     2891, 238, 26, 6, 2 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_3_depthwise_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_3_depthwise_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.19909e+07, 3.30138e+06, 2.96209e+06, 1.81998e+06, 
+                     858204, 596633, 470997, 253201, 192167, 133665 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_3_expand_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 1.18503e+07, 1.04962e+07, 7.85056e+06, 
+                     3.99415e+06, 2.20703e+06, 1.28482e+06, 834062, 579643, 
+                     1.74223e+06 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_3_expand_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_3_expand_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             27.404232025146484375
+  Histogram:       [ 1.7067e+07, 6.79446e+06, 1.23822e+06, 362899, 111966, 
+                     36113, 10711, 2821, 527, 74 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_3_expand_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_3_expand_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 1.18503e+07, 1.04962e+07, 7.85056e+06, 
+                     3.99415e+06, 2.20703e+06, 1.28482e+06, 834062, 579643, 
+                     1.74223e+06 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_4_depthwise_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 2.92771e+06, 1.58254e+06, 1.35771e+06, 
+                     1.21111e+06, 618631, 143910, 59739, 18762, 11071 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_4_depthwise_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_4_depthwise_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             18.777439117431640625
+  Histogram:       [ 1.67772e+07, 3.0473e+06, 223083, 8359, 716, 779, 154, 
+                     37, 14, 5 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_4_depthwise_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_4_depthwise_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 2.92771e+06, 1.58254e+06, 1.35771e+06, 
+                     1.21111e+06, 618631, 143910, 59739, 18762, 11071 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_4_expand_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.10722e+07, 5.89592e+06, 6.31623e+06, 4.09772e+06, 
+                     1.75664e+06, 638610, 194414, 80798, 28189, 24862 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_4_expand_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_4_expand_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             15.01897144317626953125
+  Histogram:       [ 1.67772e+07, 8.98196e+06, 1.03826e+06, 88976, 11389, 
+                     2148, 683, 249, 89, 15 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_4_expand_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_4_expand_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.10722e+07, 5.89592e+06, 6.31623e+06, 4.09772e+06, 
+                     1.75664e+06, 638610, 194414, 80798, 28189, 24862 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_5_depthwise_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 2.65016e+06, 1.4966e+06, 990785, 817231, 
+                     469309, 167627, 66422, 25864, 17478 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_5_depthwise_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_5_depthwise_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             14.49799060821533203125
+  Histogram:       [ 1.67772e+07, 2.42824e+06, 834559, 86772, 9431, 1439, 
+                     310, 86, 22, 1 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_5_depthwise_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_5_depthwise_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 2.65016e+06, 1.4966e+06, 990785, 817231, 
+                     469309, 167627, 66422, 25864, 17478 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_5_expand_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.38209e+07, 5.83406e+06, 5.55104e+06, 2.9549e+06, 
+                     1.16691e+06, 541891, 168511, 45527, 14598, 7276 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_5_expand_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_5_expand_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             10.7090282440185546875
+  Histogram:       [ 1.67772e+07, 8.67866e+06, 2.57474e+06, 533853, 61015, 
+                     8060, 1295, 257, 39, 4 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_5_expand_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_5_expand_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.38209e+07, 5.83406e+06, 5.55104e+06, 2.9549e+06, 
+                     1.16691e+06, 541891, 168511, 45527, 14598, 7276 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_6_depthwise_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 2.99084e+06, 1.01101e+06, 938360, 757561, 596973, 
+                     420910, 312862, 294116, 148732, 55034 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_6_depthwise_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 7.5264e+06, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_6_depthwise_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             15.030483245849609375
+  Histogram:       [ 4.41828e+06, 1.77455e+06, 931119, 359499, 42105, 699, 
+                     110, 31, 6, 2 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_6_depthwise_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 7.5264e+06, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_6_depthwise_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 2.99084e+06, 1.01101e+06, 938360, 757561, 596973, 
+                     420910, 312862, 294116, 148732, 55034 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_6_expand_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 3.82846e+06, 3.07287e+06, 1.97971e+06, 
+                     1.00305e+06, 477317, 233182, 117511, 61584, 99658 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_6_expand_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_6_expand_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             20.7141056060791015625
+  Histogram:       [ 1.67772e+07, 2.78836e+06, 266042, 43349, 11991, 3769, 
+                     1033, 225, 45, 10 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_6_expand_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_6_expand_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 3.82846e+06, 3.07287e+06, 1.97971e+06, 
+                     1.00305e+06, 477317, 233182, 117511, 61584, 99658 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_7_depthwise_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.2034e+07, 1.68132e+06, 805064, 334650, 118001, 45364, 
+                     17753, 8251, 4551, 3858 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_7_depthwise_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 1.50528e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_7_depthwise_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             10.74878787994384765625
+  Histogram:       [ 1.34179e+07, 1.32688e+06, 245850, 46354, 11310, 3404, 
+                     740, 225, 116, 38 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_7_depthwise_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 1.50528e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_7_depthwise_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.2034e+07, 1.68132e+06, 805064, 334650, 118001, 45364, 
+                     17753, 8251, 4551, 3858 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_7_expand_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 6.25287e+06, 3.6437e+06, 3.04988e+06, 1.44441e+06, 
+                     441042, 168315, 37946, 9406, 3216, 2017 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_7_expand_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 1.50528e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_7_expand_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             14.480724334716796875
+  Histogram:       [ 1.1086e+07, 3.63425e+06, 315930, 15047, 1320, 155, 
+                     38, 21, 13, 4 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_7_expand_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 1.50528e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_7_expand_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 6.25287e+06, 3.6437e+06, 3.04988e+06, 1.44441e+06, 
+                     441042, 168315, 37946, 9406, 3216, 2017 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_8_depthwise_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.20395e+07, 1.56174e+06, 844804, 411280, 126909, 
+                     43411, 15520, 5479, 2302, 1875 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_8_depthwise_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 1.50528e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_8_depthwise_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             11.30465030670166015625
+  Histogram:       [ 1.33969e+07, 1.37665e+06, 242758, 30076, 5023, 1137, 
+                     223, 40, 8, 3 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_8_depthwise_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 1.50528e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_8_depthwise_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.20395e+07, 1.56174e+06, 844804, 411280, 126909, 
+                     43411, 15520, 5479, 2302, 1875 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_8_expand_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 7.04791e+06, 3.61804e+06, 2.88926e+06, 1.12763e+06, 
+                     272283, 66598, 19963, 6822, 2613, 1680 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_8_expand_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 1.50528e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_8_expand_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             10.86503505706787109375
+  Histogram:       [ 9.81525e+06, 4.30238e+06, 844105, 80454, 8723, 1508, 
+                     313, 65, 5, 1 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_8_expand_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 1.50528e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_8_expand_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 7.04791e+06, 3.61804e+06, 2.88926e+06, 1.12763e+06, 
+                     272283, 66598, 19963, 6822, 2613, 1680 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_9_depthwise_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.19225e+07, 1.50455e+06, 961867, 467032, 130489, 
+                     40799, 14494, 5811, 2684, 2542 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_9_depthwise_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 1.50528e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_9_depthwise_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             11.704799652099609375
+  Histogram:       [ 1.33089e+07, 1.46556e+06, 243754, 27625, 5161, 1267, 
+                     367, 111, 38, 6 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_9_depthwise_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 1.50528e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_9_depthwise_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.19225e+07, 1.50455e+06, 961867, 467032, 130489, 
+                     40799, 14494, 5811, 2684, 2542 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_9_expand_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 8.79133e+06, 2.99747e+06, 2.22119e+06, 764030, 194555, 
+                     54513, 17336, 6172, 2742, 3463 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_9_expand_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 1.50528e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_9_expand_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             16.5048370361328125
+  Histogram:       [ 1.35157e+07, 1.48321e+06, 48129, 4304, 964, 303, 94, 
+                     31, 13, 6 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_9_expand_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 1.50528e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_9_expand_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 8.79133e+06, 2.99747e+06, 2.22119e+06, 764030, 194555, 
+                     54513, 17336, 6172, 2742, 3463 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_depthwise_Relu6_f_act__1:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 5.08749e+06, 2.7735e+06, 7.62667e+06, 
+                     8.61388e+06, 6.02314e+06, 4.91634e+06, 2.84956e+06, 
+                     1.28835e+06, 1.67878e+06 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_depthwise_Relu6_f_act__1_maxSplat:0'
+  Min:             6.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_depthwise_Relu6_f_act__1_minClip:0'
+  Min:             0.0
+  Max:             44.09804534912109375
+  Histogram:       [ 1.74707e+07, 5.69509e+06, 224934, 59898, 15711, 1546, 
+                     700, 166, 96, 48 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_depthwise_Relu6_f_act__1_minSplat:0'
+  Min:             0.0
+  Max:             0.0
+  Histogram:       [ 1.67772e+07, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+- NodeOutputName:  'Clip_MobilenetV2_expanded_conv_depthwise_Relu6_f_act__2:0'
+  Min:             0.0
+  Max:             6.0
+  Histogram:       [ 1.67772e+07, 5.08749e+06, 2.7735e+06, 7.62667e+06, 
+                     8.61388e+06, 6.02314e+06, 4.91634e+06, 2.84956e+06, 
+                     1.28835e+06, 1.67878e+06 ]
+- NodeOutputName:  'Conv_MobilenetV2_Conv_1_Relu6_f__2:0'
+  Min:             -53.98902130126953125
+  Max:             38.373149871826171875
+  Histogram:       [ 117, 3004, 53444, 625936, 3.51885e+06, 6.30454e+06, 
+                     1.8623e+06, 168297, 7363, 152 ]
+- NodeOutputName:  'Conv_MobilenetV2_Conv_Relu6_f__1:0'
+  Min:             -1.0
+  Max:             1.0
+  Histogram:       [ 3.88865e+06, 3.34168e+06, 3.48392e+06, 3.42316e+06, 
+                     3.40931e+06, 3.22287e+06, 3.11966e+06, 2.49152e+06, 
+                     1.96619e+06, 1.75864e+06 ]
+- NodeOutputName:  'Conv_MobilenetV2_Conv_Relu6_f__2:0'
+  Min:             -22.7705230712890625
+  Max:             27.79682159423828125
+  Histogram:       [ 5245, 211956, 1.5069e+06, 9.07495e+06, 1.67772e+07, 
+                     1.67772e+07, 1.82331e+06, 51635, 1904, 122 ]
+- NodeOutputName:  'Conv_MobilenetV2_Logits_Conv2d_1c_1x1_BiasAdd_f__2:0'
+  Min:             -5.344379901885986328125
+  Max:             21.554233551025390625
+  Histogram:       [ 2514, 82588, 94190, 17469, 2686, 530, 127, 58, 30, 
+                     8 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_10_depthwise_Relu6_f__2:0'
+  Min:             -14.51128101348876953125
+  Max:             11.2450771331787109375
+  Histogram:       [ 99, 1687, 14164, 83794, 1.07866e+06, 8.15355e+06, 
+                     5.09186e+06, 609691, 19004, 295 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_10_expand_Relu6_f__2:0'
+  Min:             -11.5564594268798828125
+  Max:             12.72893524169921875
+  Histogram:       [ 68, 3807, 110926, 1.5293e+06, 6.14642e+06, 5.97583e+06, 
+                     1.233e+06, 51926, 1481, 48 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_10_project_add_fold_f__2:0'
+  Min:             -24.38710784912109375
+  Max:             22.999057769775390625
+  Histogram:       [ 51, 1276, 19362, 199204, 1.29407e+06, 1.8244e+06, 
+                     386580, 35675, 2449, 141 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_11_depthwise_Relu6_f__2:0'
+  Min:             -22.6099300384521484375
+  Max:             12.5727100372314453125
+  Histogram:       [ 31, 205, 2544, 38980, 540122, 5.20167e+06, 1.45637e+07, 
+                     2.16878e+06, 62013, 1185 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_11_expand_Relu6_f__2:0'
+  Min:             -10.822170257568359375
+  Max:             19.00046539306640625
+  Histogram:       [ 3486, 203639, 3.20462e+06, 1.30717e+07, 5.46428e+06, 
+                     588471, 40677, 2095, 168, 17 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_11_project_add_fold_f__2:0'
+  Min:             -17.170848846435546875
+  Max:             18.3207035064697265625
+  Histogram:       [ 66, 1524, 25981, 298203, 2.00502e+06, 1.28275e+06, 
+                     138712, 10313, 604, 28 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_12_depthwise_Relu6_f__2:0'
+  Min:             -34.38056182861328125
+  Max:             24.6222820281982421875
+  Histogram:       [ 3, 340, 1340, 5373, 316471, 1.67772e+07, 4.12468e+06, 
+                     4349, 56, 4 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_12_expand_Relu6_f__2:0'
+  Min:             -18.9925785064697265625
+  Max:             15.00590801239013671875
+  Histogram:       [ 1, 69, 6423, 268563, 4.11991e+06, 1.31018e+07, 4.67924e+06, 
+                     389996, 12824, 325 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_12_project_add_fold_f__2:0'
+  Min:             -26.423583984375
+  Max:             28.98120880126953125
+  Histogram:       [ 67, 1200, 20378, 298745, 2.32181e+06, 1.00982e+06, 
+                     103235, 7576, 350, 13 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_13_depthwise_Relu6_f__2:0'
+  Min:             -9.66301441192626953125
+  Max:             16.6505107879638671875
+  Histogram:       [ 213, 7684, 169997, 3.03586e+06, 2.02502e+06, 383129, 
+                     22288, 551, 54, 10 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_13_expand_Relu6_f__2:0'
+  Min:             -12.725139617919921875
+  Max:             14.9641094207763671875
+  Histogram:       [ 239, 11891, 491755, 7.83268e+06, 1.18064e+07, 2.34564e+06, 
+                     87696, 2762, 92, 6 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_13_project_add_fold_f__2:0'
+  Min:             -22.4384441375732421875
+  Max:             18.5258960723876953125
+  Histogram:       [ 6, 109, 2098, 26958, 288118, 960368, 269703, 19429, 
+                     1151, 60 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_14_depthwise_Relu6_f__2:0'
+  Min:             -45.5279541015625
+  Max:             19.5839595794677734375
+  Histogram:       [ 17, 38, 137, 533, 9421, 324631, 5.54258e+06, 3.33728e+06, 
+                     192136, 1222 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_14_expand_Relu6_f__2:0'
+  Min:             -10.97167301177978515625
+  Max:             20.5641994476318359375
+  Histogram:       [ 540, 34332, 1.15257e+06, 6.62623e+06, 1.50752e+06, 
+                     81138, 5107, 466, 76, 15 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_14_project_add_fold_f__2:0'
+  Min:             -15.2861385345458984375
+  Max:             14.7465457916259765625
+  Histogram:       [ 21, 335, 8318, 105228, 580921, 688355, 165941, 17708, 
+                     1128, 45 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_15_depthwise_Relu6_f__2:0'
+  Min:             -30.573150634765625
+  Max:             17.349292755126953125
+  Histogram:       [ 29, 216, 601, 5209, 161200, 3.24606e+06, 5.7272e+06, 
+                     260723, 6659, 107 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_15_expand_Relu6_f__2:0'
+  Min:             -13.47718524932861328125
+  Max:             17.3685894012451171875
+  Histogram:       [ 60, 2711, 90328, 2.45901e+06, 5.72902e+06, 1.06893e+06, 
+                     56119, 1710, 93, 12 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_15_project_add_fold_f__2:0'
+  Min:             -30.8351116180419921875
+  Max:             30.336971282958984375
+  Histogram:       [ 3, 121, 3680, 61441, 654779, 767651, 77299, 2925, 
+                     96, 5 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_16_depthwise_Relu6_f__2:0'
+  Min:             -51.727565765380859375
+  Max:             36.960235595703125
+  Histogram:       [ 13, 30, 59, 2164, 112132, 7.05583e+06, 2.15819e+06, 
+                     78294, 1264, 20 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_16_expand_Relu6_f__2:0'
+  Min:             -24.235843658447265625
+  Max:             20.083629608154296875
+  Histogram:       [ 2, 30, 3449, 139782, 1.9998e+06, 6.50863e+06, 744650, 
+                     11429, 210, 11 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_16_project_add_fold_f__2:0'
+  Min:             -16.4709625244140625
+  Max:             17.8173198699951171875
+  Histogram:       [ 115, 2546, 37548, 360597, 1.54982e+06, 1.00562e+06, 
+                     164074, 14770, 866, 37 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_1_depthwise_Relu6_f__2:0'
+  Min:             -19.310871124267578125
+  Max:             23.829524993896484375
+  Histogram:       [ 3069, 61813, 651331, 6.67233e+06, 1.67772e+07, 6.47115e+06, 
+                     135587, 9030, 621, 47 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_1_expand_Relu6_f__2:0'
+  Min:             -57.08995819091796875
+  Max:             62.642208099365234375
+  Histogram:       [ 7094, 110779, 831140, 5.26847e+06, 1.67772e+07, 1.67772e+07, 
+                     2.43912e+06, 488244, 45733, 1409 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_1_project_add_fold_f__2:0'
+  Min:             -33.80938720703125
+  Max:             39.90633392333984375
+  Histogram:       [ 1303, 25908, 253895, 2.08261e+06, 9.01567e+06, 3.2682e+06, 
+                     366408, 34869, 3604, 340 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_2_depthwise_Relu6_f__2:0'
+  Min:             -33.931049346923828125
+  Max:             22.860988616943359375
+  Histogram:       [ 57, 557, 3366, 74511, 2.31617e+06, 1.67772e+07, 1.7531e+07, 
+                     2.80079e+06, 55377, 838 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_2_expand_Relu6_f__2:0'
+  Min:             -31.17018890380859375
+  Max:             30.24652099609375
+  Histogram:       [ 342, 4184, 36567, 766751, 1.68006e+07, 1.68762e+07, 
+                     1.08434e+06, 35371, 4553, 408 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_2_project_add_fold_f__2:0'
+  Min:             -57.349300384521484375
+  Max:             56.8856048583984375
+  Histogram:       [ 234, 4652, 64032, 681229, 7.18532e+06, 6.09543e+06, 
+                     950216, 68454, 3147, 85 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_3_depthwise_Relu6_f__2:0'
+  Min:             -20.4623050689697265625
+  Max:             13.45048427581787109375
+  Histogram:       [ 230, 3129, 26609, 152059, 690897, 5.49447e+06, 1.44312e+07, 
+                     1.71352e+06, 65140, 1965 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_3_expand_Relu6_f__2:0'
+  Min:             -26.2667446136474609375
+  Max:             27.404232025146484375
+  Histogram:       [ 898, 14552, 238984, 3.64751e+06, 1.72675e+07, 1.67772e+07, 
+                     3.18202e+06, 243741, 18786, 961 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_3_project_add_fold_f__2:0'
+  Min:             -28.54681396484375
+  Max:             31.933849334716796875
+  Histogram:       [ 691, 13457, 141051, 815282, 2.14812e+06, 1.53144e+06, 
+                     322468, 41264, 3654, 175 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_4_depthwise_Relu6_f__2:0'
+  Min:             -18.10131072998046875
+  Max:             18.777439117431640625
+  Histogram:       [ 227, 7369, 106468, 1.62811e+06, 1.67772e+07, 9.85581e+06, 
+                     395796, 4615, 201, 22 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_4_expand_Relu6_f__2:0'
+  Min:             -12.799045562744140625
+  Max:             15.01897144317626953125
+  Histogram:       [ 224, 5843, 176518, 2.53438e+06, 1.23635e+07, 1.43645e+07, 
+                     628380, 30630, 1497, 121 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_4_project_add_fold_f__2:0'
+  Min:             -29.283672332763671875
+  Max:             38.3506011962890625
+  Histogram:       [ 201, 4501, 63500, 957879, 3.66707e+06, 291962, 29556, 
+                     2752, 174, 6 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_5_depthwise_Relu6_f__2:0'
+  Min:             -28.140533447265625
+  Max:             14.49799060821533203125
+  Histogram:       [ 25, 145, 935, 15171, 285441, 4.40535e+06, 1.67772e+07, 
+                     4.31001e+06, 207401, 2926 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_5_expand_Relu6_f__2:0'
+  Min:             -10.62668132781982421875
+  Max:             10.7090282440185546875
+  Histogram:       [ 165, 4417, 125391, 1.72958e+06, 8.7253e+06, 1.52988e+07, 
+                     3.93779e+06, 275899, 8130, 142 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_5_project_add_fold_f__2:0'
+  Min:             -36.324687957763671875
+  Max:             37.3952178955078125
+  Histogram:       [ 52, 827, 10609, 179581, 2.96895e+06, 1.70887e+06, 
+                     139102, 9116, 468, 27 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_6_depthwise_Relu6_f__2:0'
+  Min:             -10.23836517333984375
+  Max:             15.030483245849609375
+  Histogram:       [ 1349, 22954, 218823, 1.68567e+06, 3.36241e+06, 1.82581e+06, 
+                     390366, 18535, 480, 9 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_6_expand_Relu6_f__2:0'
+  Min:             -13.2554111480712890625
+  Max:             20.7141056060791015625
+  Histogram:       [ 1613, 98340, 2.26652e+06, 1.48491e+07, 1.14651e+07, 
+                     1.32496e+06, 92177, 7179, 623, 42 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_6_project_add_fold_f__2:0'
+  Min:             -25.56182098388671875
+  Max:             26.24913787841796875
+  Histogram:       [ 126, 2283, 29196, 237407, 1.16143e+06, 872924, 180198, 
+                     23085, 2068, 86 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_7_depthwise_Relu6_f__2:0'
+  Min:             -18.5192737579345703125
+  Max:             10.74878787994384765625
+  Histogram:       [ 54, 385, 4808, 56388, 590085, 4.51418e+06, 9.12261e+06, 
+                     735085, 28548, 655 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_7_expand_Relu6_f__2:0'
+  Min:             -9.6086521148681640625
+  Max:             14.480724334716796875
+  Histogram:       [ 305, 13704, 410892, 4.07846e+06, 9.03121e+06, 1.44506e+06, 
+                     72024, 1083, 53, 9 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_7_project_add_fold_f__2:0'
+  Min:             -20.572803497314453125
+  Max:             26.408802032470703125
+  Histogram:       [ 170, 3365, 42228, 514879, 1.58808e+06, 316817, 38135, 
+                     4109, 839, 178 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_8_depthwise_Relu6_f__2:0'
+  Min:             -24.0761203765869140625
+  Max:             11.30465030670166015625
+  Histogram:       [ 99, 789, 3103, 9612, 49662, 951629, 1.09851e+07, 3.01916e+06, 
+                     33355, 247 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_8_expand_Relu6_f__2:0'
+  Min:             -9.5996150970458984375
+  Max:             10.86503505706787109375
+  Histogram:       [ 134, 5614, 124850, 1.41732e+06, 6.09409e+06, 6.40657e+06, 
+                     968976, 33980, 1262, 4 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_8_project_add_fold_f__2:0'
+  Min:             -23.788440704345703125
+  Max:             22.761547088623046875
+  Histogram:       [ 8, 190, 4789, 94998, 994967, 1.21698e+06, 186445, 
+                     9867, 531, 27 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_9_depthwise_Relu6_f__2:0'
+  Min:             -14.4572811126708984375
+  Max:             11.704799652099609375
+  Histogram:       [ 109, 2497, 41908, 505147, 3.63214e+06, 8.41736e+06, 
+                     2.29811e+06, 152133, 3302, 102 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_9_expand_Relu6_f__2:0'
+  Min:             -8.72429370880126953125
+  Max:             16.5048370361328125
+  Histogram:       [ 800, 69022, 2.2828e+06, 9.82705e+06, 2.82398e+06, 
+                     47033, 1822, 243, 39, 13 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_9_project_add_fold_f__2:0'
+  Min:             -21.06439208984375
+  Max:             30.4713134765625
+  Histogram:       [ 88, 3028, 70310, 1.07303e+06, 1.26988e+06, 88530, 
+                     3681, 236, 16, 1 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_depthwise_Relu6_f__2:0'
+  Min:             -28.8124542236328125
+  Max:             44.09804534912109375
+  Histogram:       [ 282, 10813, 1.13347e+06, 1.67772e+07, 1.67772e+07, 
+                     2.34274e+06, 155896, 4538, 326, 95 ]
+- NodeOutputName:  'Conv_MobilenetV2_expanded_conv_project_add_fold_f__2:0'
+  Min:             -49.67345428466796875
+  Max:             45.02787017822265625
+  Histogram:       [ 203, 7637, 130995, 1.15876e+06, 1.25549e+07, 1.67772e+07, 
+                     4.07094e+06, 467749, 35793, 1227 ]
+- NodeOutputName:  'Flatten_output_f__1:0'
+  Min:             -5.344379901885986328125
+  Max:             21.554233551025390625
+  Histogram:       [ 2514, 82588, 94190, 17469, 2686, 530, 127, 58, 30, 
+                     8 ]
+- NodeOutputName:  'GlobalAveragePool_MobilenetV2_Logits_AvgPool_f__1:0'
+  Min:             0.0
+  Max:             5.988149166107177734375
+  Histogram:       [ 186787, 34104, 18131, 9445, 4569, 1919, 710, 230, 
+                     80, 25 ]
+- NodeOutputName:  'MobilenetV2_Conv_1_Conv2D_Fold_bias:0'
+  Min:             -5.492747783660888671875
+  Max:             -3.690836429595947265625
+  Histogram:       [ 800, 6200, 22200, 54200, 69600, 57400, 31800, 10000, 
+                     2600, 1200 ]
+- NodeOutputName:  'MobilenetV2_Conv_1_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -0.640716373920440673828125
+  Max:             0.671718776226043701171875
+  Histogram:       [ 11200, 188200, 2.262e+06, 1.25658e+07, 1.67772e+07, 
+                     1.67772e+07, 8.902e+06, 1.3554e+06, 99600, 5000 ]
+- NodeOutputName:  'MobilenetV2_Conv_Conv2D_Fold_bias:0'
+  Min:             -7.00423336029052734375
+  Max:             4.659315586090087890625
+  Histogram:       [ 200, 200, 0, 600, 800, 600, 600, 600, 2400, 400 ]
+- NodeOutputName:  'MobilenetV2_Conv_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -4.11023998260498046875
+  Max:             4.51786708831787109375
+  Histogram:       [ 800, 1600, 3200, 8400, 125000, 25800, 5000, 2000, 
+                     400, 600 ]
+- NodeOutputName:  'MobilenetV2_Logits_Conv2d_1c_1x1_Conv2D_bias:0'
+  Min:             -0.8502423763275146484375
+  Max:             1.2342817783355712890625
+  Histogram:       [ 3200, 11200, 32400, 51800, 49000, 32200, 13800, 3200, 
+                     2600, 800 ]
+- NodeOutputName:  'MobilenetV2_Logits_Conv2d_1c_1x1_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -0.18940119445323944091796875
+  Max:             0.24013365805149078369140625
+  Histogram:       [ 13200, 632600, 1.40384e+07, 1.67772e+07, 1.67772e+07, 
+                     1.67772e+07, 1.67772e+07, 1.7676e+06, 78000, 2600 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_10_depthwise_depthwise_Fold_bias:0'
+  Min:             -4.03361225128173828125
+  Max:             5.498184680938720703125
+  Histogram:       [ 600, 4200, 5800, 12800, 17000, 17000, 10200, 5000, 
+                     2800, 1400 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_10_depthwise_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -4.417314052581787109375
+  Max:             3.484078884124755859375
+  Histogram:       [ 400, 1600, 1200, 4800, 36800, 549200, 75600, 15000, 
+                     5600, 1000 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_10_expand_Conv2D_Fold_bias:0'
+  Min:             -1.9636633396148681640625
+  Max:             2.203965663909912109375
+  Histogram:       [ 200, 800, 5600, 11600, 12800, 9400, 10800, 12400, 
+                     9600, 3600 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_10_expand_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -0.21167252957820892333984375
+  Max:             0.20190303027629852294921875
+  Histogram:       [ 600, 3400, 29800, 233000, 1.6544e+06, 2.582e+06, 357200, 
+                     47800, 6200, 800 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_10_project_Conv2D_Fold_bias:0'
+  Min:             -8.36193084716796875
+  Max:             10.73585796356201171875
+  Histogram:       [ 1000, 1000, 2800, 4000, 3000, 4200, 1400, 1000, 400, 
+                     400 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_10_project_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -0.951847851276397705078125
+  Max:             0.9369752407073974609375
+  Histogram:       [ 1000, 7600, 95400, 672800, 2.682e+06, 3.0292e+06, 
+                     766400, 104200, 12200, 2000 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_11_depthwise_depthwise_Fold_bias:0'
+  Min:             -6.8839397430419921875
+  Max:             6.903932094573974609375
+  Histogram:       [ 200, 1200, 4600, 19000, 47200, 24000, 15200, 3000, 
+                     600, 200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_11_depthwise_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -4.60252666473388671875
+  Max:             13.38273143768310546875
+  Histogram:       [ 2400, 30200, 907600, 92800, 3600, 0, 0, 0, 0, 200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_11_expand_Conv2D_Fold_bias:0'
+  Min:             -1.679604053497314453125
+  Max:             3.0795524120330810546875
+  Histogram:       [ 3000, 21600, 25000, 16800, 16800, 24200, 6800, 600, 
+                     200, 200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_11_expand_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -0.2169219553470611572265625
+  Max:             0.1973500549793243408203125
+  Histogram:       [ 2000, 7200, 58200, 555800, 3.2708e+06, 5.5812e+06, 
+                     1.3974e+06, 170400, 13800, 2400 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_11_project_Conv2D_Fold_bias:0'
+  Min:             -10.498279571533203125
+  Max:             9.97722148895263671875
+  Histogram:       [ 200, 0, 600, 2400, 4200, 6800, 2000, 2200, 600, 200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_11_project_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -1.13160145282745361328125
+  Max:             0.997485697269439697265625
+  Histogram:       [ 2000, 6400, 74200, 553200, 2.7752e+06, 5.7086e+06, 
+                     1.624e+06, 284600, 27400, 3600 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_12_depthwise_depthwise_Fold_bias:0'
+  Min:             -9.16428089141845703125
+  Max:             9.9634609222412109375
+  Histogram:       [ 400, 400, 3800, 23000, 49800, 34400, 2400, 800, 0, 
+                     200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_12_depthwise_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -11.7690944671630859375
+  Max:             7.150842189788818359375
+  Histogram:       [ 200, 0, 0, 600, 5000, 121800, 879000, 26400, 2800, 
+                     1000 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_12_expand_Conv2D_Fold_bias:0'
+  Min:             -1.90477001667022705078125
+  Max:             2.3003909587860107421875
+  Histogram:       [ 1200, 6600, 30000, 24000, 12600, 12000, 17600, 9400, 
+                     1200, 600 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_12_expand_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -0.2501452863216400146484375
+  Max:             0.21362771093845367431640625
+  Histogram:       [ 200, 400, 6000, 145400, 2.2708e+06, 7.152e+06, 1.4084e+06, 
+                     72000, 3000, 1000 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_12_project_Conv2D_Fold_bias:0'
+  Min:             -10.66082668304443359375
+  Max:             14.28459453582763671875
+  Histogram:       [ 600, 1800, 2200, 4400, 4600, 2200, 2000, 800, 400, 
+                     200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_12_project_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -3.669336795806884765625
+  Max:             2.4222419261932373046875
+  Histogram:       [ 200, 200, 400, 4200, 150400, 5.0932e+06, 5.6066e+06, 
+                     200400, 3000, 600 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_13_depthwise_depthwise_Fold_bias:0'
+  Min:             -4.577197551727294921875
+  Max:             4.885216236114501953125
+  Histogram:       [ 400, 0, 800, 1400, 62400, 6800, 17400, 9400, 13400, 
+                     3200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_13_depthwise_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -1.38847172260284423828125
+  Max:             2.487042903900146484375
+  Histogram:       [ 600, 4400, 121200, 359000, 503200, 44800, 2400, 800, 
+                     200, 200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_13_expand_Conv2D_Fold_bias:0'
+  Min:             -2.801443576812744140625
+  Max:             2.2237265110015869140625
+  Histogram:       [ 1000, 6400, 32000, 39400, 17200, 6400, 3600, 5800, 
+                     3000, 400 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_13_expand_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -0.16870169341564178466796875
+  Max:             0.18252970278263092041015625
+  Histogram:       [ 4800, 25200, 173000, 1.3494e+06, 5.144e+06, 3.7026e+06, 
+                     571400, 76600, 10400, 1800 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_13_project_Conv2D_Fold_bias:0'
+  Min:             -17.0196380615234375
+  Max:             16.620616912841796875
+  Histogram:       [ 400, 1200, 4200, 5200, 5600, 5000, 5400, 3800, 600, 
+                     600 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_13_project_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -1.31326496601104736328125
+  Max:             1.08651411533355712890625
+  Histogram:       [ 400, 200, 19000, 484600, 4.1678e+06, 9.3908e+06, 3.8904e+06, 
+                     458600, 18400, 1800 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_14_depthwise_depthwise_Fold_bias:0'
+  Min:             -12.8526935577392578125
+  Max:             8.30278110504150390625
+  Histogram:       [ 400, 0, 400, 2800, 13800, 83000, 76400, 11800, 3000, 
+                     400 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_14_depthwise_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -6.08345794677734375
+  Max:             4.50009250640869140625
+  Histogram:       [ 200, 600, 2600, 10800, 89800, 1.0366e+06, 547400, 
+                     34800, 4200, 1000 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_14_expand_Conv2D_Fold_bias:0'
+  Min:             -1.95203673839569091796875
+  Max:             2.153611660003662109375
+  Histogram:       [ 400, 2600, 18400, 24800, 26800, 25200, 43400, 39600, 
+                     9000, 1800 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_14_expand_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -0.2709759175777435302734375
+  Max:             0.24266500771045684814453125
+  Histogram:       [ 1000, 2800, 42800, 625200, 8.2618e+06, 1.67772e+07, 
+                     2.9514e+06, 187400, 10800, 1200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_14_project_Conv2D_Fold_bias:0'
+  Min:             -7.36111164093017578125
+  Max:             8.23458003997802734375
+  Histogram:       [ 800, 1200, 1800, 5200, 8800, 7400, 3800, 2000, 600, 
+                     400 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_14_project_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -1.09002077579498291015625
+  Max:             0.916249334812164306640625
+  Histogram:       [ 1000, 1800, 48200, 709800, 6.7546e+06, 1.67772e+07, 
+                     5.5138e+06, 507600, 25400, 2800 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_15_depthwise_depthwise_Fold_bias:0'
+  Min:             -14.2275485992431640625
+  Max:             6.2050323486328125
+  Histogram:       [ 800, 400, 800, 1800, 12600, 52200, 62000, 45600, 14000, 
+                     1800 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_15_depthwise_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -4.324754238128662109375
+  Max:             6.551360607147216796875
+  Histogram:       [ 400, 1000, 10400, 622800, 988800, 75600, 24400, 3600, 
+                     600, 400 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_15_expand_Conv2D_Fold_bias:0'
+  Min:             -2.0701649188995361328125
+  Max:             2.5783946514129638671875
+  Histogram:       [ 1400, 5800, 27200, 43600, 38400, 25800, 29400, 16600, 
+                     3400, 400 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_15_expand_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -0.2008996307849884033203125
+  Max:             0.204088509082794189453125
+  Histogram:       [ 1800, 5200, 63000, 1.4146e+06, 1.428e+07, 1.3737e+07, 
+                     1.1534e+06, 59200, 5000, 800 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_15_project_Conv2D_Fold_bias:0'
+  Min:             -12.40192699432373046875
+  Max:             23.1753177642822265625
+  Histogram:       [ 1600, 3600, 5800, 7800, 6400, 3800, 1600, 800, 400, 
+                     200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_15_project_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -4.806633472442626953125
+  Max:             4.584788799285888671875
+  Histogram:       [ 400, 0, 3400, 142600, 1.0616e+07, 1.67772e+07, 430800, 
+                     2600, 1200, 600 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_16_depthwise_depthwise_Fold_bias:0'
+  Min:             -9.908206939697265625
+  Max:             4.990886688232421875
+  Histogram:       [ 200, 400, 200, 1800, 4400, 9400, 114000, 25600, 29200, 
+                     6800 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_16_depthwise_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -32.912506103515625
+  Max:             8.8863773345947265625
+  Histogram:       [ 200, 0, 0, 0, 200, 0, 200, 829400, 896600, 1400 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_16_expand_Conv2D_Fold_bias:0'
+  Min:             -1.83110845088958740234375
+  Max:             2.1475431919097900390625
+  Histogram:       [ 4400, 50600, 81600, 25400, 6200, 6400, 5800, 9200, 
+                     2000, 400 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_16_expand_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -0.2742746174335479736328125
+  Max:             0.24561907351016998291015625
+  Histogram:       [ 400, 600, 3800, 70000, 6.2194e+06, 1.67772e+07, 733400, 
+                     15800, 2400, 400 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_16_project_Conv2D_Fold_bias:0'
+  Min:             -10.66945648193359375
+  Max:             20.76905059814453125
+  Histogram:       [ 2000, 5000, 15600, 22200, 13400, 3600, 1800, 200, 
+                     0, 200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_16_project_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -0.88102185726165771484375
+  Max:             1.1533377170562744140625
+  Histogram:       [ 200, 28400, 1.3936e+06, 1.63678e+07, 1.67772e+07, 
+                     8.745e+06, 388000, 6400, 800, 200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_1_depthwise_depthwise_Fold_bias:0'
+  Min:             -14.52584362030029296875
+  Max:             7.138099193572998046875
+  Histogram:       [ 400, 200, 0, 200, 800, 200, 10000, 6200, 600, 600 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_1_depthwise_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -2.264665126800537109375
+  Max:             3.0614917278289794921875
+  Histogram:       [ 600, 2400, 8600, 45200, 89400, 20800, 3600, 1400, 
+                     200, 600 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_1_expand_Conv2D_Fold_bias:0'
+  Min:             -2.2376787662506103515625
+  Max:             4.87654876708984375
+  Histogram:       [ 400, 200, 2000, 6600, 1800, 3600, 3400, 600, 400, 
+                     200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_1_expand_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -1.22957193851470947265625
+  Max:             1.2490890026092529296875
+  Histogram:       [ 200, 1400, 1400, 8600, 188000, 94600, 9400, 1600, 
+                     1800, 200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_1_project_Conv2D_Fold_bias:0'
+  Min:             -14.04760265350341796875
+  Max:             14.20720386505126953125
+  Histogram:       [ 200, 200, 400, 1200, 800, 400, 400, 400, 400, 400 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_1_project_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -3.4930832386016845703125
+  Max:             2.2310659885406494140625
+  Histogram:       [ 200, 400, 1600, 4800, 28200, 167000, 208200, 38600, 
+                     9600, 2200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_2_depthwise_depthwise_Fold_bias:0'
+  Min:             -3.803797245025634765625
+  Max:             5.901479244232177734375
+  Histogram:       [ 200, 600, 2200, 10000, 8000, 2200, 1800, 3000, 200, 
+                     600 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_2_depthwise_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -8.6607761383056640625
+  Max:             34.4732818603515625
+  Histogram:       [ 1000, 119600, 137400, 800, 200, 0, 0, 0, 0, 200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_2_expand_Conv2D_Fold_bias:0'
+  Min:             -2.570327281951904296875
+  Max:             4.70403194427490234375
+  Histogram:       [ 600, 2000, 2800, 4800, 6000, 8600, 2800, 800, 200, 
+                     200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_2_expand_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -0.522764742374420166015625
+  Max:             0.4057824313640594482421875
+  Histogram:       [ 200, 400, 2800, 13000, 70400, 450600, 129000, 20600, 
+                     3200, 1000 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_2_project_Conv2D_Fold_bias:0'
+  Min:             -23.0012645721435546875
+  Max:             32.773273468017578125
+  Histogram:       [ 400, 200, 800, 800, 800, 600, 600, 200, 200, 200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_2_project_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -3.3164746761322021484375
+  Max:             3.6453812122344970703125
+  Histogram:       [ 1000, 2800, 9200, 60800, 403600, 191400, 18800, 2400, 
+                     800, 400 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_3_depthwise_depthwise_Fold_bias:0'
+  Min:             -2.64873218536376953125
+  Max:             6.220715999603271484375
+  Histogram:       [ 400, 200, 7600, 8400, 1800, 6400, 1600, 400, 800, 
+                     1200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_3_depthwise_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -2.442807674407958984375
+  Max:             1.9267215728759765625
+  Histogram:       [ 200, 1000, 2400, 7000, 42800, 110600, 77200, 14200, 
+                     3000, 800 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_3_expand_Conv2D_Fold_bias:0'
+  Min:             -2.3678295612335205078125
+  Max:             4.07468891143798828125
+  Histogram:       [ 1400, 1200, 4000, 8000, 5000, 4800, 3000, 800, 200, 
+                     400 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_3_expand_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -0.3088841140270233154296875
+  Max:             0.452830135822296142578125
+  Histogram:       [ 2800, 5200, 25400, 265200, 347000, 36800, 6000, 2000, 
+                     600, 200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_3_project_Conv2D_Fold_bias:0'
+  Min:             -16.2645893096923828125
+  Max:             10.69694614410400390625
+  Histogram:       [ 800, 400, 0, 1200, 1200, 600, 600, 1200, 0, 400 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_3_project_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -1.852916240692138671875
+  Max:             2.425635814666748046875
+  Histogram:       [ 1200, 7800, 39000, 228000, 466400, 147200, 25600, 
+                     5000, 1000, 400 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_4_depthwise_depthwise_Fold_bias:0'
+  Min:             -4.75773525238037109375
+  Max:             13.6836700439453125
+  Histogram:       [ 1000, 5400, 22800, 6000, 2200, 400, 400, 0, 0, 200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_4_depthwise_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -7.634326934814453125
+  Max:             8.93933963775634765625
+  Histogram:       [ 200, 400, 1600, 14600, 288800, 35200, 4600, 0, 0, 
+                     200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_4_expand_Conv2D_Fold_bias:0'
+  Min:             -2.5978100299835205078125
+  Max:             3.1356937885284423828125
+  Histogram:       [ 200, 400, 1600, 4000, 2800, 5400, 14600, 8400, 600, 
+                     400 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_4_expand_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -0.2444016933441162109375
+  Max:             0.2444016933441162109375
+  Histogram:       [ 800, 2200, 13400, 82600, 503000, 527600, 83800, 13000, 
+                     1600, 800 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_4_project_Conv2D_Fold_bias:0'
+  Min:             -15.351985931396484375
+  Max:             15.65563488006591796875
+  Histogram:       [ 200, 0, 200, 400, 1400, 2400, 1000, 400, 0, 400 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_4_project_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -2.7641222476959228515625
+  Max:             2.077857494354248046875
+  Histogram:       [ 200, 800, 2800, 9800, 106200, 786000, 296000, 21400, 
+                     3600, 2000 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_5_depthwise_depthwise_Fold_bias:0'
+  Min:             -29.838245391845703125
+  Max:             8.964687347412109375
+  Histogram:       [ 200, 0, 0, 0, 0, 0, 1400, 30800, 5000, 1000 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_5_depthwise_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -7.435197353363037109375
+  Max:             12.6556549072265625
+  Histogram:       [ 400, 800, 16600, 270600, 54200, 2600, 200, 0, 0, 200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_5_expand_Conv2D_Fold_bias:0'
+  Min:             -1.61170673370361328125
+  Max:             3.2733917236328125
+  Histogram:       [ 600, 4000, 4400, 5800, 5200, 12000, 5600, 200, 200, 
+                     400 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_5_expand_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -0.1828987300395965576171875
+  Max:             0.1637898981571197509765625
+  Histogram:       [ 1400, 3000, 15400, 66400, 306200, 637400, 156600, 
+                     31600, 9200, 1600 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_5_project_Conv2D_Fold_bias:0'
+  Min:             -16.8716144561767578125
+  Max:             4.7521495819091796875
+  Histogram:       [ 200, 0, 0, 0, 400, 200, 1400, 1800, 1400, 1000 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_5_project_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -2.3232266902923583984375
+  Max:             2.3232266902923583984375
+  Histogram:       [ 200, 1200, 4600, 45800, 530600, 595200, 42800, 7200, 
+                     400, 800 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_6_depthwise_depthwise_Fold_bias:0'
+  Min:             -0.601214110851287841796875
+  Max:             7.176118373870849609375
+  Histogram:       [ 13800, 4600, 3400, 6400, 2800, 1600, 3000, 1200, 1200, 
+                     400 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_6_depthwise_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -1.2710735797882080078125
+  Max:             1.29124939441680908203125
+  Histogram:       [ 1200, 2000, 6000, 48400, 121800, 83200, 62800, 16000, 
+                     3000, 1200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_6_expand_Conv2D_Fold_bias:0'
+  Min:             -1.8466885089874267578125
+  Max:             2.1004173755645751953125
+  Histogram:       [ 2000, 3400, 4800, 6000, 4800, 6000, 4200, 3800, 1600, 
+                     1800 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_6_expand_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -0.24154751002788543701171875
+  Max:             0.2453815937042236328125
+  Histogram:       [ 200, 3000, 18400, 96400, 508000, 491800, 90600, 16400, 
+                     3200, 800 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_6_project_Conv2D_Fold_bias:0'
+  Min:             -13.77653980255126953125
+  Max:             21.5506439208984375
+  Histogram:       [ 600, 800, 1400, 2600, 2000, 2800, 1600, 600, 200, 
+                     200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_6_project_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -2.131787776947021484375
+  Max:             1.57693898677825927734375
+  Histogram:       [ 200, 800, 1800, 36400, 292200, 1.32e+06, 696800, 98000, 
+                     10200, 1200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_7_depthwise_depthwise_Fold_bias:0'
+  Min:             -9.26342010498046875
+  Max:             12.2121753692626953125
+  Histogram:       [ 200, 0, 800, 16200, 54200, 4200, 800, 200, 0, 200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_7_depthwise_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -6.641055583953857421875
+  Max:             8.83443164825439453125
+  Histogram:       [ 1200, 1000, 6600, 135400, 501400, 40400, 4800, 200, 
+                     0, 200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_7_expand_Conv2D_Fold_bias:0'
+  Min:             -1.530673503875732421875
+  Max:             3.4041855335235595703125
+  Histogram:       [ 2000, 5400, 6400, 7200, 20200, 32200, 2800, 200, 0, 
+                     400 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_7_expand_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -0.1926825046539306640625
+  Max:             0.202005863189697265625
+  Histogram:       [ 1200, 5400, 45200, 384600, 2.4506e+06, 1.787e+06, 
+                     210400, 28600, 1600, 600 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_7_project_Conv2D_Fold_bias:0'
+  Min:             -10.15544605255126953125
+  Max:             4.065258502960205078125
+  Histogram:       [ 200, 0, 200, 0, 800, 1000, 3600, 5000, 1200, 800 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_7_project_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -2.06430149078369140625
+  Max:             2.198565006256103515625
+  Histogram:       [ 400, 400, 5400, 97000, 3.2984e+06, 1.4614e+06, 45600, 
+                     5400, 800, 400 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_8_depthwise_depthwise_Fold_bias:0'
+  Min:             -6.7264347076416015625
+  Max:             6.9089298248291015625
+  Histogram:       [ 600, 600, 2600, 13200, 37000, 16200, 5200, 1000, 200, 
+                     200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_8_depthwise_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -6.91783618927001953125
+  Max:             6.39375782012939453125
+  Histogram:       [ 400, 600, 2400, 13800, 190200, 439400, 36200, 6000, 
+                     1400, 800 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_8_expand_Conv2D_Fold_bias:0'
+  Min:             -1.45391523838043212890625
+  Max:             2.2177143096923828125
+  Histogram:       [ 400, 3400, 7400, 7200, 8400, 9400, 31000, 8600, 800, 
+                     200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_8_expand_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -0.19554962217807769775390625
+  Max:             0.17790605127811431884765625
+  Histogram:       [ 600, 3200, 16200, 149200, 1.326e+06, 2.961e+06, 408200, 
+                     45000, 5200, 600 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_8_project_Conv2D_Fold_bias:0'
+  Min:             -5.257122516632080078125
+  Max:             5.32176303863525390625
+  Histogram:       [ 600, 200, 1000, 2600, 2600, 2400, 1800, 800, 400, 
+                     400 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_8_project_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -1.59938442707061767578125
+  Max:             1.67677402496337890625
+  Histogram:       [ 1800, 5400, 30400, 231000, 2.6472e+06, 1.8314e+06, 
+                     141400, 20600, 4800, 1200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_9_depthwise_depthwise_Fold_bias:0'
+  Min:             -5.93812847137451171875
+  Max:             7.958761692047119140625
+  Histogram:       [ 400, 1200, 8000, 31800, 21400, 10000, 2000, 1400, 
+                     400, 200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_9_depthwise_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -6.2799472808837890625
+  Max:             4.077888011932373046875
+  Histogram:       [ 200, 400, 1600, 4800, 20400, 237800, 379800, 39200, 
+                     6000, 1000 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_9_expand_Conv2D_Fold_bias:0'
+  Min:             -1.3621098995208740234375
+  Max:             1.6259210109710693359375
+  Histogram:       [ 1000, 4800, 10400, 11600, 8400, 8800, 9400, 10400, 
+                     9600, 2400 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_9_expand_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -0.17304201424121856689453125
+  Max:             0.17578871548175811767578125
+  Histogram:       [ 1000, 5600, 36000, 352200, 2.1906e+06, 2.03e+06, 264600, 
+                     31400, 2600, 1200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_9_project_Conv2D_Fold_bias:0'
+  Min:             -5.29059600830078125
+  Max:             9.25382518768310546875
+  Histogram:       [ 1400, 1000, 2200, 4000, 2600, 800, 400, 200, 0, 200 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_9_project_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -2.797292232513427734375
+  Max:             2.17132472991943359375
+  Histogram:       [ 200, 200, 1600, 11600, 206800, 4.079e+06, 590200, 
+                     22800, 1800, 1000 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_depthwise_depthwise_Fold_bias:0'
+  Min:             -5.620209217071533203125
+  Max:             4.051402568817138671875
+  Histogram:       [ 200, 0, 0, 0, 600, 2000, 800, 600, 1200, 1000 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_depthwise_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -56.36606597900390625
+  Max:             30.9325962066650390625
+  Histogram:       [ 1000, 800, 200, 800, 2200, 2600, 47800, 1000, 800, 
+                     400 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_project_Conv2D_Fold_bias:0'
+  Min:             -22.1469402313232421875
+  Max:             23.27947998046875
+  Histogram:       [ 200, 200, 200, 600, 200, 600, 400, 200, 200, 400 ]
+- NodeOutputName:  'MobilenetV2_expanded_conv_project_weights_quant_FakeQuantWithMinMaxVars__1:0'
+  Min:             -5.194674015045166015625
+  Max:             4.297751903533935546875
+  Histogram:       [ 600, 600, 1600, 3800, 8200, 71400, 11000, 2600, 1600, 
+                     1000 ]
+- NodeOutputName:  'input:0'
+  Min:             -1.0
+  Max:             1.0
+  Histogram:       [ 3.88865e+06, 3.34168e+06, 3.48392e+06, 3.42316e+06, 
+                     3.40931e+06, 3.22287e+06, 3.11966e+06, 2.49152e+06, 
+                     1.96619e+06, 1.75864e+06 ]
+...
