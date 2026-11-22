@@ -183,11 +183,22 @@ add_bundle_if_present(DeiTTest vtaDeiTBundle deitMain.cpp deit.cpp)
 if(TARGET vtaDeiTBundle)
   target_link_libraries(vtaDeiTBundle pthread)
 endif()
+#### JO added (2026-11-22): DPU comparison dirs (vta/bundles/<dir>/CMakeLists.txt; ImageNet val, imagenet_eval/eval_sets.txt):
+#### the torchvision ResNet-50, the TF-slim float MobileNetV2 and MobileNetV2Test's QAT model on ImageNet val
+add_bundle_if_present(Resnet50TvTest vtaTvResnet50Bundle caffe2_resnet50Main.cpp resnet50.cpp)
+add_bundle_if_present(MobileNetV2TfTest vtaMobileNetV2TfBundle mobilenetv2Main.cpp mobilenetv2.cpp)
+add_bundle_if_present(MobileNetV2ValTest vtaMobileNetV2ValBundle mobilenetv2Main.cpp mobilenetv2.cpp)
+foreach(t vtaMobileNetV2TfBundle vtaMobileNetV2ValBundle)
+  if(TARGET ${t})
+    target_link_libraries(${t} pthread)
+  endif()
+endforeach()
 #### JO added (2026-11-22): eval executables (dataset accuracy, imagenet_eval/eval_board.sh: EVAL_LIST of the generic main with the
 #### model in multi_model.h); the stock mains stay for run_all.sh / run_prof.sh. MobileNetV2 / DeiT: their executable is the eval one.
 foreach(e "Resnet18Test;vtaMxnetResnet18Eval;resnet18EvalMain.cpp;mxnet_exported_resnet18.cpp"
           "Resnet50Test;vtaCaffe2Resnet50Eval;resnet50EvalMain.cpp;resnet50.cpp"
-          "Vgg16Cifar10Test;vtaVGG16Cifar10Eval;vgg16EvalMain.cpp;vgg16_cifar10.cpp")
+          "Vgg16Cifar10Test;vtaVGG16Cifar10Eval;vgg16EvalMain.cpp;vgg16_cifar10.cpp"
+          "Resnet50TvTest;vtaTvResnet50Eval;resnet50EvalMain.cpp;resnet50.cpp")
   list(GET e 1 t)
   add_bundle_if_present(${e})
   if(TARGET ${t})
@@ -224,9 +235,17 @@ add_bundle_if_present(MultiEVTADeiTTest multivtaDeiTBundle multi_threads_main.cp
 add_bundle_if_present(MultiEVTAMobileNetV2Test singlevtaMobileNetV2Bundle single_thread_main.cpp mobilenetv2.cpp)
 add_bundle_if_present(MultiEVTAMobileNetV2Test multivtaMobileNetV2Bundle multi_threads_main.cpp
   mobilenetv2.cpp mobilenetv2_1.cpp mobilenetv2_2.cpp mobilenetv2_3.cpp)
+#### JO added (2026-11-22): the DPU comparison models on 4 EVTAs (vta/multievta_bundles/<dir>, gen_multi4_bundles.sh)
+add_bundle_if_present(MultiEVTAResnet50TvTest singlevtaTvResnet50Bundle single_thread_main.cpp resnet50.cpp)
+add_bundle_if_present(MultiEVTAResnet50TvTest multivtaTvResnet50Bundle multi_threads_main.cpp
+  resnet50.cpp resnet50_1.cpp resnet50_2.cpp resnet50_3.cpp)
+add_bundle_if_present(MultiEVTAMobileNetV2TfTest singlevtaMobileNetV2TfBundle single_thread_main.cpp mobilenetv2.cpp)
+add_bundle_if_present(MultiEVTAMobileNetV2TfTest multivtaMobileNetV2TfBundle multi_threads_main.cpp
+  mobilenetv2.cpp mobilenetv2_1.cpp mobilenetv2_2.cpp mobilenetv2_3.cpp)
 # foreach(t multivtaCaffe2Resnet50Bundle multivtaVGG16Cifar10Bundle)
 foreach(t multivtaCaffe2Resnet50Bundle multivtaVGG16Cifar10Bundle singlevtaDeiTBundle multivtaDeiTBundle
-          singlevtaMobileNetV2Bundle multivtaMobileNetV2Bundle)
+          singlevtaMobileNetV2Bundle multivtaMobileNetV2Bundle singlevtaTvResnet50Bundle multivtaTvResnet50Bundle
+          singlevtaMobileNetV2TfBundle multivtaMobileNetV2TfBundle)
   if(TARGET ${t})
     target_link_libraries(${t} pthread)
   endif()

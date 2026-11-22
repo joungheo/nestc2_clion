@@ -103,12 +103,23 @@ host PC 냉각이 고쳐질 때까지 그 PC에서는 모든 코어를 쓰는 �
 |---|---|---|---|---|---|
 | ResNet50 (DPU 8.2 GOP, 우리 8.18) | DPU S (B4096 1개) | 79.9 | 655 | 57 % | ImageNet val 76.1 → 76.0 % (−0.1 %p) |
 | | DPU T (B4096 3개) | 189.7 | 1,556 | 45 % | |
-| | 우리 EVTA 1개 (`_alux3`, 68.4 ms) | 14.6 | 119.6 | 58 % | ImageNetV2 63.34 → 62.53 % (−0.81 %p) |
-| | 우리 multi4 (`_rq`, 4장 동시, 78.5 ms) | 50.9 | 416.7 | 51 % | 같은 bundle |
+| | 우리 EVTA 1개 `Resnet50TvTest` (`_alux3`, 68.4 ms) | 14.6 | 119.6 | 58 % | ImageNet val: 측정 대기 (ImageNetV2 63.34 → 62.53 %, −0.81 %p) |
+| | 우리 multi4 `MultiEVTAResnet50TvTest` (`_rq`, 4장 동시, 75.7 ms) | 52.8 | 432.1 | 53 % | 같은 bundle |
 | MobileNetV2 (DPU 0.602 GOP, 우리 0.658) | DPU S | 270 | 163 | 14 % | ImageNet val 70.13 → 67.67 % (−2.46 %p) |
 | | DPU T | 764 | 460 | 13 % | |
-| | 우리 EVTA 1개 (`_alux3`, 14.44 ms) | 69.2 | 45.5 | 22 % | ImageNetV2 58.71 → 56.66 % (−2.05 %p) |
-| | 우리 multi4 (`_rq`, 4장 동시, 19.1 ms) | 209.1 | 137.5 | 17 % | 같은 bundle |
+| | 우리 EVTA 1개 `MobileNetV2TfTest` (`_alux3`, 14.39 ms) | 69.5 | 45.7 | 22 % | ImageNet val: 측정 대기 (ImageNetV2 hold1000 61.6 → 59.9 %, −1.7 %p) |
+| | 우리 multi4 `MultiEVTAMobileNetV2TfTest` (`_rq`, 4장 동시, 17.2 ms) | 233 | 153 | 19 % | 같은 bundle |
+| | (참고) 우리 QAT 모델 `MobileNetV2ValTest` (`_alux3`, 14.43 ms) | 69.3 | 45.6 | 22 % | ImageNet val: 측정 대기 (ImageNetV2 58.71 → 56.66 %) |
+
+**DPU 비교용 bundle (11-22, 두 번째).**
+- 같은 모델, 같은 이미지로 잰다. DPU 수치는 ImageNet val(ILSVRC2012 검증 셋 50,000장)이므로 우리도 그 셋으로 잰다. ImageNetV2는 같은 모델에서도 약 11 %p 낮게 나와 직접 비교할 수 없다.
+- dir 규칙: 새로 받은 모델과, 같은 모델이라도 테스트 셋이 다르면 dir을 따로 둔다. 한 dir의 정확도는 늘 같은 이미지로 잰 값이다(`vtabundles_xcmpl/imagenet_eval/eval_sets.txt`, `eval_board.sh`가 실행 파일의 dir로 셋을 고른다).
+  - `Resnet50TvTest`: torchvision ResNet-50(DPU `pt_resnet50`의 float 모델), ImageNet val, torchvision 전처리.
+  - `MobileNetV2TfTest`: TF-slim `mobilenet_v2_1.0_224` float(DPU `tf_mobilenetv2_1.0`의 float 모델), ImageNet val, TF-slim 전처리. DPU 비교의 기본이다.
+  - `MobileNetV2ValTest`: 우리 QAT 모델(`MobileNetV2Test`)을 ImageNet val로.
+  - multi4: `MultiEVTAResnet50TvTest`, `MultiEVTAMobileNetV2TfTest` (copy 0 = single bundle, byte 단위로 같다).
+- calibration: 200장 ImageNetV2(테스트 셋과 겹치지 않음), 2048칸, KL + `-quantization-pow2-mse=2`가 이 dir들의 기본이다(`gen_calib_bundle.sh`).
+- 기존 dir(`Resnet50Test`, `MobileNetV2Test`, ImageNetV2)은 그대로 둔다.
 
 **순서 4의 결과 (11-22).**
 - 같은 모델로 잰다.

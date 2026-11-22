@@ -66,11 +66,15 @@ run MultiEVTADeiTTest multivtaDeiTBundle /home/xilinx/JO/npuprg/nestc2_clion/nes
 run MultiEVTADeiTTest singlevtaDeiTBundle /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler/glow/tests/images/imagenet/cat_285.png ''
 run MultiEVTAMobileNetV2Test multivtaMobileNetV2Bundle /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler/glow/tests/images/imagenet/cat_285.png ''
 run MultiEVTAMobileNetV2Test singlevtaMobileNetV2Bundle /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler/glow/tests/images/imagenet/cat_285.png ''
+run MultiEVTAMobileNetV2TfTest multivtaMobileNetV2TfBundle /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler/glow/tests/images/imagenet/cat_285.png ''
+run MultiEVTAMobileNetV2TfTest singlevtaMobileNetV2TfBundle /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler/glow/tests/images/imagenet/cat_285.png ''
 run MultiEVTAResConv10Test multi4resconv10Bundle '15 100' vtaResConv10TestGolden.bin
 run MultiEVTAResnet18Test multivtaMxnetResnet18Bundle /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler/glow/tests/images/imagenet/cat_285.png ''
 run MultiEVTAResnet18Test singlevtaMxnetResnet18Bundle /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler/glow/tests/images/imagenet/cat_285.png ''
 run MultiEVTAResnet50Test multivtaCaffe2Resnet50Bundle /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler/glow/tests/images/imagenet/cat_285.png ''
 run MultiEVTAResnet50Test singlevtaCaffe2Resnet50Bundle /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler/glow/tests/images/imagenet/cat_285.png ''
+run MultiEVTAResnet50TvTest multivtaTvResnet50Bundle /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler/glow/tests/images/imagenet/cat_285.png ''
+run MultiEVTAResnet50TvTest singlevtaTvResnet50Bundle /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler/glow/tests/images/imagenet/cat_285.png ''
 run MultiEVTAVgg16Cifar10Test multivtaVGG16Cifar10Bundle /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler/examples/bundles/vgg16_cifar10/cifar10/test/airplane/0001.png ''
 run MultiEVTAVgg16Cifar10Test singlevtaVGG16Cifar10Bundle /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler/examples/bundles/vgg16_cifar10/cifar10/test/airplane/0001.png ''
 echo; echo "== summary"; cat result/results.txt

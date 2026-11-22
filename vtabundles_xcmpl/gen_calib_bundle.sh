@@ -5,7 +5,12 @@
 #### model (the CMakeLists used Glow's default BGR for Resnet18 / VGG16, whose mains feed RGB) and -minibatch=1 (one image per run).
 #### Run where Debug2_remote's tools run (PC: inside the nestc-build container; or the board). Output into
 #### Debug2_remote/vta/bundles/<Dir> as the CMake rules write it (then collect_hw_bundles.py <Dir>), logs prof.log / gen.log there.
-#### usage: gen_calib_bundle.sh <Resnet18Test|Resnet50Test|MobileNetV2Test|Vgg16Cifar10Test> <image list file | profile.yaml> [model-compiler options]
+#### usage: gen_calib_bundle.sh <Resnet18Test|Resnet50Test|MobileNetV2Test|Vgg16Cifar10Test|Resnet50TvTest|MobileNetV2TfTest|MobileNetV2ValTest> <image list file | profile.yaml> [model-compiler options]
+#### JO added (2026-11-22): Resnet50TvTest / MobileNetV2TfTest are the DPU comparison bundles (the DPU's float models, ImageNet val;
+####   MobileNetV2ValTest: MobileNetV2Test's QAT model on ImageNet val;
+####   their CMakeLists.txt): KL + -quantization-pow2-mse=2 are their defaults (DEF below), e.g.
+####   gen_calib_bundle.sh Resnet50TvTest ../vta/bundles/Resnet50TvTest/calib/resnet50_tv_calib_n200_b2048.yaml.gz
+####   BINS=2048 gen_calib_bundle.sh MobileNetV2TfTest imagenet_eval/calib_imagenetv2_200.txt   (IMGDIR=<ImageNetV2 png dir>)
 ####   a .yaml: that profile, no image-classifier run (the profiles of 2026-11-22 are in vta/bundles/<Dir>/calib/, e.g.
 ####     gen_calib_bundle.sh Resnet50Test ../vta/bundles/Resnet50Test/calib/resnet50_calib_n200.yaml)
 ####   an image list: one PNG per line, absolute or relative to IMGDIR=<dir> (imagenet_eval/calib_imagenetv2_200.txt:
@@ -15,21 +20,21 @@
 #### term only since 2026-11-22: docs/evta_accuracy.md §6).
 #### KL + power-of-two MSE (2026-11-22, docs/evta_accuracy.md §7; the DPU comparison bundles): BINS=2048 when profiling, then
 ####   gen_calib_bundle.sh <Dir> <profile> -quantization-calibration=KL -quantization-pow2-mse=2 (R50=tv for the torchvision ResNet-50)
-####   e.g. R50=tv gen_calib_bundle.sh Resnet50Test ../vta/bundles/Resnet50Test/calib/resnet50_tv_calib_n200_b2048.yaml.gz \
-####          -quantization-calibration=KL -quantization-pow2-mse=2
+####   (the torchvision ResNet-50 is Resnet50TvTest since 2026-11-22; R50=tv reads $O/tv/resnet50.onnx of Resnet50Test as before)
 ####   BINS=<n>: -num-histogram-bins (Glow's default 10 is too few for KL: it needs > 255 bins, else no calibration happens).
 ####   QSCHEMA=<schema> (default symmetric_with_power2_scale), CALIB=<suffix> names the profile <net>_calib_<suffix>.yaml (default "n"); QCAL=KL adds -quantization-calibration=KL.
 set -u
 D=$1; L=$2; shift 2
 H=$(cd "$(dirname "$0")" && pwd)
 B=$(cd "$H/../Debug2_remote" && pwd)
-O=$B/vta/bundles/$D
+O=$B/vta/bundles/$D; mkdir -p $O
 case $L in
   *.yaml|*.yaml.gz) IMGS="" ;;
   *) IMGS=$(awk -v d="${IMGDIR:-}" '{ print (d != "" && substr($1, 1, 1) != "/") ? d "/" $1 : $1 }' "$L") ;;
 esac
 #### QSCHEMA=symmetric: free scales, VTA.cpp -vta-pow2-ratio (default on) keeps every EVTA ratio in * w / out a power of two (as DeiT)
 Q=-quantization-schema=${QSCHEMA:-symmetric_with_power2_scale}
+DEF=
 QC=${QCAL:+-quantization-calibration=$QCAL}
 case $D in
   Resnet18Test)
@@ -43,6 +48,22 @@ case $D in
     NET=mobilenetv2; M=$O/mobilenetv2_qat_f32.onnx; IN=input; SHAPE=[1,3,224,224]
     PF="-do-not-lower-nodes-for-profiling=Convolution -image-layout=NCHW -image-mode=neg1to1 -image-channel-order=RGB"
     MC="-network-name=mobilenetv2 -enable-channelwise-depthwise -vta-round-shift -vta-evta-depthwise" ;;
+  #### JO added (2026-11-22): DPU comparison dirs (KL + pow2 MSE by default; options given after the profile still win)
+  Resnet50TvTest)
+    NET=resnet50_tv; M=$O/resnet50.onnx; IN=gpu_0/data_0; SHAPE=[1,3,224,224]
+    PF="-image-layout=NCHW -image-mode=0to1 -image-channel-order=BGR"; MC="-network-name=resnet50 -vta-round-shift"
+    DEF="-quantization-calibration=KL -quantization-pow2-mse=2" ;;
+  MobileNetV2TfTest)
+    NET=mobilenetv2_tf; M=$O/mobilenetv2_tf_f32.onnx; IN=input; SHAPE=[1,3,224,224]
+    PF="-do-not-lower-nodes-for-profiling=Convolution -image-layout=NCHW -image-mode=neg1to1 -image-channel-order=RGB"
+    MC="-network-name=mobilenetv2 -enable-channelwise-depthwise -vta-round-shift -vta-evta-depthwise"
+    DEF="-quantization-calibration=KL -quantization-pow2-mse=2" ;;
+  MobileNetV2ValTest)
+    # MobileNetV2Test's model, ImageNet val (vta/bundles/MobileNetV2ValTest/CMakeLists.txt)
+    NET=mobilenetv2; M=$B/vta/bundles/MobileNetV2Test/mobilenetv2_qat_f32.onnx; IN=input; SHAPE=[1,3,224,224]
+    PF="-do-not-lower-nodes-for-profiling=Convolution -image-layout=NCHW -image-mode=neg1to1 -image-channel-order=RGB"
+    MC="-network-name=mobilenetv2 -enable-channelwise-depthwise -vta-round-shift -vta-evta-depthwise"
+    DEF="-quantization-calibration=KL -quantization-pow2-mse=2" ;;
   Vgg16Cifar10Test)
     NET=vgg16_cifar10; IN=input; SHAPE=[1,3,32,32]
     # CIFAR-10 mean / std on the 0..1 RGB input the main feeds (float top-1 30.07 -> 86.58 %)
@@ -68,7 +89,7 @@ fi
 # model-compiler reads ./VTASkipQuantizeNodes.txt (a skip-quant ON build may have left one)
 rm -f VTASkipQuantizeNodes.txt
 $B/glow/bin/model-compiler -g -model=$M -backend=VTA -emit-bundle=$O -bundle-api=dynamic -model-input=$IN,float,$SHAPE \
-  -load-profile=$P $Q $QC $MC "$@" > gen.log 2>&1
+  -load-profile=$P $Q $QC $MC $DEF "$@" > gen.log 2>&1
 r=$?; echo "$D rc=$r"
 grep "^VTA_FUSION_LOG [0-9 ]" gen.log | sed 's/^VTA_FUSION_LOG /  /'
 exit $r

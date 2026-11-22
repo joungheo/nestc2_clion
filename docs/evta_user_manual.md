@@ -349,9 +349,10 @@ vtaMxnetResnet18Bundle                   OK     6s
 | NEST-C CMake에 있는 bundle (시험 번들, Resnet18 / 50, VGG16) | `vtabundles_xcmpl/build_sim_bundles.sh [-f] [target ...]` | `Debug2_remote/vta/bundles/<Dir>/`, 로그 `Debug2_remote/bundle_logs/<target>.log`, `summary.txt` |
 | MobileNetV2 | `vtabundles_xcmpl/gen_mobilenetv2_bundle.sh [model-compiler 옵션]` | `Debug2_remote/vta/bundles/MobileNetV2Test/` (`gen.log`, `prof.log`) |
 | DeiT-tiny | `vtabundles_xcmpl/gen_deit_bundle.sh [model-compiler 옵션]` | `Debug2_remote/vta/bundles/DeiTTest/` (`gen.log`) |
-| CNN 네 모델을 여러 그림의 profile로 | `vtabundles_xcmpl/gen_calib_bundle.sh <Dir> <그림 목록 \| profile.yaml[.gz]> [model-compiler 옵션]` (`BINS=2048` histogram 칸, `R50=tv` torchvision ResNet-50) | `Debug2_remote/vta/bundles/<Dir>/` (`prof.log`, `gen.log`). [evta_accuracy.md](evta_accuracy.md) §6, §7 |
-| torchvision ResNet-50 ONNX | `~/.venvs/onnxeval/bin/python vtabundles_xcmpl/export_tv_resnet50.py Debug2_remote/vta/bundles/Resnet50Test/tv/resnet50.onnx` (torch, torchvision 필요) | Caffe2 resnet50.onnx와 입력 / 출력이 같은 ONNX |
-| multi4 copy 4개 | `[MODEL=<onnx>] [PROF=<yaml>] [MCX="<옵션>"] vtabundles_xcmpl/gen_multi4_bundles.sh <Dir> ...` (`MultiEVTAResnet18Test`, `MultiEVTAResnet50Test`, `MultiEVTAVgg16Cifar10Test`, `MultiEVTADeiTTest`, `MultiEVTAMobileNetV2Test`) | `Debug2_remote/vta/multievta_bundles/<Dir>/` (`gen_<i>.log`). single bundle이 먼저 있어야 한다(모델과 profile을 거기서 읽음) |
+| CNN 네 모델을 여러 그림의 profile로 | `vtabundles_xcmpl/gen_calib_bundle.sh <Dir> <그림 목록 \| profile.yaml[.gz]> [model-compiler 옵션]` (`BINS=2048` histogram 칸; DPU 비교 dir `Resnet50TvTest`, `MobileNetV2TfTest`, `MobileNetV2ValTest`는 KL + `-quantization-pow2-mse=2`가 기본) | `Debug2_remote/vta/bundles/<Dir>/` (`prof.log`, `gen.log`). [evta_accuracy.md](evta_accuracy.md) §6, §7 |
+| torchvision ResNet-50 ONNX | `~/.venvs/onnxeval/bin/python vtabundles_xcmpl/export_tv_resnet50.py Debug2_remote/vta/bundles/Resnet50TvTest/resnet50.onnx` (torch, torchvision 필요) | Caffe2 resnet50.onnx와 입력 / 출력이 같은 ONNX (`Resnet50TvTest`) |
+| TF-slim float MobileNetV2 ONNX | `vta/bundles/MobileNetV2TfTest/CMakeLists.txt` 머리의 curl / `tfl2onnx.py` 두 줄 (tflite, onnx 필요) | `Debug2_remote/vta/bundles/MobileNetV2TfTest/mobilenetv2_tf_f32.onnx` (logits, 1001 클래스) |
+| multi4 copy 4개 | `[MODEL=<onnx>] [PROF=<yaml>] [MCX="<옵션>"] vtabundles_xcmpl/gen_multi4_bundles.sh <Dir> ...` (`MultiEVTAResnet18Test`, `MultiEVTAResnet50Test`, `MultiEVTAVgg16Cifar10Test`, `MultiEVTADeiTTest`, `MultiEVTAMobileNetV2Test`, DPU 비교 `MultiEVTAResnet50TvTest`, `MultiEVTAMobileNetV2TfTest`) | `Debug2_remote/vta/multievta_bundles/<Dir>/` (`gen_<i>.log`). single bundle이 먼저 있어야 한다(모델과 profile을 거기서 읽음) |
 | model-compiler 다시 빌드 | `Debug2_remote`에서 `make -j16 model-compiler`(PC) / `make -j2 model-compiler`(보드) | VTASave.cpp 등을 바꾼 뒤 |
 
 넣을 것:
@@ -802,12 +803,14 @@ tail -1 imagenet_eval/result/base.log      # 마지막 EVAL 줄에 top-1
 | 일 | 어디서 | 명령 |
 |---|---|---|
 | 이미지 준비 (10,000장 → 224 × 224 PNG, `list.txt`) | PC | `prep_imagenetv2.py <imagenetv2-matched-frequency-format-val> <out>`. 보드 `~xilinx/JO/imagenetv2_png224`로 복사 |
-| bundle top-1 | 보드 | `sudo /bin/sh -c "imagenet_eval/eval_board.sh <exe> <name> [n]"`. 예: `hw/DeiTTest/vtaDeiTBundle_sys base 10000`. 결과 `imagenet_eval/result/<name>.log` |
+| bundle top-1 | 보드 | `sudo /bin/sh -c "imagenet_eval/eval_board.sh <exe> <name> [n]"`. 예: `hw/DeiTTest/vtaDeiTBundle_sys base 10000`. 결과 `imagenet_eval/result/<name>.log`. 이미지는 실행 파일 Dir의 셋(`imagenet_eval/eval_sets.txt`; `PNG=<dir>`가 우선), `n` 기본은 셋 전체 |
+| ImageNet val 준비 (DPU 비교, 50,000장) | PC | HF `ILSVRC/imagenet-1k`의 `data/val_images.tar.gz`(로그인과 약관 동의 필요: `~/.venvs/onnxeval/bin/hf auth login`)를 풀고 `prep_imagenet_val.py <tv\|tf> <JPEG dir> <out>` (`tv` torchvision 전처리 → 보드 `~xilinx/JO/imagenet_val_tv224`, `tf` TF-slim 전처리 → `~xilinx/JO/imagenet_val_tf224`) |
 | float 기준 | PC | `float_ref.py <model.onnx> <png dir> [n] [out]` (DeiT), `float_ref_cnn.py <resnet18\|resnet50\|vgg16\|mobilenetv2\|deit> <model.onnx> <png dir> [n] [out]` (bundle main과 같은 입력; venv `~/.venvs/onnxeval`) |
-| CIFAR-10 준비 (VGG16) | PC | `prep_cifar10.py <cifar-10-python.tar.gz> <out>`. 보드 `~xilinx/JO/cifar10_png`로 복사, `PNG=~xilinx/JO/cifar10_png eval_board.sh ...` |
+| CIFAR-10 준비 (VGG16) | PC | `prep_cifar10.py <cifar-10-python.tar.gz> <out>`. 보드 `~xilinx/JO/cifar10_png`로 복사 (`Vgg16Cifar10Test`의 셋이라 `PNG=`는 필요 없다) |
 | int8 흉내 (보드 없이 양자화 시도) | PC | `fakequant.py <model.onnx> <png dir> [--n 9000] [--pow2] [--ln-float] [--gelu-float] [--softmax-float] [--skip s]` |
 
 - `eval_board.sh`는 bitstream을 올리고 lock을 잡는다(`BIN=`, 기본 `SYS_BIN`).
+- 한 Dir에는 테스트 셋이 하나다(`eval_sets.txt`). 같은 모델을 다른 셋으로 재려면 Dir을 새로 만든다(예: `MobileNetV2Test` ImageNetV2, `MobileNetV2ValTest` ImageNet val). 새로 받은 모델도 새 Dir이다(`Resnet50TvTest`, `MobileNetV2TfTest`).
   - 환경 `PNG=<dir>`, `OMP_NUM_THREADS`(기본 4), 그리고 `EVTA_*` 같은 실행 스위치를 그대로 넘긴다.
 - DeiT main의 환경 변수:
   - `EVAL_LIST=<file>`("<png> <class>" 줄들): 정확도 모드.

@@ -76,6 +76,8 @@ run FCTest vtaFCTestBundle vtaFCTestInput.bin vtaFCTestGolden.bin
 run FloatConvTest vtaFloatConvTestBundle vtaFloatConvTestInput.bin vtaFloatConvTestGolden.bin
 run MaxPool vtaMaxPoolTestBundle vtaMaxPoolTestInput.bin vtaMaxPoolTestGolden.bin
 run MobileNetV2Test vtaMobileNetV2Bundle /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler/glow/tests/images/imagenet/cat_285.png ''
+run MobileNetV2TfTest vtaMobileNetV2TfBundle /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler/glow/tests/images/imagenet/cat_285.png ''
+run MobileNetV2ValTest vtaMobileNetV2ValBundle /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler/glow/tests/images/imagenet/cat_285.png ''
 run NonVTAConvTest vtaNonVTAConvTestBundle vtaNonVTAConvTestInput.bin vtaNonVTAConvTestGolden.bin
 run Quantize vtaQuantizeTestBundle vtaQuantizeTestInput.bin vtaQuantizeTestGolden.bin
 run ReluTest vtaReluTestBundle vtaReluTestInput.bin vtaReluTestGolden.bin
@@ -92,6 +94,7 @@ run ResConv9Test vtaResConv9TestBundle vtaResConv9TestInput.bin vtaResConv9TestG
 run Resnet18PartitionTest vtaMxnetResnet18PartitionBundle /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler/glow/tests/images/imagenet/cat_285.png ''
 run Resnet18Test vtaMxnetResnet18Bundle /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler/glow/tests/images/imagenet/cat_285.png ''
 run Resnet50Test vtaCaffe2Resnet50Bundle /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler/glow/tests/images/imagenet/cat_285.png ''
+run Resnet50TvTest vtaTvResnet50Bundle /home/xilinx/JO/npuprg/nestc2_clion/nest-compiler/glow/tests/images/imagenet/cat_285.png ''
 run Resnetv10S1C0Test vtaResnetv10S1C0TestBundle vtaResnetv10S1C0TestInput.bin ''
 run SoftMax vtaSoftMaxTestBundle vtaSoftMaxTestInput.bin vtaSoftMaxTestGolden.bin
 run SplatMax vtaSplatMaxTestBundle vtaSplatMaxTestInput.bin vtaSplatMaxTestGolden.bin

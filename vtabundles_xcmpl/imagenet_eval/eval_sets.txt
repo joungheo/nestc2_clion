@@ -1,0 +1,12 @@
+#### JO added (2026-11-22): the test images of each bundle Dir (eval_board.sh takes the set of the executable's Dir; PNG=<dir> overrides).
+#### A Dir has one test set: a model on another set is another Dir (e.g. MobileNetV2Test / MobileNetV2ValTest), so a number
+#### measured in a Dir always means the same images. The DPU comparison Dirs use ImageNet val as the published DPU numbers.
+#### <Dir>             <png dir on the board (list.txt "<png> <class>" in it)>  <made by>
+Resnet18Test         /home/xilinx/JO/imagenetv2_png224     prep_imagenetv2.py (ImageNetV2 matched-frequency, 10,000)
+Resnet50Test         /home/xilinx/JO/imagenetv2_png224     prep_imagenetv2.py
+MobileNetV2Test      /home/xilinx/JO/imagenetv2_png224     prep_imagenetv2.py
+DeiTTest             /home/xilinx/JO/imagenetv2_png224     prep_imagenetv2.py
+Vgg16Cifar10Test     /home/xilinx/JO/cifar10_png           prep_cifar10.py (CIFAR-10 test, 10,000)
+Resnet50TvTest       /home/xilinx/JO/imagenet_val_tv224    prep_imagenet_val.py tv (ILSVRC2012 val, 50,000; torchvision preprocessing)
+MobileNetV2TfTest    /home/xilinx/JO/imagenet_val_tf224    prep_imagenet_val.py tf (ILSVRC2012 val, 50,000; TF-slim preprocessing)
+MobileNetV2ValTest   /home/xilinx/JO/imagenet_val_tf224    prep_imagenet_val.py tf

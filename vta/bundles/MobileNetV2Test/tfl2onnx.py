@@ -1,4 +1,4 @@
-# TFLite (uint8 QAT) MobileNet -> float ONNX (NCHW): weights dequantized, fused RELU6 as Clip, SAME padding as explicit pads.
+# TFLite (uint8 QAT or float) MobileNet -> float ONNX (NCHW): weights dequantized, fused RELU6 as Clip, SAME padding as explicit pads.
 #### JO added (2026-11-06): TFLite (uint8 QAT) -> float ONNX for vta/bundles/MobileNetV2Test (see its CMakeLists.txt).
 #### Needs the tflite, flatbuffers, onnx and numpy Python packages. usage: tfl2onnx.py <model.tflite> <out.onnx> [--relu]
 import sys, numpy as np, tflite, onnx
@@ -34,8 +34,11 @@ def same_pads(ih, iw, kh, kw, s):
 
 def act(out, fused, ti=None):
     # old QAT models give no fused activation: RELU6 is the uint8 saturation of an output range [0, 6]
-    if fused == tflite.ActivationFunctionType.NONE and ti is not None:
-        q = g.Tensors(ti).Quantization()
+    #### JO changed (2026-11-22): a float model (TF-slim mobilenet_v2_1.0_224.tflite, MobileNetV2TfTest) has no quantization
+    #### parameters: its RELU6 are fused activations
+    # if fused == tflite.ActivationFunctionType.NONE and ti is not None:
+    q = g.Tensors(ti).Quantization() if ti is not None else None
+    if fused == tflite.ActivationFunctionType.NONE and q is not None and q.ScaleLength():
         lo = (0 - q.ZeroPoint(0)) * q.Scale(0)
         if abs(lo) < 1e-6: fused = tflite.ActivationFunctionType.RELU6
     if fused == tflite.ActivationFunctionType.NONE: return out
@@ -72,6 +75,9 @@ for k in range(g.OperatorsLength()):
         nodes.append(helper.make_node('GlobalAveragePool', [nm(ins[0])], [oname])); alias[tname(out)] = oname
     elif code == BO.RESHAPE:
         nodes.append(helper.make_node('Flatten', [nm(ins[0])], [oname], axis=1)); alias[tname(out)] = oname
+    #### JO added (2026-11-22): the float model ends with a softmax; left out so that both models give the logits (same main, same top-1)
+    elif code == BO.SOFTMAX:
+        alias[tname(out)] = nm(ins[0])
     else:
         raise SystemExit('op %d not handled' % code)
 
