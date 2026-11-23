@@ -68,8 +68,14 @@ endif
 ifeq ($(ALUMUL)$(SYSTOLIC),10)
 $(error ALUMUL=1 needs SYSTOLIC=1 (the imm loop of the systolic compute))
 endif
+#### JO added (2026-11-23): ALUBC=1 (with ALUMUL=1) -> vta.cc VTA_ALU_BC: a vector MIN / MAX / ADD / SHR with one uop and
+#### src_factor_in 0 (broadcast src, e.g. the depthwise per-channel shift) in the imm loop at II 1; _bc in the IP name
+ALUBC ?= 0
+ifeq ($(ALUBC)$(ALUMUL),10)
+$(error ALUBC=1 needs ALUMUL=1)
+endif
 #IP_NAME := $(CONF)$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(MEM_OREG)),_oreg)$(if $(filter 1,$(SYSTOLIC)),_sa)
-IP_NAME := $(CONF)$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(MEM_OREG)),_oreg)$(if $(filter 1,$(SYSTOLIC)),_sa)$(if $(filter 1,$(ALUX)),_alux)$(if $(filter 1,$(ALUX_NOIMM)),_ni)$(if $(filter 1,$(ALUMUL)),_amul)
+IP_NAME := $(CONF)$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(MEM_OREG)),_oreg)$(if $(filter 1,$(SYSTOLIC)),_sa)$(if $(filter 1,$(ALUX)),_alux)$(if $(filter 1,$(ALUX_NOIMM)),_ni)$(if $(filter 1,$(ALUMUL)),_amul)$(if $(filter 1,$(ALUBC)),_bc)
 #### JO changed (2026-10-28, systolic D8): IMPL_STRATEGY=<Vivado impl strategy>, BUILD_TAG=<suffix of the vivado dir>
 #BUILD_NAME := $(IP_NAME)$(if $(FREQ),_$(FREQ)mhz)
 IMPL_STRATEGY ?=
@@ -82,6 +88,7 @@ export VTA_SYSTOLIC := $(SYSTOLIC)
 export VTA_ALUX := $(ALUX)
 export VTA_ALUX_NOIMM := $(ALUX_NOIMM)
 export VTA_ALU_MUL := $(ALUMUL)
+export VTA_ALU_BC := $(ALUBC)
 export VTA_FREQ := $(FREQ)
 HW_BUILD_PATH := $(BUILD_DIR)/vivado/$(BUILD_NAME)
 

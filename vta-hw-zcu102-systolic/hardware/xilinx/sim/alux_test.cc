@@ -118,6 +118,15 @@ void addRandom(Prog &p) {
   int dmax = (a.iter_out - 1) * a.dst_factor_out + (a.iter_in - 1) * a.dst_factor_in;
   int smax = (a.iter_out - 1) * a.src_factor_out + (a.iter_in - 1) * a.src_factor_in;
   int nu = 1 + rnd(p, 3);
+#ifdef VTA_ALU_BC
+  //#### JO added (2026-11-23, "_bc"): one in three a broadcast vector op (one uop, src_factor_in 0: the imm loop's src slot)
+  if (op < 4 && rnd(p, 3) == 0) {
+    a.use_imm = 0;
+    a.src_factor_in = 0;
+    nu = 1;
+    smax = (a.iter_out - 1) * a.src_factor_out;
+  }
+#endif
   std::vector<std::pair<int, int>> us;
   for (int u = 0; u < nu; u++)
     us.push_back({rnd(p, N - dmax), rnd(p, N - smax)});
@@ -142,7 +151,7 @@ void addRandom(Prog &p) {
   if (!hazardOk && vta_alu_ref::hazard_slots(h, uv.data(), wslots) != 0) continue;
 #endif
 #else
-#if defined(VTA_ALUX) && !defined(VTA_ALUX_II2)
+#if (defined(VTA_ALUX) && !defined(VTA_ALUX_II2)) || defined(VTA_ALU_BC)
   if (vta_alu_ref::hazard_slots(h, uv.data(), 0) != 0) continue;
 #endif
 #endif

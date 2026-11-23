@@ -187,3 +187,62 @@ NOIMM=1 vta-hw-zcu102-systolic/hardware/xilinx/sim/run_csim.sh    # imm 루프�
    - CNN / DeiT 시간을 `_alux3`와 견준다. 명령마다 파이프라인을 채우는 시간이 늘어나는 만큼 차이가 날 수 있다.
    - 같으면 EVTA 1개도 `_ni`를 기본으로 할지 정한다.
 3. `m4_build.sh`의 `I` 변수 문제.
+4. single `_amul_bc` 합성과 보드 시험, 그다음 multi4 `_amul_bc`(§6.3).
+5. multi4 `run_all.sh` `SYS_BIN`을 `_amul`로 바꿀지 정하기(§6.2).
+
+## 6. 다른 길: CNN에 필요한 MUL만 넣은 `_amul` (2026-11-23, PC ubuntu)
+
+alux3 전체 대신 CNN이 실제로 쓰는 확장 연산만 넣었다.
+- `EVTA_REPLAY_DUMP`로 센 결과, CNN이 `_alux3`에서 쓰는 확장 연산은 avgpool의 MUL immediate(op 4) 하나뿐이다. 나머지는 DeiT용이다.
+- HLS `vta.cc` `VTA_ALU_MUL`(Makefile `ALUMUL=1`, 이름 `_amul`): imm 루프(II 1)에 MUL immediate만 더한다. 표 RAM, slot 루프, 다른 확장 연산은 없다.
+- vtalib-systolic `VTAHasAluMul()`: 이름에 `_amul` 또는 `_alux`가 있으면 `avgpool_evta`를 EVTA에서 돌린다(`EVTA_ALUMUL=0|1`). bundle은 그대로다.
+- 바꾸기 전 코드: tag `amul-before-261123`, `~/npuprg/archive/amul_before_261123/`.
+
+### 6.1 EVTA 1개 `_amul`
+`vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_amul_400mhz_rq.bin` (Explore, WNS +0.024 ns, LUT 43.4k: `_rq` 42.1k, `_alux3` 69.8k).
+golden 30 PASS, avgpool `EVTA_RES_CHECK` 5 모델 0 differ. 보드에서 빌드한 `_systimed`, OMP 1, 25회 중앙값(ms):
+
+| bundle | `_amul` | `_alux3` | `_amul` + `EVTA_ALUMUL=0` |
+|---|---|---|---|
+| MobileNetV2Test | 14.65 | 14.39 | 15.21 |
+| MobileNetV2TfTest | 14.64 | 14.39 | 15.19 |
+| Resnet50Test | 64.46 | 64.47 | 65.27 |
+| Resnet50TvTest | 68.37 | 68.38 | 69.21 |
+| Resnet18Test | 22.70 | 22.71 | 22.90 |
+
+MobileNetV2에 남은 0.26 ms는 depthwise의 채널별 vector SHR이다. `_alux2`부터는 slot 루프에서 broadcast src(uop 1개, `src_factor_in` 0)로 II 1에 돈다(§6.3).
+
+### 6.2 EVTA 4개 `_amul`
+`vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_amul_400mhz_hp322_rq.bin`
+(보드 `bit/evta_multi4_amul_400MHz_pass_261123/`, PC `build/y219/rs_mamulh`).
+- `m4_build.sh amul VTA_PLACE_DIRECTIVE=ExtraNetDelay_high SYSTOLIC=1 ALUMUL=1 FREQ=400 IMPL_STRATEGY=Performance_ExtraTimingOpt`.
+- LUT 167.9k (62 %), FF 215.3k, BRAM 580. `_ni` 243.9k, crossbar 212k보다 훨씬 작다.
+- 배선 직후 WNS 0.000. 행 Y219의 net 382개를 RapidWright로 옮긴 뒤 −0.259 ns.
+- `route_s.tcl ... opt`: 0.000 ns지만 net 11개가 행 안으로 돌아갔다. RapidWright 재배선 뒤 −0.176, 다시 opt에서 행 안 2개.
+- 그 뒤 반복은 수렴하지 않았다. phys_opt는 HP 읽기 데이터 net(`saxigp4_rdata[123]` → `hpslice2`, Y221)을 행 안으로 넣어 맞추고, RapidWright가 돌려 배선하면 −0.092 / −0.192 ns가 된다.
+- 그래서 HP 포트 클럭만 내렸다. `flow/mmcm_hp_set.tcl rs_mamulo3or.dcp rs_mamulh 46.25`로 `hp_pll` 333.0 → 321.7 MHz. EVTA는 400 MHz 그대로다.
+- 결과: EVTA 클럭 WNS 0.000, HP +0.009, WHS +0.004, WPWS +0.054 ns. 행 Y219 PIP 0개, `stuckchk.py -b rs_mrqp2o3.bit` 0 extra.
+
+보드: probes 40/40, `EVTA_RES_CHECK` 5 모델 391건 0 differ(avgpool 29건 포함), 분류는 `_rq`와 같다.
+실행 파일은 보드 `build_multievtax4_systimed`에서 `cmake .` 후 다시 빌드했다(그 dir의 vtalib가 11-10 것이었다).
+4 copy lockstep, OMP 1, 25회 중앙값(ms, copy마다):
+
+| bundle | `_rq` (11-04) | `_amul` |
+|---|---|---|
+| MultiEVTAMobileNetV2Test | 19.23 | **18.69** |
+| MultiEVTAMobileNetV2TfTest | 19.15 | **18.72** |
+| MultiEVTAResnet50Test | 78.47 | **77.99** |
+| MultiEVTAResnet50TvTest | 78.47 | **77.89** |
+| MultiEVTAResnet18Test | 23.94 | 24.04 |
+
+- Resnet18 multi4 bundle에는 EVTA avgpool이 없어서(`EVTA_RES_CHECK avgpool` 0건) 이득이 없다. +0.1 ms는 HP 클럭 3 % 차이로 보인다.
+- 이미 있던 문제: `MultiEVTAResnet50Test`가 281 (0.832588)을 낸다. 이 값은 single `Resnet50TvTest`의 결과다. single `Resnet50Test`는 0.478383이다. `_rq`에서도 같으니, 11-22에 만든 multi4 copy가 Tv 모델로 만들어진 것으로 보인다. 같은 dir의 `singlevtaCaffe2Resnet50Bundle_systimed`(11-08)는 옛 실행 파일이라 exit 1이다.
+
+### 6.3 broadcast vector를 imm 루프에 (`_bc`, Makefile `ALUBC=1`, 합성 전)
+- `vta.cc` `VTA_ALU_BC`(ALUMUL=1과 함께): uop 1개이고 `src_factor_in` 0인 vector MIN / MAX / ADD / SHR이 imm 루프에서 돈다.
+- 안쪽 루프마다 src를 한 slot 읽어 `s_reg`에 두고, 나머지 단계는 dst만 읽는다(II 1). imm 루프는 slot 하나짜리 루프 `ALU_IMM_SLOT`이 됐다.
+- 명령 형식이 같아서 vtalib와 bundle은 그대로다. 이름 `_amul_bc`도 vtalib의 `_amul` 검사에 걸린다.
+- HLS 추정(compute, `_amul` → `_amul_bc`): LUT 44,870 → 45,948, FF 28,978 → 31,040, DSP 같음, 2.635 ns 같음, 깊이 15.
+- csim(`sim/run_csim.sh AMUL=1 BC=1`, broadcast 명령이 무작위 명령의 1/3): 20/20. `s_reg`에 +1을 넣은 고장판은 0/20. `AMUL=1`, `ALUX=1`도 20/20.
+- MobileNetV2 replay dump: broadcast vector 218개(모두 depthwise SHR, 784 단계 = II 2에서 1,568 사이클 → 785), 그 밖의 vector 4개. Resnet18 / 50 / VGG16은 0개.
+  `SLOTS=34 hazard_dump.py` 0건.

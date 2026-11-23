@@ -42,6 +42,10 @@ row Y219, `write_edif <out>.edf` and `Y219RWRoute.java` / `route_s.tcl ... opt2`
 Another placer directive may do better: rq with `VTA_PLACE_DIRECTIVE=ExtraNetDelay_high` +0.002 ns before RapidWright, -0.205 after,
 `opt` +0.002 ns with one net back in the row; that net (no timed path) rerouted with `Y219RWRoute.java -Dtd=0` (wirelength-driven: timing-driven
 RWRoute 2025.2 throws in printRoutingStatistics when no routed connection is timed), then `route_s.tcl` with no opt: 400 MHz +0.002 ns, board pass.
+When `opt` and RapidWright keep trading the same HP read net (phys_opt puts it into the row to meet timing, RapidWright's detour
+misses): `flow/mmcm_hp_set.tcl -tclargs <dcp with no row nets> <out> 46.25` sets only the HP port clock (`hp_pll`) to 321.7 MHz
+(47.875 = 333.0). amul 2026-11-23: opt / RapidWright four times -0.092 / -0.192 ns on `saxigp4_rdata[123]` -> `hpslice2`; HP 321.7 MHz:
+EVTA 400 MHz WNS 0.000, HP +0.009, WHS +0.004 ns, board pass (`docs/evta_multi4_alux3.md` §6.2).
 `run_flow.sh` takes `VTA_PLACE_DIRECTIVE` (placer directive in `place_d.tcl`, default Explore) and `RW_XMX` (RapidWright heap, default 64g).
 
 ## Tools

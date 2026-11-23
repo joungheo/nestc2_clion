@@ -66,6 +66,10 @@ if {[info exists ::env(VTA_ALUX_NOIMM)] && $::env(VTA_ALUX_NOIMM) eq "1"} {
 if {[info exists ::env(VTA_ALU_MUL)] && $::env(VTA_ALU_MUL) eq "1"} {
     append cflags " -DVTA_ALU_MUL"
 }
+#### JO added (2026-11-23): Makefile ALUBC=1 -> broadcast vector ops in the imm loop (vta.cc VTA_ALU_BC, "_bc")
+if {[info exists ::env(VTA_ALU_BC)] && $::env(VTA_ALU_BC) eq "1"} {
+    append cflags " -DVTA_ALU_BC"
+}
 
 # Get the VTA configuration paramters
 set ::device $FPGA_DEVICE
