@@ -158,6 +158,9 @@ GEMM과 ALU 명령에 그 값이 들어가고, `en = 0`으로 다시 끈다(`cmd
 | `..._16_15_18_17_4evta_sa_400mhz_bias.bin` | 4 | ○ | × | × | systolic | `76aa60e` 11-04 | `build_multievtax4_sys*` |
 | `..._16_15_18_17_4evta_sa_396mhz_rq.bin` (395.8 MHz) | 4 | ○ | ○ | × | systolic | `d26c3e3` 11-04 | `build_multievtax4_sys*` |
 | `..._16_15_18_17_4evta_sa_400mhz_rq.bin` | 4 | ○ | ○ | × | systolic | `d26c3e3` 11-04 | `build_multievtax4_sys*` |
+| `..._16_16_19_18_sa_amul_400mhz_rq.bin` | 1 | ○ | ○ | MUL imm만 | systolic | `398f358` 11-23 (`VTAHasAluMul`) | `build_systimed` (보드, 11-23 18:01 다시 빌드) |
+| `..._16_16_19_18_sa_amul_bc_400mhz_rq2.bin` | 1 | ○ | ○ | MUL imm + broadcast vector II 1 | systolic | `398f358` 11-23 (vtalib 변경 없음, 하드웨어만) | `build_systimed` |
+| `..._16_15_18_17_4evta_sa_amul_400mhz_hp322_rq.bin` (HP 포트 321.7 MHz) | 4 | ○ | ○ | MUL imm만 | systolic | `398f358` 11-23 | `build_multievtax4_systimed` (보드, 11-23 22:41 `cmake .` 후 다시 빌드) |
 
 - "systolic"은 `vtalib-zcu102-systolic`이다. **판 번호는 없고, 그 commit 뒤의 vtalib면 된다.**
   - 새 vtalib는 옛 bitstream에서도 돈다. bitstream 이름에 없는 기능은 쓰지 않는다.
@@ -202,7 +205,9 @@ ALU 확장 판(`_alux*`)은 같은 실행 파일(`build_sys*`, `_pcsys*`)로 돌
 | 11-14 | `_sa_alux_380mhz_rq.bin` | 380 | ALU 확장 1단계(MUL, SUB, CPY, LUT, LUTSET, RSUM, RMAX, CLZ, §8) | +0.002 | §8.12 |
 | 11-14 | `_sa_alux_400mhz_rq.bin` | 400 | 같은 기능을 400 MHz로: ALU / requantize / RMW register, queue register slice | +0.014 | §8.13 |
 | 11-15 | `_sa_alux2_400mhz_rq.bin` | 400 | ALU 확장 2단계: II 1 slot 루프, MADD / MULSHR / SHRV / SHRR | +0.026 | §8.14, [evta_alux_hw.md](evta_alux_hw.md) |
-| 11-15 | **`_sa_alux3_400mhz_rq.bin`** | 400 | ALU 확장 3단계: SQACC(제곱 누적), LUTC(clamp LUT). **가장 최근이자 11-22부터 `SYS_BIN` 기본** | +0.022 | §8.15 |
+| 11-15 | **`_sa_alux3_400mhz_rq.bin`** | 400 | ALU 확장 3단계: SQACC(제곱 누적), LUTC(clamp LUT). **11-22부터 `SYS_BIN` 기본** | +0.022 | §8.15 |
+| 11-23 | `_sa_amul_400mhz_rq.bin` | 400 | `_rq`에 ALU MUL immediate만(CNN이 쓰는 확장 연산 하나). `_alux*`의 다른 연산은 없다 | +0.024 | §5.2 ⑨ |
+| 11-24 | `_sa_amul_bc_400mhz_rq2.bin` | 400 | `_amul` + broadcast vector 연산을 imm 루프에서 II 1 (11-23의 `_rq` 이름 판은 틀림, 쓰지 않는다) | +0.036 | §5.2 ⑩ |
 
 **EVTA 4개 (16/15/18/17)**
 
@@ -211,7 +216,8 @@ ALU 확장 판(`_alux*`)은 같은 실행 파일(`build_sys*`, `_pcsys*`)로 돌
 | 10-28 | `_sa_400mhz.bin` | 400 | systolic 첫 판 | |
 | 11-04 | `_sa_400mhz_alu1.bin`, `_sa_400mhz_bias.bin` | 400 | ALU immediate II = 1, bias reset | +0.037 (bias) |
 | 11-04 | `_sa_396mhz_rq.bin` | 395.8 | requantize. 400 MHz가 맞기 전의 판 | |
-| 11-04 | **`_sa_400mhz_rq.bin`** | 400 | requantize. **multi4의 최신이자 `SYS_BIN` 기본**. ALU 확장은 없다 | +0.002 |
+| 11-04 | **`_sa_400mhz_rq.bin`** | 400 | requantize. **multi4의 `SYS_BIN` 기본**. ALU 확장은 없다 | +0.002 |
+| 11-23 | `_sa_amul_400mhz_hp322_rq.bin` | 400 (HP 321.7) | ALU MUL immediate. HP 포트 클럭만 333 → 321.7 MHz | 0.000 (HP +0.009) |
 
 - WNS를 비운 판은 기록을 찾지 못했다.
 - PC에서 합성한 결과와 보드 파일의 짝(md5): `_alux_380mhz_rq` = PC build dir `..._sa_alux_380mhz_rq`, `_alux_400mhz_rq` = `..._rq_qrs`,
@@ -320,10 +326,51 @@ ALU 확장 판(`_alux*`)은 같은 실행 파일(`build_sys*`, `_pcsys*`)로 돌
   - CNN: MobileNetV2 17.26, Resnet18 23.08, Resnet50 68.81, VGG16 7.02 ms. `_alux2`와 같다.
 - 이 판 뒤로 하드웨어는 그대로다. 11-15 ~ 11-17의 줄어든 시간은 모두 vtalib / 컴파일러다(§5.3 표 B).
 
+**⑨ `_sa_amul_400mhz_rq` (11-23): MUL immediate만 — multi4에 넣을 수 있는 크기로**
+- 왜: multi4 `_alux3`는 LUT가 모자라고 배선이 안 됐다(287.9k / `_ni` 243.9k, [evta_multi4_alux3.md](evta_multi4_alux3.md)).
+  `EVTA_REPLAY_DUMP`로 세 보니 CNN이 `_alux3`에서 쓰는 확장 연산은 avgpool의 MUL immediate(op 4) 하나뿐이었다. 나머지는 DeiT용이다.
+- 하드웨어: `vta.cc`에 `VTA_ALU_MUL`(Makefile `ALUMUL=1`, 이름 `_amul`; `ALUX=1`과 같이 쓸 수 없다).
+  - imm 루프(II 1)에서 `alu_op_ext == 1 && alu_opcode == 0 && alu_op_ext2 == 0`이면 dst = dst × (int16) imm(하위 32비트).
+  - 표 RAM, slot 루프, 다른 확장 연산은 없다. HLS compute: LUT 42,638 → 44,870, FF 22,965 → 28,978, DSP 6 → 22, imm 루프 깊이 12 → 15.
+  - 시험: `sim/run_csim.sh AMUL=1` 20/20(MUL에 +1을 넣은 고장판은 모든 seed에서 틀림), `DEFS=-DVTA_ALU_MUL sim/run_cosim.sh 3` PASS.
+- vtalib(`vtalib-zcu102-systolic`, `398f358`): `VTAHasAluMul()` — 이름에 `_amul` 또는 `_alux`가 있으면 참(시뮬레이터는 늘 참, `EVTA_ALUMUL=0|1`).
+  `avgpool_evta`가 `VTAHasAluExt()` 대신 이것을 본다. 없으면 0을 돌려주고 번들이 CPU avgpool을 부른다.
+- 컴파일러: 바꾸지 않았다(`-vta-evta-avgpool`이 이미 `avgpool_evta`를 부른다).
+- 합성: `make bin SYSTOLIC=1 ALUMUL=1 FREQ=400 IMPL_STRATEGY=Performance_ExplorePostRoutePhysOpt BUILD_TAG=rq`. WNS +0.024, WHS +0.010, WPWS +0.001 ns. LUT 43,362(`_rq` 42,119), FF 55,659, BRAM 258, DSP 305.
+- 보드: golden 30 PASS, avgpool `EVTA_RES_CHECK` 5 모델 0 differ, 분류 같음.
+- 시간: 표 E. Resnet18 / 50은 `_alux3`와 같다. MobileNetV2는 0.26 ms 느리다(depthwise, ⑩).
+- 바꾸기 전 코드: tag `amul-before-261123`, `~/npuprg/archive/amul_before_261123/`.
+
+**⑩ `_sa_amul_bc_400mhz_rq2` (11-24): broadcast vector 연산을 II 1로**
+- 왜: ⑨와 `_alux3`의 MobileNetV2 차이 0.26 ms는 모두 `dw_convolution_evta`였다(6.035 vs 5.766 ms). depthwise의 채널별 shift는 vector SHR이고,
+  uop 1개, `src_factor_in` 0(줄마다 같은 src)이다. `_alux2`부터는 slot 루프가 이 src를 줄마다 한 번만 읽어 II 1로 돈다. 기본 vector 루프는 src와 dst를 다 읽어 II 2다.
+- 하드웨어: `vta.cc` `VTA_ALU_BC`(Makefile `ALUBC=1`, `ALUMUL=1`과 함께, 이름 `_amul_bc`).
+  - imm 루프를 slot 하나짜리 루프 `ALU_IMM_SLOT`으로 바꿨다. broadcast vector MIN / MAX / ADD / SHR이면 줄마다 첫 slot에서 src를 `s_reg`에 읽고, 나머지 단계는 dst만 읽는다.
+  - 명령 형식이 같아서 vtalib와 번들은 그대로다. `_amul_bc`도 vtalib의 `_amul` 검사에 걸린다.
+  - MobileNetV2 replay dump: broadcast vector 218개(784 단계 명령 하나가 1,568 → 785 cycle), 그 밖의 vector 4개. Resnet18 / 50 / VGG16은 0개. `SLOTS=34 hazard_dump.py` 0건.
+- **첫 합성(11-23, `..._sa_amul_bc_400mhz_rq.bin`, WNS +0.014)은 틀렸다.**
+  - MobileNetV2 confidence 0.920 → 0.862, depthwise 7개 층 `EVTA_RES_CHECK` differ. 바깥 반복이 여러 번인 명령(`iter 3–10 × 49 / 196`)의 각 줄 마지막 2단계가 다음 줄의 src를 썼다.
+  - 원인: `s_reg`에 `DEPENDENCE inter false`를 두어 HLS가 읽기를 MUL 단계 뒤(쓰기보다 2단계 늦게)로 놓았다. 고침: pragma를 빼고 operand를 `alu_reg`로 잡았다(II 1, 깊이 15 → 17).
+  - csim은 순서대로 돌아 못 본다. cosim도 못 봤다: `run_cosim.sh`가 빈 `VTA_ALUX_DIST`를 넘겨 2026-11-14부터 무작위 명령이 0개였다.
+    `alux_test.cc`를 고치고 depthwise 모양 broadcast 명령 6개를 넣었다. 고치기 전 cosim 3/3 FAIL, 고친 뒤 3/3 PASS. `_amul`, ALUX도 3/3 PASS.
+- 합성: `make ip bin SYSTOLIC=1 ALUMUL=1 ALUBC=1 FREQ=400 IMPL_STRATEGY=Performance_ExplorePostRoutePhysOpt BUILD_TAG=rq2`. WNS +0.036, WHS +0.010, WPWS +0.001 ns. LUT 44,954, FF 약 56k.
+  HLS compute 추정(고치기 전): LUT 44,870 → 45,948, FF 28,978 → 31,040.
+- 보드(`bit/evta_single_amul_bc_400MHz_261124/`): golden 30 PASS, `EVTA_RES_CHECK` 6 모델 3,830건 0 differ, 분류 / confidence는 ⑨와 같다.
+- 시간: 표 E. CNN 다섯 모델 모두 `_alux3`와 같고, LUT는 `_alux3`(69.8k)보다 25k 적다.
+
 **multi4 (EVTA 4개, 16/15/18/17)**
 - 10-28 첫 판 → 11-04 ALU imm II 1 → bias reset → requantize(395.8 MHz, 다음 400 MHz) 순서다. 하드웨어 변경은 single의 ②–④와 같다.
 - vtalib는 single과 같은 `vtalib-zcu102-systolic`을 `BUNDLE_SET=multievtax4`로 빌드한다(buffer 16/15/18/17, acc 2048 entry).
-- ALU 확장(⑤–⑧)은 아직 multi4 판에 없다.
+- ALU 확장(⑤–⑧)은 multi4 판에 없다. ⑨의 MUL immediate만 넣은 판이 있다(11-23, 아래).
+
+**multi4 ⑨ `_4evta_sa_amul_400mhz_hp322_rq` (11-23)**
+- 하드웨어 / vtalib는 ⑨와 같다(`vta-hw-zcu102-multi4`의 `vta.cc`는 systolic 것과 같은 파일).
+- 합성: `m4_build.sh amul VTA_PLACE_DIRECTIVE=ExtraNetDelay_high SYSTOLIC=1 ALUMUL=1 FREQ=400 IMPL_STRATEGY=Performance_ExtraTimingOpt`, 그 뒤 행 Y219 흐름.
+  - LUT 167.9k (62 %), FF 215.3k, BRAM 580.
+  - RapidWright 뒤 −0.259 ns → `route_s.tcl ... opt`와 RapidWright 재배선을 되풀이했지만 HP 읽기 net 하나(`saxigp4_rdata[123]` → `hpslice2`)가 −0.092 / −0.192 ns에서 오갔다.
+  - HP 포트 클럭만 내렸다: `flow/mmcm_hp_set.tcl rs_mamulo3or.dcp rs_mamulh 46.25`(333.0 → 321.7 MHz). EVTA 400 MHz WNS 0.000, HP +0.009, WHS +0.004, WPWS +0.054 ns. 행 Y219 PIP 0개, `stuckchk.py -b rs_mrqp2o3.bit` 0 extra.
+- 보드(`bit/evta_multi4_amul_400MHz_pass_261123/`): probes 40/40, `EVTA_RES_CHECK` 5 모델 391건 0 differ(avgpool 29건), 분류는 `_rq`와 같다.
+- 시간: 표 E. 자세히: [evta_multi4_alux3.md](evta_multi4_alux3.md) §6.
 
 ### 5.3 판별 성능 표 (2026-11-21에 정리)
 
@@ -411,6 +458,39 @@ DeiT OMP 1에서 시간이 어디서 줄었나(문장별 시간을 호출 이름
 - `run_prof.sh` / `run_all.sh` 머리말의 `features` 줄은 11-22부터 ALU 확장도 보여 준다(`bininfo.sh`: `ALU-ext1`, `ALU-ext2(...)`, `ALU-ext3(...)`).
 - 결과 파일은 보드의 `/home/xilinx/JO/meas_pcsys27/`에 있다(`<bitstream>.omp1.out` 등).
 - 보드의 `hw/DeiTTest/deit.weights.bin`을 이번에 11-16 판(마지막 블록 2행, 11,391,936 B)으로 바꿨다. 11-12 판은 `deit.weights.bin.1112`로 남겼다.
+
+**표 E. CNN에 필요한 것만 넣은 판 (2026-11-23 / 24).** 같은 날 같은 실행 파일. OMP 1, 25회(2–25회) 중앙값, 전체 ms.
+- 실행 파일: 보드에서 새 vtalib(`398f358`)로 다시 빌드했다. single은 `build_systimed`(11-23 18:01), multi4는 `build_multievtax4_systimed`(11-23 22:41, `cmake .`가 필요했다).
+  PC에서 만든 `_pcsystimed`(11-22, ubuntu2)는 `VTAHasAluMul` 전 vtalib라 `_amul`에서 avgpool이 CPU로 간다.
+- 측정: `BIN=<bitstream> hw/script/run_prof.sh -s _systimed -n 25 <Dir...>`, multi4는 `hw_multievtax4/script/run_prof.sh ... -l`(4 copy lockstep, copy당 시간).
+
+single:
+
+| 모델 | `_alux3` | ⑨ `_amul` | ⑩ `_amul_bc` (rq2) | `_amul` + `EVTA_ALUMUL=0` (CPU avgpool) | 분류 |
+|---|---|---|---|---|---|
+| MobileNetV2Test | 14.43 | 14.65 | **14.40** | 15.21 | 282 (0.920282) |
+| MobileNetV2TfTest | 14.38 | 14.63 | **14.39** | 15.19 | 282 (0.322088) |
+| Resnet50Test | 64.45 | 64.45 | 64.48 | 65.27 | 281 (0.478383) |
+| Resnet50TvTest | 68.37 | 68.37 | 68.41 | 69.21 | 281 (0.832588) |
+| Resnet18Test | 22.72 | 22.69 | 22.69 | 22.90 | 281 (0.452810) |
+| Vgg16Cifar10Test | 6.75 | 6.75 | 6.75 | | 8 (0.607698) |
+
+- `EVTA_ALUMUL=0` 열은 11-23 첫 측정(⑨ 날)이다. 나머지 세 열은 11-23 밤 ~ 11-24에 연달아 쟀다.
+- 표 D(11-22, `_pcsys27`)와 MobileNetV2 값이 다른 것은 실행 파일이 달라서다. 보드에서 빌드한 MobileNetV2Test는 282 (0.920282), `_pcsys27`은 (0.944157)이다.
+- DeiT는 재지 않았다. `_amul*`에서는 layer norm / softmax / GELU 표가 `_rq`처럼 CPU로 간다(표 D의 `_rq` 열).
+
+multi4 (4 copy lockstep, copy당):
+
+| 모델 | `_4evta_sa_400mhz_rq` | `_4evta_sa_amul_400mhz_hp322_rq` |
+|---|---|---|
+| MultiEVTAMobileNetV2Test | 19.23 | **18.69** |
+| MultiEVTAMobileNetV2TfTest | 19.15 | **18.72** |
+| MultiEVTAResnet50Test | 78.47 | **77.99** |
+| MultiEVTAResnet50TvTest | 78.47 | **77.89** |
+| MultiEVTAResnet18Test | 23.94 | 24.04 |
+
+- multi4 Resnet18 번들에는 EVTA avgpool이 없어(`EVTA_RES_CHECK avgpool` 0건) 이득이 없다. +0.1 ms는 HP 클럭 3 % 차이로 보인다.
+- `MultiEVTAResnet50Test`는 281 (0.832588)로 single `Resnet50TvTest`의 값을 낸다(두 bitstream 같음). 11-22에 만든 multi4 copy가 Tv 모델인 것으로 보인다(이번 변경과 무관).
 
 ## 6. 다른 모델 돌리기 (VGG, Resnet50, MobileNet 등)
 
