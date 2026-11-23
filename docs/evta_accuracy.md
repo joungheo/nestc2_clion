@@ -149,7 +149,42 @@
 - `torchvision.models.resnet50(IMAGENET1K_V1)`, ImageNet top-1 76.13 %. Vitis AI `pt_resnet50_imagenet_224_224_8.2G`의 float 모델이다.
 - 지금의 Caffe2 resnet50.onnx와 입력 / 출력이 같게 내보낸다(`gpu_0/data_0` BGR 0..1 NCHW, `gpu_0/softmax_1`). BGR은 conv1 weight의 입력 채널을 뒤집어 맞추고(정확), mean / std는 입력 앞의 Sub / Div다(conv0 입력 복사에 합쳐진다). 그래서 main과 `multi_model.h`를 그대로 쓴다.
 - ImageNetV2 float 63.34 %(문헌값 63.3 %). Caffe2 판은 57.50 %였다.
-- `R50=tv gen_calib_bundle.sh Resnet50Test …`가 `Debug2_remote/vta/bundles/Resnet50Test/tv/resnet50.onnx`를 쓴다.
+- 11-22 저녁부터는 자기 dir `vta/bundles/Resnet50TvTest`다(모델 `Debug2_remote/vta/bundles/Resnet50TvTest/resnet50.onnx`, ImageNet val로 잰다: [evta_dpu_compare.md](evta_dpu_compare.md)). 그 전의 `R50=tv gen_calib_bundle.sh Resnet50Test …`(`Resnet50Test/tv/resnet50.onnx`)는 옛 방식으로 남아 있다.
 - 1장 68.4 ms(`_pcsystimed` OMP 1). Caffe2 판은 64.6 ms다. torchvision(v1.5)은 stride 2가 1x1이 아니라 3x3 conv에 있어 conv 모양이 다르고, `sched_search.py`로 23개 모양을 다시 찾았지만 거의 그대로였다(conv 합 61.74 → 61.68 ms, `SCHED_SUFFIX=_pcsystimed`). 차이는 모델 구조에서 온다.
 
-**아직 기본이 아닌 것.** 저장소의 bundle(§6)은 그대로다. 위 설정으로 바꾸려면 그 Dir의 보드 실행 파일을 모두 다시 빌드해야 한다(bundle `.cpp`의 shift 값이 바뀐다).
+**어디에 기본으로 쓰나.**
+- DPU 비교 dir(`Resnet50TvTest`, `MobileNetV2TfTest`, `MobileNetV2ValTest`; [evta_dpu_compare.md](evta_dpu_compare.md))은 KL + MSE k = 2가 기본이다(`gen_calib_bundle.sh`의 `DEF`).
+- 기존 dir(`Resnet18Test`, `Resnet50Test`, `MobileNetV2Test`, `Vgg16Cifar10Test`; §6)의 bundle은 그대로다. 바꾸려면 그 Dir의 보드 실행 파일을 모두 다시 빌드해야 한다(bundle `.cpp`의 shift 값이 바뀐다).
+- 한 Dir에는 테스트 셋이 하나다(`vtabundles_xcmpl/imagenet_eval/eval_sets.txt`). 같은 모델을 다른 이미지로 재려면 Dir을 새로 만든다.
+
+## 8. 명령 모음
+
+```bash
+# PC, nestc-build 컨테이너 안 (vtabundles_xcmpl/): profile (2048칸) + bundle
+sudo -n docker exec -u ubuntu nestc-build bash -c "cd $PWD && BINS=2048 CALIB=n200_b2048 IMGDIR=/home/jerry/data/imagenetv2_png224 \
+    ./gen_calib_bundle.sh <Dir> imagenet_eval/calib_imagenetv2_200.txt [-quantization-calibration=KL -quantization-pow2-mse=2]"
+#   저장한 profile로:     ./gen_calib_bundle.sh <Dir> ../vta/bundles/<Dir>/calib/<profile>.yaml.gz [options]
+#   VGG16: IMGDIR=<cifar10 train png dir> ... imagenet_eval/calib_cifar10_train100.txt
+gzip -9c ../Debug2_remote/vta/bundles/<Dir>/<profile>.yaml > ../vta/bundles/<Dir>/calib/<profile>.yaml.gz   # git에 남길 때
+
+# PC: 보드용 파일 모으기, cross build (build_sys: EVTA 1개 systolic vtalib, 실행 파일 끝 _sys)
+python3 collect_hw_bundles.py <Dir>          # hw/script/run_all.sh를 새로 쓴다: 여러 Dir이면 빠진 줄이 없는지 git diff로 본다
+sudo -n docker exec -u ubuntu -w $PWD/build_sys nestc-build sh -c "make -j16 <target>"
+rsync -a hw/<Dir> xilinx@192.168.20.2:<board vtabundles_xcmpl>/hw/
+
+# 보드 (vtabundles_xcmpl/): 데이터셋 top-1. 이미지는 Dir의 셋(eval_sets.txt), n 기본은 전체
+sudo /bin/sh -c "imagenet_eval/eval_board.sh hw/<Dir>/<exe>_sys <name> [n]"   # -> imagenet_eval/result/<name>.log 마지막 EVAL 줄
+#   빠른 비교: 평가와 겹치지 않는 1,000장 (~xilinx/JO/hold1000.txt)
+sudo /bin/sh -c "hw/script/load_bit.sh vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_alux3_400mhz_rq.bin; cd hw/<Dir> && \
+    OMP_NUM_THREADS=4 EVAL_LIST=/home/xilinx/JO/hold1000.txt EVAL_QUIET=1 ./<exe>_sys | tail -1"
+
+# PC: float 기준 (bundle main과 같은 입력)
+~/.venvs/onnxeval/bin/python imagenet_eval/float_ref_cnn.py <resnet18|resnet50|vgg16|mobilenetv2> <model.onnx> <png dir> [n] [out]
+
+# PC: Glow Interpreter의 같은 양자화 (보드 없이 몇 분)
+Debug2_remote/glow/bin/image-classifier <PNGs> -m=<model.onnx> -model-input-name=<in> -backend=Interpreter \
+    -load-profile=<yaml> -quantization-schema=symmetric_with_power2_scale [-quantization-calibration=KL -quantization-pow2-mse=2] <image 옵션>
+```
+
+- `<image 옵션>`은 `gen_calib_bundle.sh`의 `PF`(Dir마다 layout, 값 범위, 채널 순서)다.
+- 시간은 `sudo hw/script/run_prof.sh -s _pcsystimed -n 25 <Dir>`로 잰다([evta_user_manual.md](evta_user_manual.md)).

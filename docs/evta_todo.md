@@ -21,10 +21,10 @@ CNN은 CPU에 남은 일이 거의 없다. 더 빨라지려면 EVTA 자체(sched
 | 1 | 이 표를 문서로 | 끝 (이 문서) |
 | 2 | DeiT: softmax를 Q K^T의 epilogue로, 2장 엇갈려 처리(EVTA와 CPU 겹치기) | 할 일. 11-22에 한때 연구 과제로 미뤘다가 다시 하기로 함 (`deit_optimization.md` §6.11, §6.1) |
 | 3 | HW H5: 명령 링 + interrupt | 할 일. 상한은 쟀다 (`unified_runtime_plan.md` §4.5: DeiT 9.9 ms 중 실제 이득 약 1 ms) |
-| 5 | Resnet50 / Resnet18 / MobileNetV2 calibration을 그림 여러 장으로 | 끝 (11-22, `evta_accuracy.md` §6): 첫 conv 반올림 버그도 찾음. Resnet50 44.66 → 52.92 %, Resnet18 52.61 → 55.67 %, MobileNetV2 56.19 → 56.27 %. symmetric scale은 남은 후보 |
-| 6 | VGG16 CIFAR-10 입력 정규화 | 끝 (11-22): 29.27 → 86.41 % (float 86.58 %), 시간 같음 |
-| 4 | AMD DPU와 비교: ResNet50, MobileNetV2 | 끝 (11-22, 아래 §5): 가동률은 같거나 높고, 절대 성능은 DPU가 4–5배다. calibration을 바꿔 정확도 손실도 DPU 수준이다(`evta_accuracy.md` §7). multi4는 ALU 확장 판으로 다시 잰다 |
-| 7 | multi4 bitstream 다시 만들기 (ALU 확장 3단계까지) | 배치 / 배선 중 (11-22). 처음 판은 LUT 287,909개가 필요했다(칩 271,752개; compute 하나 49.5k LUT). ALU에 경로가 둘 있었다: immediate 연산만 하는 II 1 루프와, 확장 연산을 모두 하는 II 1 slot 루프다. slot 루프도 immediate 연산을 한 slot에 하므로 앞 루프를 뺐다(`vta.cc` `VTA_ALUX_NO_IMM_LOOP`, `make ALUX_NOIMM=1`, `_ni`). compute 49.5k → 38.5k, 전체 243,945개(89.3 %), BRAM 580. C 시뮬레이션 무작위 시험 모두 통과. SmartConnect를 AXI Interconnect로 바꾸는 것(`VTA_DATA_IC=1`)은 LUT 245.1k, BRAM 742로 더 나빠 쓰지 않는다 |
+| 5 | Resnet50 / Resnet18 / MobileNetV2 calibration을 그림 여러 장으로 | 끝 (11-22, [evta_calib_images.md](evta_calib_images.md)): 첫 conv 반올림 버그도 찾음. Resnet50 44.66 → 52.92 %, Resnet18 52.61 → 55.67 %, MobileNetV2 56.19 → 56.27 %. symmetric scale은 남은 후보 |
+| 6 | VGG16 CIFAR-10 입력 정규화 | 끝 (11-22, [evta_vgg16_input_norm.md](evta_vgg16_input_norm.md)): 29.27 → 86.41 % (float 86.58 %), 시간 같음 |
+| 4 | AMD DPU와 비교: ResNet50, MobileNetV2 | 끝 (11-22, 아래 §5, [evta_dpu_compare.md](evta_dpu_compare.md)): 가동률은 같거나 높고, 절대 성능은 DPU가 4–5배다. calibration을 바꿔 정확도 손실도 DPU 수준이다(`evta_accuracy.md` §7). multi4는 ALU 확장 판으로 다시 잰다 |
+| 7 | multi4 bitstream 다시 만들기 (ALU 확장 3단계까지) | 배치 / 배선 중 (11-22, [evta_multi4_alux3.md](evta_multi4_alux3.md)). 처음 판은 LUT 287,909개가 필요했다(칩 271,752개; compute 하나 49.5k LUT). ALU에 경로가 둘 있었다: immediate 연산만 하는 II 1 루프와, 확장 연산을 모두 하는 II 1 slot 루프다. slot 루프도 immediate 연산을 한 slot에 하므로 앞 루프를 뺐다(`vta.cc` `VTA_ALUX_NO_IMM_LOOP`, `make ALUX_NOIMM=1`, `_ni`). compute 49.5k → 38.5k, 전체 243,945개(89.3 %), BRAM 580. C 시뮬레이션 무작위 시험 모두 통과. SmartConnect를 AXI Interconnect로 바꾸는 것(`VTA_DATA_IC=1`)은 LUT 245.1k, BRAM 742로 더 나빠 쓰지 않는다 |
 
 ## 3. SW에 남은 일
 
@@ -103,16 +103,16 @@ host PC 냉각이 고쳐질 때까지 그 PC에서는 모든 코어를 쓰는 �
 |---|---|---|---|---|---|
 | ResNet50 (DPU 8.2 GOP, 우리 8.18) | DPU S (B4096 1개) | 79.9 | 655 | 57 % | ImageNet val 76.1 → 76.0 % (−0.1 %p) |
 | | DPU T (B4096 3개) | 189.7 | 1,556 | 45 % | |
-| | 우리 EVTA 1개 `Resnet50TvTest` (`_alux3`, 68.4 ms) | 14.6 | 119.6 | 58 % | ImageNet val: 측정 대기 (ImageNetV2 63.34 → 62.53 %, −0.81 %p) |
-| | 우리 multi4 `MultiEVTAResnet50TvTest` (`_rq`, 4장 동시, 75.7 ms) | 52.8 | 432.1 | 53 % | 같은 bundle |
+| | 우리 EVTA 1개 `Resnet50TvTest` (`_alux3`, 68.4 ms) | 14.6 | 119.6 | 58 % | ImageNet val 76.15 → 75.29 % (−0.86 %p) |
+| | 우리 multi4 `MultiEVTAResnet50TvTest` (`_rq`, 4장 동시, 75.7 ms) | 52.9 | 432 | 53 % | 같은 bundle |
 | MobileNetV2 (DPU 0.602 GOP, 우리 0.658) | DPU S | 270 | 163 | 14 % | ImageNet val 70.13 → 67.67 % (−2.46 %p) |
 | | DPU T | 764 | 460 | 13 % | |
-| | 우리 EVTA 1개 `MobileNetV2TfTest` (`_alux3`, 14.39 ms) | 69.5 | 45.7 | 22 % | ImageNet val: 측정 대기 (ImageNetV2 hold1000 61.6 → 59.9 %, −1.7 %p) |
+| | 우리 EVTA 1개 `MobileNetV2TfTest` (`_alux3`, 14.39 ms) | 69.5 | 45.7 | 22 % | ImageNet val 71.80 → 68.43 % (−3.37 %p) |
 | | 우리 multi4 `MultiEVTAMobileNetV2TfTest` (`_rq`, 4장 동시, 17.2 ms) | 233 | 153 | 19 % | 같은 bundle |
-| | (참고) 우리 QAT 모델 `MobileNetV2ValTest` (`_alux3`, 14.43 ms) | 69.3 | 45.6 | 22 % | ImageNet val: 측정 대기 (ImageNetV2 58.71 → 56.66 %) |
+| | (참고) 우리 QAT 모델 `MobileNetV2ValTest` (`_alux3`, 14.43 ms) | 69.3 | 45.6 | 22 % | ImageNet val 70.91 → 69.24 % (−1.67 %p) |
 
 **DPU 비교용 bundle (11-22, 두 번째).**
-- 같은 모델, 같은 이미지로 잰다. DPU 수치는 ImageNet val(ILSVRC2012 검증 셋 50,000장)이므로 우리도 그 셋으로 잰다. ImageNetV2는 같은 모델에서도 약 11 %p 낮게 나와 직접 비교할 수 없다.
+- 같은 모델, 같은 이미지로 잰다. DPU 수치는 ImageNet val(ILSVRC2012 검증 셋 50,000장)이므로 우리도 그 셋으로 잰다. ImageNetV2는 같은 모델에서도 12–13 %p 낮게 나와 직접 비교할 수 없다. 측정, 모델, calibration, 결과 전부: [evta_dpu_compare.md](evta_dpu_compare.md).
 - dir 규칙: 새로 받은 모델과, 같은 모델이라도 테스트 셋이 다르면 dir을 따로 둔다. 한 dir의 정확도는 늘 같은 이미지로 잰 값이다(`vtabundles_xcmpl/imagenet_eval/eval_sets.txt`, `eval_board.sh`가 실행 파일의 dir로 셋을 고른다).
   - `Resnet50TvTest`: torchvision ResNet-50(DPU `pt_resnet50`의 float 모델), ImageNet val, torchvision 전처리.
   - `MobileNetV2TfTest`: TF-slim `mobilenet_v2_1.0_224` float(DPU `tf_mobilenetv2_1.0`의 float 모델), ImageNet val, TF-slim 전처리. DPU 비교의 기본이다.

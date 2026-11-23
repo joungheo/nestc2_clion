@@ -72,6 +72,11 @@ if {$queue_rs} { puts "command queue register slices" }
 #### JO added (2026-11-22): VTA_DATA_IC=1 -> AXI Interconnect instead of SmartConnect for the data masters (smc_<i>, below)
 set data_ic [expr {[info exists ::env(VTA_DATA_IC)] && $::env(VTA_DATA_IC) eq "1"}]
 if {$data_ic} { puts "data masters through axi_interconnect" }
+#### JO added (2026-11-23): VTA_DATA_XBAR=1 -> smc_<i> is a hierarchy of an axi_crossbar (SAMD, 128 bit) with read-only width
+#### converters for fetch (256 -> 128) and compute uop (64 -> 128) and one axi_clock_converter before M00 (HP clock), instead of
+#### the SmartConnect (10.2k LUT per EVTA): multi4 alux3 _ni routed with congestion level 6 at 89 % LUT (docs/evta_multi4_alux3.md)
+set data_xbar [expr {[info exists ::env(VTA_DATA_XBAR)] && $::env(VTA_DATA_XBAR) eq "1"}]
+if {$data_xbar} { puts "data masters through axi_crossbar + width / clock converters" }
 set hp_clk  [expr {$hp_split ? "hp_clk" : "evta_clk"}]
 set hp_rstn [expr {$hp_split ? "hp_rstn" : "evta_rstn"}]
 if {$hp_split} { puts "HP ports on their own clock, $hp_freq MHz" }
@@ -347,7 +352,50 @@ proc add_evta {i} {
   #### SmartConnect, meant to save LUTs (11.5k per EVTA) for multi4 with the ALU extension. Same cell name, so the pblocks, the
   #### reset multicycle list and the Y219 flow are unchanged. Tried 2026-11-22 (multi4 alux3 _ni): LUT 243.9k -> 245.1k,
   #### BRAM 580 -> 742 (its clock converter / FIFOs); not used.
-  if {$::data_ic} {
+  if {$::data_xbar} {
+    #### the hierarchy keeps the SmartConnect's pin names (S0<k>_AXI, M00_AXI, aclk, aclk1, aresetn) + aresetn1 (HP reset)
+    set smc [ create_bd_cell -type hier smc_$i ]
+    for {set k 0} {$k < 5} {incr k} {
+      create_bd_intf_pin -mode Slave -vlnv xilinx.com:interface:aximm_rtl:1.0 smc_$i/S0${k}_AXI
+    }
+    create_bd_intf_pin -mode Master -vlnv xilinx.com:interface:aximm_rtl:1.0 smc_$i/M00_AXI
+    create_bd_pin -dir I -type clk smc_$i/aclk
+    create_bd_pin -dir I -type rst smc_$i/aresetn
+    create_bd_pin -dir I -type clk smc_$i/aclk1
+    create_bd_pin -dir I -type rst smc_$i/aresetn1
+    set xb [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_crossbar:2.1 smc_$i/xbar ]
+    set_property -dict [ list CONFIG.NUM_SI {5} CONFIG.NUM_MI {1} CONFIG.STRATEGY {2} CONFIG.DATA_WIDTH {128} \
+      CONFIG.M00_READ_ISSUING {8} CONFIG.M00_WRITE_ISSUING {8} ] $xb
+    for {set k 0} {$k < 5} {incr k} {
+      set_property -dict [ list CONFIG.S0${k}_READ_ACCEPTANCE {4} CONFIG.S0${k}_WRITE_ACCEPTANCE {4} ] $xb
+    }
+    #### S00 = fetch (256 bit), S02 = compute uop (64 bit): read-only width converters; S01 / S03 / S04 are 128 bit
+    foreach {k w} {0 256 2 64} {
+      set dw [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_dwidth_converter:2.1 smc_$i/dw$k ]
+      set_property -dict [ list CONFIG.SI_DATA_WIDTH $w CONFIG.MI_DATA_WIDTH {128} CONFIG.READ_WRITE_MODE {READ_ONLY} ] $dw
+      connect_bd_intf_net [get_bd_intf_pins smc_$i/S0${k}_AXI] [get_bd_intf_pins smc_$i/dw$k/S_AXI]
+      connect_bd_intf_net [get_bd_intf_pins smc_$i/dw$k/M_AXI] [get_bd_intf_pins smc_$i/xbar/S0${k}_AXI]
+      connect_bd_net [get_bd_pins smc_$i/aclk] [get_bd_pins smc_$i/dw$k/s_axi_aclk]
+      connect_bd_net [get_bd_pins smc_$i/aresetn] [get_bd_pins smc_$i/dw$k/s_axi_aresetn]
+    }
+    foreach k {1 3 4} {
+      connect_bd_intf_net [get_bd_intf_pins smc_$i/S0${k}_AXI] [get_bd_intf_pins smc_$i/xbar/S0${k}_AXI]
+    }
+    connect_bd_net [get_bd_pins smc_$i/aclk] [get_bd_pins smc_$i/xbar/aclk]
+    connect_bd_net [get_bd_pins smc_$i/aresetn] [get_bd_pins smc_$i/xbar/aresetn]
+    if {$hp_split} {
+      set cc [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_clock_converter:2.1 smc_$i/cc ]
+      set_property -dict [ list CONFIG.ACLK_ASYNC {1} ] $cc
+      connect_bd_intf_net [get_bd_intf_pins smc_$i/xbar/M00_AXI] [get_bd_intf_pins smc_$i/cc/S_AXI]
+      connect_bd_intf_net [get_bd_intf_pins smc_$i/cc/M_AXI] [get_bd_intf_pins smc_$i/M00_AXI]
+      connect_bd_net [get_bd_pins smc_$i/aclk] [get_bd_pins smc_$i/cc/s_axi_aclk]
+      connect_bd_net [get_bd_pins smc_$i/aresetn] [get_bd_pins smc_$i/cc/s_axi_aresetn]
+      connect_bd_net [get_bd_pins smc_$i/aclk1] [get_bd_pins smc_$i/cc/m_axi_aclk]
+      connect_bd_net [get_bd_pins smc_$i/aresetn1] [get_bd_pins smc_$i/cc/m_axi_aresetn]
+    } else {
+      connect_bd_intf_net [get_bd_intf_pins smc_$i/xbar/M00_AXI] [get_bd_intf_pins smc_$i/M00_AXI]
+    }
+  } elseif {$::data_ic} {
     set smc [ create_bd_cell -type ip -vlnv xilinx.com:ip:axi_interconnect:2.1 smc_$i ]
     set_property -dict [ list CONFIG.NUM_MI {1} CONFIG.NUM_SI {5} CONFIG.STRATEGY {2} ] $smc
   } else {
@@ -423,6 +471,8 @@ proc add_evta {i} {
   connect_bd_net -net evta_clk [get_bd_pins smc_$i/aclk]
   if {$hp_split} { connect_bd_net -net hp_clk [get_bd_pins smc_$i/aclk1] }
   connect_bd_net -net evta_rstn_$i [get_bd_pins smc_$i/aresetn]
+  #### JO added (2026-11-23): VTA_DATA_XBAR: the clock converter's master side reset (HP domain)
+  if {$::data_xbar && $hp_split} { connect_bd_net -net $hp_rstn [get_bd_pins smc_$i/aresetn1] }
   }
   connect_bd_net -net $hp_clk [get_bd_pins processing_system/saxihp${i}_fpd_aclk]
 

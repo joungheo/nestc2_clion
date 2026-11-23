@@ -6,13 +6,16 @@
 ####       crop 224 (transforms.CenterCrop rounding)
 ####   tf: TF-slim inception_preprocessing for eval (MobileNetV2TfTest / MobileNetV2ValTest): tf.image.central_crop(0.875) (offset
 ####       h // 16, w // 16), then tf.image.resize_bilinear to 224 x 224 (TF 1 legacy: src = dst * in / out, no antialiasing)
+#### Input: the HF ILSVRC/imagenet-1k validation parquet files (data/validation-*.parquet, columns image {bytes, path} and label =
+#### the usual class index; hf download ILSVRC/imagenet-1k --repo-type dataset --include 'data/validation-*.parquet', login and the
+#### dataset's terms needed) when the dir has *.parquet, else JPEG files:
 #### Class: the synset (n########) in the file name (HF ILSVRC/imagenet-1k val_images: ILSVRC2012_val_00000001_n01751748.JPEG)
 #### or in the parent dir name (val/<synset>/*.JPEG); class index = position in the sorted 1000 synsets (the usual index, as
 #### torchvision / TF-slim - 1 / ImageNetV2's folders).
 #### Writes <out>/<class>/<name>.png and <out>/list.txt ("<path relative to out> <class>", classes interleaved as prep_imagenetv2.py
 #### so that any prefix covers all classes).
-#### usage: prep_imagenet_val.py <tv|tf> <dir with the val JPEGs, searched recursively> <out dir>
-import os, re, sys
+#### usage: prep_imagenet_val.py <tv|tf> <dir with the val parquet files or JPEGs, searched recursively> <out dir>
+import io, os, re, sys
 from multiprocessing import Pool
 import numpy as np
 from PIL import Image
@@ -36,10 +39,10 @@ def tf_resize_bilinear(a, oh, ow):
 
 
 def one(job):
-    src, cls = job
+    src, cls = job[:2]
     dst = os.path.join(OUT, str(cls), os.path.splitext(os.path.basename(src))[0] + '.png')
     if not os.path.exists(dst):
-        im = Image.open(src).convert('RGB')
+        im = Image.open(io.BytesIO(job[2]) if len(job) > 2 else src).convert('RGB')
         w, h = im.size
         if MODE == 'tv':
             if w <= h:
@@ -60,7 +63,24 @@ def one(job):
     return '%d/%s %d' % (cls, os.path.basename(dst), cls)
 
 
+def parquet_jobs(pqs):
+    import pyarrow.parquet as pq
+    for f in pqs:
+        t = pq.read_table(f, columns=['image', 'label']).to_pylist()
+        for r in t:
+            yield (r['image']['path'], r['label'], r['image']['bytes'])
+
+
 if __name__ == '__main__':
+    pqs = sorted(os.path.join(r, n) for r, _, ns in os.walk(SRC) for n in ns if n.endswith('.parquet'))
+    if pqs:
+        for i in range(1000):
+            os.makedirs(os.path.join(OUT, str(i)), exist_ok=True)
+        lines = []
+        with Pool() as p:
+            for f in pqs:
+                lines += p.map(one, list(parquet_jobs([f])), chunksize=32)
+                print(f, len(lines), flush=True)
     files = []
     for root, _, names in os.walk(SRC):
         for n in names:
@@ -68,14 +88,15 @@ if __name__ == '__main__':
                 m = SYN.search(n) or SYN.search(os.path.basename(root))
                 if m:
                     files.append((os.path.join(root, n), m.group(1)))
-    syns = sorted({s for _, s in files})
-    assert len(syns) == 1000, '%d synsets found' % len(syns)
-    idx = {s: i for i, s in enumerate(syns)}
-    for i in range(1000):
-        os.makedirs(os.path.join(OUT, str(i)), exist_ok=True)
-    jobs = sorted((f, idx[s]) for f, s in files)
-    with Pool() as p:
-        lines = p.map(one, jobs, chunksize=64)
+    if not pqs:
+        syns = sorted({s for _, s in files})
+        assert len(syns) == 1000, '%d synsets found' % len(syns)
+        idx = {s: i for i, s in enumerate(syns)}
+        for i in range(1000):
+            os.makedirs(os.path.join(OUT, str(i)), exist_ok=True)
+        jobs = sorted((f, idx[s]) for f, s in files)
+        with Pool() as p:
+            lines = p.map(one, jobs, chunksize=64)
     by = {}
     for ln in lines:
         by.setdefault(ln.split()[1], []).append(ln)

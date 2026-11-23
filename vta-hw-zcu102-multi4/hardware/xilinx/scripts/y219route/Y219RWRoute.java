@@ -133,7 +133,10 @@ public class Y219RWRoute {
       net.setPIPs(kept);
     }
     System.out.println("nets with a PIP in row " + row + ": " + nets + ", sinks to route: " + pins.size());
-    RWRouteConfig c = new RWRouteConfig(new String[0]);
+    //#### JO changed (2026-11-23): -Drwargs="--maxIterations 300 --enlargeBoundingBox ..." passes RWRoute options
+    //RWRouteConfig c = new RWRouteConfig(new String[0]);
+    String ra = System.getProperty("rwargs", "").trim();
+    RWRouteConfig c = new RWRouteConfig(ra.isEmpty() ? new String[0] : ra.split("\\s+"));
     // -Dtd=0: wirelength-driven (RWRoute 2025.2 throws in printRoutingStatistics when the nets to route have no timed path)
     c.setTimingDriven(!"0".equals(System.getProperty("td")));
     c.setVerbose(true);
