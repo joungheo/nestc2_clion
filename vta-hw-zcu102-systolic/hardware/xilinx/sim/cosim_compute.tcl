@@ -8,7 +8,11 @@ set src_dir "$root_dir/hardware/xilinx/src"
 set sim_dir "$root_dir/hardware/xilinx/sim"
 set test_dir "$root_dir/tests/hardware/common"
 source $vta_config
-set cflags "$CFLAGS -DVTA_SYSTOLIC -DVTA_ALUX"
+#set cflags "$CFLAGS -DVTA_SYSTOLIC -DVTA_ALUX"
+#### JO changed (2026-11-23): VTA_COSIM_DEFS (run_cosim.sh DEFS=...) instead of -DVTA_ALUX, e.g. "-DVTA_ALU_MUL -DVTA_ALU_BC"
+set defs "-DVTA_ALUX"
+if {[info exists ::env(VTA_COSIM_DEFS)] && $::env(VTA_COSIM_DEFS) ne ""} { set defs $::env(VTA_COSIM_DEFS) }
+set cflags "$CFLAGS -DVTA_SYSTOLIC $defs"
 
 open_project -reset vta_cosim_compute
 set_top compute

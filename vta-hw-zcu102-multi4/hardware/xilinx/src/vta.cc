@@ -722,7 +722,8 @@ void alu(
 #pragma HLS ARRAY_PARTITION variable = s_reg complete dim = 0
     ALU_IMM_SLOT: for (int t = 0; t < total; t++) {
 #pragma HLS PIPELINE II = 1
-#pragma HLS DEPENDENCE variable = s_reg inter false
+      //#### no DEPENDENCE inter false on s_reg: with it HLS read s_reg two stages after the fetch's write (after the MUL's
+      //#### stages), so the last 2 steps of a row took the next row's src (board: MobileNetV2 depthwise; cosim BC cases)
       uop_T uop = alu_reg(uop_mem[upc]);
       const bool fetch = first;
       acc_idx_T a = alu_reg((acc_idx_T) (fetch ? (acc_idx_T) (uop.range(VTA_UOP_ALU_1_1, VTA_UOP_ALU_1_0) + soff_out)
@@ -734,10 +735,10 @@ void alu(
       out_T o_tensor[VTA_BATCH][VTA_BLOCK_OUT];
       for (int i = 0; i < VTA_BATCH; i++) {
         for (int b = 0; b < VTA_BLOCK_OUT; b++) {
-          const acc_T x = rd_tensor[i][b];
+          const acc_T x = alu_reg(rd_tensor[i][b]);
           if (fetch)
             s_reg[i][b] = x;
-          const acc_T y = bcv ? s_reg[i][b] : (acc_T) insn.imm;
+          const acc_T y = alu_reg(bcv ? s_reg[i][b] : (acc_T) insn.imm);
 #if defined(VTA_ALU_MUL) && !defined(VTA_ALUX)
             const acc_T p = (acc_T) (x * imm_m);
             alu_lane(insn.alu_opcode, x, y, dst_tensor[i][b], o_tensor[i][b]);

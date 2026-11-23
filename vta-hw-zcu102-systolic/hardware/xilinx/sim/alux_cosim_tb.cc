@@ -6,7 +6,8 @@
  * contents carry over from call to call; uop_mem and the ALU tables are static inside compute and carry over too.
  * Run: sim/run_cosim.sh [seeds] [ninsn]  (vivado_hls in the docker container vivado2020-build).
  */
-#if defined(VTA_ALUX) && defined(ALUX_COSIM)
+//#### JO changed (2026-11-23): also for VTA_ALU_MUL ("_amul", "_amul_bc"; run_cosim.sh DEFS=...)
+#if (defined(VTA_ALUX) || defined(VTA_ALU_MUL)) && defined(ALUX_COSIM)
 
 #include <stdio.h>
 #include <stdlib.h>

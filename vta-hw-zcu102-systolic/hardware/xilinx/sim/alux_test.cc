@@ -222,7 +222,10 @@ int alux_test(unsigned seed, int ninsn) {
   //#### JO added (2026-11-14): VTA_ALUX_DIST=<d>,<d>,... instead of the random instructions: one vector ADD per d whose
   //#### steps add acc[100] to acc[0..d) four times over (uops dst j = 0..d-1, iter_in 4, factors 0), so every step reads the
   //#### entry written exactly d steps before. Store k + 2 is the one of the k-th d: it differs iff d is inside the window.
-  if (getenv("VTA_ALUX_DIST")) {
+  //#### JO changed (2026-11-23): an empty VTA_ALUX_DIST (run_cosim.sh always passes it) is not a directed run (it left
+  //#### 0 random instructions in every cosim since 2026-11-14)
+  //if (getenv("VTA_ALUX_DIST")) {
+  if (getenv("VTA_ALUX_DIST") && *getenv("VTA_ALUX_DIST")) {
     std::vector<int> ds;
     for (const char *c = getenv("VTA_ALUX_DIST"); *c;) {
       ds.push_back(atoi(c));
@@ -242,6 +245,33 @@ int alux_test(unsigned seed, int ninsn) {
       addAlu(p, a, us);
     }
     ninsn = 0;
+  }
+#endif
+#ifdef VTA_ALU_BC
+  //#### JO added (2026-11-23): broadcast vector ops shaped like the depthwise per-channel shift (iter_out rows of iter_in
+  //#### steps, one src entry per row): the board showed the last 2 steps of a row taking the next row's src
+  for (int k = 0; k < 6; k++) {
+    static const int ops[4] = {VTA_ALU_OPCODE_SHR, VTA_ALU_OPCODE_ADD, VTA_ALU_OPCODE_MIN, VTA_ALU_OPCODE_MAX};
+    VTAAluInsn a = blank(ops[k % 4]);
+    a.iter_out = 2 + rnd(p, 3);
+    a.iter_in = 8 + rnd(p, N / a.iter_out - 8);
+    a.dst_factor_out = a.iter_in;
+    a.dst_factor_in = 1;
+    a.src_factor_out = 1;
+    a.src_factor_in = 0;
+    if (rnd(p, 2)) {
+      a.rq_en = 1;
+      a.rq_round = rnd(p, 4);
+      a.rq_shift = rnd(p, 8);
+      a.rq_lo = -128;
+      a.rq_hi = 127;
+    }
+    // src rows inside [0, N) but not in the dst range of this instruction
+    const int len = a.iter_out * a.iter_in;
+    const int d0 = rnd(p, N - len + 1);
+    int s0 = d0 + len <= N - a.iter_out ? N - a.iter_out : 0;
+    if (s0 == 0 && d0 < a.iter_out) continue;
+    addAlu(p, a, {{d0, s0}});
   }
 #endif
   for (int k = 0; k < ninsn; k++) {

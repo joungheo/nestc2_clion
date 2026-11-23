@@ -187,7 +187,7 @@ NOIMM=1 vta-hw-zcu102-systolic/hardware/xilinx/sim/run_csim.sh    # imm 루프�
    - CNN / DeiT 시간을 `_alux3`와 견준다. 명령마다 파이프라인을 채우는 시간이 늘어나는 만큼 차이가 날 수 있다.
    - 같으면 EVTA 1개도 `_ni`를 기본으로 할지 정한다.
 3. `m4_build.sh`의 `I` 변수 문제.
-4. single `_amul_bc` 합성과 보드 시험, 그다음 multi4 `_amul_bc`(§6.3).
+4. multi4 `_amul_bc`(§6.3; single은 통과).
 5. multi4 `run_all.sh` `SYS_BIN`을 `_amul`로 바꿀지 정하기(§6.2).
 
 ## 6. 다른 길: CNN에 필요한 MUL만 넣은 `_amul` (2026-11-23, PC ubuntu)
@@ -246,3 +246,29 @@ MobileNetV2에 남은 0.26 ms는 depthwise의 채널별 vector SHR이다. `_alux
 - csim(`sim/run_csim.sh AMUL=1 BC=1`, broadcast 명령이 무작위 명령의 1/3): 20/20. `s_reg`에 +1을 넣은 고장판은 0/20. `AMUL=1`, `ALUX=1`도 20/20.
 - MobileNetV2 replay dump: broadcast vector 218개(모두 depthwise SHR, 784 단계 = II 2에서 1,568 사이클 → 785), 그 밖의 vector 4개. Resnet18 / 50 / VGG16은 0개.
   `SLOTS=34 hazard_dump.py` 0건.
+
+첫 합성(`..._sa_amul_bc_400mhz_rq.bin`, WNS +0.014 ns)은 **틀렸다**:
+- MobileNetV2 14.38 ms였지만 confidence 0.920 → 0.862, depthwise 7개 층 `EVTA_RES_CHECK` differ(golden 30과 다른 CNN은 같음).
+- 틀린 층은 바깥 반복이 여러 번인 명령(`iter 3–10 × 49 / 196`)이고, 처음 다른 곳이 각 줄의 마지막 2단계(entry 47–48, 194–195)였다.
+- 원인: `s_reg`에 `DEPENDENCE inter false`를 두어, HLS가 `s_reg` 읽기를 MUL 단계 뒤로(쓰기보다 2단계 늦게) 놓았다. 줄 끝 2단계가 다음 줄의 src를 썼다. csim은 순서대로 돌아서 못 본다.
+- cosim도 못 봤다: `run_cosim.sh`가 `VTA_ALUX_DIST`를 늘 빈 문자열로 넘겨 `alux_test.cc`가 직접 지정 모드로 들어가 무작위 명령을 0개 만들었다(2026-11-14부터 모든 cosim).
+
+고침:
+- `vta.cc`: pragma를 빼고 operand를 `alu_reg`로 잡았다(II 1, 깊이 15 → 17).
+- `sim/alux_test.cc`: 빈 `VTA_ALUX_DIST`는 직접 지정이 아니다. `VTA_ALU_BC`면 depthwise 모양 broadcast 명령 6개(2–4줄, 줄마다 다른 src, rq 일부)를 넣는다.
+- `sim/run_cosim.sh` `DEFS="-DVTA_ALU_MUL -DVTA_ALU_BC"`(`sim/cosim_compute.tcl` `VTA_COSIM_DEFS`, testbench도 `VTA_ALU_MUL`에서).
+- cosim: 고치기 전 3/3 FAIL(323–447 byte, 보드 증상 재현), 고친 뒤 3/3 PASS. `DEFS=-DVTA_ALU_MUL`, ALUX(seed마다 명령 54개, 모든 확장 연산)도 3/3 PASS.
+
+`..._sa_amul_bc_400mhz_rq2.bin` (Explore, WNS +0.036, WHS +0.010 ns, LUT 44,954; 보드 `bit/evta_single_amul_bc_400MHz_261124/`):
+golden 30 PASS, `EVTA_RES_CHECK` 6 모델 3,830건 0 differ, 분류 / confidence는 `_amul`과 같다. OMP 1, 25회 중앙값(ms):
+
+| bundle | `_amul` | `_amul_bc` (rq2) | `_alux3` |
+|---|---|---|---|
+| MobileNetV2Test | 14.65 | **14.40** | 14.43 |
+| MobileNetV2TfTest | 14.63 | **14.39** | 14.38 |
+| Resnet50Test | 64.45 | 64.48 | 64.45 |
+| Resnet50TvTest | 68.37 | 68.41 | 68.37 |
+| Resnet18Test | 22.69 | 22.69 | 22.72 |
+| Vgg16Cifar10Test | 6.75 | 6.75 | 6.75 |
+
+CNN 시간은 `_alux3`와 같고 LUT는 `_alux3`(69.8k)보다 25k 적다.
