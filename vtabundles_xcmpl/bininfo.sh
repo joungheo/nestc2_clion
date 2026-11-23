@@ -17,6 +17,8 @@ bin_info() {
   if [[ $b =~ _alux([0-9]*) ]]; then
     case ${BASH_REMATCH[1]:-1} in 1) f="$f ALU-ext1";; 2) f="$f ALU-ext2(+slot-II1,MADD..SHRR)";; *) f="$f ALU-ext${BASH_REMATCH[1]}(+slot-II1,MADD..SHRR,SQACC,LUTC)";; esac
   fi
+  #### JO added (2026-11-23): "_amul" = ALU MUL with an immediate only (HLS ALUMUL=1; avgpool on the EVTA, VTAHasAluMul)
+  case $b in *_amul*) f="$f ALU-MUL-imm";; esac
   case $b in *_prof*) f="$f AXI-perf-monitor";; esac
   case $b in *hp333*) f="$f HP-333MHz";; esac
   echo "  bitstream : /lib/firmware/$b"

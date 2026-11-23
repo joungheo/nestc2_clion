@@ -722,6 +722,28 @@ bool VTAHasAluExt3() {
   }
   return on;
 }
+//#### JO added (2026-11-23): ALU MUL with an immediate (operation 4, the imm loop): every "_alux" bitstream, and "_amul" (HLS
+//#### ALUMUL=1: that operation only, no other extended operation; multi4 for the CNNs), always in the simulator;
+//#### EVTA_ALUMUL=0|1 overrides. Only for paths that need nothing else (avgpool_evta)
+bool VTAHasAluMul() {
+  static int on = -1;
+  if (on < 0) {
+    const char *e = getenv("EVTA_ALUMUL");
+    if (e && *e) on = atoi(e) > 0;
+    else {
+#if (NESTC_USE_VTASIM)
+      on = 1;
+#else
+      char name[256] = {0};
+      FILE *f = fopen("/tmp/evta_bitstream", "r");
+      on = f && fgets(name, sizeof(name), f) && strstr(name, "_amul") && strncmp(name, "FAILED", 6);
+      if (f) fclose(f);
+#endif
+      on = on || VTAHasAluExt();
+    }
+  }
+  return on;
+}
 static void *outLutBuffer(const int8_t *T) {
   static std::mutex m;
   static std::map<const int8_t *, std::pair<void *, std::vector<int8_t>>> bufs;
@@ -6961,7 +6983,8 @@ int avgpool_evta_run(void *input, void *output, int NB, int HW, const AvgMulPlan
 int avgpool_evta(void *input, float inputScale, int8_t *output, float outputScale, int NB, int H, int W, int KH, int KW,
                  int pad_size, int stride_size, void *vtaCmdH, uint32_t idEVTA) {
   static const int on = getenv("EVTA_AVGPOOL") ? atoi(getenv("EVTA_AVGPOOL")) : 1;
-  if (!on || !VTAHasAluExt() || !evtaRequant() || KH != H || KW != W || pad_size || NB < 1)
+  //#### JO changed (2026-11-23): VTAHasAluMul (was VTAHasAluExt): ADD vectors and MUL imm with rq, also on "_amul"
+  if (!on || !VTAHasAluMul() || !evtaRequant() || KH != H || KW != W || pad_size || NB < 1)
     return 0;
   const int HW = H * W;
   const AvgMulPlan mp = avgMulPlan(inputScale, outputScale, HW);

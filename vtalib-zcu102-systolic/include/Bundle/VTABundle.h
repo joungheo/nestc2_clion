@@ -201,6 +201,7 @@ void VTASetOutputLut(const int8_t *T);
 bool VTAHasAluExt();
 bool VTAHasAluExt2();   // #### JO (2026-11-15): + MADD / MULSHR / SHRV / SHRR (_alux2)
 bool VTAHasAluExt3();   // #### JO (2026-11-15): + SQACC / LUTC (_alux3)
+bool VTAHasAluMul();    // #### JO (2026-11-23): MUL with an immediate only (_amul, or any _alux)
 //#### JO added (2026-11-14): conv epilogue (docs/evta_alux_epilogue.md): steps applied in order to every output value v of the
 //#### next convolution_wo_tr calls, after the conv's own requantize (v starts as its int8 output); VTASetConvEpilogue(nullptr)
 //#### turns it off. The EVTA does what it can on the loaded bitstream (ALU / GEMM passes per tile before the STORE), the rest

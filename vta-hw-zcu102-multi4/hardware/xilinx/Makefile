@@ -66,11 +66,21 @@ BUILD_TAG ?=
 ALUX ?= 0
 #### JO added (2026-11-22): ALUX_NOIMM=1 -> vta.cc VTA_ALUX_NO_IMM_LOOP (imm ops in the slot loop only; fewer LUTs), _ni in the IP name
 ALUX_NOIMM ?= 0
-IP_NAME := $(CONF)_$(NUM_EVTA)evta$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(SYSTOLIC)),_sa)$(if $(filter 1,$(ALUX)),_alux)$(if $(filter 1,$(ALUX_NOIMM)),_ni)
+#### JO added (2026-11-23): ALUMUL=1 -> vta.cc VTA_ALU_MUL: only ALU MUL with an immediate (operation 4) in the imm loop,
+#### no other extended operation (the one the CNN bundles use; multi4 fits); _amul in the IP name, which vtalib checks
+ALUMUL ?= 0
+ifeq ($(ALUMUL)$(ALUX),11)
+$(error ALUMUL=1 with ALUX=1: ALUX already has MUL)
+endif
+ifeq ($(ALUMUL)$(SYSTOLIC),10)
+$(error ALUMUL=1 needs SYSTOLIC=1 (the imm loop of the systolic compute))
+endif
+IP_NAME := $(CONF)_$(NUM_EVTA)evta$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(SYSTOLIC)),_sa)$(if $(filter 1,$(ALUX)),_alux)$(if $(filter 1,$(ALUX_NOIMM)),_ni)$(if $(filter 1,$(ALUMUL)),_amul)
 BUILD_NAME := $(IP_NAME)$(if $(FREQ),_$(FREQ)mhz)$(if $(BUILD_TAG),_$(BUILD_TAG))
 export VTA_SYSTOLIC := $(SYSTOLIC)
 export VTA_ALUX := $(ALUX)
 export VTA_ALUX_NOIMM := $(ALUX_NOIMM)
+export VTA_ALU_MUL := $(ALUMUL)
 export VTA_IMPL_STRATEGY := $(IMPL_STRATEGY)
 #### JO added (2026-11-04): IMPL_TO_STEP=opt_design stops impl_1 after opt_design (multi4 Y219 flow input)
 IMPL_TO_STEP ?=

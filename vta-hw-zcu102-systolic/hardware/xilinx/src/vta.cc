@@ -697,6 +697,13 @@ void alu(
 #else
   if (insn.use_imm) {
 #endif
+#if defined(VTA_ALU_MUL) && !defined(VTA_ALUX)
+    //#### JO added (2026-11-23, multi4 CNNs): VTA_ALU_MUL (Makefile ALUMUL=1, "_amul") adds only MUL with an immediate
+    //#### (operation 4, VTA_ALUX_MUL: dst = dst * (int16) imm, low 32 bits) to this loop, the one extended operation the
+    //#### CNN bundles use (avgpool_evta's / n with rq); no table, no slot loop, no other extended operation
+    const bool imm_mul = insn.alu_op_ext == 1 && insn.alu_opcode == 0 && insn.alu_op_ext2 == 0;
+    const ap_int<16> imm_m = (ap_int<16>) ((acc_T) insn.imm).range(15, 0);
+#endif
     acc_idx_T imm_dst_offset_out = 0;
     ALU_IMM_OUT_LOOP: for (int it_out = 0; it_out < insn.iter_out; it_out++) {
       acc_idx_T dst_offset_in = imm_dst_offset_out;
@@ -712,7 +719,17 @@ void alu(
           out_T o_tensor[VTA_BATCH][VTA_BLOCK_OUT];
           for (int i = 0; i < VTA_BATCH; i++) {
             for (int b = 0; b < VTA_BLOCK_OUT; b++) {
+#if defined(VTA_ALU_MUL) && !defined(VTA_ALUX)
+              const acc_T x = dst_tensor[i][b];
+              const acc_T p = (acc_T) (x * imm_m);
+              alu_lane(insn.alu_opcode, x, (acc_T) insn.imm, dst_tensor[i][b], o_tensor[i][b]);
+              if (imm_mul) {
+                dst_tensor[i][b] = p;
+                o_tensor[i][b] = (out_T) p.range(VTA_OUT_WIDTH - 1, 0);
+              }
+#else
               alu_lane(insn.alu_opcode, dst_tensor[i][b], (acc_T) insn.imm, dst_tensor[i][b], o_tensor[i][b]);
+#endif
               //#### JO added (2026-11-04): requantize of the out write
               o_tensor[i][b] = requant(dst_tensor[i][b], o_tensor[i][b], insn.rq_en, insn.rq_round, insn.rq_shift,
                                        (ap_int<8>) insn.rq_lo, (ap_int<8>) insn.rq_hi);

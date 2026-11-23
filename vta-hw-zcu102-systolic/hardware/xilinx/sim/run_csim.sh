@@ -2,7 +2,7 @@
 # #### JO added (2026-11-11, ALU extension, docs/evta_isa_ext.md 8.8): the HLS C simulation compiled with g++ in the docker
 # container vivado2020-build, without vivado_hls (make ip CSIM=1 runs the same testbench but then synthesizes all four
 # stages). One core, seconds to a few minutes. Usage (on the host):
-#   sim/run_csim.sh [ALUX=1|0] [SYSTOLIC=1|0] [NOIMM=1]      sim/vta_test.cc (with sim/alux_test.cc); VTA_ALUX_SEEDS = random
+#   sim/run_csim.sh [ALUX=1|0] [SYSTOLIC=1|0] [NOIMM=1] [AMUL=1]      sim/vta_test.cc (with sim/alux_test.cc); VTA_ALUX_SEEDS = random
 #                                                   programs (default 20)
 #   sim/run_csim.sh PROG=1 [rows] [seed]            the integer layer norm / softmax ALU programs of
 #                                                   vtalib-zcu102-systolic/tests/alu_ext_test.cc on the HLS ALU
@@ -18,6 +18,8 @@ D=""
 [ "$ALUX" = 1 ] && D="$D -DVTA_ALUX"
 #### JO added (2026-11-22): NOIMM=1 -> VTA_ALUX_NO_IMM_LOOP (imm ops in the slot loop, Makefile ALUX_NOIMM=1)
 [ "${NOIMM:-0}" = 1 ] && D="$D -DVTA_ALUX_NO_IMM_LOOP"
+#### JO added (2026-11-23): AMUL=1 -> VTA_ALU_MUL without VTA_ALUX (Makefile ALUMUL=1: MUL with an immediate only)
+[ "${AMUL:-0}" = 1 ] && D="$(echo "$D" | sed 's/ -DVTA_ALUX//') -DVTA_ALU_MUL"
 HI=-I/tools/Xilinx/v2020.1/Vivado/2020.1/include
 W=$X/sim/.csim_$$          # inside the tree: the container mounts it at the same path
 mkdir -p $W && chmod 777 $W   # (run with sudo: the container user must write it)

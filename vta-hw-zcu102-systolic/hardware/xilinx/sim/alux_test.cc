@@ -7,8 +7,10 @@
  *   are compared too. The same instructions run on the reference model; every stored byte must match.
  * C simulation runs the steps one after another, so it says nothing about steps overlapping in the pipeline (same dst
  * written by close steps); the programs here may do that, the hardware programs must not (docs/evta_isa_ext.md 8.7).
+ * #### JO changed (2026-11-23): also for VTA_ALU_MUL ("_amul", ALU MUL with an immediate only): operations 0-4, MUL with
+ * use_imm, no lut_en; ADD imm 0 instead of the CPYs, no LUTSET.
  */
-#ifdef VTA_ALUX
+#if defined(VTA_ALUX) || defined(VTA_ALU_MUL)
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -87,7 +89,11 @@ void addRandom(Prog &p) {
  //#### JO changed (2026-11-15): the C simulation too drops instructions whose broadcast src (II 1 slot loop) is written in
  //#### its own inner loop (hazard_slots(..., 0)); the cosim drops those with a stale read in VTA_ALUX_WSLOTS slots
  for (;;) {
+#ifdef VTA_ALUX
   int op = rnd(p, 18);   // #### JO: 16 since 2026-11-15 (MADD, MULSHR, SHRV, SHRR), 18 (SQACC, LUTC)
+#else
+  int op = rnd(p, 5);    // #### JO (2026-11-23): VTA_ALU_MUL: 0-3 and MUL (imm only)
+#endif
   VTAAluInsn a = blank(op);
   a.iter_out = 1 + rnd(p, 4);
   a.iter_in = 1 + rnd(p, 4);
@@ -105,6 +111,10 @@ void addRandom(Prog &p) {
     a.rq_hi = (int8_t) (rnd(p, 256) - 128);
   }
   a.lut_en = rnd(p, 4) == 0;
+#ifndef VTA_ALUX
+  a.lut_en = 0;
+  if (op == 4) a.use_imm = 1;
+#endif
   int dmax = (a.iter_out - 1) * a.dst_factor_out + (a.iter_in - 1) * a.dst_factor_in;
   int smax = (a.iter_out - 1) * a.src_factor_out + (a.iter_in - 1) * a.src_factor_in;
   int nu = 1 + rnd(p, 3);
@@ -132,7 +142,7 @@ void addRandom(Prog &p) {
   if (!hazardOk && vta_alu_ref::hazard_slots(h, uv.data(), wslots) != 0) continue;
 #endif
 #else
-#ifndef VTA_ALUX_II2
+#if defined(VTA_ALUX) && !defined(VTA_ALUX_II2)
   if (vta_alu_ref::hazard_slots(h, uv.data(), 0) != 0) continue;
 #endif
 #endif
@@ -175,15 +185,21 @@ int alux_test(unsigned seed, int ninsn) {
   uint32_t *accBuf = static_cast<uint32_t *>(allocBuffer(VTA_ACC_ELEM_BYTES * 2 * N));
   ppack(acc, 2 * N, accBuf);
 
-  // out of every entry defined: CPY onto itself over [0, 2N)
+  // out of every entry defined: CPY onto itself over [0, 2N) (VTA_ALU_MUL: ADD imm 0)
   {
+#ifdef VTA_ALUX
     VTAAluInsn a = blank(VTA_ALUX_CPY);
+#else
+    VTAAluInsn a = blank(VTA_ALU_OPCODE_ADD);
+    a.use_imm = 1;
+#endif
     a.iter_in = 2 * N;
     a.dst_factor_in = 1;
     a.src_factor_in = 1;
     addAlu(p, a, {{0, 0}});
   }
   // a whole table, then the random instructions with a new partial table now and then (imm and vector LUTSETs)
+#ifdef VTA_ALUX
   {
     VTAAluInsn a = blank(VTA_ALUX_LUTSET);
     a.iter_in = 16;
@@ -192,6 +208,7 @@ int alux_test(unsigned seed, int ninsn) {
     a.imm = (int16_t) (16 * rnd(p, 100));   // multiples of 16: the start entry wraps to 0
     addAlu(p, a, {{0, rnd(p, N - 16)}});
   }
+#endif
 #ifdef ALUX_COSIM
   //#### JO added (2026-11-14): VTA_ALUX_DIST=<d>,<d>,... instead of the random instructions: one vector ADD per d whose
   //#### steps add acc[100] to acc[0..d) four times over (uops dst j = 0..d-1, iter_in 4, factors 0), so every step reads the
@@ -219,7 +236,11 @@ int alux_test(unsigned seed, int ninsn) {
   }
 #endif
   for (int k = 0; k < ninsn; k++) {
+#ifdef VTA_ALUX
     if (rnd(p, 8) == 0) {
+#else
+    if (false) {
+#endif
       VTAAluInsn a = blank(VTA_ALUX_LUTSET);
       a.iter_in = 1 + rnd(p, 16);
       a.src_factor_in = rnd(p, 3);
@@ -231,12 +252,29 @@ int alux_test(unsigned seed, int ninsn) {
     }
   }
   // all 32 bits of acc[0, N): CPY to [N, 2N), then the bytes by SHR 8 (out = low 8 bits)
+  // (VTA_ALU_MUL: ADD imm 0 copies nothing, so [N, 2N) is copied from [0, N) as the reference does it; see below)
   {
+#ifdef VTA_ALUX
     VTAAluInsn a = blank(VTA_ALUX_CPY);
     a.iter_in = N;
     a.dst_factor_in = 1;
     a.src_factor_in = 1;
     addAlu(p, a, {{N, 0}}, N);
+#else
+    // [N, 2N) = 0 (MIN 0, MAX 0), then ADD of the vector [0, N)
+    for (int o : {VTA_ALU_OPCODE_MIN, VTA_ALU_OPCODE_MAX}) {
+      VTAAluInsn z = blank(o);
+      z.iter_in = N;
+      z.dst_factor_in = 1;
+      z.use_imm = 1;
+      addAlu(p, z, {{N, 0}}, N);
+    }
+    VTAAluInsn a = blank(VTA_ALU_OPCODE_ADD);
+    a.iter_in = N;
+    a.dst_factor_in = 1;
+    a.src_factor_in = 1;
+    addAlu(p, a, {{N, 0}}, N);
+#endif
     for (int s = 0; s < 3; s++) {
       VTAAluInsn h = blank(VTA_ALU_OPCODE_SHR);
       h.iter_in = N;
@@ -306,4 +344,4 @@ int alux_test(unsigned seed, int ninsn) {
   return -1;
 }
 
-#endif  // VTA_ALUX
+#endif  // VTA_ALUX || VTA_ALU_MUL

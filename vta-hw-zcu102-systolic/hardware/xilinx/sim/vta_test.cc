@@ -29,7 +29,7 @@
 #include "../src/vta.h"
 #include "../../../tests/hardware/common/test_lib.h"
 
-#ifdef VTA_ALUX
+#if defined(VTA_ALUX) || defined(VTA_ALU_MUL)
 //#### JO added (2026-11-11, ALU extension): sim/alux_test.cc
 int alux_test(unsigned seed, int ninsn);
 #endif
@@ -61,7 +61,7 @@ int main(void) {
     status |= alu_test(VTA_ALU_OPCODE_SHR, false, VTA_BLOCK_OUT, 128, true);
     status |= alu_test(VTA_ALU_OPCODE_SHR, false, VTA_BLOCK_OUT, 128, false);
 
-#ifdef VTA_ALUX
+#if defined(VTA_ALUX) || defined(VTA_ALU_MUL)   //#### JO (2026-11-23): also the MUL-only build
     //#### JO added (2026-11-11): random extended ALU programs against the reference model (VTA_ALUX_SEEDS, default 20)
     {
       const char *e = getenv("VTA_ALUX_SEEDS");

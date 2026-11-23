@@ -62,6 +62,10 @@ if {[info exists ::env(VTA_ALUX)] && $::env(VTA_ALUX) eq "1"} {
 if {[info exists ::env(VTA_ALUX_NOIMM)] && $::env(VTA_ALUX_NOIMM) eq "1"} {
     append cflags " -DVTA_ALUX_NO_IMM_LOOP"
 }
+#### JO added (2026-11-23): Makefile ALUMUL=1 -> only ALU MUL with an immediate (vta.cc VTA_ALU_MUL, "_amul")
+if {[info exists ::env(VTA_ALU_MUL)] && $::env(VTA_ALU_MUL) eq "1"} {
+    append cflags " -DVTA_ALU_MUL"
+}
 
 # Get the VTA configuration paramters
 set ::device $FPGA_DEVICE
