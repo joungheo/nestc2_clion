@@ -187,7 +187,7 @@ NOIMM=1 vta-hw-zcu102-systolic/hardware/xilinx/sim/run_csim.sh    # imm 루프�
    - CNN / DeiT 시간을 `_alux3`와 견준다. 명령마다 파이프라인을 채우는 시간이 늘어나는 만큼 차이가 날 수 있다.
    - 같으면 EVTA 1개도 `_ni`를 기본으로 할지 정한다.
 3. `m4_build.sh`의 `I` 변수 문제.
-4. multi4 `_amul_bc`(§6.3; single은 통과).
+4. ~~multi4 `_amul_bc`~~: 만들어 보드를 통과했지만 이득이 없다(§6.4). multi4는 `_amul`을 쓴다.
 5. multi4 `run_all.sh` `SYS_BIN`을 `_amul`로 바꿀지 정하기(§6.2).
 
 ## 6. 다른 길: CNN에 필요한 MUL만 넣은 `_amul` (2026-11-23, PC ubuntu)
@@ -238,7 +238,7 @@ MobileNetV2에 남은 0.26 ms는 depthwise의 채널별 vector SHR이다. `_alux
 - Resnet18 multi4 bundle에는 EVTA avgpool이 없어서(`EVTA_RES_CHECK avgpool` 0건) 이득이 없다. +0.1 ms는 HP 클럭 3 % 차이로 보인다.
 - 이미 있던 문제: `MultiEVTAResnet50Test`가 281 (0.832588)을 낸다. 이 값은 single `Resnet50TvTest`의 결과다. single `Resnet50Test`는 0.478383이다. `_rq`에서도 같으니, 11-22에 만든 multi4 copy가 Tv 모델로 만들어진 것으로 보인다. 같은 dir의 `singlevtaCaffe2Resnet50Bundle_systimed`(11-08)는 옛 실행 파일이라 exit 1이다.
 
-### 6.3 broadcast vector를 imm 루프에 (`_bc`, Makefile `ALUBC=1`, 합성 전)
+### 6.3 broadcast vector를 imm 루프에 (`_bc`, Makefile `ALUBC=1`)
 - `vta.cc` `VTA_ALU_BC`(ALUMUL=1과 함께): uop 1개이고 `src_factor_in` 0인 vector MIN / MAX / ADD / SHR이 imm 루프에서 돈다.
 - 안쪽 루프마다 src를 한 slot 읽어 `s_reg`에 두고, 나머지 단계는 dst만 읽는다(II 1). imm 루프는 slot 하나짜리 루프 `ALU_IMM_SLOT`이 됐다.
 - 명령 형식이 같아서 vtalib와 bundle은 그대로다. 이름 `_amul_bc`도 vtalib의 `_amul` 검사에 걸린다.
@@ -272,3 +272,32 @@ golden 30 PASS, `EVTA_RES_CHECK` 6 모델 3,830건 0 differ, 분류 / confidence
 | Vgg16Cifar10Test | 6.75 | 6.75 | 6.75 |
 
 CNN 시간은 `_alux3`와 같고 LUT는 `_alux3`(69.8k)보다 25k 적다.
+
+### 6.4 EVTA 4개 `_amul_bc` (2026-11-24)
+`vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_amul_bc_400mhz_hp282_rq.bin`
+(보드 `bit/evta_multi4_amul_bc_400MHz_pass_261124/`, PC `build/y219/rs_bch`). vtalib는 `vtalib-zcu102-systolic` `398f358`(바꾼 것 없음), 실행 파일은 §6.2와 같다.
+- `m4_build.sh amulbc VTA_PLACE_DIRECTIVE=ExtraNetDelay_high SYSTOLIC=1 ALUMUL=1 ALUBC=1 FREQ=400 IMPL_STRATEGY=Performance_ExtraTimingOpt`.
+- LUT 175.0k (64 %, `_amul` +7.1k), FF 233.8k. 배선 직후 EVTA +0.006, HP +0.084 ns.
+- RapidWright(행 Y219 net 502개) 뒤 `route_s.tcl`이 "Interactive router failed ... node overlaps"로 멈췄다. `-Dtd=0`으로 다시 해도 같았다.
+  - `report_route_status -show_all`: RapidWright가 두 쌍의 net을 같은 노드에 배선했다(`m_atarget_enc[3]` / `fetch_1 ... data_buf[147]`: `INT_X29Y218/INODE_W_9_FT1`; `ap_ce_reg_repN_22` / `icmp_ln723...repN_8`: `INT_X50Y213/INT_NODE_GLOBAL_4_INT_OUT1`).
+  - 겹친 net을 모두 다시 배선하면 Vivado가 행 안으로 넣고, RapidWright가 다시 겹치게 옮겨 반복이 돌았다.
+  - 풀이: 쌍마다 한 net(`icmp...repN_8`, `data_buf[147]`)만 Vivado로 다시 배선하고, 행 안으로 들어간 그 2개만 RapidWright로 옮겼다(겹침 0, 행 PIP 0).
+    그 뒤 `route_s.tcl ... opt`와 RapidWright를 되풀이해 EVTA setup +0.003. hold −0.049는 `holdnets.tcl`로 오히려 −0.113이 되어 `holdpin.tcl ... 200`(최소 지연 200 ps)로 +0.010.
+  - HP 읽기 경로 `SAXIGP4RCLK` → `hpslice2`가 −0.432 ns(25개)로 남아 `flow/mmcm_hp_set.tcl rs_bcp.dcp rs_bch 40.5`: `hp_pll` 281.7 MHz.
+- 결과: EVTA 400 MHz WNS +0.003, WHS +0.010, HP 281.7 MHz +0.093, WPWS +0.275 ns. 행 Y219 PIP 0개.
+- `stuckchk.py -b rs_mrqp2o3.bit`: 1 extra(frame 26209, word 62 bit 1). 행 Y219 타일 401개에 쓰인 PIP가 없고 그 행 site(SLICE / RAMB / DSP)에 cell도 없다. RapidWright 뒤의 모든 판에 있었다. 무엇인지는 찾지 못했다.
+- 이번 흐름에서 쓴 임시 스크립트(`route_s_ur.tcl`: 겹친 net을 최상위 net으로 지우고 다시 배선, `fix2.tcl`)는 `build/y219`에만 있다.
+
+보드: probes 40/40, `EVTA_RES_CHECK` 5 모델 432건 0 differ(MobileNetV2 152건 중 14x14 / 7x7 depthwise 80건). 4 copy lockstep, OMP 1, 25회 중앙값(ms, copy마다, 같은 날 잇달아):
+
+| bundle | `_amul` (hp322) | `_amul_bc` (hp282) |
+|---|---|---|
+| MultiEVTAMobileNetV2Test | 18.66 | 18.73 |
+| MultiEVTAMobileNetV2TfTest | 18.71 | 18.65 |
+| MultiEVTAResnet50Test | 78.06 | 79.33 |
+| MultiEVTAResnet50TvTest | 78.02 | 79.36 |
+| MultiEVTAResnet18Test | 23.99 | 24.14 |
+
+- MobileNetV2는 같다. single에서 줄인 0.25 ms(depthwise SHR)가 4 copy에서는 CPU 연산과 DDR 경쟁 시간에 묻힌다.
+- Resnet50은 1.3 ms 느리다. 다른 차이가 HP 클럭(321.7 → 281.7 MHz)이라 그 탓으로 본다(따로 재지 않았다).
+- **multi4는 `_amul`(hp322)을 쓴다.** `_amul_bc`는 single(LUT 여유, HP 333 MHz)에서만 의미가 있다.

@@ -161,6 +161,7 @@ GEMM과 ALU 명령에 그 값이 들어가고, `en = 0`으로 다시 끈다(`cmd
 | `..._16_16_19_18_sa_amul_400mhz_rq.bin` | 1 | ○ | ○ | MUL imm만 | systolic | `398f358` 11-23 (`VTAHasAluMul`) | `build_systimed` (보드, 11-23 18:01 다시 빌드) |
 | `..._16_16_19_18_sa_amul_bc_400mhz_rq2.bin` | 1 | ○ | ○ | MUL imm + broadcast vector II 1 | systolic | `398f358` 11-23 (vtalib 변경 없음, 하드웨어만) | `build_systimed` |
 | `..._16_15_18_17_4evta_sa_amul_400mhz_hp322_rq.bin` (HP 포트 321.7 MHz) | 4 | ○ | ○ | MUL imm만 | systolic | `398f358` 11-23 | `build_multievtax4_systimed` (보드, 11-23 22:41 `cmake .` 후 다시 빌드) |
+| `..._16_15_18_17_4evta_sa_amul_bc_400mhz_hp282_rq.bin` (HP 포트 281.7 MHz) | 4 | ○ | ○ | MUL imm + broadcast vector II 1 | systolic | `398f358` 11-23 (vtalib 변경 없음) | `build_multievtax4_systimed` (위와 같은 실행 파일) |
 
 - "systolic"은 `vtalib-zcu102-systolic`이다. **판 번호는 없고, 그 commit 뒤의 vtalib면 된다.**
   - 새 vtalib는 옛 bitstream에서도 돈다. bitstream 이름에 없는 기능은 쓰지 않는다.
@@ -218,6 +219,7 @@ ALU 확장 판(`_alux*`)은 같은 실행 파일(`build_sys*`, `_pcsys*`)로 돌
 | 11-04 | `_sa_396mhz_rq.bin` | 395.8 | requantize. 400 MHz가 맞기 전의 판 | |
 | 11-04 | **`_sa_400mhz_rq.bin`** | 400 | requantize. **multi4의 `SYS_BIN` 기본**. ALU 확장은 없다 | +0.002 |
 | 11-23 | `_sa_amul_400mhz_hp322_rq.bin` | 400 (HP 321.7) | ALU MUL immediate. HP 포트 클럭만 333 → 321.7 MHz | 0.000 (HP +0.009) |
+| 11-24 | `_sa_amul_bc_400mhz_hp282_rq.bin` | 400 (HP 281.7) | `_amul` + broadcast vector II 1(single ⑩과 같은 `vta.cc`). HP 포트 클럭 281.7 MHz. CNN 시간 이득 없음, 쓰지 않는다 | +0.003 (HP +0.093) |
 
 - WNS를 비운 판은 기록을 찾지 못했다.
 - PC에서 합성한 결과와 보드 파일의 짝(md5): `_alux_380mhz_rq` = PC build dir `..._sa_alux_380mhz_rq`, `_alux_400mhz_rq` = `..._rq_qrs`,
@@ -372,6 +374,18 @@ ALU 확장 판(`_alux*`)은 같은 실행 파일(`build_sys*`, `_pcsys*`)로 돌
 - 보드(`bit/evta_multi4_amul_400MHz_pass_261123/`): probes 40/40, `EVTA_RES_CHECK` 5 모델 391건 0 differ(avgpool 29건), 분류는 `_rq`와 같다.
 - 시간: 표 E. 자세히: [evta_multi4_alux3.md](evta_multi4_alux3.md) §6.
 
+**multi4 ⑩ `_4evta_sa_amul_bc_400mhz_hp282_rq` (11-24)**
+- 하드웨어 / vtalib는 single ⑩과 같다(`ALUMUL=1 ALUBC=1`, 고친 뒤의 `vta.cc`, vtalib 변경 없음). 실행 파일은 multi4 ⑨와 같은 `build_multievtax4_systimed`.
+- 합성: `m4_build.sh amulbc VTA_PLACE_DIRECTIVE=ExtraNetDelay_high SYSTOLIC=1 ALUMUL=1 ALUBC=1 FREQ=400 IMPL_STRATEGY=Performance_ExtraTimingOpt`.
+  - LUT 175.0k (64 %), FF 233.8k. 배선 직후 EVTA +0.006, HP +0.084 ns.
+  - 행 Y219 흐름이 처음으로 그대로 끝나지 않았다. RapidWright가 net 두 쌍을 같은 노드(`INT_X29Y218/INODE_W_9_FT1`, `INT_X50Y213/INT_NODE_GLOBAL_4_INT_OUT1`)에 배선해 `route_s.tcl`의 `route_design`이 "node overlaps"로 멈췄다.
+    쌍마다 한 net만 Vivado로 다시 배선(그 net은 행 안으로) → 그 2개만 RapidWright로 옮김 → `route_s.tcl ... opt`와 RapidWright 반복 → hold 2개는 `flow/holdpin.tcl ... 200`(최소 지연 200 ps).
+  - HP 읽기 경로(`SAXIGP4RCLK` → `hpslice2`)가 −0.432 ns로 남아 `flow/mmcm_hp_set.tcl rs_bcp.dcp rs_bch 40.5`(HP 281.7 MHz, 주기 3.550 ns).
+  - 결과(PC `build/y219/rs_bch`): EVTA 400 MHz WNS +0.003, WHS +0.010, HP +0.093, WPWS +0.275 ns. 행 Y219 PIP 0개.
+  - `stuckchk.py -b rs_mrqp2o3.bit`: **1 extra**(frame 26209, word 62 bit 1). 행 Y219의 타일에 쓰인 PIP도, 그 행 site에 놓인 cell도 없는데 RapidWright 뒤 모든 판에 있다. 무엇인지 모른다.
+- 보드(`bit/evta_multi4_amul_bc_400MHz_pass_261124/`): probes 40/40, `EVTA_RES_CHECK` 5 모델 432건 0 differ(MobileNetV2 depthwise 14x14 / 7x7 80건 포함). 위 1비트로 틀린 곳은 시험에서 보이지 않았다.
+- 시간(표 E): CNN 이득이 없다. MobileNetV2는 `_amul`과 같고(depthwise SHR이 줄인 0.25 ms가 4 copy에서는 CPU / DDR 시간에 묻힌다), Resnet50은 HP 클럭이 낮아 1.3 ms 느리다. **multi4는 `_amul`(hp322)을 쓴다.**
+
 ### 5.3 판별 성능 표 (2026-11-21에 정리)
 
 **표 A. bitstream만 바꾼 효과.** 바꾸기 전과 후를 같은 날 같은 실행 파일로 쟀다. OMP 1, 25회 중앙값, 전체 ms. 빈칸은 그날 재지 않은 것이다.
@@ -481,13 +495,15 @@ single:
 
 multi4 (4 copy lockstep, copy당):
 
-| 모델 | `_4evta_sa_400mhz_rq` | `_4evta_sa_amul_400mhz_hp322_rq` |
-|---|---|---|
-| MultiEVTAMobileNetV2Test | 19.23 | **18.69** |
-| MultiEVTAMobileNetV2TfTest | 19.15 | **18.72** |
-| MultiEVTAResnet50Test | 78.47 | **77.99** |
-| MultiEVTAResnet50TvTest | 78.47 | **77.89** |
-| MultiEVTAResnet18Test | 23.94 | 24.04 |
+| 모델 | `_4evta_sa_400mhz_rq` | `_4evta_sa_amul_400mhz_hp322_rq` | 같은 판, 11-24 다시 | `_4evta_sa_amul_bc_400mhz_hp282_rq` |
+|---|---|---|---|---|
+| MultiEVTAMobileNetV2Test | 19.23 | **18.69** | 18.66 | 18.73 |
+| MultiEVTAMobileNetV2TfTest | 19.15 | **18.72** | 18.71 | 18.65 |
+| MultiEVTAResnet50Test | 78.47 | **77.99** | 78.06 | 79.33 |
+| MultiEVTAResnet50TvTest | 78.47 | **77.89** | 78.02 | 79.36 |
+| MultiEVTAResnet18Test | 23.94 | 24.04 | 23.99 | 24.14 |
+
+- 11-24의 두 열은 같은 실행 파일로 잇달아 잰 것이다(`BIN=<file> hw_multievtax4/script/run_prof.sh -s _systimed -n 25 -l ...`).
 
 - multi4 Resnet18 번들에는 EVTA avgpool이 없어(`EVTA_RES_CHECK avgpool` 0건) 이득이 없다. +0.1 ms는 HP 클럭 3 % 차이로 보인다.
 - `MultiEVTAResnet50Test`는 281 (0.832588)로 single `Resnet50TvTest`의 값을 낸다(두 bitstream 같음). 11-22에 만든 multi4 copy가 Tv 모델인 것으로 보인다(이번 변경과 무관).
