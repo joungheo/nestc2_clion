@@ -1064,6 +1064,19 @@ static int epiUnary(const VTAEpilogue &E, int b, int e, int lo, int hi, int *q, 
       return k ? 1 : 0;
     }
   }
+  //#### JO added (2026-11-24): kind 3 = clip((x + 2^(q-1)) >> q, a, bb) (q 1..7; a relu to a 2^q larger scale, torchvision
+  //#### ResNet50 layer4.0): base ALU ADD / SHR / MAX / MIN, no table (so also without the ALU extension)
+  for (int k = 1; k < 8 && A <= B; k++) {
+    bool m = true;
+    for (int x = lo; x <= hi && m; x++) {
+      const int32_t y = (x + (1 << (k - 1))) >> k;
+      m = (y < A ? A : y > B ? B : y) == f[x + 128];
+    }
+    if (m) {
+      *q = k, *a = A, *bb = B;
+      return 3;
+    }
+  }
   for (int k = 0; k < 256; k++) {
     const int x = (int8_t)k;
     T[k] = (int8_t)f[(x < lo ? lo : x > hi ? hi : x) + 128];
@@ -1137,13 +1150,15 @@ static bool lowerEpilogueUncached(const VTAEpilogue &E, bool relu, uint32_t idEV
   const int k1 = epiUnary(E, 0, f1End, p->lo0, p->hi0, &q, &a, &b, T1, &ok);
   if (k1 == 0)
     p->lo0 = a, p->hi0 = b;
-  else if (k1 == 1)
+  //else if (k1 == 1)
+  else if (k1 == 1 || k1 == 3)   //#### JO changed (2026-11-24): kind 3 (right shift with rounding)
     p->q1 = q, p->a1 = a, p->b1 = b;
   p->kind1 = k1;
   if (k1 == 2)
     p->T = epiTable(T1);
   if (!p->add) {
-    p->accConv = !rqOn || k1 == 1;
+    //p->accConv = !rqOn || k1 == 1;
+    p->accConv = !rqOn || k1 == 1 || k1 == 3;   //#### JO changed (2026-11-24): kind 3 in acc too
     return ok && (k1 != 2 || alux);
   }
   p->accConv = true;
@@ -1178,7 +1193,8 @@ static bool lowerEpilogueUncached(const VTAEpilogue &E, bool relu, uint32_t idEV
   const int k2 = epiUnary(E, j, E.n, p->lo, p->hi, &q, &a, &b, T2, &ok);
   if (k2 == 0)
     p->lo = a, p->hi = b;
-  else if (k2 == 1)
+  //else if (k2 == 1)
+  else if (k2 == 1 || k2 == 3)   //#### JO changed (2026-11-24): kind 3 (right shift with rounding)
     p->q2 = q, p->a2 = a, p->b2 = b;
   p->kind2 = k2;
   if (k2 == 2) {
@@ -1186,7 +1202,8 @@ static bool lowerEpilogueUncached(const VTAEpilogue &E, bool relu, uint32_t idEV
       return false; // one table per conv (LUTSET once before the tiles)
     p->T = epiTable(T2);
   }
-  p->rqSum = rqOn && k2 != 1;
+  //p->rqSum = rqOn && k2 != 1;
+  p->rqSum = rqOn && k2 != 1 && k2 != 3;   //#### JO changed (2026-11-24): kind 3 after the sum in acc
   //#### JO added (2026-11-15): the multiplied add needs the ALU MUL and the rq on the ALU write, no table / shift after it
   if (p->madd && (!alux || !rqOn || k2 != 0 || p->shlV || p->shlT))
     return false;
@@ -1867,8 +1884,17 @@ void conv_kernel(uint32_t sizeOutTileH,
           pushAlu(vtaCmdH, idEVTA, base, base, size, VTA_ALUX_CPY, 0, 0);
           VTAAluLut(vtaCmdH, 0);
         };
+        //#### JO added (2026-11-24): values in [lo, hi] -> clip((v + 2^(q-1)) >> q, a, b) (kind 3)
+        auto shrClip = [&](int q, int a, int b, int lo, int hi) {
+          alu(RES_ALU_ADD, 1 << (q - 1));
+          alu(RES_ALU_SHR, q);
+          if (a > ((lo + (1 << (q - 1))) >> q)) alu(RES_ALU_MAX, a);
+          if (b < ((hi + (1 << (q - 1))) >> q)) alu(RES_ALU_MIN, b);
+        };
         if (res->kind1 == 1)
           shlClip(res->q1, res->a1, res->b1, lo0, hi0);
+        if (res->kind1 == 3)
+          shrClip(res->q1, res->a1, res->b1, lo0, hi0);
         if (res->kind1 == 2) {
           if (res->accConv) lutInAcc();
           else lutCpy();   // no add: the conv's rq (rqConv) still set
@@ -1927,6 +1953,11 @@ void conv_kernel(uint32_t sizeOutTileH,
               alu(RES_ALU_SHR, -q);
               if (postMax && res->a2 > lo * (1 << q)) alu(RES_ALU_MAX, res->a2);
               if (!preMin || res->b2 < res->hi * (1 << q)) alu(RES_ALU_MIN, res->b2);
+            } else if (res->kind2 == 3) {
+              //#### JO added (2026-11-24): clip(clip(v, lo, hi) + 2^(q-1)) >> q, a, b)
+              alu(RES_ALU_MAX, res->lo);
+              alu(RES_ALU_MIN, res->hi);
+              shrClip(res->q2, res->a2, res->b2, res->lo, res->hi);
             } else {
               alu(RES_ALU_MAX, res->lo);
               alu(RES_ALU_MIN, res->hi);

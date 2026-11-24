@@ -21,6 +21,13 @@
 
 ---
 
+### 2026-11-24 ubuntu2 (이 commit) — ResNet50Tv의 CPU 전처리와 layer4.0 relu를 EVTA로 (EVTA 1개 68.41 → 63.68 ms, multi4 52.9 → 56.6 fps)
+- **바뀐 것:** [evta_dpu_compare.md](evta_dpu_compare.md) §6.5.
+  - `lib/Backends/VTA/VTASave.cpp`: `findInputPreprocess`가 제자리 elemsub / elemdiv를 받는다. `findResidualFusions`: relu가 2^-q 큰 scale로 갈 때(q < 0) `CLIP` + `RQ round 1`, 제자리 add의 residual은 만든 conv를 하나 더 센다.
+  - `vtalib-zcu102-systolic/lib/Bundle/VTABundle.cpp` `lowerEpilogue`: 단항 kind 3 `clip((x + 2^(k-1)) >> k)`를 기본 ALU로. `tests/epi_conv_test.cc`에 경우 추가.
+- **다른 쪽이 할 일:** `model-compiler 다시 빌드`. `bundle 다시 생성`: `Resnet50TvTest`(`gen_calib_bundle.sh Resnet50TvTest ../vta/bundles/Resnet50TvTest/calib/resnet50_tv_calib_n200_b2048.yaml.gz`), `MultiEVTAResnet50TvTest`(`gen_multi4_bundles.sh`); 다른 bundle은 같다(이 꼴이 없다). `실행 파일 다시 빌드`(systolic vtalib의 모든 build dir: 새 bundle은 새 vtalib가 있어야 EVTA에서 돈다; 옛 vtalib는 그 conv의 relu를 `_alux*`에서 ALU 표로, 그 밖의 판에서 CPU로 한다: 결과는 같다).
+- 보드: `hw/Resnet50TvTest`, `hw_multievtax4/MultiEVTAResnet50TvTest`의 bundle과 `build_systimed` / `build_multievtax4_systimed`의 그 실행 파일은 11-24 18:06에 새로 만들었다(`VTABundle.cpp`는 scp로 먼저 넣었다: pull 전에 `git checkout vtalib-zcu102-systolic/lib/Bundle/VTABundle.cpp`). 옛 것은 `~/JO/r50tv_old261124/`.
+
 ### 2026-11-24 ubun 4c2ee3f — 빌드 흔적: bundle과 실행 파일에 compiler / vtalib commit을 남긴다
 - **바뀐 것:**
   - `lib/Backends/VTA/VTASave.cpp` `compilerStamp`: bundle `.cpp`의 옵션 목록 다음 줄에

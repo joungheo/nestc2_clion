@@ -4391,13 +4391,21 @@ void findResidualFusions(const IRFunction *IR, VTASaveContext *ctx) {
         if (!vtaConvEpilogue && (!R || nRelu))
           break;
         int q = 0; // sV / sO = 2^q
+        //#### JO changed (2026-11-24): also a relu to a 2^-q larger scale (q = -1..-7; torchvision ResNet50 layer4.0:
+        //#### 1/32 -> 1/16): RQ round half up by -q, as the CPU relu ((v * 2^(16+q) + 2^15) >> 16 for v >= 0)
+        //if (V->getType()->getOffset() || O->getType()->getOffset() ||
+        //    !powerOfTwoExp(V->getType()->getScale() / O->getType()->getScale(), &q) || q < 0 || q > 7)
         if (V->getType()->getOffset() || O->getType()->getOffset() ||
-            !powerOfTwoExp(V->getType()->getScale() / O->getType()->getScale(), &q) || q < 0 || q > 7)
+            !powerOfTwoExp(V->getType()->getScale() / O->getType()->getScale(), &q) || q < -7 || q > 7)
+          break;
+        if (q < 0 && !vtaConvEpilogue)
           break;
         f.steps.push_back({CLIP, 0, 127, 0, 0});
-        if (q) {
+        if (q > 0) {
           f.steps.push_back({SHL, q, 0, 0, 0});
           f.steps.push_back({CLIP, -128, 127, 0, 0});
+        } else if (q < 0) {
+          f.steps.push_back({RQ, 1, -q, 0, 127});
         }
         f.reluShl = q;
         nRelu++;
@@ -4438,7 +4446,10 @@ void findResidualFusions(const IRFunction *IR, VTASaveContext *ctx) {
           uses = uses || op.first == v;
         n += uses;
       }
-      alone = alone && users[v] == n;
+      //#### JO changed (2026-11-24): the residual's producer is outside the chain (an add in place over the residual,
+      //#### then a relu of it: torchvision ResNet50 layer4.0)
+      //alone = alone && users[v] == n;
+      alone = alone && users[v] == n + (v == R && v != D);
     }
     if (!alone)
       continue;
@@ -4641,8 +4652,21 @@ void findInputPreprocess(const IRFunction *IR, VTASaveContext *ctx) {
     const Value *cur = Q->getDest();
     const ConvolutionInst *C = nullptr;
     bool transposed = false;
+    //#### JO added (2026-11-24): an elemsub / elemdiv may write over its input (torchvision ResNet50: _Sub in place on
+    //#### the quantize's buffer); the value then has one more user per such instruction
+    auto inPlaceOps = [&](const Value *v) {
+      int n = 0;
+      for (const Instruction *I : ins) {
+        if (auto *E = llvm::dyn_cast<ElementSubInst>(I))
+          n += E->getDest() == v && E->getLHS() == v;
+        else if (auto *E = llvm::dyn_cast<ElementDivInst>(I))
+          n += E->getDest() == v && E->getLHS() == v;
+      }
+      return n;
+    };
     for (size_t j = next(i); j < ins.size(); j = next(j)) {
-      if (users[cur] != 2) // the producer and the next instruction
+      //if (users[cur] != 2) // the producer and the next instruction
+      if (users[cur] != 2 + inPlaceOps(cur)) // the producer, the in-place ops on it and the next instruction
         break;
       const Instruction *I = ins[j];
       if (auto *Cv = llvm::dyn_cast<ConvolutionInst>(I)) {
@@ -4656,7 +4680,10 @@ void findInputPreprocess(const IRFunction *IR, VTASaveContext *ctx) {
       else if (auto *E = llvm::dyn_cast<ElementDivInst>(I))
         lhs = E->getLHS(), rhs = E->getRHS(), dest = E->getDest();
       if (lhs) {
-        if (lhs != cur || dest == cur || !plainInt8(rhs) || !plainInt8(dest) || !plainInt8(cur) ||
+        //#### JO changed (2026-11-24): dest == cur (in place) allowed when it keeps the type (the table is per value)
+        //if (lhs != cur || dest == cur || !plainInt8(rhs) || !plainInt8(dest) || !plainInt8(cur) ||
+        //    rhs->dims() != cur->dims() || !constantPayload(rhs, ctx))
+        if (lhs != cur || rhs == cur || !plainInt8(rhs) || !plainInt8(dest) || !plainInt8(cur) ||
             rhs->dims() != cur->dims() || !constantPayload(rhs, ctx))
           break;
         chain.push_back(I);

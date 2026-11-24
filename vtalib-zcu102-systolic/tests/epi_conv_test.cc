@@ -144,6 +144,16 @@ int main(int argc, char **argv) {
   CASE("add + relu in place", a, true, 127, 9, prog({{ADD, 0, 0, 1}, {RQ, 2, 1, -128, 127}, {CLIP, 0, 127}}), true, 12);
   CASE("add (shifts 2 / 3) + relu6", c, false, 127, 9, prog({{ADD, 0, 2, 3}, {RQ, 2, 4, -128, 127}, {CLIP, 0, 96}}), false,
        13);
+  //#### JO added (2026-11-24): a right shift with rounding as a unary part (kind 3: base ALU ADD / SHR / MAX / MIN), e.g. the
+  //#### relu of torchvision ResNet50 layer4.0 to twice the scale (VTASave: CLIP 0..127, RQ round 1 by 1)
+  CASE("add + relu to 2x scale (R50 tv)", a, true, 127, 9,
+       prog({{ADD, 0, 0, 1}, {RQ, 2, 1, -128, 127}, {CLIP, 0, 127}, {RQ, 1, 1, 0, 127}}), false, 15);
+  CASE("add + relu to 2x scale in place", a, true, 127, 9,
+       prog({{ADD, 0, 0, 1}, {RQ, 2, 1, -128, 127}, {CLIP, 0, 127}, {RQ, 1, 1, 0, 127}}), true, 16);
+  CASE("relu to 4x scale, no add", b, true, 127, 8, prog({{CLIP, 0, 127}, {RQ, 1, 2, 0, 127}}), false, 17);
+  CASE("a rounding shift + clip, no add", c, false, 127, 9, prog({{RQ, 1, 3, -20, 60}}), false, 18);
+  CASE("add, then shift 7", a, false, 127, 9, prog({{ADD, 0, 1, 0}, {RQ, 2, 1, -128, 127}, {RQ, 1, 7, -128, 127}}),
+       false, 19);
   // not on the EVTA: the CPU does them
   CASE("two tables (cpu)", a, false, 127, 9, prog({{LUT, 0}, {ADD, 0, 0, 0}, {RQ, 2, 1, -128, 127}, {LUT, 1}}, sig, rnd),
        false, 14);
@@ -200,6 +210,28 @@ int main(int argc, char **argv) {
     const Shape &s = (k % 3 == 0) ? a : (k % 3 == 1) ? b : c;
     const std::string name = "random " + std::to_string(k) + " (" + std::to_string(E.n) + " steps)";
     CASE(name.c_str(), s, (k & 2) != 0, (k & 4) ? 60 : 127, 8 + (k % 3), E, (k % 5) == 4, 100 + k);
+  }
+  //#### JO added (2026-11-24): random programs with rounding right shifts among the unary parts
+  std::mt19937 r2(24);
+  auto rj = [&](int lo, int hi) { return std::uniform_int_distribution<int>(lo, hi)(r2); };
+  for (int k = 0; k < 12; k++) {
+    VTAEpilogue E = {};
+    auto unary = [&]() {
+      if (rj(0, 1)) {
+        int lo = rj(-128, 0), hi = rj(lo, 127);
+        E.s[E.n++] = {CLIP, lo, hi, 0, 0};
+      }
+      E.s[E.n++] = {RQ, 1, rj(1, 7), -128, 127};
+    };
+    if (rj(0, 1)) unary();
+    if (rj(0, 3)) {
+      E.s[E.n++] = {ADD, 0, rj(0, 3), rj(0, 3), 0};
+      E.s[E.n++] = {RQ, rj(0, 2), rj(0, 5), rj(-128, 0), 127};
+    }
+    if (E.n + 2 <= VTA_EPI_MAX_STEPS) unary();
+    const Shape &s = (k % 3 == 0) ? a : (k % 3 == 1) ? b : c;
+    const std::string name = "random shr " + std::to_string(k) + " (" + std::to_string(E.n) + " steps)";
+    CASE(name.c_str(), s, (k & 2) != 0, 127, 8 + (k % 3), E, (k % 5) == 4, 200 + k);
   }
   printf(bad ? "FAILED\n" : "all equal\n");
   return bad;

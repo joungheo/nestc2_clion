@@ -22,8 +22,8 @@ ZCU102에서 우리 EVTA와 AMD의 DPU(Vitis AI의 NPU IP)를 **같은 float 모
 |---|---|---|---|---|---|
 | ResNet50 | DPU S (B4096 1개, 1 thread) | 79.9 | 655 | 57 % | 76.1 → 76.0 % (−0.1 %p) |
 | | DPU T (B4096 3개, 여러 thread) | 189.7 | 1,555 | 45 % | |
-| | 우리 EVTA 1개 `Resnet50TvTest` | 14.6 | 119.6 | **58 %** | 76.15 → **75.29 %** (−0.86 %p) |
-| | 우리 EVTA 4개 `MultiEVTAResnet50TvTest` (`_amul`, 11-24) | 52.9 | 433 | **53 %** | 같은 bundle |
+| | 우리 EVTA 1개 `Resnet50TvTest` (11-24 §6.5) | 15.7 | 128.4 | **63 %** | 76.15 → **75.29 %** (−0.86 %p) |
+| | 우리 EVTA 4개 `MultiEVTAResnet50TvTest` (`_amul`, 11-24 §6.5) | 56.6 | 463 | **57 %** | 같은 bundle |
 | MobileNetV2 | DPU S | 270.0 | 163 | 14 % | 70.13 → 67.67 % (−2.46 %p) |
 | | DPU T | 764.4 | 460 | 13 % | |
 | | 우리 EVTA 1개 `MobileNetV2TfTest` | 69.5 | 45.7 | **22 %** | 71.80 → **68.43 %** (−3.37 %p) |
@@ -34,7 +34,7 @@ ZCU102에서 우리 EVTA와 AMD의 DPU(Vitis AI의 NPU IP)를 **같은 float 모
   - EVTA 1개 204.8 GOPS 대 B4096 1개 1,151 GOPS (5.6배).
   - EVTA 4개 819 대 B4096 3개 3,453 GOPS (4.2배).
 - **EVTA 4개는 `_amul`(ALU MUL immediate만, 11-24)로 다시 쟀다(§6.4).** avgpool이 EVTA로 갔지만 `_rq` 때와 거의 같다(52.9 / 233 → 52.9 / 235.6 fps). ALU 확장 3단계 multi4는 배치·배선이 안 되어 멈췄다([evta_multi4_alux3.md](evta_multi4_alux3.md) §4.2).
-- **클럭당으로 보면 우리 EVTA 4개(2,048 op)가 B4096 1개(4,096 op)의 반이다.** 그래서 우리 multi4를 DPU **S**(B4096 1개)와 견주면 ResNet50 52.9 대 79.9 fps(66 %), MobileNetV2 235.6 대 270.0 fps(87 %)다. 이 두 모델에서 이 차이를 줄이는 것이 다음 목표다(§6.4).
+- **클럭당으로 보면 우리 EVTA 4개(2,048 op)가 B4096 1개(4,096 op)의 반이다.** 그래서 우리 multi4를 DPU **S**(B4096 1개)와 견주면 ResNet50 56.6 대 79.9 fps(71 %, §6.5), MobileNetV2 235.6 대 270.0 fps(87 %)다. 이 두 모델에서 이 차이를 줄이는 것이 다음 목표다(§6.4).
 
 ## 2. 비교 대상: AMD DPU 수치
 
@@ -297,6 +297,27 @@ EVTA 4개용(`vta/multievta_bundles`):
 - **VGG16 CIFAR-10**은 32 × 32 입력이라 tile이 작아(마지막 층 2 × 2) 가동률이 낮다.
 - **DeiT**는 EVTA 4개에서 나쁘다(장당 90.7 ms, EVTA 1개 37.1 ms의 2.4배). `_amul`에는 ALU 확장 2·3단계가 없어 layer norm / softmax / residual add가 CPU로 가고, 4 copy가 CPU와 DDR을 나눠 쓴다(copy 1개만이면 83.4 ms). DeiT는 EVTA 1개 `_alux3`가 4개 `_amul`의 61 %의 처리량을 낸다.
 - **이미 있던 문제:** `MultiEVTAResnet50Test`의 copy는 torchvision 모델로 만들어져 있다(분류 281 (0.832588) = `Resnet50TvTest`; [evta_multi4_alux3.md](evta_multi4_alux3.md) §6.2). 그래서 그 줄의 EVTA 4개 값은 Tv 모델의 값이고 연산량도 8.178 GOP다.
+
+### 6.5 ResNet50Tv의 CPU 일을 EVTA로 (2026-11-24)
+
+§6.4에서 `Resnet50TvTest`에만 CPU 일이 4.7 ms 남아 있었다(Caffe2 `Resnet50Test`는 64.48 ms로 3.9 ms 빠르다).
+
+| CPU 일 (EVTA 1개) | 왜 남았나 | 바꾼 것 |
+|---|---|---|
+| 입력 전처리 2.87 ms: `quantize` 0.32, `elemsub`(mean) 0.50, `elemdiv`(std) 0.71, `transpose` 1.34 | torchvision 모델의 `_Sub`가 quantize 출력 버퍼에 제자리(in place)로 쓴다. VTASave `findInputPreprocess`가 `dest == 입력`이면, 그리고 그 버퍼의 사용자가 3이면 멈췄다 | 제자리 elemsub / elemdiv를 받는다(그런 명령 수만큼 사용자 수를 더 센다). 이제 `preprocess_conv0pack_stream`이 첫 conv 입력 복사 안에서 채널별 256칸 표로 한다(Caffe2 판과 같은 경로, 표는 CPU elemsub / elemdiv와 같은 계산) |
+| layer4.0 relu 1.80 ms (`relu(..., 1/32, 1/16)`) | relu 출력 scale이 입력의 2배(거칠다). conv epilogue는 같거나 2^q 작은 scale만 받았다(q ≥ 0). 또 add가 residual 버퍼에 제자리로 써서, chain 검사("chain의 값은 chain만 읽는다")가 residual을 만든 conv3을 세어 chain 전체(add 포함)를 버렸다 | VTASave `findResidualFusions`: q = −1..−7이면 `CLIP 0..127` 뒤에 `RQ round 1, shift −q`(CPU relu와 같은 반올림). residual은 만든 conv 하나를 더 센다. vtalib-systolic `lowerEpilogue`: 단항 부분의 세 번째 꼴 `clip((x + 2^(k−1)) >> k, a, b)`(kind 3)를 기본 ALU ADD / SHR / MAX / MIN으로(표가 아니라서 `_amul`처럼 ALU 확장이 없어도 EVTA에서 돈다) |
+
+- **같은지:** 보드(`_alux3`)에서 EVTA conv dump 106개(53개 × 2회) 중 layer4.0 downsample conv의 2개만 다르다. 그 conv의 출력이 이제 relu와 반올림 shift 뒤의 값이라서이고, 새 dump = 옛 dump에 `(max(x, 0) + 1) >> 1`을 한 것과 100,352 byte 모두 같다. 나머지 dump와 결과(281, 0.832588)는 같다. 그래서 정확도(ImageNet val 75.29 %)는 그대로다. `EVTA_EPI_CHECK=1 EVTA_RES_CHECK=1` 38건 0 differ.
+- **vtalib 시뮬레이터:** `tests/run_epi_test.sh`에 kind 3 경우 5개(이 모양 그대로, 제자리, add 없는 relu 4배, 반올림 shift + clip, add 뒤 shift 7)와 무작위 12개를 더했다. 네 방식(rq 끔 / 켬 / MADD 없음 / ALU 확장 없음) 모두 0 differ이고, `EVTA_EPI_CHECK`로 kind 3이 EVTA에서 돈 것(ALU 확장 없음 포함)을 확인했다.
+- weights 파일은 mean / std 상수(300 KB)가 빠져 25.63 MB가 됐다. multi4 copy 4개도 같은 컴파일러로 다시 만들었다(`gen_multi4_bundles.sh MultiEVTAResnet50TvTest`, copy 0 = single).
+
+| | 전 (§6.4) | 후 | fps | GOPS (가동률) |
+|---|---|---|---|---|
+| EVTA 1개 `Resnet50TvTest` (`_alux3`) | 68.41 ms | **63.68 ms** | 14.6 → **15.7** | 119.6 → 128.4 (58 → 63 %) |
+| EVTA 4개 `MultiEVTAResnet50TvTest` (`_amul`, `-l` 없이) | 75.57 ms | **70.67 ms** | 52.9 → **56.6** | 433 → 463 (53 → 57 %) |
+
+- GOPS는 모델의 연산량 8.178 GOP로 셈했다. `run_prof.sh`는 이제 8.251 GOP를 찍는다: 전처리가 들어간 첫 conv가 행마다 나눠 도는 판(stream, 겹치는 행을 다시 계산)이라 EVTA가 하는 연산이 0.9 % 많다(Caffe2 판과 같다).
+- DPU S 대비: EVTA 4개 56.6 대 79.9 fps(71 %), EVTA 1개 15.7 대 79.9(20 %).
 
 ## 7. 조건이 다른 점 (해석할 때 주의)
 
