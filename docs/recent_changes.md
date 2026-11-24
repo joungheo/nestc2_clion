@@ -21,7 +21,7 @@
 
 ---
 
-### 2026-11-24 ubun (이 commit) — 빌드 흔적: bundle과 실행 파일에 compiler / vtalib commit을 남긴다
+### 2026-11-24 ubun 4c2ee3f — 빌드 흔적: bundle과 실행 파일에 compiler / vtalib commit을 남긴다
 - **바뀐 것:**
   - `lib/Backends/VTA/VTASave.cpp` `compilerStamp`: bundle `.cpp`의 옵션 목록 다음 줄에
     `// model-compiler: compiler sources at <commit> (<날짜>)[ + uncommitted changes], binary built <날짜> on <host>`.
@@ -31,6 +31,9 @@
     bitstream의 기능보다 실행 파일의 vtalib가 오래됐으면 `WARNING`을 찍는다(예: `_amul` 판에 `398f358` 전 vtalib).
 - **다른 쪽이 할 일:** `pull`. `model-compiler 다시 빌드`(그래야 새 bundle에 줄이 생긴다). 실행 파일은 다음 빌드 때 저절로 흔적이 들어간다
   (`vtabundles_xcmpl` CMakeLists가 바뀌어 각 build dir에서 cmake가 한 번 다시 돈다).
+- 보드에서 확인: model-compiler를 다시 빌드했다(16:44). 다시 만든 Resnet18 bundle의 줄은 `compiler sources at 4c2ee3f (2026-11-24 16:41), binary built 2026-11-24 16:44 on pynq`,
+  그 줄을 뺀 나머지는 전과 같다. 다시 링크한 multi4 Resnet18 실행 파일은 `vtalib=vtalib-zcu102-systolic 398f358 ... host=pynq dir=build_multievtax4_systimed`.
+  다른 실행 파일과 bundle은 다시 빌드 / 생성할 때 흔적이 생긴다(그 전에는 `no build stamp`로 나온다).
 - bundle을 바이트 비교할 때는 이 줄을 빼고 비교한다: `diff <(grep -v '^// model-compiler:' a.cpp) <(grep -v '^// model-compiler:' b.cpp)`.
 
 ### 2026-11-24 ubun 90f05a6 — multi4 Resnet18 / VGG16 / DeiT bundle을 지금 컴파일러로 다시 만듦
