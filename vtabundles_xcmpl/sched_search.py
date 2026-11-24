@@ -20,9 +20,11 @@ the tile + one entry in a thread's acc half (2048 / vt entries) and one channel 
 half (2048 / vt). Results are checked afterwards (EVTA_DUMP_CONV dumps against the bundle's schedules).
 """
 #### JO added (2026-11-22): SCHED_SUFFIX=<suffix> runs that executable instead of _systimed (e.g. _pcsystimed, a PC cross build)
+#### JO added (2026-11-24): SCHED_SET=hw_multievtax4 SCHED_EXE=multivtaMobileNetV2TfBundle: the search with 4 copies at once
+#### (the times of every copy's timing_<cpp>.csv, runs numbered copy * 10000 + run); depthwise (dw_convolution_evta, key KN 0)
 import csv, glob, json, os, re, statistics, sys
 
-CALL = re.compile(r'^\s*(convolution_wo_tr(?:_pool)?)\((.*)\);')
+CALL = re.compile(r'^\s*(convolution_wo_tr(?:_pool)?|dw_convolution_evta)\((.*)\);')
 
 
 def divisors(n):
@@ -36,19 +38,29 @@ def cands(path):
         if not m:
             continue
         a = [x.strip() for x in m.group(2).split(',')]
-        # (in, kernel, bias, out, N, H, W, C, KN, KH, KW, pad, stride, relu, bias, shift, out_h, out_w, cmd, vt, th, tw, id, ...)
-        H, W, C, KN, KH, KW, pad, s = (int(x) for x in a[5:13])
-        oh, ow = int(a[16]), int(a[17])
-        vt, th, tw = int(a[19]), int(a[20]), int(a[21])
+        dw = m.group(1) == 'dw_convolution_evta'
+        if dw:
+            # (in, kernel, bias, shift, out, N, H, W, C, KH, KW, pad, stride, out_h, out_w, lo, hi, cmd, vt, th, tw, id)
+            H, W, C, KH, KW, pad, s = (int(x) for x in a[6:13])
+            oh, ow = int(a[13]), int(a[14])
+            vt, th, tw = int(a[18]), int(a[19]), int(a[20])
+            KN, out = 0, a[4].split(')')[-1].strip()
+        else:
+            # (in, kernel, bias, out, N, H, W, C, KN, KH, KW, pad, stride, relu, bias, shift, out_h, out_w, cmd, vt, th, tw, id, ...)
+            H, W, C, KN, KH, KW, pad, s = (int(x) for x in a[5:13])
+            oh, ow = int(a[16]), int(a[17])
+            vt, th, tw = int(a[19]), int(a[20]), int(a[21])
+            out = a[3].split(')')[-1].strip()
         key = f'{H},{W},{C},{KN},{KH},{s}'
-        out = a[3].split(')')[-1].strip()
-        e = shapes.setdefault(key, dict(key=key, KH=KH, KW=KW, stride=s, oh=oh, ow=ow, cur=[vt, th, tw], outs=[], cands=[], pool=0))
+        e = shapes.setdefault(key, dict(key=key, KH=KH, KW=KW, stride=s, oh=oh, ow=ow, cur=[vt, th, tw], outs=[], cands=[], pool=0,
+                                        dw=C if dw else 0))
         if m.group(1) == 'convolution_wo_tr_pool':
             e['pool'] = 1   # the fused 2x2 / 2 or 3x3 / 2 / 1 max pool: the pooled tile is tile / 2
         e['outs'].append(out)
     for e in shapes.values():
         KH, KW, s, oh, ow = e['KH'], e['KW'], e['stride'], e['oh'], e['ow']
-        KN = int(e['key'].split(',')[3])
+        KN = e.get('dw') or int(e['key'].split(',')[3])   # depthwise: vt divides the channel blocks
+        acc1 = 2 if e.get('dw') else 1                      # dw_convolution_evta: tile + 2 entries
         c = []
         for vt in (2, 1):
             if vt == 2 and (KN // 16) % 2:
@@ -61,7 +73,7 @@ def cands(path):
                         continue
                     if th * tw < min(4, oh * ow):   # uop_kernel.h VerifyDep: the same acc entry twice in a row
                         continue
-                    if th * tw + 1 > 2048 // vt:
+                    if th * tw + acc1 > 2048 // vt:
                         continue
                     if ((th - 1) * s + KH) * ((tw - 1) * s + KW) > 2048 // vt:
                         continue
@@ -83,9 +95,9 @@ def read_csv(path, outs_by_key):
     per_run = {}
     for r in csv.DictReader(open(path)):
         run = int(r['run'])
-        if run < 2:
+        if run % 10000 < 2:
             continue
-        if r['call'] not in ('convolution_wo_tr', 'convolution_wo_tr_pool', 'preprocess_conv0pack_stream'):
+        if r['call'] not in ('convolution_wo_tr', 'convolution_wo_tr_pool', 'preprocess_conv0pack_stream', 'dw_convolution_evta'):
             continue
         node = r['node']
         for key, outs in outs_by_key.items():
@@ -132,20 +144,38 @@ def run_all(sh, d, D, R):
     """board, as root, in vtabundles_xcmpl/: every candidate run; a failing run (exit != 0) is split in halves of its shapes
     until the failing (shape, candidate) pairs are found (bad.txt), the rest kept"""
     import subprocess
+    S = os.environ.get('SCHED_SET', 'hw')
     os.makedirs(d, exist_ok=True)
     bad = open(f'{d}/bad.txt', 'a')
 
     def one(name, pairs):
         envs = ';'.join(f'{k}:{",".join(map(str, c))}' for k, c in pairs)
         open(f'{d}/{name}.env', 'w').write(envs)
-        o = subprocess.run(['hw/script/run_prof.sh', '-s', os.environ.get('SCHED_SUFFIX', '_systimed'), '-n', str(R), D], env=dict(os.environ, EVTA_SCHED=envs),
+        for f in glob.glob(f'{S}/{D}/timing*.csv'):
+            os.remove(f)
+        o = subprocess.run([f'{S}/script/run_prof.sh', '-s', os.environ.get('SCHED_SUFFIX', '_systimed'), '-n', str(R), D],
+                           env=dict(os.environ, EVTA_SCHED=envs, PROF_EXE=os.environ.get('SCHED_EXE', '')),
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout.decode(errors='replace')
         open(f'{d}/{name}.out', 'w').write(o)
         ok = re.search(r'exit=0 ', o) is not None
         m = re.findall(r'whole run median ([0-9.]+) ms', o)
-        if ok:
+        if ok and S == 'hw':
             import shutil
             shutil.copy(f'hw/{D}/timing.csv', f'{d}/{name}.csv')
+        elif ok:
+            # every copy's timing_<cpp>.csv in one file, runs numbered copy * 10000 + run
+            fs = sorted(glob.glob(f'{S}/{D}/timing_*.csv'))
+            with open(f'{d}/{name}.csv', 'w') as w:
+                for ci, f in enumerate(fs):
+                    for li, line in enumerate(open(f)):
+                        if li == 0:
+                            if ci == 0:
+                                w.write(line)
+                            continue
+                        r, rest = line.split(',', 1)
+                        w.write(f'{ci * 10000 + int(r)},{rest}')
+            ok = len(fs) > 0
+        if ok:
             open(f'{d}/{name}.ok', 'w').close()
         print(name, len(pairs), 'ok' if ok else 'FAIL', m[-1] if m else '', flush=True)
         return ok

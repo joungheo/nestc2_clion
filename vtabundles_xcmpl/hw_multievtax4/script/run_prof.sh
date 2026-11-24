@@ -170,6 +170,8 @@ for D in "$@"; do
   while read -r line <&3; do
   eval "set -- $line"     # -> run dir exe input golden
   EXE=$3$SUFFIX; IN=$4; GOLD=$5
+  #### JO added (2026-11-24): PROF_EXE=<name> runs only that executable of a Dir with several run lines (sched_search.py on multi4)
+  [ -n "${PROF_EXE:-}" ] && [ "$3" != "$PROF_EXE" ] && continue
   #### JO added (2026-10-29): a Dir with several run lines (multi-EVTA: threaded + single-thread executable) gets one log
   #### per executable, <suffix>_<exe>.log; with one shared <suffix>.log the second executable overwrote the first
   LOG=${SUFFIX#_}.log

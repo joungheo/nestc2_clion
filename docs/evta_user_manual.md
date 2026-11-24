@@ -924,6 +924,8 @@ diff -r /tmp/dumpA /tmp/dumpB && echo same; sudo rm -rf /tmp/dumpA /tmp/dumpB   
 | `NESTC_AVGPOOL_NEON=1` | 0 | 비교용 NEON CPU avgpool |
 | `MULTI_MASK=<bits>` | 모두 | multi4 Resnet50 / VGG16: 이 copy만 돌린다(copy i = EVTA i) |
 | `MULTI_RUNS`, `MULTI_LOCKSTEP` | 25, 0 | multi-EVTA main의 copy당 추론 수, lockstep(`run_prof.sh -n`, `-l`이 설정) |
+| `MULTI_FREE`, `MULTI_STAGGER_US` | 0, 0 | multi-EVTA main: 1이면 추론마다 barrier 없이 각자 돈다, copy i의 출발을 i × us 늦춘다. 2번째 run부터의 처리량을 `THROUGHPUT` 줄로 찍는다(`_sys`로 잴 것; 2026-11-24) |
+| `PROF_EXE` | (없음) | `run_prof.sh`: Dir의 run 줄 가운데 그 실행 파일만 돌린다(multi4 Dir의 multivta / singlevta 중 하나) |
 | `BUNDLE_RUNS` | | `_prof` / `_timed` 실행 파일의 추론 수(`run_prof.sh -n`이 설정) |
 
 **확인 (EVTA 결과를 CPU와 실행 중에 비교, 불일치 수 출력)**
@@ -1028,6 +1030,7 @@ sudo ./gemmprobe ident                         # 새 bitstream의 GEMM 기본 �
 
 - **conv schedule 다시 찾기:** `vtabundles_xcmpl/sched_search.py`(`cands` → 보드 `run` → `pick` / `final`). 모든 모양에 후보를 하나씩 동시에 끼워
   run 수를 줄이고, 고른 값은 dump 비교 후 `VTASchedules.h`에 넣는다. 방법과 2026-11-22 결과: [evta_sched_search.md](evta_sched_search.md).
+  4개 동시 실행에서 찾기: `SCHED_SET=hw_multievtax4 SCHED_EXE=<multivta…Bundle>`(depthwise도 후보; §5).
 
 | 일 | 어디서 | 명령 |
 |---|---|---|

@@ -319,6 +319,24 @@ EVTA 4개용(`vta/multievta_bundles`):
 - GOPS는 모델의 연산량 8.178 GOP로 셈했다. `run_prof.sh`는 이제 8.251 GOP를 찍는다: 전처리가 들어간 첫 conv가 행마다 나눠 도는 판(stream, 겹치는 행을 다시 계산)이라 EVTA가 하는 연산이 0.9 % 많다(Caffe2 판과 같다).
 - DPU S 대비: EVTA 4개 56.6 대 79.9 fps(71 %), EVTA 1개 15.7 대 79.9(20 %).
 
+### 6.6 MobileNetV2Tf multi4의 경쟁분 (2026-11-24)
+
+DPU S(270장/s)를 넘으려면 copy당 14.81 ms가 되어야 한다. 지금은 16.7 ms다. 혼자 돌 때 14.7 ms이므로, 늘어난 2 ms가 4개가 함께 돌아서 생긴 경쟁분이다.
+
+**잰 방법:** 시간 측정 코드가 없는 `_sys` 실행 파일로 벽시계 처리량을 쟀다. `multi_threads_main.cpp`에 두 가지를 더했다.
+- `MULTI_FREE=1`: copy들이 추론마다 barrier에서 기다리지 않고 각자 돈다.
+- `MULTI_STAGGER_US=<us>`: copy i의 출발을 i × us 늦춘다.
+- 둘 다 `THROUGHPUT ... images/s (ms per image per copy)` 줄을 찍는다(2번째 run부터 센다).
+
+**알게 된 것:**
+- barrier는 거의 상관없다: barrier 231–236장/s, free 236–245장/s, stagger 224–245장/s(잡음 ±2–4 %). `run_prof.sh`의 235.6 fps는 실제 처리량과 맞다.
+- 같이 도는 copy 수에 비례한다(copy당 ms): 1개 14.72, 2개 15.2, 3개 15.7, 4개 16.7. HP 포트 쌍과는 거의 상관없다(DDR 포트를 함께 쓰는 HP1 + HP2도 +0.1 ms).
+- EVTA 하나가 추론 한 번에 DDR로 옮기는 양은 11.7 MB다(`EVTA_REPLAY_LOG=2`: wgt 4.43, inp 3.94, out 3.12 MB). 평균 1.5 GB/s, 4개를 합쳐 약 6 GB/s로 DDR4 최대치의 1/3이다. 대역이 꽉 찬 것이 아니라 늦어진 응답을 기다리는 시간으로 본다.
+- 늘어난 시간이 큰 층: conv0 +0.39, expanded_conv_1 expand +0.29, 첫 depthwise +0.13, expanded_conv project +0.09 ms(모두 112×112). 나머지는 층마다 +0.01–0.03 ms다.
+- 4개 동시 실행에서 schedule을 다시 찾으면 3개 모양이 바뀐다. 처리량은 +0.9–1.5 %(copy당 약 −0.2 ms)다([evta_sched_search.md](evta_sched_search.md) §5; `VTASchedules.h`에 넣었다).
+
+**다음:** depthwise를 더 효율적으로 한다. 지금은 16×16 GEMM의 대각선만 쓴다. depthwise는 copy당 약 6 ms로 가장 큰 덩어리다([evta_todo.md](evta_todo.md) §5).
+
 ## 7. 조건이 다른 점 (해석할 때 주의)
 
 - **calibration 셋:**

@@ -151,9 +151,13 @@ convTune.ConvolutionTune_.push_back({1, 18, 11, 208, 64, 1, 1, 208, 1, 0, 2, 18,
 //#### Q K^T (64 -> 208, 13 blocks, padded to 14 for 2 threads): 2, 18, 11 took 0.77 ms per call, 2, 9, 11 0.44 -> ~0.36 ms
 convTune.ConvolutionTune_.push_back({1, 18, 11, 64, 208, 1, 1, 64, 1, 0, 2, 9, 11});
 //#### JO changed (2026-11-22, sched_search.py): was 1, 16, 56
-convTune.ConvolutionTune_.push_back({1, 112, 112, 32, 16, 1, 1, 32, 1, 0, 1, 14, 112});
+// convTune.ConvolutionTune_.push_back({1, 112, 112, 32, 16, 1, 1, 32, 1, 0, 1, 14, 112});
+//#### JO changed (2026-11-24, sched_search.py with 4 copies at once on multi4, docs/evta_sched_search.md 5): was 1, 14, 112
+convTune.ConvolutionTune_.push_back({1, 112, 112, 32, 16, 1, 1, 32, 1, 0, 1, 16, 112});
 //#### JO changed (2026-11-22, sched_search.py): was 2, 16, 28
-convTune.ConvolutionTune_.push_back({1, 112, 112, 16, 96, 1, 1, 16, 1, 0, 2, 8, 112});
+// convTune.ConvolutionTune_.push_back({1, 112, 112, 16, 96, 1, 1, 16, 1, 0, 2, 8, 112});
+//#### JO changed (2026-11-24, sched_search.py with 4 copies at once on multi4, docs/evta_sched_search.md 5): was 2, 8, 112
+convTune.ConvolutionTune_.push_back({1, 112, 112, 16, 96, 1, 1, 16, 1, 0, 2, 2, 112});
 //#### JO changed (2026-11-22, sched_search.py): was 2, 8, 56
 convTune.ConvolutionTune_.push_back({1, 56, 56, 96, 32, 1, 1, 96, 1, 0, 2, 14, 56});
 //#### JO changed (2026-11-22, sched_search.py): was 1, 8, 56
@@ -181,7 +185,9 @@ convTune.ConvolutionTune_.push_back({1, 7, 7, 320, 1280, 1, 1, 320, 1, 0, 2, 7, 
 //#### JO added (2026-11-08): MobileNetV2's depthwise convs on the EVTA (dw_convolution_evta, -vta-evta-depthwise): filterN 0,
 //#### found with EVTA_SCHED (key KN 0; nVirtualThread 2 only with an even number of 16-channel blocks); dumps identical to
 //#### the default 1, 8, 8; depthwise 19.6 -> 8.4 ms (docs/evta_runtime_compare.md 7.21)
-convTune.ConvolutionTune_.push_back({1, 112, 112, 32, 0, 3, 3, 32, 1, 1, 2, 14, 56});
+// convTune.ConvolutionTune_.push_back({1, 112, 112, 32, 0, 3, 3, 32, 1, 1, 2, 14, 56});
+//#### JO changed (2026-11-24, sched_search.py with 4 copies at once on multi4, docs/evta_sched_search.md 5): was 2, 14, 56
+convTune.ConvolutionTune_.push_back({1, 112, 112, 32, 0, 3, 3, 32, 1, 1, 2, 4, 112});
 convTune.ConvolutionTune_.push_back({1, 112, 112, 96, 0, 3, 3, 96, 2, 0, 2, 4, 56});
 convTune.ConvolutionTune_.push_back({1, 56, 56, 144, 0, 3, 3, 144, 1, 1, 1, 28, 56});
 convTune.ConvolutionTune_.push_back({1, 56, 56, 144, 0, 3, 3, 144, 2, 0, 1, 14, 28});

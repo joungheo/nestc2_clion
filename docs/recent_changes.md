@@ -21,6 +21,21 @@
 
 ---
 
+### 2026-11-24 ubuntu2 COMMIT — MobileNetV2 112×112 층 3개의 schedule을 4개 동시 실행에서 다시 찾음, multi4 main에 `MULTI_FREE` / `MULTI_STAGGER_US`
+- **바뀐 것:**
+  - `include/Backends/VTA/VTASchedules.h`: 112, 112, 32 → 16 (1, 16, 112), 112, 112, 16 → 96 (2, 2, 112), 첫 depthwise 112, 112, 32 (2, 4, 112).
+    multi4 처리량 +0.9–1.5 %, EVTA 1개는 느려지지 않음, conv dump 208개 같음([evta_sched_search.md](evta_sched_search.md) §5).
+  - `vtabundles_xcmpl/sched_search.py`: `SCHED_SET=hw_multievtax4 SCHED_EXE=<exe>`(4개 동시 탐색), depthwise 후보. `hw*/script/run_prof.sh`: `PROF_EXE`.
+  - `multi_threads_main.cpp`(공통본 10개): `MULTI_FREE=1`, `MULTI_STAGGER_US`, `THROUGHPUT` 줄([evta_dpu_compare.md](evta_dpu_compare.md) §6.6).
+- **다른 쪽이 할 일:**
+  - `pull`.
+  - `model-compiler 다시 빌드`.
+    - 이유: schedule 표 `VTASchedules.h`는 `include/` 아래 header라 model-compiler 안에 컴파일된다. bundle이 conv 호출의 인자로 그 값을 적기 때문이다.
+    - 다시 빌드하지 않은 model-compiler로 MobileNetV2 bundle을 만들면 옛 schedule이 들어간다. 결과는 같고 multi4가 약 1 % 느릴 뿐이다.
+    - 다른 모델의 bundle은 바뀌지 않는다(이 세 모양이 없다).
+  - `bundle 다시 생성`은 급하지 않다. MobileNetV2(Tf / QAT / Val) bundle은 다음에 다시 만들 때 반영된다. 그 전에는 실행할 때 `EVTA_SCHED='112,112,32,0,3,1:2,4,112;112,112,32,16,1,1:1,16,112;112,112,16,96,1,1:2,2,112'`로 같은 효과를 낸다.
+  - multi4 / single 실행 파일에서 `MULTI_FREE`를 쓰려면 해당 build dir에서 다시 빌드한다(보드 `build_multievtax4_sys`, `build_sys`는 11-24에 다시 빌드했다).
+
 ### 2026-11-24 ubuntu2 16ff33a — ResNet50Tv의 CPU 전처리와 layer4.0 relu를 EVTA로 (EVTA 1개 68.41 → 63.68 ms, multi4 52.9 → 56.6 fps)
 - **바뀐 것:** [evta_dpu_compare.md](evta_dpu_compare.md) §6.5.
   - `lib/Backends/VTA/VTASave.cpp`: `findInputPreprocess`가 제자리 elemsub / elemdiv를 받는다. `findResidualFusions`: relu가 2^-q 큰 scale로 갈 때(q < 0) `CLIP` + `RQ round 1`, 제자리 add의 residual은 만든 conv를 하나 더 센다.

@@ -28,6 +28,7 @@
 //#### The copies' weights are the same bytes; load_module shares their VTA buffers (vtalib VTAConstBufferAlloc).
 
 #include <sys/time.h>
+#include <unistd.h>   //#### JO added (2026-11-24): usleep (MULTI_STAGGER_US)
 #include "VTARuntime.h"
 #include <assert.h>
 #include <inttypes.h>
@@ -224,7 +225,21 @@ extern "C" void evta_lockstep_hook() {
 struct ThreadArg {
   int copy, runs, bad;
   uint8_t *constantWeights, *mutableWeights, *activations;
+  double t1, tEnd;   //#### JO added (2026-11-24): start of run 2 and end of the last run (ms, MULTI_FREE throughput)
 };
+
+//#### JO added (2026-11-24): MULTI_FREE=1: the copies do not wait for each other before each inference (only once before
+//#### the first), as independent streams (DPU "multi thread"); MULTI_STAGGER_US=<us>: copy j starts j * us later.
+//#### main prints the throughput from the start of everyone's 2nd run to the last end: images / time.
+static bool multiFree() {
+  const char *e = getenv("MULTI_FREE");
+  return e && atoi(e) > 0;
+}
+static double nowMs() {
+  timeval t;
+  gettimeofday(&t, NULL);
+  return t.tv_sec * 1000.0 + t.tv_usec / 1000.0;
+}
 
 static void *threadMain(void *a) {
   ThreadArg *t = static_cast<ThreadArg *>(a);
@@ -233,10 +248,19 @@ static void *threadMain(void *a) {
   m.load(t->constantWeights);
   float conf = 0;
   int idx = -1;
+  const bool freeRun = multiFree();
+  const char *sg = getenv("MULTI_STAGGER_US");
+  const int stagger = sg ? atoi(sg) : 0;
   for (int run = 0; run < t->runs; run++) {
 #ifndef MULTI_SINGLE
-    pthread_barrier_wait(&runBarrier);
+    //pthread_barrier_wait(&runBarrier);
+    if (!freeRun || run == 0)
+      pthread_barrier_wait(&runBarrier);
+    if (run == 0 && stagger > 0)
+      usleep(stagger * t->copy);
 #endif
+    if (run == 1)
+      t->t1 = nowMs();
     m.run(t->constantWeights, t->mutableWeights, t->activations);
     idx = classify(*m.config, t->mutableWeights, &conf);
     if (idx != MODEL_EXPECT) {
@@ -245,6 +269,7 @@ static void *threadMain(void *a) {
       t->bad++;
     }
   }
+  t->tEnd = nowMs();
   printf("copy %d: %d runs, Result: %d Confidence: %f, %d wrong\n", t->copy, t->runs, idx, conf, t->bad);
   m.destroy();
   m.destroyRuntime();
@@ -341,7 +366,7 @@ int main(int argc, char **argv) {
     const BundleConfig &c = *copies[i].config;
     args[j] = {i, runs, 0, initConstantWeights(copies[i].weights, c),
                static_cast<uint8_t *>(alignedAlloc(c, c.mutableWeightVarsMemSize)),
-               static_cast<uint8_t *>(alignedAlloc(c, c.activationsMemSize))};
+               static_cast<uint8_t *>(alignedAlloc(c, c.activationsMemSize)), 0, 0};
     const SymbolTableEntry &in = getMutableWeightVar(c, MODEL_INPUT);
     memcpy(args[j].mutableWeights + in.offset, input, 3 * MODEL_HEIGHT * MODEL_WIDTH * sizeof(float));
   }
@@ -364,6 +389,15 @@ int main(int argc, char **argv) {
   }
   gettimeofday(&t2, NULL);
   std::cout << "Inference time: " << (t2.tv_sec - t1.tv_sec) * 1000.0 + (t2.tv_usec - t1.tv_usec) / 1000.0 << "ms\n";
+  //#### JO added (2026-11-24): throughput over runs 2..runs of every copy (MULTI_FREE / MULTI_STAGGER_US compare)
+  if (runs > 1) {
+    double a0 = 1e300, a1 = 0;
+    for (auto &a : args) a0 = std::min(a0, a.t1), a1 = std::max(a1, a.tEnd);
+    const int imgs = n * (runs - 1);
+    printf("THROUGHPUT %d copies%s stagger %s us: %d images in %.3f ms = %.1f images/s (%.3f ms per image per copy)\n", n,
+           multiFree() ? " free" : " barrier", getenv("MULTI_STAGGER_US") ? getenv("MULTI_STAGGER_US") : "0", imgs,
+           a1 - a0, imgs * 1000.0 / (a1 - a0), (a1 - a0) * n / imgs);
+  }
   for (auto &a : args) {
     free(a.activations);
     free(a.constantWeights);

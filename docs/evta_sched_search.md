@@ -72,3 +72,47 @@ python3 sched_search.py final Resnet50Test.json /home/xilinx/JO/sched/Resnet50Te
 PC cross build 실행 파일로 찾으려면 `sudo /bin/sh -c 'SCHED_SUFFIX=_pcsystimed python3 sched_search.py run …'`(sudo는 환경 변수를 넘기지 않으므로 sh 안에서 준다; 2026-11-22 torchvision ResNet-50).
 
 같은 보드 lock(`/tmp/evta_run.lock`)을 `run_prof.sh`가 잡는다. 두 탐색을 동시에 돌리면 서로 lock을 못 잡아 모두 실패한다.
+
+## 5. 4개 동시 실행에서 다시 찾기 (2026-11-24, MobileNetV2Tf multi4)
+
+**왜:** multi4에서 MobileNetV2Tf는 copy당 14.7 ms(혼자) → 16.7 ms(4개 동시)로 느려진다. 늘어난 시간은 112×112 앞쪽 층에 몰려 있다([evta_dpu_compare.md](evta_dpu_compare.md) §6.6).
+§3의 schedule은 EVTA 1개로 찾았으므로, DDR이 붐빌 때 더 나은 tile이 있는지 4개를 동시에 돌리며 다시 찾았다.
+
+**도구에 더한 것:**
+- `SCHED_SET=hw_multievtax4 SCHED_EXE=<multi 실행 파일>`
+  - `hw_multievtax4/script/run_prof.sh`로 그 실행 파일만 돌린다(`run_prof.sh`의 새 환경 변수 `PROF_EXE`).
+  - 네 copy의 `timing_<cpp>.csv`를 한 파일로 모은다(run 번호 = copy × 10000 + run). 그래서 모양별 시간은 네 copy를 합친 중앙값이다.
+- depthwise(`dw_convolution_evta`, key KN 0)도 후보에 넣는다. 조건은 acc에 tile + 2 entry가 들어가는 것, vt는 채널 블록 수의 약수인 것이다.
+
+```sh
+# PC
+python3 vtabundles_xcmpl/sched_search.py cands <보드의 hw_multievtax4/MultiEVTAMobileNetV2TfTest/mobilenetv2.cpp> > MbTf_m4.json
+# 보드 (vtabundles_xcmpl/): 44번, 한 번에 약 8초
+sudo /bin/sh -c 'SCHED_SET=hw_multievtax4 SCHED_EXE=multivtaMobileNetV2TfBundle python3 sched_search.py run MbTf_m4.json /home/xilinx/JO/sched/MbTf_m4 MultiEVTAMobileNetV2TfTest 25'
+python3 sched_search.py pick MbTf_m4.json /home/xilinx/JO/sched/MbTf_m4
+```
+
+**결과:** 모양 30개(depthwise 13개)를 찾았고, 1 %를 넘게 빨라진 것은 3개다.
+
+| 모양 (H, W, C, KN, K, stride) | 전 (vt, tileH, tileW) | 후 | 4개 동시 conv 시간 (ms) |
+|---|---|---|---|
+| 112, 112, 32, 0, 3, 1 (첫 depthwise) | 2, 14, 56 | 2, 4, 112 | 1.048 → 0.933 |
+| 112, 112, 16, 96, 1, 1 (expanded_conv_1 expand) | 2, 8, 112 | 2, 2, 112 | 0.992 → 0.892 |
+| 112, 112, 32, 16, 1, 1 (expanded_conv project) | 1, 14, 112 | 1, 16, 112 | 0.292 → 0.283 |
+
+- conv 문장 시간의 합은 15.44 → 15.20 ms(−0.24 ms)다.
+- 나머지 모양은 11-22에 찾은 값이 4개 동시에서도 가장 빨랐다.
+- 낮고 넓은 tile이 빨라진 이유: 행 전체가 LOAD 하나가 되고, tile이 작아 LOAD와 GEMM이 더 잘 겹친다.
+
+**검증 (`_sys`, 시간 측정 코드 없음, copy당 200회, `EVTA_SCHED`로 넣어 번갈아 3번씩):**
+- 모든 EVTA conv dump 208개가 지금 schedule과 byte 단위로 같다.
+
+| | 지금 schedule (장/s) | 새 schedule (장/s) | 차이 |
+|---|---|---|---|
+| 4개 barrier(추론마다 함께 출발) | 233.0 / 233.6 / 236.2 (평균 234.3) | 235.5 / 236.7 / 237.4 (평균 236.5) | +0.9 % (3번 모두 빠름) |
+| 4개 free(`MULTI_FREE=1`) | 239.2 / 241.6 / 235.9 (평균 238.9) | 243.2 / 238.0 / 246.2 (평균 242.5) | +1.5 % (잡음 ±2 %) |
+| EVTA 1개(`_alux3`, ms) | 14.51 / 14.55 | 14.43 / 14.45 | −0.08 ms |
+
+- 결론: 1개일 때도 느려지지 않으므로 `VTASchedules.h`에 넣었다. 하지만 경쟁분 2 ms 가운데 0.2 ms만 줄었다. schedule로는 경쟁분이 크게 줄지 않는다.
+- bundle은 아직 다시 만들지 않았다. 다음에 MobileNetV2 bundle을 다시 만들 때 함께 반영된다. 그 전에는 위의 `EVTA_SCHED`로 같은 효과를 낸다.
+- 남은 경쟁분은 depthwise 효율(GEMM의 1/16만 씀; [evta_todo.md](evta_todo.md) §5)과 층 묶기로 줄여야 한다.
