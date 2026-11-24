@@ -36,6 +36,9 @@
 #include <map>
 #include <set>
 #include <vector>
+#include <ctime>      //#### JO added (2026-11-24): compilerStamp
+#include <sys/stat.h> //#### JO added (2026-11-24): compilerStamp
+#include <unistd.h>   //#### JO added (2026-11-24): compilerStamp
 
 //#define VTA_PROFILE
 //#define VTA_ALLINONE_FUNCTION
@@ -9786,6 +9789,56 @@ static std::string vtaOptionsComment() {
   return s + "\n";
 }
 
+//#### JO added (2026-11-24, docs/evta_user_manual.md "빌드 흔적"): which compiler made a bundle. One line after the options:
+//#### the last commit of the NEST-C compiler sources (lib include tools cmake of the tree this file was compiled from), whether
+//#### they have uncommitted changes, when and where this model-compiler was linked, and a warning when that commit is newer
+//#### than the binary (a model-compiler not rebuilt after a pull; the 11-22 compiler fixes were missed that way). Compare two
+//#### bundles without it: diff <(grep -v '^// model-compiler:' a.cpp) <(grep -v '^// model-compiler:' b.cpp)
+static std::string runLine(const std::string &cmd) {
+  std::string out;
+  if (FILE *f = popen(cmd.c_str(), "r")) {
+    char buf[256];
+    if (fgets(buf, sizeof(buf), f))
+      out = buf;
+    pclose(f);
+  }
+  while (!out.empty() && (out.back() == '\n' || out.back() == '\r'))
+    out.pop_back();
+  return out;
+}
+
+static std::string compilerStamp() {
+  std::string src = __FILE__;
+  const size_t k = src.rfind("/lib/Backends/VTA/");
+  const std::string root = k == std::string::npos ? std::string(".") : src.substr(0, k);
+  const std::string git = "git -C '" + root + "' ";
+  const std::string paths = " -- lib include tools cmake 2>/dev/null";
+  const std::string log = runLine(git + "log -1 --format='%h %ct %cd' --date=format:'%Y-%m-%d %H:%M'" + paths);
+  const bool dirty = !runLine(git + "status --porcelain --untracked-files=no" + paths).empty();
+  std::string s = "// model-compiler: compiler sources ";
+  long long commitTime = 0;
+  if (log.empty()) {
+    s += "unknown (no git in " + root + ")";
+  } else {
+    const size_t a = log.find(' '), b = log.find(' ', a + 1);
+    commitTime = atoll(log.substr(a + 1, b - a - 1).c_str());
+    s += "at " + log.substr(0, a) + " (" + log.substr(b + 1) + ")";
+  }
+  if (dirty)
+    s += " + uncommitted changes";
+  struct stat st;
+  char host[64] = "?";
+  gethostname(host, sizeof(host) - 1);
+  if (stat("/proc/self/exe", &st) == 0) {
+    char t[32];
+    strftime(t, sizeof(t), "%Y-%m-%d %H:%M", localtime(&st.st_mtime));
+    s += std::string(", binary built ") + t + " on " + host;
+    if (commitTime > st.st_mtime)
+      s += "; WARNING: the binary is older than that commit, rebuild model-compiler";
+  }
+  return s + "\n";
+}
+
 void exportBundleEntry(llvm::StringRef outputDir, llvm::StringRef bundleName,
                        struct BundleSaveCtx &bundleCtx) {
   std::string outputFile = outputDir;
@@ -9797,6 +9850,9 @@ void exportBundleEntry(llvm::StringRef outputDir, llvm::StringRef bundleName,
   std::ofstream fos(outputFile.c_str(), std::ios::out);
   const std::string optionsComment = vtaOptionsComment();
   fos.write(optionsComment.c_str(), optionsComment.size());
+  //#### JO added (2026-11-24): the compiler's commit and build (compilerStamp above)
+  const std::string stampComment = compilerStamp();
+  fos.write(stampComment.c_str(), stampComment.size());
   fos.write(bundleCtx.summaryComment.c_str(), bundleCtx.summaryComment.size());
   fos.write(VTA_SAVE_COMMON.c_str(), VTA_SAVE_COMMON.size());
   fos.write(bundleCtx.includeHeader.c_str(), bundleCtx.includeHeader.size());

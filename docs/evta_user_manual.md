@@ -52,6 +52,8 @@
   - scp로 소스를 덮지 않는다.
 - **scp로 보내는 것:** bitstream 파일(§2.3), PC에서 cross build한 실행 파일(§4.2).
 - **`Debug2_remote/`와 `vtabundles_xcmpl/build*/`는 git 밖이다**(빌드 결과). 거기에 둔 스크립트는 pull로 오지 않는다.
+- **두 PC가 같이 일할 때:** pull한 뒤 [recent_changes.md](recent_changes.md)의 맨 위를 읽고, 다른 쪽이 할 일이 생기는 변경을 push할 때 그 파일 맨 위에 한 항목을 더한다.
+  빌드한 것이 어느 commit인지는 파일에 적혀 있다(§4.4).
 
 ```bash
 # 보드에서 (최신으로)
@@ -676,10 +678,36 @@ sudo /bin/sh -c "hw/script/run_prof.sh -s _pcsystimed -r MobileNetV2Test"      #
 
 - `isa_ext`는 [evta_isa_ext.md](evta_isa_ext.md), `deit`는 [deit_optimization.md](deit_optimization.md)다.
 - 지금 기본으로 쓰는 것은 보드 build dir의 `_sys*`, `_sysprof`, `_systimed`와 PC의 `_pcsystimed`다. 번호 판은 비교 기록용이다.
-- **주의: 보드의 `_sys*`는 옛 vtalib다**(마지막 빌드 `_systimed` 11-14 09:47, DeiT `_sys` 11-12). ALU 확장 vtalib(11-14 10:37 뒤) 전이라 `_alux*` bitstream에서도 확장을 쓰지 않는다.
-  `_alux3`의 기능을 쓰는 최신 실행 파일은 다섯 모델 모두 `_pcsys27`(11-21)이다. 새로 재려면 PC에서 `_pcsystimed`를 다시 빌드해 보낸다.
+- 보드의 `build_systimed`(single)와 `build_multievtax4_systimed`(multi4)는 11-23 / 11-24에 `vtalib-zcu102-systolic` `398f358`로 다시 빌드했다(모델 실행 파일 전부).
+  그 전(11-14 ~ 11-22)에는 보드의 `_sys*`가 옛 vtalib라 `_alux*` 기능을 쓰지 않았고, 그때 측정은 PC의 `_pcsys27`(11-21)로 했다.
+  build dir별로 지금 어느 vtalib인지는 §4.4의 빌드 흔적으로 본다. `_sysprof`, `_sys` 등 다른 build dir은 다시 빌드하지 않았다.
   bitstream과 vtalib commit의 짝, 판마다 더한 것과 성능 표: [evta_isa_ext.md](evta_isa_ext.md) §5, §5.2, §5.3.
 - bitstream 판은 [evta_isa_ext.md](evta_isa_ext.md) §5.1에 있다. 실행 파일은 vtalib가 bitstream 이름을 보고 기능을 고르므로, 같은 실행 파일이 여러 bitstream에서 돈다.
+
+### 4.4 빌드 흔적: 어느 commit으로 만든 bundle / 실행 파일인가 (2026-11-24)
+
+빌드한 것은 git에 없어서, 다른 PC가 만든 것이나 오래된 것을 구별하기 어려웠다(11-24: 보드 model-compiler가 11-22 수정 전이었고,
+multi4 Resnet18 / VGG16 bundle이 11-06 것이었다). 이제 파일 자체에 남긴다.
+
+| 무엇 | 어디에 | 내용 | 만드는 곳 |
+|---|---|---|---|
+| bundle `.cpp` | 둘째 줄(옵션 목록 다음) `// model-compiler: ...` | NEST-C 컴파일러 소스(`lib include tools cmake`)의 마지막 commit과 날짜, 커밋 안 된 수정 여부, model-compiler binary를 만든 날짜와 host. binary가 그 commit보다 오래됐으면 `WARNING: ... rebuild model-compiler` | `VTASave.cpp` `compilerStamp` (생성할 때 `git -C <소스 트리>`) |
+| 실행 파일 | 문자열 `NESTC_BUILD vtalib=<dir> <commit> <날짜>[ dirty] host=<host> dir=<build dir>` | 링크한 vtalib dir의 마지막 commit, 커밋 안 된 수정 여부, 빌드한 host와 build dir | `vtabundles_xcmpl/build_stamp.cmake` (make마다 돌고, 내용이 바뀔 때만 다시 써서 relink) |
+
+```bash
+head -40 hw/Resnet18Test/mxnet_exported_resnet18.cpp | grep '^// model-compiler:'
+grep -a -o 'NESTC_BUILD [ -~]*' hw/Resnet18Test/vtaMxnetResnet18Bundle_systimed | head -1
+cd vtabundles_xcmpl/hw && bash -c '. ../bininfo.sh; exe_info Resnet18Test/vtaMxnetResnet18Bundle_systimed <bitstream 이름>'
+```
+
+- `run_prof.sh`는 실행 파일마다 `exe :`(만든 날짜, 흔적), `bundle :`(Dir의 bundle `.cpp`의 model-compiler 줄)을 찍고, summary에도 남긴다.
+- **경고:** bitstream 이름의 기능을 vtalib가 쓰기 시작한 commit(§5의 짝 표)보다 실행 파일의 vtalib가 오래됐으면 `WARNING : vtalib <commit> predates ...`를 찍는다.
+  그 실행 파일은 돌지만 그 기능을 쓰지 않는다. 검사하는 commit: `_sa_` 3982d46, bias / `_rq` 76aa60e, `_rq` d26c3e3, `_alux` e1a7924, `_alux2` c50e968, `_alux3` 8191320, `_amul` 398f358.
+  새 기능을 vtalib에 넣으면 `bininfo.sh` `exe_info`에 한 줄 더한다.
+- 흔적이 없는 실행 파일은 11-24 전에 링크한 것이고, `// model-compiler:` 줄이 없는 bundle은 11-24 전에 만든 것이다.
+- bundle 두 개를 바이트 비교할 때는 이 줄을 빼고 비교한다(binary를 만든 날짜가 들어 있다):
+  `diff <(grep -v '^// model-compiler:' a.cpp) <(grep -v '^// model-compiler:' b.cpp)`.
+- PC에서 cross build한 실행 파일도 흔적이 같이 간다(scp한 파일 안에 있다). 흔적의 commit을 보드에서 `git log -1 <commit>`으로 찾으려면 그 PC가 push해 두어야 한다.
 
 ## 5. 실행과 측정 (보드, sudo)
 

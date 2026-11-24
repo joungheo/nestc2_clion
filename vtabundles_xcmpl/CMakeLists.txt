@@ -102,6 +102,14 @@ find_package(PythonInterp 3 REQUIRED)
 #### EXCLUDE_FROM_ALL themselves; `make <target>` still builds one); before, `make` built nothing
 #add_custom_target(hw_bundles)
 add_custom_target(hw_bundles ALL)
+#### JO added (2026-11-24, docs/evta_user_manual.md "빌드 흔적"): every executable links build_stamp.cpp, one string with
+#### vtalib's last commit (dirty or not), the host and this build dir (build_stamp.cmake; rewritten only when it changes).
+#### run_prof.sh prints it per executable and warns when the bitstream needs a newer vtalib (bininfo.sh exe_info).
+set(BUILD_STAMP_CPP ${CMAKE_CURRENT_BINARY_DIR}/build_stamp.cpp)
+add_custom_target(build_stamp
+  COMMAND ${CMAKE_COMMAND} -DOUT=${BUILD_STAMP_CPP} -DVTALIB=${VTALIB} -DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/build_stamp.cmake
+  BYPRODUCTS ${BUILD_STAMP_CPP})
 function(add_bundle dir target)
   set(srcs)
   #### JO added (2026-10-26): several timed .cpp in one executable (multi-EVTA copies, VTA partitions) write
@@ -141,7 +149,10 @@ function(add_bundle dir target)
       list(APPEND srcs ${HW_DIR}/${dir}/${f})
     endif()
   endforeach()
-  add_executable(${target} EXCLUDE_FROM_ALL ${srcs})
+  #### JO changed (2026-11-24): + build_stamp.cpp (above)
+  #add_executable(${target} EXCLUDE_FROM_ALL ${srcs})
+  add_executable(${target} EXCLUDE_FROM_ALL ${srcs} ${BUILD_STAMP_CPP})
+  add_dependencies(${target} build_stamp)
   target_compile_definitions(${target} PRIVATE ${VTA_DEFS})
   target_compile_options(${target} PRIVATE ${VTA_OPTS})
   target_include_directories(${target} PRIVATE

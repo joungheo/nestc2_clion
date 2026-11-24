@@ -10,6 +10,14 @@ code for NPUs. Glow itself is a **git submodule** (`glow/`), as are TVM (`tvm/`)
 sources, headers and CMake files on top of the pristine submodule at configure time. Understanding that
 overlay is the single most important thing about this repo.
 
+## Two host PCs and the board share this tree (read first)
+
+Two host PCs (`ubun`, user `ubuntu`; `ubuntu2`, user `jerry`) and the board work on the same git `main`. Builds (model-compiler,
+executables, bitstreams) are not in git. **After `git pull`, read the top of [docs/recent_changes.md](docs/recent_changes.md); when a
+push needs the other side to act (rebuild model-compiler, regenerate bundles, rebuild executables, a new bitstream), add an entry at its
+top in the same commit.** Every bundle `.cpp` (`// model-compiler:` line) and executable (`NESTC_BUILD` string, printed by `run_prof.sh`)
+records the commit it was built from (2026-11-24, `docs/evta_user_manual.md` 4.4).
+
 ## The overlay mechanism (read before editing anything)
 
 The top-level [CMakeLists.txt](CMakeLists.txt) does three things before `add_subdirectory(glow)`:

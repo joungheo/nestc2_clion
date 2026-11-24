@@ -181,6 +181,8 @@ for D in "$@"; do
   BH="cd ${BLD}${SUFFIX} && make $3"; case $SUFFIX in _pcsys*) BH="cross-build $3 on the PC with BUNDLE_EXE_SUFFIX=$SUFFIX, scp it to $D/";; esac
   [ -x $D/$EXE ] || { echo "$D/$EXE not built ($BH)"
                       printf "%-30s %-34s NOT BUILT\n" $D $EXE >> $SUM; continue; }
+  #### JO added (2026-11-24): who built the executable and its bundle, from which commits (../bininfo.sh exe_info), also in the summary
+  XI=$(exe_info $D/$EXE $BIN); echo "$XI"
   #### JO changed (2026-11-01): record the loaded bitstream in /tmp/evta_bitstream (vtalib's pynq_driver.cc checks the
   #### EVTA count of its name before mapping the registers: a missing EVTA is an SError, not a clean error)
   # echo 0 > /sys/class/fpga_manager/fpga0/flags; echo $BIN > /sys/class/fpga_manager/fpga0/firmware
@@ -258,6 +260,7 @@ for D in "$@"; do
   [ -n "$acc" ] && t="$t; accuracy: $acc"
   printf "%-30s %-34s exit=%-3s omp=%-2s %-10s %s\n" $D $EXE $rc $OMP "$res" "$t" >> $SUM
   [ -n "$more" ] && echo "$more" >> $SUM
+  echo "$XI" | sed 's/^  /    /' >> $SUM
   done 3< <(grep -E "^run $D " $RUN_ALL)
 done
 echo; echo "== summary ($SUM)"; cat $SUM
