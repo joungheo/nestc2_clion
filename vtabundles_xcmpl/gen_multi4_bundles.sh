@@ -13,17 +13,29 @@ MCB=$B/glow/bin/model-compiler
 rc=0
 for D in "$@"; do
   case $D in
-    MultiEVTAResnet18Test) base=mxnet_exported_resnet18; S=$B/vta/multievta_bundles/$D
+    #### JO changed (2026-11-24): Resnet18 / VGG16 / DeiT as their single bundles (gen_calib_bundle.sh, gen_deit_bundle.sh):
+    #### the 200 / 100-image profiles of vta/bundles/<Dir>/calib/, VGG16's normalized model, -vta-round-shift, DeiT's pruned
+    #### model with QSCHEMA=symmetric (run gen_calib_bundle.sh Vgg16Cifar10Test / gen_deit_bundle.sh first: they make norm/ and
+    #### deit_prune.onnx). Before: the one-image profiles, the plain VGG16 model and the whole DeiT model (bundles of 11-06 / 11-10).
+    #MultiEVTAResnet18Test) base=mxnet_exported_resnet18; S=$B/vta/multievta_bundles/$D
+    #  set -- -model=$B/models/mxnet_exported_resnet18.onnx -model-input=data,float,[1,224,224,3] \
+    #    -load-profile=$S/mxnet_exported_resnet18_calib_1.yaml ;;
+    MultiEVTAResnet18Test) base=mxnet_exported_resnet18; S=$B/vta/bundles/Resnet18Test
       set -- -model=$B/models/mxnet_exported_resnet18.onnx -model-input=data,float,[1,224,224,3] \
-        -load-profile=$S/mxnet_exported_resnet18_calib_1.yaml ;;
+        -load-profile=$B/../vta/bundles/Resnet18Test/calib/mxnet_exported_resnet18_calib_n200.yaml -vta-round-shift ;;
     MultiEVTAResnet50Test) base=resnet50; S=$B/vta/bundles/Resnet50Test
       set -- -model=$S/resnet50.onnx -keep-original-precision-for-nodes=SoftMax \
         -model-input=gpu_0/data_0,float,[1,3,224,224] -load-profile=$S/resnet50_calib_2.yaml ;;
+    #MultiEVTAVgg16Cifar10Test) base=vgg16_cifar10; S=$B/vta/bundles/Vgg16Cifar10Test
+    #  set -- -model=$S/vgg16_cifar10.onnx -model-input=input,float,[1,3,32,32] -load-profile=$S/vgg16_calib_1.yaml ;;
     MultiEVTAVgg16Cifar10Test) base=vgg16_cifar10; S=$B/vta/bundles/Vgg16Cifar10Test
-      set -- -model=$S/vgg16_cifar10.onnx -model-input=input,float,[1,3,32,32] -load-profile=$S/vgg16_calib_1.yaml ;;
+      set -- -model=$S/norm/vgg16_cifar10.onnx -model-input=input,float,[1,3,32,32] \
+        -load-profile=$B/../vta/bundles/Vgg16Cifar10Test/calib/vgg16_cifar10_calib_n100.yaml -vta-round-shift ;;
     #### JO added (2026-11-10): DeiT-tiny (the single bundle's folded model and profile, -vta-round-shift as gen_deit_bundle.sh)
     MultiEVTADeiTTest) base=deit; S=$B/vta/bundles/DeiTTest
-      set -- -model=$S/deit_fold.onnx -model-input=pixel_values,float,[1,3,224,224] -load-profile=$S/deit_calib.yaml \
+      #set -- -model=$S/deit_fold.onnx -model-input=pixel_values,float,[1,3,224,224] -load-profile=$S/deit_calib.yaml \
+      #  -vta-round-shift ;;
+      set -- -model=$S/deit_prune.onnx -model-input=pixel_values,float,[1,3,224,224] -load-profile=$S/deit_calib_prune.yaml \
         -vta-round-shift ;;
     #### JO added (2026-11-22): MobileNetV2 (the single bundle's model; copy 0 named mobilenetv2 below)
     MultiEVTAMobileNetV2Test) base=mobilenetv2; S=$B/vta/bundles/MobileNetV2Test
@@ -49,7 +61,9 @@ for D in "$@"; do
   mkdir -p $O && cd $O || exit 1
   # the single bundle's skip list (model-compiler reads ./VTASkipQuantizeNodes.txt)
   rm -f VTASkipQuantizeNodes.txt
-  [ $D != MultiEVTAResnet18Test ] && [ -f $S/VTASkipQuantizeNodes.txt ] && cp $S/VTASkipQuantizeNodes.txt .
+  #### JO changed (2026-11-24): VGG16 as Resnet18 (gen_calib_bundle.sh removes the skip list of its single Dirs)
+  #[ $D != MultiEVTAResnet18Test ] && [ -f $S/VTASkipQuantizeNodes.txt ] && cp $S/VTASkipQuantizeNodes.txt .
+  case $D in MultiEVTAResnet18Test|MultiEVTAVgg16Cifar10Test) ;; *) [ -f $S/VTASkipQuantizeNodes.txt ] && cp $S/VTASkipQuantizeNodes.txt . ;; esac
   for i in 0 1 2 3; do
     # if [ $i = 0 ]; then extra=""; else n=${base}_$i; extra="-index-multi-evta=$((1 << i)) -network-name=$n -main-entry-name=$n"; fi
     #### JO changed (2026-11-10): DeiT copy 0 is named deit (-network-name) as the single bundle
@@ -61,7 +75,9 @@ for D in "$@"; do
       prof=$(echo "$@" | sed -n 's/.*-load-profile=\([^ ]*\).*/\1/p'); cp $prof calib_mc_$i.yaml
       args=$(echo "$@" | sed "s|-load-profile=[^ ]*|-load-profile=$O/calib_mc_$i.yaml|")
       for k in 1 2 3 4 5 6; do
-        $MCB -g $args -backend=VTA -emit-bundle=$O -bundle-api=dynamic -quantization-schema=symmetric_with_power2_scale \
+        #### JO changed (2026-11-24): free scales as gen_deit_bundle.sh (QSCHEMA=symmetric; -vta-pow2-ratio keeps the EVTA ratios power-of-two)
+        #$MCB -g $args -backend=VTA -emit-bundle=$O -bundle-api=dynamic -quantization-schema=symmetric_with_power2_scale \
+        $MCB -g $args -backend=VTA -emit-bundle=$O -bundle-api=dynamic -quantization-schema=symmetric \
           $extra > gen_$i.log 2>&1
         r=$?
         h=$(grep -o "Current graph hash: 0x[0-9A-Fa-f]*" gen_$i.log | awk '{print $4}')
