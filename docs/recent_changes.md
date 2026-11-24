@@ -21,7 +21,7 @@
 
 ---
 
-### 2026-11-24 ubuntu2 COMMIT — MobileNetV2 112×112 층 3개의 schedule을 4개 동시 실행에서 다시 찾음, multi4 main에 `MULTI_FREE` / `MULTI_STAGGER_US`
+### 2026-11-24 ubuntu2 744b1fb — MobileNetV2 112×112 층 3개의 schedule을 4개 동시 실행에서 다시 찾음, multi4 main에 `MULTI_FREE` / `MULTI_STAGGER_US`
 - **바뀐 것:**
   - `include/Backends/VTA/VTASchedules.h`: 112, 112, 32 → 16 (1, 16, 112), 112, 112, 16 → 96 (2, 2, 112), 첫 depthwise 112, 112, 32 (2, 4, 112).
     multi4 처리량 +0.9–1.5 %, EVTA 1개는 느려지지 않음, conv dump 208개 같음([evta_sched_search.md](evta_sched_search.md) §5).
