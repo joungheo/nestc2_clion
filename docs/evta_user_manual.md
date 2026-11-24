@@ -294,7 +294,13 @@ sudo cp /home/xilinx/JO/npuprg/bit/<목적>_<YYMMDD>/vtahw_<dir>.bin /lib/firmwa
 - **HLS GEMM:** `vtahw_zcu102_1x16_i8w8a32_16_16_19_18_380mhz.bin`(10-28, `BIN` 기본). `vta/vtalib` 실행 파일(`build`, `build_prof`, `build_timed`)용.
 - **systolic, single EVTA:** 가장 최근은 `..._sa_alux3_400mhz_rq.bin`(11-15)이다. 모든 기능(requantize, bias reset, ALU 확장 1~3단계)이 들어 있다.
   - `SYS_BIN` 기본은 2026-11-22부터 이 판이다(그 전 `..._sa_400mhz_rq.bin`, ALU 확장 없음). 옛 판은 `BIN=`으로 준다.
-- **systolic, EVTA 4개:** 가장 최근은 `..._16_15_18_17_4evta_sa_400mhz_rq.bin`(11-04, ALU 확장 없음, `SYS_BIN` 기본)이다.
+  - `..._sa_amul_400mhz_rq.bin`(11-23): ALU 확장 중 MUL immediate만(`_amul`, avgpool on EVTA). MobileNetV2가 `_alux3`보다 0.26 ms 느리다.
+  - `..._sa_amul_bc_400mhz_rq2.bin`(11-24): `_amul` + broadcast vector 연산 II 1(`_amul_bc`). CNN 다섯 모델은 `_alux3`와 같은 시간, LUT 45.0k(`_alux3` 69.8k). DeiT 확장 연산은 없다.
+    `rq2`는 고쳐서 다시 합성한 두 번째 판이다. 첫 판 `..._sa_amul_bc_400mhz_rq.bin`은 depthwise가 틀려 쓰지 않는다.
+- **systolic, EVTA 4개:** `SYS_BIN` 기본은 2026-11-24부터 `..._16_15_18_17_4evta_sa_amul_400mhz_hp322_rq.bin`(11-23, MUL immediate, HP 포트 321.7 MHz)이다.
+  - 그 전 기본 `..._4evta_sa_400mhz_rq.bin`(11-04, ALU 확장 없음, avgpool CPU). per copy MobileNetV2 19.23 → 18.69, Resnet50 78.47 → 77.99 ms.
+  - `..._4evta_sa_amul_bc_400mhz_hp282_rq.bin`(11-24): 보드는 통과했지만 CNN 이득이 없고 HP 클럭이 낮아(281.7 MHz) Resnet50이 1.3 ms 느리다. 쓰지 않는다.
+  - 이름 조각(`_amul`, `_amul_bc`, `_rq2`, `_hp322` …)의 뜻: [evta_isa_ext.md](evta_isa_ext.md) §5 "bitstream 이름 읽는 법".
 - **최종판은 아니다.** 다음 판의 후보(RQ ALU 연산, multi4 ALU 확장, KV260)가 있다.
 - **짝이 되는 vtalib:** `_alux3`의 기능은 `vtalib-zcu102-systolic` commit `8191320`(11-15) 뒤로 빌드한 실행 파일만 쓴다. 보드의 `_sys*`는 그 전 판이다(§4.3).
 - 판마다 날짜, 클럭, 더한 기능, WNS, 지금 소스와의 관계: [evta_isa_ext.md](evta_isa_ext.md) §5.1.

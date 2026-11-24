@@ -13,7 +13,10 @@ case " $* " in *" -h "*|*" --help "*) echo "usage: sudo $0 [-t <threads>] [Dir .
   exit 0;; esac
 [ -n "${BIN:-}" ] && BSRC="BIN= in the environment" || BSRC="BIN of $0"
 BIN=${BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_380mhz.bin}
-SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz_rq.bin}
+#### JO changed (2026-11-24): SYS_BIN = the ALU MUL immediate build (_amul, HP ports 321.7 MHz; avgpool on the EVTA);
+#### before: _4evta_sa_400mhz_rq.bin (docs/evta_isa_ext.md section 5)
+#SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz_rq.bin}
+SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_amul_400mhz_hp322_rq.bin}
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-1}
 #### JO added (2026-11-10): -t <threads> = OMP_NUM_THREADS; other options (-s ...) belong to run_prof.sh; a Dir that is not a
 #### run line stops before any run (it ran nothing and said nothing) and names the run lines that match it ignoring case

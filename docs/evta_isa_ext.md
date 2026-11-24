@@ -189,6 +189,31 @@ GEMM과 ALU 명령에 그 값이 들어가고, `en = 0`으로 다시 끈다(`cmd
   반대로 켤 수 있는 bitstream에서 `=0`으로 끄는 것은 안전하다. 이전 경로와 비교할 때 쓴다.
 - 기본 bitstream은 `vtabundles_xcmpl/hw*/script/run_all.sh` 맨 위의 `BIN`(HLS GEMM)과 `SYS_BIN`(systolic, `-s _sys*`)이다.
   다른 것은 `BIN=<file>`로 준다(`-s _sys*`에서도 `BIN`이 우선).
+  - `SYS_BIN` 기본(2026-11-24): single `..._16_16_19_18_sa_alux3_400mhz_rq.bin`(11-22부터), multi4 `..._16_15_18_17_4evta_sa_amul_400mhz_hp322_rq.bin`
+    (11-24부터, 그 전 `..._4evta_sa_400mhz_rq.bin`). single은 `_amul_bc` rq2가 CNN에서 같은 시간이지만 DeiT용 확장 연산이 없어 `_alux3`로 둔다.
+
+**bitstream 이름 읽는 법** (예: `vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_amul_bc_400mhz_hp282_rq.bin`)
+
+| 이름 조각 | 뜻 | 누가 읽나 |
+|---|---|---|
+| `vtahw_` | 이 작업에서 합성한 판(etri 판과 구분) | 사람 |
+| `zcu102_1x16_i8w8a32` | 보드, batch 1 × block 16, int8 입력 / 가중치, int32 acc | 사람 |
+| `16_16_19_18` / `16_15_18_17` | uop / inp / wgt / acc buffer 크기(log2 바이트). single / multi | vtalib 빌드(`BUNDLE_SET`) |
+| `_4evta` | EVTA 4개. 없으면 1개 | vtalib `CheckLoadedBitstream`(EVTA 수 검사) |
+| `_sa` | systolic GEMM(`SYSTOLIC=1`). 없으면 HLS GEMM | 사람(실행 파일은 `vtalib-zcu102-systolic` 빌드 `_sys*`) |
+| `_alux`, `_alux2`, `_alux3` | ALU 확장 1~3단계 전부(§8.12–8.15). DeiT의 layer norm / softmax / GELU 표, CNN avgpool | vtalib `VTAHasAluExt*`, `VTAHasAluMul` |
+| `_amul` | ALU 확장 중 MUL immediate(op 4) 하나만(Makefile `ALUMUL=1`, ⑨). CNN이 쓰는 확장은 avgpool의 이것뿐이라, 표 RAM / slot 루프 없이 LUT +1.2k로 넣었다. multi4에 들어가는 크기 | vtalib `VTAHasAluMul`(→ `avgpool_evta`) |
+| `_amul_bc` | `_amul` + broadcast vector 연산(src가 줄마다 같은 vector MIN / MAX / ADD / SHR)을 imm 루프에서 II 1로(`ALUBC=1`, ⑩). MobileNetV2 depthwise의 채널별 shift가 빨라진다. 명령 형식은 같아서 vtalib는 `_amul`로 본다 | vtalib는 `_amul`만 본다 |
+| `_400mhz` | EVTA 클럭(`FREQ=`) | 사람 |
+| `_hp322`, `_hp282` | multi4의 HP 포트(DDR 쪽) 클럭을 321.7 / 281.7 MHz로 내린 판(`flow/mmcm_hp_set.tcl`). 없으면 333 MHz. 행 Y219를 피한 배선에서 HP 경로가 333 MHz를 못 맞춰 내렸다 | 사람 |
+| `_rq` | requantize + bias reset(§3.1, §3.2). `BUILD_TAG=rq` | vtalib(`_rq` → `EVTA_REQUANT`, `EVTA_BIAS_RESET`) |
+| `_rq2` | 같은 설정을 고쳐서 다시 합성한 두 번째 판(`BUILD_TAG=rq2`). `_amul_bc`의 첫 판 `..._sa_amul_bc_400mhz_rq.bin`(11-23)은 broadcast src 읽는 순서가 틀려 MobileNetV2 depthwise가 틀렸고, 고친 판이 rq2다. vtalib는 `_rq`가 들어 있으니 `_rq`로 본다 | vtalib(`_rq`와 같음) |
+| `_alu1`, `_epr`, `_bias`, `_y219` | 옛 판: ALU imm II 1, Explore post-route phys_opt, bias reset만, 행 Y219를 피한 333 MHz 판 | 사람(`_bias`는 vtalib bias reset) |
+
+- 지금 쓰는 판과 쓰지 않는 판:
+  - single: `_alux3`(기본, DeiT까지), `_amul_bc_400mhz_rq2`(CNN 시간 `_alux3`와 같음, LUT 45.0k, 보드 통과), `_amul`(MobileNetV2 0.26 ms 느림). `_amul_bc_400mhz_rq`(rq2 없는 것)는 틀려서 쓰지 않는다.
+  - multi4: `_amul_400mhz_hp322_rq`(기본), `_amul_bc_400mhz_hp282_rq`(보드 통과, CNN 이득 없음, HP 클럭이 낮아 Resnet50 1.3 ms 느림. 쓰지 않는다), `_400mhz_rq`(ALU 확장 없음, avgpool CPU).
+- 네 판 모두 vtalib는 `vtalib-zcu102-systolic` `398f358`(11-23) 뒤의 것이면 된다. 하드웨어 변경 내용은 §5.2 ⑨ / ⑩ / multi4 ⑨ / ⑩, 시간은 §5.3 표 E.
 
 ### 5.1 systolic bitstream을 만든 순서, 지금의 최신판 (2026-11-21에 정리)
 
