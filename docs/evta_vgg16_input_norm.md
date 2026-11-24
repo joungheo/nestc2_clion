@@ -48,7 +48,8 @@
 
 - PC float의 1,000장 값(87.3 %)과 10,000장 값(86.58 %)은 그림 수가 달라 차이가 난다.
 - 지금 저장소의 `Vgg16Cifar10Test` bundle은 '후' 줄이다(weights md5 `79ba584d59a6`). `vtabundles_xcmpl/hw/script/accuracy.txt`에 86.41 %로 적었다.
-- multi4 `MultiEVTAVgg16Cifar10Test`는 아직 정규화 전의 bundle이다. 다시 만들려면 `gen_multi4_bundles.sh`에 `MODEL=` / `PROF=`로 정규화 모델과 profile을 준다.
+- multi4 `MultiEVTAVgg16Cifar10Test`도 2026-11-24에 정규화 모델과 이 profile로 다시 만들었다(`gen_multi4_bundles.sh`의 기본값). copy 0은 single bundle과 바이트 단위로 같다.
+  `airplane/0001.png`의 top-1은 8 (0.607698)이라 `multi_model.h`의 `MODEL_EXPECT`를 0에서 8로 바꿨다(정규화 전 모델은 0).
 
 ## 4. 명령
 

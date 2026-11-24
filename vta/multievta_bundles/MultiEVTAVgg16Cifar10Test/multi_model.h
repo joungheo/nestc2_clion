@@ -36,7 +36,10 @@
 #define MODEL_OUTPUT "output"
 // 1: the output is the logits (softmax in the main)
 #define MODEL_SOFTMAX 1
-#define MODEL_EXPECT 0
+// JO changed (2026-11-24): the normalized model (docs/evta_vgg16_input_norm.md) says 8 (0.607698) on airplane/0001.png,
+// as the single bundle; the plain model said 0
+//#define MODEL_EXPECT 0
+#define MODEL_EXPECT 8
 // copy 0 alone: the single-thread executable links only its .cpp
 #define MODEL_COPY0 \
     {&vgg16_cifar10_config, vgg16_cifar10_load_module, vgg16_cifar10_destroy_module, vgg16_cifar10, "vgg16_cifar10.weights.bin", initVTARuntime, destroyVTARuntime}
