@@ -24,7 +24,8 @@ CNN은 CPU에 남은 일이 거의 없다. 더 빨라지려면 EVTA 자체(sched
 | 5 | Resnet50 / Resnet18 / MobileNetV2 calibration을 그림 여러 장으로 | 끝 (11-22, [evta_calib_images.md](evta_calib_images.md)): 첫 conv 반올림 버그도 찾음. Resnet50 44.66 → 52.92 %, Resnet18 52.61 → 55.67 %, MobileNetV2 56.19 → 56.27 %. symmetric scale은 남은 후보 |
 | 6 | VGG16 CIFAR-10 입력 정규화 | 끝 (11-22, [evta_vgg16_input_norm.md](evta_vgg16_input_norm.md)): 29.27 → 86.41 % (float 86.58 %), 시간 같음 |
 | 4 | AMD DPU와 비교: ResNet50, MobileNetV2 | 끝 (11-22, 아래 §5, [evta_dpu_compare.md](evta_dpu_compare.md)): 가동률은 같거나 높고, 절대 성능은 DPU가 4–5배다. calibration을 바꿔 정확도 손실도 DPU 수준이다(`evta_accuracy.md` §7). multi4는 ALU 확장 판으로 다시 잰다 |
-| 7 | multi4 bitstream 다시 만들기 (ALU 확장 3단계까지) | 배치 / 배선 중 (11-22, [evta_multi4_alux3.md](evta_multi4_alux3.md)). 처음 판은 LUT 287,909개가 필요했다(칩 271,752개; compute 하나 49.5k LUT). ALU에 경로가 둘 있었다: immediate 연산만 하는 II 1 루프와, 확장 연산을 모두 하는 II 1 slot 루프다. slot 루프도 immediate 연산을 한 slot에 하므로 앞 루프를 뺐다(`vta.cc` `VTA_ALUX_NO_IMM_LOOP`, `make ALUX_NOIMM=1`, `_ni`). compute 49.5k → 38.5k, 전체 243,945개(89.3 %), BRAM 580. C 시뮬레이션 무작위 시험 모두 통과. SmartConnect를 AXI Interconnect로 바꾸는 것(`VTA_DATA_IC=1`)은 LUT 245.1k, BRAM 742로 더 나빠 쓰지 않는다 |
+| 7 | multi4 bitstream 다시 만들기 (ALU 확장) | **끝: multi4는 `_amul`** (11-24, [evta_multi4_alux3.md](evta_multi4_alux3.md) §6.2: `_rq` + ALU MUL immediate, LUT 62 %, HP 321.7 MHz, avgpool on EVTA; `SYS_BIN` 기본). alux3 / alux1 multi4는 멈춤(§4.2): alux3 `_ni` + crossbar는 LUT 77 %, 결함 행 Y219를 지나는 net 1,922개, 행 둘레를 비운 판은 WNS −0.45 / −0.87 ns(400 / 379 MHz), alux1 + crossbar(LUT 70 %, 행 net 781)는 RapidWright 재배선이 수렴하지 않았다(연결 못 함 또는 WNS −9.5 / −4.3 ns). DeiT용 2·3단계 확장은 EVTA 1개(`_alux3`)에만 |
+| 8 | KV260에 EVTA 1개 (DPU B4096F 1개 @ 300 MHz와 비교) | **ZCU102에서 DPU 비교와 구조 수정이 다 끝난 뒤.** ① 같은 칩(`xczu5ev-sfvc784`, Vivado 2020.1에 K26 품번이 없으면)으로 지금 single sa를 구현해 LUT / BRAM / 클럭을 본다. BRAM36 258개 > K26 144개라 buffer를 URAM으로 옮겨야 한다. DSP(약 300 / 1,248)는 문제없다. ② DPU와 같은 MAC 수(2,048)로 키울 때 DSP가 문제다: INT8 packing(DSP 하나에 곱 2개, WP486) + DSP 2배 클럭(외부 250–300 / DSP 500–600 MHz; `evta_systolic.md` 후보 C·D, §9.5 / §9.7)이면 DSP 512개. ③ 보드가 생기면 `Resnet50TvTest` / `MobileNetV2TfTest`를 ImageNet val로 잰다. DPU 수치: [evta_dpu_compare.md](evta_dpu_compare.md) §2 (KV260 ResNet50 85.5 / 89.3 fps, MobileNetV2 290.0 / 338.1 fps). 픽셀 병렬(PP 8)과 입력 공급의 설계 메모: 아래 §5 |
 
 ## 3. SW에 남은 일
 
@@ -81,10 +82,25 @@ host PC 냉각이 고쳐질 때까지 그 PC에서는 모든 코어를 쓰는 �
 - 배열은 64 × 64도 32 × 32도 아니다. 픽셀 8개 × 입력 채널 16 × 출력 채널 16 = 2,048이다.
   - 우리 GEMM(입력 16 × 출력 16 = 256 MAC)이 8개 있고, 8개가 같은 weight를 서로 다른 픽셀 8개에 쓰는 셈이다.
   - weight는 8 픽셀이 같이 쓰므로 weight buffer와 대역이 8배로 늘지 않는다.
+  - 클럭마다 들어가는 값과 곱셈기 수(11-23; PG338의 병렬도 PP 8 / ICP 16 / OCP 16에서 셈한 것이고, 내부 회로는 공개되지 않았다):
+    - 입력값 8 × 16 = 128개. 입력값 a[p][ic] 하나는 출력 채널 16개의 곱셈기 16개에 들어간다.
+    - weight 16 × 16 = 256개. weight w[oc][ic] 하나는 픽셀 8개의 곱셈기 8개에 들어간다.
+    - 곱셈기 128 × 16 = 256 × 8 = 2,048개. (p, oc)마다 입력 채널 16개의 곱을 더해 출력 128개(8 픽셀 × 16 채널)에 쌓는다.
+    - 우리 16 × 16(batch 1)은 입력값 16개가 곱셈기 16개씩, weight 256개가 곱셈기 1개씩이다. DPU처럼 하려면 GEMM의 batch(VTA `BATCH`, 지금 1)를 8로 하는 것과 같다.
 - DSP는 데이터 클럭의 2배로 돈다(ZCU102 표: 281 MHz, DSP 562 MHz). 그리고 DSP48E2 하나로 operand 하나를 같이 쓰는 int8 곱 2개를 한다(INT8 packing, WP486).
   - 그래서 DSP 하나가 데이터 클럭마다 MAC 4개를 한다. 2,048 MAC에 곱셈 DSP 512개 정도면 된다(계산값. 실제 수는 PG338 표와 설정에 따라 다르다).
   - ZU9EG의 DSP는 2,520개다. 그래서 B4096 3개(MAC 6,144)가 들어간다.
 - 우리는 DSP 하나가 MAC 하나다. EVTA 1개에 DSP 268개, multi2 536개였다(`evta_systolic.md`). multi4에서 모자라는 것은 DSP가 아니라 BRAM(556 / 912)과 결함 행 Y219 아래 자리다.
+
+**픽셀 병렬을 우리 GEMM에 넣으려면 (순서 8의 설계 메모, 11-23)**
+- 목표: 한 장(batch 1) 안에서 한 행의 이웃 픽셀 8개가 같은 weight를 같이 쓰게 한다(DPU의 PP 8). 이미지 폭이 8보다 커야 쓸모가 있다(ResNet50 마지막 7 × 7은 7/8).
+- DSP packing도 같은 모양이다: DSP 하나에 같은 weight × 픽셀 2개(WP486), DSP 2배 클럭이면 픽셀 4개분.
+- 어려운 점은 입력 공급이다. 클럭마다 픽셀 8개 × 16 채널(1,024비트)을 GEMM에 넣어야 한다.
+  - **8배 빠르게 읽기는 안 된다:** BRAM은 400 MHz도 빠듯하다(칩 상한 600–700 MHz).
+  - **8배 넓게 읽기는 되지만 정렬된 묶음만:** 한 칸 = 픽셀 8개로 두면 한 주소로 0–7, 8–15만 나온다. 3 × 3의 탭 kx = 1은 1–8이 필요해 두 칸에 걸친다. inp buffer의 두 포트는 LOAD 쓰기와 GEMM 읽기가 쓰고 있어 두 칸을 함께 읽을 수 없다. 1 × 1 conv(stride 1)에는 정렬 문제가 없다.
+  - **8 bank + 회전:** 픽셀 x를 bank x mod 8에 두고 bank마다 주소를 따로 주면 어느 위치에서 시작해도 8개가 한 클럭에 나온다. bank 순서를 lane 순서로 돌리는 128비트 × 8:1 선택 회로가 LUT 약 2–3k, register 한 단(HLS `ARRAY_PARTITION cyclic factor=8` + 주소 계산). stride 2는 입력이 짝수 bank에 몰려(bank 충돌) LOAD 때 짝 / 홀 픽셀을 나눠 두어야 한다(conv0 pack이 stride를 채널로 옮기는 것과 같은 생각).
+  - **LOAD 때 탭별 사본:** 탭 kx마다 한 칸 밀린 사본을 만들어 늘 정렬해 둔다. 하드웨어는 거의 그대로지만 inp SRAM과 DMA가 KW배(3 × 3이면 3배)라 BRAM이 적은 KV260에 불리하다.
+- 순서: 1 × 1 conv에 8배 넓게 읽기 먼저(ResNet50 / MobileNetV2 연산의 큰 몫), 그다음 8 bank + 회전으로 3 × 3.
 
 **최대 성능 (peak)**
 

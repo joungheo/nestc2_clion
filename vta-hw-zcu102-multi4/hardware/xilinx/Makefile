@@ -81,13 +81,17 @@ ALUBC ?= 0
 ifeq ($(ALUBC)$(ALUMUL),10)
 $(error ALUBC=1 needs ALUMUL=1)
 endif
-IP_NAME := $(CONF)_$(NUM_EVTA)evta$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(SYSTOLIC)),_sa)$(if $(filter 1,$(ALUX)),_alux)$(if $(filter 1,$(ALUX_NOIMM)),_ni)$(if $(filter 1,$(ALUMUL)),_amul)$(if $(filter 1,$(ALUBC)),_bc)
+#### JO added (2026-11-23): ALUX_STEP1=1 (with ALUX=1) -> src/vta_alux1.cc, the ALU extension step 1 (11-14 source), "_alux1" in the IP name
+ALUX_STEP1 ?= 0
+#IP_NAME := $(CONF)_$(NUM_EVTA)evta$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(SYSTOLIC)),_sa)$(if $(filter 1,$(ALUX)),_alux)$(if $(filter 1,$(ALUX_NOIMM)),_ni)$(if $(filter 1,$(ALUMUL)),_amul)$(if $(filter 1,$(ALUBC)),_bc)
+IP_NAME := $(CONF)_$(NUM_EVTA)evta$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(SYSTOLIC)),_sa)$(if $(filter 1,$(ALUX)),_alux$(if $(filter 1,$(ALUX_STEP1)),1))$(if $(filter 1,$(ALUX_NOIMM)),_ni)$(if $(filter 1,$(ALUMUL)),_amul)$(if $(filter 1,$(ALUBC)),_bc)
 BUILD_NAME := $(IP_NAME)$(if $(FREQ),_$(FREQ)mhz)$(if $(BUILD_TAG),_$(BUILD_TAG))
 export VTA_SYSTOLIC := $(SYSTOLIC)
 export VTA_ALUX := $(ALUX)
 export VTA_ALUX_NOIMM := $(ALUX_NOIMM)
 export VTA_ALU_MUL := $(ALUMUL)
 export VTA_ALU_BC := $(ALUBC)
+export VTA_ALUX_STEP1 := $(ALUX_STEP1)
 export VTA_IMPL_STRATEGY := $(IMPL_STRATEGY)
 #### JO added (2026-11-04): IMPL_TO_STEP=opt_design stops impl_1 after opt_design (multi4 Y219 flow input)
 IMPL_TO_STEP ?=

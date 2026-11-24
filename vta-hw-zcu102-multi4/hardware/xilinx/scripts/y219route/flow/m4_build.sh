@@ -12,7 +12,9 @@ V="source /tools/Xilinx/v2020.1/Vivado/2020.1/settings64.sh && cd $M/hardware/xi
 docker exec -u ubuntu vivado2020-build bash -c "$V && make bin JOBS=4 BUILD_TAG=$T IMPL_TO_STEP=opt_design $*" > $M/build/m4_$T.log 2>&1 &
 MK=$!
 I=$(ls -d $M/build/hardware/xilinx/vivado/*_$T 2>/dev/null)
-while kill -0 $MK 2> /dev/null; do
+#### JO changed (2026-11-23): docker is a sudo wrapper here, kill -0 on a root process fails (EPERM) and the loop ended at once
+#while kill -0 $MK 2> /dev/null; do
+while [ -d /proc/$MK ]; do
   sleep 60
   [ -z "$I" ] && I=$(ls -d $M/build/hardware/xilinx/vivado/*_$T 2>/dev/null)
   R=$I/vta.runs/impl_1
@@ -24,6 +26,7 @@ while kill -0 $MK 2> /dev/null; do
   fi
 done
 wait $MK; echo "make bin rc=$?"
+[ -z "$I" ] && I=$(ls -d $M/build/hardware/xilinx/vivado/*_$T 2>/dev/null)
 R=$I/vta.runs/impl_1
 ls -la $R/vta_wrapper_opt.dcp || { echo ALL_DONE; exit 1; }
 mkdir -p $M/build/y219

@@ -138,7 +138,7 @@ EVTA 1개 bitstream에는 ALU 확장 3단계(`_alux3`)가 있다. 그런데 EVTA
   - bitstream 이름에 `_4evta_sa_alux3_400mhz_rq`가 들어가게 한다(+ `_ni`). vtalib는 이름으로 기능을 켠다.
   - 보드에서 확인한다: hwtest probe 40/40, golden, CNN dump가 EVTA 1개와 byte 단위로 같은지.
   - multi4 MobileNetV2 / ResNet50 / DeiT를 다시 잰다([evta_dpu_compare.md](evta_dpu_compare.md) §6.1).
-- **`m4_build.sh`의 문제:** 이번에는 make가 끝난 뒤 impl dir 변수(`I`)가 비어 `run_flow.sh`를 부르지 않았다(`build/m4_ni_driver.log`: `ls: cannot access '/vta.runs/impl_1/...'`). 그래서 아래처럼 직접 불렀다. 원인은 아직 고치지 않았다.
+- **`m4_build.sh`의 문제:** 이번에는 make가 끝난 뒤 impl dir 변수(`I`)가 비어 `run_flow.sh`를 부르지 않았다(`build/m4_ni_driver.log`: `ls: cannot access '/vta.runs/impl_1/...'`). 그래서 아래처럼 직접 불렀다. 원인은 11-23에 고쳤다(§4.2).
 
 ## 4. 명령
 
@@ -179,14 +179,100 @@ NOIMM=1 vta-hw-zcu102-systolic/hardware/xilinx/sim/run_csim.sh    # imm 루프�
   - `*.utilization.rpt`
 - multi4의 bitstream은 `build/y219/rs_m<tag>.bit`이고, `bit2bin.py`로 `.bin`을 만든다.
 
+## 4.1 ALU 확장 1단계 + crossbar multi4 (`ALUX_STEP1=1`, 11-23)
+
+**왜**
+- 11-04 `_rq` multi4는 LUT 164k(60 %)에서 빌드 한 번이 1–1.5시간이었고 Y219 행을 지나는 net이 1개였다.
+- alux3 crossbar 판은 212k(77 %)에서 한 번이 약 8시간이었고, 행을 지나는 net이 1,922개라 RapidWright가 수렴하지 않았다.
+- LUT가 는 것은 400 MHz용 register가 아니라 ALU 확장 회로다(EVTA 1개 bitstream, 배치·배선 뒤):
+
+  | 판 | LUT | 앞 판보다 |
+  |---|---|---|
+  | `_alux` 380 MHz (1단계, 11-14) | 53.6k | |
+  | `_alux` 400 MHz + register (§8.13 `alu_reg`, queue slice) | 55.5–55.7k | +2k (register) |
+  | `_alux2` (slot 루프) | 67.8k | +12k |
+  | `_alux3` | 69.8k | +2k |
+  | `_alux3` + `_ni` | 58.5k | −11k |
+
+- 폭 변환기(crossbar 판의 `dw0` 256 → 128 424 LUT, `dw2` 64 → 128 303 LUT)는 EVTA 하나당 727, 4개 2.9k로 작다. SmartConnect(10.2k)가 컸다.
+- 예상: 1단계 + crossbar multi4 약 190k(69 %).
+
+**무엇을 했나**
+- `src/vta_alux1.cc`(multi4, systolic 두 트리): `7a128c5`(11-14)의 `vta.cc` 그대로. 그 뒤 RTL과 `vta.h`는 그대로이고 `hw_spec.h`는 필드만 늘었다.
+  - 오늘 `VTA_ALU_FULL_OP`는 `alu_op_ext2`를 bit 4로 더한다. 이 파일은 `(ap_uint<4>)`로 잘라 연산 16–31을 해석하지 않는다. vtalib는 `_alux1`에 그런 명령을 보내지 않는다.
+- `Makefile` `ALUX_STEP1=1`(`ALUX=1`과 함께): `hls.tcl`이 `vta_alux1.cc`를 쓰고 IP 이름은 `_alux1`이다. vtalib는 `_alux<k>`의 k로 단계를 읽는다(`VTAHasAluExt2`는 k ≥ 2).
+- C 시뮬레이션: `sim/run_csim.sh STEP1=1`(연산 0–11만, `VTA_ALUX_OPS=12`; `alux_test.cc`에 `VTA_ALUX_OPS` 추가). 39 / 39 통과, 기본 소스도 39 / 39.
+
+**같은 소스의 EVTA 1개 bitstream으로 보드 확인** (`..._sa_alux_400mhz_rq.bin`, 11-14; 지금 실행 파일 그대로)
+- `run_prof.sh -s _systimed all`: 시험 bundle 모두 PASS. `_alux3`와 같다.
+- `EVTA_EPI_CHECK` / `LN` / `SM` / `EA` / `RES` / `MATMUL_CHECK=1`: MobileNetV2 87, DeiT 180, Resnet18 33, Resnet50 57, VGG16 18개 모두 0 differ. 분류도 같다: MobileNetV2 282 (0.920282), DeiT 281 (0.719773).
+- 시간 (OMP 1, `-n 10`, 번갈아 두 번):
+
+  | 모델 | `_alux` (1단계) | `_alux3` | 차이 |
+  |---|---|---|---|
+  | MobileNetV2 (QAT) | 14.68 / 14.68 ms | 14.39 / 14.39 ms | +0.29 ms (+2 %) |
+  | Resnet50 | 64.54 / 64.57 | 64.48 / 64.45 | 같음 |
+  | Resnet18 | 22.78 / 22.73 | 22.71 / 22.72 | 같음 |
+  | VGG16 CIFAR-10 | 6.76 / 6.76 | 6.75 / 6.75 | 같음 |
+  | DeiT-tiny | 46.30 / 46.18 | 37.06 / 37.00 | +9.2 ms (+25 %: fused layer norm / softmax / elemadd가 없다) |
+
+  - CNN에는 1단계로 거의 충분하다. DeiT만 2·3단계의 효과가 크다.
+
+**빌드**
+```bash
+# host, vta-hw-zcu102-multi4/
+PATH=$HOME/bin_sudo_docker:$PATH hardware/xilinx/scripts/y219route/flow/m4_build.sh x1 SYSTOLIC=1 ALUX=1 ALUX_STEP1=1 VTA_DATA_XBAR=1 FREQ=400 IMPL_STRATEGY=Performance_ExtraTimingOpt
+# C 시뮬레이션 (vta-hw-zcu102-systolic/hardware/xilinx)
+sim/run_csim.sh STEP1=1
+```
+- 11-23 12시에 시작했다(`build/m4_x1.log`, `build/y219/*_mx1.*`). 결과는 §4.2.
+
+## 4.2 11-23 ~ 11-24에 해 본 것과 안 된 이유 (멈춤)
+
+결론: alux3도 alux1도 multi4 400 MHz를 결함 행 Y219와 함께 맞추지 못했다. 11-24에 멈췄다. multi4 기본은 `_rq`에 ALU MUL만 더한 `_amul` 판(ubun PC에서 합성, §6.2)으로 하고, 이 판들은 쓰지 않는다.
+
+**A. 결함 행 둘레를 비우기 (띠, `VTA_FENCE_ROWS="213 225"`, alux3 + `_ni` + crossbar의 opt_design 결과)**
+- `place_d.tcl`이 SLICE 행 Y213–Y225를 PROHIBIT(1,261 site). `VTA_MMCM_MULT`로 PLL 배수도 바꾼다(`run_flow.sh`가 둘 다 컨테이너에 넘긴다).
+
+  | 판 | 클럭 | Y219를 지나는 net | Vivado 배선 뒤 WNS | RapidWright (`crit=0`, 250회, `--enlargeBoundingBox`) |
+  |---|---|---|---|---|
+  | `mnix` (띠 없음, §3) | 400 MHz | 1,922 | −0.288 ns | 수렴 안 함 |
+  | `mnixb` | 400 MHz | 199 | −0.452 ns | 돌리지 않음 (멈춤) |
+  | `mnixc` | 379.2 MHz (배수 11.375) | 199 | −0.873 ns | 22회째 겹친 node 77k → 342k로 늚, 멈춤 |
+
+- 띠로 행을 지나는 net은 1/10이 됐지만 빼앗긴 slice만큼 다른 곳이 붐벼 타이밍이 크게 나빠졌다. 클럭을 5 % 내려도 −0.87 ns다.
+
+**B. ALU 확장 1단계 + crossbar (`x1`, §4.1), 400 MHz, 띠 없음**
+- 배치·배선 뒤 LUT 190,609 (70.1 %). Vivado 배선 뒤 WNS −0.195 ns, Y219 행을 지나는 net **781**.
+
+  | 시도 | RapidWright | Vivado 마무리 (`route_s.tcl`) | 결과 |
+  |---|---|---|---|
+  | `mx1` | `crit=0.95`, 100회: 행 net 0, sink 42개 연결 못 함 | `route_design -nets` 202 net: node 3개 겹침으로 실패 | bitstream 없음 |
+  | `mx1b` | 300회: 같음 (42개) | 107 net, 실패 | bitstream 없음 |
+  | `mx1c` | 300회 + `--enlargeBoundingBox`: **모두 연결** | 성공, 행 net 0 | WNS **−9.468 ns** (22,240 endpoint). 최악 경로 `gemm_sa_0/rmw/s4_reg` → `acc_mem_0` BRAM이 배선 11.5 ns: 넓은 bounding box로 먼 길을 돌았다 |
+  | `mx1d` | `mx1b` 결과를 Vivado 전체 `route_design`(남의 net도 뜯음) → 행 net **306**, WNS −0.859 → 다시 RapidWright 300회: sink 35개 못 함 | 223 net 마무리 | 행 net **1**, WNS **−4.323 ns** |
+
+- Vivado에 배선을 맡기면 행으로 돌아가고, RapidWright로 빼면 연결이 남거나 먼 길을 돈다. 반복해도 줄지 않았다.
+- RapidWright(`Y219RWRoute.java`)는 설계의 클럭을 모른다(`crit`는 모든 연결에 같은 값). 행을 지나는 net이 수백 개면 우회가 타이밍을 깬다. `_rq` 판은 1개뿐이어서 됐다.
+
+**C. 해 보지 않은 것 (다시 할 때)**
+1. EVTA 0·1은 행 아래, 2·3은 위로 pblock을 나눠 행을 지나는 net을 HP / AXI 몇 개로 줄이고, 그 net에 register 한 단을 넣는다(지금은 crossbar, 폭 변환기, GEMM 내부 net도 행을 지난다).
+2. Vivado timing 보고서의 slack으로 연결마다 criticality를 주는 RapidWright.
+3. 클럭을 낮추는 것은 1과 함께일 때만 의미가 있다(`mx1b` / `mx1d`는 타이밍보다 배선 실패).
+
+**도구 쪽에서 고친 것**
+- `m4_build.sh`: host의 `docker`는 `sudo -n docker` wrapper라 make 프로세스가 root다. `kill -0 $MK`가 EPERM으로 실패해 감시 루프가 곧바로 끝났고, 그래서 `I`가 비었다(§3의 문제). `[ -d /proc/$MK ]`로 바꾸고 make 뒤에 `I`를 다시 찾는다.
+- Vivado 컨테이너는 `/tmp`를 못 본다. tcl은 `/home` 아래(`build/y219`)에 둔다. `mx1d` 첫 실행이 이것으로 3초 만에 끝났다.
+- 결과 파일: `build/y219/{routed,rws,rs,route_s}_m{nixb,nixc,x1,x1b,x1c,x1d}.*`(`rs_mx1c.bit`, `rs_mx1d.bit`는 쓰지 말 것), `vfix.tcl`(`mx1d`의 Vivado 단계).
+
 ## 5. 남은 일
 
-1. multi4 `_ni` 배선과 타이밍(§3).
+1. ~~multi4 `_ni` 배선과 타이밍(§3)~~: 멈춤(§4.2). multi4 기본은 `_rq` + ALU MUL(`_amul`, §6.2), EVTA 1개 기본은 `_alux3`.
 2. EVTA 1개 `_ni`의 보드 시험.
    - ALU 시험과 dump 비교를 한다.
    - CNN / DeiT 시간을 `_alux3`와 견준다. 명령마다 파이프라인을 채우는 시간이 늘어나는 만큼 차이가 날 수 있다.
    - 같으면 EVTA 1개도 `_ni`를 기본으로 할지 정한다.
-3. `m4_build.sh`의 `I` 변수 문제.
+3. ~~`m4_build.sh`의 `I` 변수 문제~~: 고침(§4.2).
 4. ~~multi4 `_amul_bc`~~: 만들어 보드를 통과했지만 이득이 없다(§6.4). multi4는 `_amul`을 쓴다.
 5. multi4 `run_all.sh` `SYS_BIN`을 `_amul`로 바꿀지 정하기(§6.2).
 

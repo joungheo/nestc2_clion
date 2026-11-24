@@ -1,0 +1,1303 @@
+//#### JO added (2026-11-23, docs/evta_multi4_alux3.md): the vta.cc of 7a128c5 (2026-11-14, "_alux" at 400 MHz: ALU extension
+//#### step 1 = operations 4-11 and lut_en in the II 2 vector loop, the imm loop at II 1, the 400 MHz registers), kept as is for
+//#### a smaller compute (single EVTA LUT 55.7k against 69.8k for _alux3, 58.5k for _alux3 + _ni). Makefile ALUX=1 ALUX_STEP1=1
+//#### builds this file instead of vta.cc (IP name "_alux1"; vtalib: VTAHasAluExt() only). The VTA_ALU_FULL_OP of today's hw_spec.h
+//#### adds alu_op_ext2 as bit 4; the (ap_uint<4>) cast below drops it, so operations 16-31 are not decoded here (vtalib sends
+//#### none to an "_alux1" bitstream).
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+/*!
+ * \file vta.cpp
+ * \brief VTA HLS design.
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "vta.h"
+
+//#### JO added (2026-11-03): a register on a value (the pattern of hls::reg in utils/x_hls_utils.h, there in an internal
+//#### namespace): a function that is not inlined and registers its return
+template <class T>
+T alu_reg(T in) {
+#pragma HLS INLINE off
+#pragma HLS INTERFACE ap_none port=return register
+  return in;
+}
+
+#ifdef VTA_SYSTOLIC
+//#### JO (2026-11-03): pipelined with the address in a register: the loop of the original (sram_idx ++ in the body, not
+//#### pipelined) drove the write enables of the 58 acc_mem BRAMs from its exit compare (multi4 400 MHz WNS -0.181 ns)
+template <typename DATA_T, int MAT_AXI_RATIO>
+void reset_mem(
+  memop_sram_T &sram_idx,
+  memop_sram_T range,
+  DATA_T mem[][MAT_AXI_RATIO]) {
+
+  memop_sram_T base = sram_idx;
+  RESET_MEM: for (int i = 0; i < range; i ++) {
+#pragma HLS PIPELINE II = 1
+    memop_sram_T a = alu_reg((memop_sram_T) (base + i));
+    for (int j = 0; j < MAT_AXI_RATIO; j ++) {
+#pragma HLS UNROLL
+      mem[a][j] = 0;
+    }
+  }
+  sram_idx = base + range;
+}
+#else
+template <typename DATA_T, int MAT_AXI_RATIO>
+void reset_mem(
+  memop_sram_T &sram_idx,
+  memop_sram_T range,
+  DATA_T mem[][MAT_AXI_RATIO]) {
+
+  for (int i = 0; i < range; i ++) {
+    for (int j = 0; j < MAT_AXI_RATIO; j ++) {
+#pragma HLS UNROLL
+      mem[sram_idx][j] = 0;
+    }
+    sram_idx ++;
+  }
+}
+#endif
+
+template <typename DATA_T, int MAT_AXI_RATIO, int ELEM_BYTES>
+void load_pad_2d(
+  volatile DATA_T *src,
+  DATA_T dst[][MAT_AXI_RATIO],
+  memop_sram_T sram_idx,
+  memop_dram_T dram_idx,
+  memop_size_T y_size,
+  memop_size_T x_size,
+  memop_stride_T x_stride,
+  memop_pad_T x_pad_0,
+  memop_pad_T x_pad_1,
+  memop_sram_T y_offset_0,
+  memop_sram_T y_offset_1) {
+#pragma HLS INLINE
+
+  reset_mem<DATA_T, MAT_AXI_RATIO>(sram_idx, y_offset_0, dst);
+  for (int y = 0; y < y_size; y++) {
+#ifndef VTA_SYSTOLIC
+#pragma HLS PIPELINE
+#endif
+    //#### JO (2026-11-03): no PIPELINE on y in the systolic copy: HLS could not apply it (subloops with variable bounds) and it
+    //#### kept the RESET_MEM loop of reset_mem from being pipelined
+    reset_mem<DATA_T, MAT_AXI_RATIO>(sram_idx, x_pad_0, dst);
+    memcpy(&dst[sram_idx][0],
+           (const DATA_T*) &src[dram_idx * MAT_AXI_RATIO],
+           x_size * ELEM_BYTES);
+    sram_idx += x_size;
+    dram_idx += x_stride;
+    reset_mem<DATA_T, MAT_AXI_RATIO>(sram_idx, x_pad_1, dst);
+  }
+  reset_mem<DATA_T, MAT_AXI_RATIO>(sram_idx, y_offset_1, dst);
+}
+
+template <typename DATA_T, int MAT_AXI_RATIO, int ELEM_BYTES>
+void load_2d(
+  volatile DATA_T *src,
+  DATA_T dst[][MAT_AXI_RATIO],
+  memop_sram_T sram_idx,
+  memop_dram_T dram_idx,
+  memop_size_T y_size,
+  memop_size_T x_size,
+  memop_stride_T x_stride) {
+#pragma HLS INLINE
+
+  for (int y = 0; y < y_size; y++) {
+    memcpy(&dst[sram_idx][0],
+           (const DATA_T*) &src[dram_idx * MAT_AXI_RATIO],
+           x_size * ELEM_BYTES);
+#pragma HLS RESOURCE variable = sram_idx core = Mul_LUT
+    sram_idx += x_size;
+    dram_idx += x_stride;
+  }
+}
+
+template <typename WIDE_T, typename NARROW_T, typename IDX_T, int WIDE_W, int NARROW_W, int Y_DIM, int X_DIM>
+void read_tensor(
+  IDX_T idx,
+  WIDE_T src[][NARROW_W * Y_DIM * X_DIM / WIDE_W],
+  NARROW_T dst[Y_DIM][X_DIM]) {
+#pragma HLS INLINE
+
+  // Read in weight tensor
+  for (int p = 0; p < NARROW_W * Y_DIM * X_DIM / WIDE_W; p++) {
+    WIDE_T packet = src[idx][p];
+    for (int w = 0; w < (WIDE_W / NARROW_W); w++) {
+      int x = (p * (WIDE_W / NARROW_W) + w) / X_DIM;
+      int y = (p * (WIDE_W / NARROW_W) + w) % X_DIM;
+      dst[x][y] = (NARROW_T) packet.range((w + 1) * NARROW_W - 1, w * NARROW_W);
+    }
+  }
+}
+
+template <typename WIDE_T, typename NARROW_T, typename IDX_T, int WIDE_W, int NARROW_W, int Y_DIM, int X_DIM>
+void write_tensor(
+  IDX_T idx,
+  NARROW_T src[Y_DIM][X_DIM],
+  WIDE_T dst[][NARROW_W * Y_DIM * X_DIM / WIDE_W]) {
+#pragma HLS INLINE
+
+  for (int p = 0; p < NARROW_W * Y_DIM * X_DIM / WIDE_W; p++) {
+    WIDE_T packet = 0;
+    for (int w = 0; w < (WIDE_W / NARROW_W); w++) {
+      int x = (p * (WIDE_W / NARROW_W) + w) / X_DIM;
+      int y = (p * (WIDE_W / NARROW_W) + w) % X_DIM;
+      packet.range((w + 1) * NARROW_W - 1, w * NARROW_W) = src[x][y];
+    }
+    dst[idx][p] = packet;
+  }
+}
+
+void fetch(
+  uint32_t insn_count,
+  volatile insn_T *insns,
+  hls::stream<insn_T> &load_queue,
+  hls::stream<insn_T> &gemm_queue,
+  hls::stream<insn_T> &store_queue) {
+PRAGMA_HLS(HLS INTERFACE s_axilite port = insn_count bundle = CONTROL_BUS offset = VTA_FETCH_INSN_COUNT_OFFSET)
+#pragma HLS INTERFACE m_axi port = insns offset = slave bundle = ins_port
+#pragma HLS INTERFACE axis port = load_queue
+#pragma HLS INTERFACE axis port = gemm_queue
+#pragma HLS INTERFACE axis port = store_queue
+#pragma HLS INTERFACE s_axilite port = return bundle = CONTROL_BUS
+
+  INSN_DECODE: for (int pc = 0; pc < insn_count; pc++) {
+#pragma HLS PIPELINE
+    // Read instruction fields
+    insn_T raw_insn = insns[pc];
+    VTAInsn insn;
+    insn.generic = *((VTAGenericInsn *) &raw_insn);
+    // Do some partial decoding
+    opcode_T opcode = insn.generic.opcode;
+    memop_id_T memory_type = insn.mem.memory_type;
+    // Push to appropriate instruction queue
+    if (opcode == VTA_OPCODE_STORE) {
+      store_queue.write(raw_insn);
+    } else if (opcode == VTA_OPCODE_LOAD) {
+      if (memory_type == VTA_MEM_ID_INP || memory_type == VTA_MEM_ID_WGT) {
+        load_queue.write(raw_insn);
+      } else {
+        gemm_queue.write(raw_insn);
+      }
+    } else {
+      gemm_queue.write(raw_insn);
+    }
+  }
+}
+
+void load(
+  volatile bus_T *inputs,
+  volatile bus_T *weights,
+  hls::stream<insn_T> &load_queue,
+  hls::stream<bool> &g2l_dep_queue,
+  hls::stream<bool> &l2g_dep_queue,
+  bus_T inp_mem[VTA_INP_BUFF_DEPTH][INP_MAT_AXI_RATIO],
+  bus_T wgt_mem[VTA_WGT_BUFF_DEPTH][WGT_MAT_AXI_RATIO]) {
+#pragma HLS INTERFACE m_axi port = inputs offset = slave bundle = data_port
+#pragma HLS INTERFACE m_axi port = weights offset = slave bundle = data_port
+#pragma HLS INTERFACE axis port = load_queue
+#pragma HLS INTERFACE axis port = g2l_dep_queue
+#pragma HLS INTERFACE axis port = l2g_dep_queue
+#pragma HLS INTERFACE bram port = wgt_mem
+#pragma HLS INTERFACE bram port = inp_mem
+#pragma HLS INTERFACE s_axilite port = return bundle = CONTROL_BUS
+#pragma HLS RESOURCE variable = inp_mem core = RAM_1P
+#pragma HLS RESOURCE variable = wgt_mem core = RAM_1P
+
+  // Pop load instruction
+  insn_T raw_insn = load_queue.read();
+  // Cast to MemInsn
+  insn_T raw_copy = raw_insn;
+  VTAMemInsn insn = *((VTAMemInsn *) &raw_copy);
+
+  // Pop dependence token if instructed
+  if (insn.pop_next_dep) {
+    g2l_dep_queue.read();
+  }
+
+  // Pre-processing
+  memop_sram_T x_width = (insn.x_pad_0 + insn.x_size + insn.x_pad_1);
+  memop_sram_T y_offset_0 = x_width * insn.y_pad_0;
+#pragma HLS RESOURCE variable = y_offset_0 core = Mul_LUT latency = 4
+  memop_sram_T y_offset_1 = x_width * insn.y_pad_1;
+#pragma HLS RESOURCE variable = y_offset_1 core = Mul_LUT latency = 4
+
+  if (insn.memory_type == VTA_MEM_ID_INP) {
+    load_pad_2d<bus_T, INP_MAT_AXI_RATIO, VTA_INP_ELEM_BYTES>(
+        inputs,
+        inp_mem,
+        insn.sram_base,
+        insn.dram_base,
+        insn.y_size,
+        insn.x_size,
+        insn.x_stride,
+        insn.x_pad_0,
+        insn.x_pad_1,
+        y_offset_0,
+        y_offset_1);
+  } else if (insn.memory_type == VTA_MEM_ID_WGT) {
+    load_2d<bus_T, WGT_MAT_AXI_RATIO, VTA_WGT_ELEM_BYTES>(
+        weights,
+        wgt_mem,
+        insn.sram_base,
+        insn.dram_base,
+        insn.y_size,
+        insn.x_size,
+        insn.x_stride);
+  }
+
+  // Push dependence token if instructed
+  if (insn.push_next_dep) {
+    l2g_dep_queue.write(1);
+  }
+}
+
+void gemm(
+  insn_T insn_raw,
+  uop_T uop_mem[VTA_UOP_BUFF_DEPTH],
+  bus_T acc_mem[VTA_ACC_BUFF_DEPTH][ACC_MAT_AXI_RATIO],
+  bus_T inp_mem[VTA_INP_BUFF_DEPTH][INP_MAT_AXI_RATIO],
+  bus_T wgt_mem[VTA_WGT_BUFF_DEPTH][WGT_MAT_AXI_RATIO],
+  bus_T out_mem[VTA_ACC_BUFF_DEPTH][OUT_MAT_AXI_RATIO]) {
+#pragma HLS INLINE
+
+  VTAGemInsn insn = *((VTAGemInsn *) &insn_raw);
+
+  // Loop offset
+  acc_idx_T dst_offset_out = 0;
+  inp_idx_T src_offset_out = 0;
+  wgt_idx_T wgt_offset_out = 0;
+
+  // Outer Loop
+  EXE_OUT_LOOP: for (int it_out = 0; it_out < insn.iter_out; it_out++) {
+    acc_idx_T dst_offset_in = dst_offset_out;
+    inp_idx_T src_offset_in = src_offset_out;
+    wgt_idx_T wgt_offset_in = wgt_offset_out;
+
+    // Inner Loop
+    EXE_IN_LOOP: for (int it_in = 0; it_in < insn.iter_in; it_in++) {
+
+      // Iterate over micro op
+      READ_GEMM_UOP: for (int upc = insn.uop_bgn; upc < insn.uop_end; upc++) {
+#pragma HLS PIPELINE II = 1
+        // Read micro-op fields
+        uop_T uop = uop_mem[upc];
+
+        // Decode indices
+        acc_idx_T dst_idx =
+            uop.range(VTA_UOP_GEM_0_1, VTA_UOP_GEM_0_0) + dst_offset_in;
+        inp_idx_T src_idx =
+            uop.range(VTA_UOP_GEM_1_1, VTA_UOP_GEM_1_0) + src_offset_in;
+        wgt_idx_T wgt_idx =
+            uop.range(VTA_UOP_GEM_2_1, VTA_UOP_GEM_2_0) + wgt_offset_in;
+
+        // Read in weight tensor
+        wgt_T w_tensor[VTA_BLOCK_OUT][VTA_BLOCK_IN];
+        read_tensor<bus_T, wgt_T, wgt_idx_T, VTA_BUS_WIDTH, VTA_WGT_WIDTH, VTA_BLOCK_OUT, VTA_BLOCK_IN>(wgt_idx, wgt_mem, w_tensor);
+        // Read in input tensor
+        inp_T i_tensor[VTA_BATCH][VTA_BLOCK_IN];
+        read_tensor<bus_T, inp_T, inp_idx_T, VTA_BUS_WIDTH, VTA_INP_WIDTH, VTA_BATCH, VTA_BLOCK_IN>(src_idx, inp_mem, i_tensor);
+        // Read in accum tensor
+        acc_T a_tensor[VTA_BATCH][VTA_BLOCK_OUT];
+        read_tensor<bus_T, acc_T, acc_idx_T, VTA_BUS_WIDTH, VTA_ACC_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, acc_mem, a_tensor);
+        // Output tensor
+        out_T o_tensor[VTA_BATCH][VTA_BLOCK_OUT];
+
+        // Inner GEMM loop
+        for (int b = 0; b < VTA_BATCH; b++) {
+          for (int oc = 0; oc < VTA_BLOCK_OUT; oc++) {
+            // Initialize the accumulator values
+            acc_T accum = a_tensor[b][oc];
+            // Dot product sum
+            sum_T tmp = 0;
+            // Inner matrix multiplication loop (input channel/feature)
+            for (int ic = 0; ic < VTA_BLOCK_IN; ic++) {
+              wgt_T w_elem = w_tensor[oc][ic];
+              inp_T i_elem = i_tensor[b][ic];
+              mul_T prod_dsp = i_elem * w_elem;
+              tmp += (sum_T) prod_dsp;
+            }
+            // Update summation
+            accum += (acc_T) tmp;
+            // Write back result acc_mem
+            a_tensor[b][oc] = insn.reset_reg ? (acc_T) 0 : accum;
+            // And output vector
+            o_tensor[b][oc] = (out_T) accum.range(VTA_OUT_WIDTH - 1, 0);
+          }
+        }
+
+        // Write the results back into accumulator
+        write_tensor<bus_T, acc_T, acc_idx_T, VTA_BUS_WIDTH, VTA_ACC_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, a_tensor, acc_mem);
+        // Write the results back in the output buffer
+        write_tensor<bus_T, out_T, acc_idx_T, VTA_BUS_WIDTH, VTA_OUT_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, o_tensor, out_mem);
+      }
+      // Update offsets
+      dst_offset_in += insn.dst_factor_in;
+      src_offset_in += insn.src_factor_in;
+      wgt_offset_in += insn.wgt_factor_in;
+    }
+    // Update offsets
+    dst_offset_out += insn.dst_factor_out;
+    src_offset_out += insn.src_factor_out;
+    wgt_offset_out += insn.wgt_factor_out;
+  }
+}
+
+//#### JO added (2026-11-04, requantize): the int8 written to out for the new acc value v, rq_* of VTAGemInsn / VTAAluInsn
+//#### (as sa_rmw.v): o (the low 8 bits) when off, else clip((v + round) >> shift, lo, hi), the add 32-bit (wraps as the
+//#### ALU ADD), round 1: + 2^(shift-1), 2: + 2^(shift-1) - (v < 0) (half away from zero), none with shift 0.
+inline out_T requant(acc_T v, out_T o, bool en, ap_uint<2> rnd, ap_uint<5> shift, ap_int<8> lo, ap_int<8> hi) {
+#pragma HLS INLINE
+  ap_uint<32> h = (rnd != 0 && shift != 0) ? (ap_uint<32>) ((ap_uint<32>) 1 << (shift - 1)) : (ap_uint<32>) 0;
+  if (rnd == 2 && shift != 0 && v < 0) h = h - 1;
+  acc_T t = (acc_T) ((ap_uint<32>) v.range(VTA_ACC_WIDTH - 1, 0) + h);
+  acc_T q = t >> shift;
+  out_T c = q < lo ? (out_T) lo : q > hi ? (out_T) hi : (out_T) q.range(VTA_OUT_WIDTH - 1, 0);
+  return en ? c : o;
+}
+
+#ifdef VTA_ALUX
+//#### JO added (2026-11-14, 400 MHz: v < 0 -> round - 1 -> 32-bit add -> shift was -0.052 ns in the ALUX vector loop): requant
+//#### with a register after the add (one more cycle between the acc read and the out write)
+inline out_T requant_p(acc_T v, out_T o, bool en, ap_uint<2> rnd, ap_uint<5> shift, ap_int<8> lo, ap_int<8> hi) {
+#pragma HLS INLINE
+  ap_uint<32> h = (rnd != 0 && shift != 0) ? (ap_uint<32>) ((ap_uint<32>) 1 << (shift - 1)) : (ap_uint<32>) 0;
+  if (rnd == 2 && shift != 0 && v < 0) h = h - 1;
+  acc_T t = alu_reg((acc_T) ((ap_uint<32>) v.range(VTA_ACC_WIDTH - 1, 0) + h));
+  acc_T q = t >> shift;
+  out_T c = q < lo ? (out_T) lo : q > hi ? (out_T) hi : (out_T) q.range(VTA_OUT_WIDTH - 1, 0);
+  return en ? c : alu_reg(o);
+}
+#endif
+
+#ifdef VTA_SYSTOLIC
+//#### JO added (2026-10-27, systolic Phase D, docs/evta_systolic_design.md §3): the GEMM loop of gemm() with the
+//#### computation replaced by one uop to gemm_sa per step (final addresses, last on the instruction's final step).
+//#### Returns false if the instruction has no step (then gemm_sa sends no done for it).
+bool gemm_sa_issue(
+  insn_T insn_raw,
+  uop_T uop_mem[VTA_UOP_BUFF_DEPTH],
+  hls::stream<sa_uop_T> &gemm_uop) {
+  VTAGenericInsn ginsn = *((VTAGenericInsn *) &insn_raw);
+#pragma HLS INLINE
+
+  VTAGemInsn insn = *((VTAGemInsn *) &insn_raw);
+  bool any = insn.iter_out != 0 && insn.iter_in != 0 && insn.uop_end > insn.uop_bgn;
+
+  acc_idx_T dst_offset_out = 0;
+  inp_idx_T src_offset_out = 0;
+  wgt_idx_T wgt_offset_out = 0;
+  SA_OUT_LOOP: for (int it_out = 0; it_out < insn.iter_out; it_out++) {
+    acc_idx_T dst_offset_in = dst_offset_out;
+    inp_idx_T src_offset_in = src_offset_out;
+    wgt_idx_T wgt_offset_in = wgt_offset_out;
+    SA_IN_LOOP: for (int it_in = 0; it_in < insn.iter_in; it_in++) {
+      SA_UOP: for (int upc = insn.uop_bgn; upc < insn.uop_end; upc++) {
+#pragma HLS PIPELINE II = 1
+        uop_T uop = uop_mem[upc];
+        acc_idx_T dst_idx = uop.range(VTA_UOP_GEM_0_1, VTA_UOP_GEM_0_0) + dst_offset_in;
+        inp_idx_T src_idx = uop.range(VTA_UOP_GEM_1_1, VTA_UOP_GEM_1_0) + src_offset_in;
+        wgt_idx_T wgt_idx = uop.range(VTA_UOP_GEM_2_1, VTA_UOP_GEM_2_0) + wgt_offset_in;
+        bool last = it_out == insn.iter_out - 1 && it_in == insn.iter_in - 1 && upc == insn.uop_end - 1;
+        bool first = it_out == 0 && it_in == 0 && upc == insn.uop_bgn;
+        sa_uop_T u;
+        u.range(VTA_LOG_ACC_BUFF_DEPTH - 1, 0) = dst_idx;
+        u.range(VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH - 1, VTA_LOG_ACC_BUFF_DEPTH) = src_idx;
+        u.range(VTA_SA_UOP_B - 1, VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH) = wgt_idx;
+        u[VTA_SA_UOP_B] = insn.reset_reg;
+        u[VTA_SA_UOP_B + 1] = last;
+        u[VTA_SA_UOP_B + 2] = first;
+        u[VTA_SA_UOP_B + 3] = last && ginsn.push_prev_dep;   // g2l token, pushed by gemm_sa
+        u[VTA_SA_UOP_B + 4] = last && ginsn.push_next_dep;   // g2s token
+        u[VTA_SA_UOP_B + 5] = insn.reset_reg && insn.bias_reset;   //#### JO added (2026-11-04): bias reset step
+        //#### JO added (2026-11-04): requantize of the out writes (sa_rmw.v)
+        u[VTA_SA_RQ] = insn.rq_en;
+        u.range(VTA_SA_RQ + 2, VTA_SA_RQ + 1) = insn.rq_round;
+        u.range(VTA_SA_RQ + 7, VTA_SA_RQ + 3) = insn.rq_shift;
+        u.range(VTA_SA_RQ + 15, VTA_SA_RQ + 8) = (ap_uint<8>) insn.rq_lo;
+        u.range(VTA_SA_RQ + 23, VTA_SA_RQ + 16) = (ap_uint<8>) insn.rq_hi;
+        gemm_uop.write(u);
+      }
+      dst_offset_in += insn.dst_factor_in;
+      src_offset_in += insn.src_factor_in;
+      wgt_offset_in += insn.wgt_factor_in;
+    }
+    dst_offset_out += insn.dst_factor_out;
+    src_offset_out += insn.src_factor_out;
+    wgt_offset_out += insn.wgt_factor_out;
+  }
+  return any;
+}
+
+#ifndef __SYNTHESIS__
+//#### JO added: C model of gemm_sa for C simulation: the arithmetic of gemm() for each streamed step, a done per last
+void gemm_sa_csim(
+  hls::stream<sa_uop_T> &gemm_uop,
+  hls::stream<bool> &gemm_done,
+  bus_T acc_mem[VTA_ACC_BUFF_DEPTH][ACC_MAT_AXI_RATIO],
+  bus_T inp_mem[VTA_INP_BUFF_DEPTH][INP_MAT_AXI_RATIO],
+  bus_T wgt_mem[VTA_WGT_BUFF_DEPTH][WGT_MAT_AXI_RATIO],
+  bus_T out_mem[VTA_ACC_BUFF_DEPTH][OUT_MAT_AXI_RATIO],
+  hls::stream<bool> &g2l_dep_queue,
+  hls::stream<bool> &g2s_dep_queue) {
+  while (!gemm_uop.empty()) {
+    sa_uop_T u = gemm_uop.read();
+    acc_idx_T dst_idx = u.range(VTA_LOG_ACC_BUFF_DEPTH - 1, 0);
+    inp_idx_T src_idx = u.range(VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH - 1, VTA_LOG_ACC_BUFF_DEPTH);
+    wgt_idx_T wgt_idx = u.range(VTA_SA_UOP_B - 1, VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH);
+    bool reset = u[VTA_SA_UOP_B];
+    bool bias = u[VTA_SA_UOP_B + 5];   //#### JO added (2026-11-04): acc[dst] = acc[src], as sa_rmw.v
+    //#### JO added (2026-11-04): requantize of the out writes
+    bool rq_en = u[VTA_SA_RQ];
+    ap_uint<2> rq_round = u.range(VTA_SA_RQ + 2, VTA_SA_RQ + 1);
+    ap_uint<5> rq_shift = u.range(VTA_SA_RQ + 7, VTA_SA_RQ + 3);
+    ap_int<8> rq_lo = u.range(VTA_SA_RQ + 15, VTA_SA_RQ + 8);
+    ap_int<8> rq_hi = u.range(VTA_SA_RQ + 23, VTA_SA_RQ + 16);
+    wgt_T w_tensor[VTA_BLOCK_OUT][VTA_BLOCK_IN];
+    read_tensor<bus_T, wgt_T, wgt_idx_T, VTA_BUS_WIDTH, VTA_WGT_WIDTH, VTA_BLOCK_OUT, VTA_BLOCK_IN>(wgt_idx, wgt_mem, w_tensor);
+    inp_T i_tensor[VTA_BATCH][VTA_BLOCK_IN];
+    read_tensor<bus_T, inp_T, inp_idx_T, VTA_BUS_WIDTH, VTA_INP_WIDTH, VTA_BATCH, VTA_BLOCK_IN>(src_idx, inp_mem, i_tensor);
+    acc_T a_tensor[VTA_BATCH][VTA_BLOCK_OUT];
+    //read_tensor<bus_T, acc_T, acc_idx_T, VTA_BUS_WIDTH, VTA_ACC_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, acc_mem, a_tensor);
+    read_tensor<bus_T, acc_T, acc_idx_T, VTA_BUS_WIDTH, VTA_ACC_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(bias ? (acc_idx_T) src_idx : dst_idx,
+                                                                                                acc_mem, a_tensor);
+    out_T o_tensor[VTA_BATCH][VTA_BLOCK_OUT];
+    for (int b = 0; b < VTA_BATCH; b++) {
+      for (int oc = 0; oc < VTA_BLOCK_OUT; oc++) {
+        acc_T accum = a_tensor[b][oc];
+        sum_T tmp = 0;
+        for (int ic = 0; ic < VTA_BLOCK_IN; ic++) {
+          mul_T prod_dsp = i_tensor[b][ic] * w_tensor[oc][ic];
+          tmp += (sum_T) prod_dsp;
+        }
+        //accum += (acc_T) tmp;
+        //a_tensor[b][oc] = reset ? (acc_T) 0 : accum;
+        if (!bias) accum += (acc_T) tmp;
+        a_tensor[b][oc] = reset && !bias ? (acc_T) 0 : accum;
+        //o_tensor[b][oc] = (out_T) accum.range(VTA_OUT_WIDTH - 1, 0);
+        o_tensor[b][oc] = requant(accum, (out_T) accum.range(VTA_OUT_WIDTH - 1, 0), rq_en, rq_round, rq_shift, rq_lo, rq_hi);
+      }
+    }
+    write_tensor<bus_T, acc_T, acc_idx_T, VTA_BUS_WIDTH, VTA_ACC_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, a_tensor, acc_mem);
+    write_tensor<bus_T, out_T, acc_idx_T, VTA_BUS_WIDTH, VTA_OUT_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, o_tensor, out_mem);
+    if (u[VTA_SA_UOP_B + 3]) g2l_dep_queue.write(1);
+    if (u[VTA_SA_UOP_B + 4]) g2s_dep_queue.write(1);
+    if (u[VTA_SA_UOP_B + 1]) gemm_done.write(1);
+  }
+}
+#endif
+#endif
+
+//#### JO added (2026-11-02): one ALU lane, the arithmetic of the loop in alu() below
+inline void alu_lane(uint32_t opcode, acc_T src_0, acc_T src_1, acc_T &d, out_T &o) {
+#pragma HLS INLINE
+  aluop_shr_arg_T shft_by = src_1.range(VTA_SHR_ARG_BIT_WIDTH - 1, 0);
+  if (opcode == VTA_ALU_OPCODE_MIN || opcode == VTA_ALU_OPCODE_MAX) {
+    acc_T mix_val = src_0 < src_1 ?
+        (opcode == VTA_ALU_OPCODE_MIN ? src_0 : src_1) :
+        (opcode == VTA_ALU_OPCODE_MIN ? src_1 : src_0);
+    d = mix_val;
+    o = (out_T) mix_val.range(VTA_OUT_WIDTH - 1, 0);
+  } else if (opcode == VTA_ALU_OPCODE_ADD) {
+    acc_T add_val = src_0.range(VTA_ACC_WIDTH - 1, 0) + src_1.range(VTA_ACC_WIDTH - 1, 0);
+    d = add_val;
+    o = (out_T) add_val.range(VTA_OUT_WIDTH - 1, 0);
+  } else if (opcode == VTA_ALU_OPCODE_SHR) {
+    acc_T shr_val = src_0 >> shft_by;
+    d = shr_val;
+    o = (out_T) shr_val.range(VTA_OUT_WIDTH - 1, 0);
+  }
+}
+
+#ifdef VTA_ALUX
+#ifndef VTA_SYSTOLIC
+#error "VTA_ALUX (Makefile ALUX=1) needs VTA_SYSTOLIC (SYSTOLIC=1)"
+#endif
+//#### JO added (2026-11-11, ALU extension, docs/evta_isa_ext.md 8.8): the operations 4-11 (VTA_ALUX_*), the ALU lut_en, as the
+//#### reference model vtalib-zcu102-systolic/include/zcu102/vta/alu_ext_ref.h. The 256-entry LUT T is kept in copies, one per
+//#### lane so that 16 lanes read it at once, each split into 16 banks (bank = address bits 3..0, entry = bits 7..4): a LUTSET
+//#### step writes lane b's value to bank b, entry (imm + step) & 15, of every copy, so each bank takes one write per step.
+//#### alux_lut_d serves the LUT operation, alux_lut_o the lut_en of the out write (both in one instruction is allowed).
+#define VTA_ALUX_LANES (VTA_BATCH * VTA_BLOCK_OUT)
+static ap_uint<8> alux_lut_d[VTA_ALUX_LANES][16][16];
+static ap_uint<8> alux_lut_o[VTA_ALUX_LANES][16][16];
+
+inline acc_T alux_clz(acc_T x) {
+#pragma HLS INLINE
+  ap_uint<VTA_ACC_WIDTH> v = x.range(VTA_ACC_WIDTH - 1, 0);
+  ap_uint<7> n = VTA_ACC_WIDTH;
+  for (int i = 0; i < VTA_ACC_WIDTH; i++) {
+#pragma HLS UNROLL
+    if (v[i]) n = VTA_ACC_WIDTH - 1 - i;
+  }
+  return (acc_T) n;
+}
+
+//#### one step of an ALU instruction (any operation 0-11) on one acc entry: D = acc[dst] (updated in place), S = acc[src]
+//#### (the imm loop passes the entry it read), O = the out entry; lut_entry = (imm + step) & 15 for LUTSET, which writes
+//#### only the LUT (the caller skips the acc / out writes)
+//#### (the fields are passed by value: HLS cannot take the instruction struct by reference, a pointer reinterpretation)
+struct AluxFields {
+  bool use_imm, rq_en, lut_en, sign;
+  acc_T imm;
+  ap_uint<2> rq_round;
+  ap_uint<5> rq_shift;
+  ap_int<8> rq_lo, rq_hi;
+};
+
+inline void alux_step(AluxFields f, ap_uint<4> op, ap_uint<4> lut_entry,
+                      acc_T D[VTA_BATCH][VTA_BLOCK_OUT], acc_T S[VTA_BATCH][VTA_BLOCK_OUT],
+                      out_T O[VTA_BATCH][VTA_BLOCK_OUT]) {
+#pragma HLS INLINE
+  const acc_T imm = f.imm;
+  if (op == VTA_ALUX_LUTSET) {
+    for (int k = 0; k < VTA_ALUX_LANES; k++) {
+      for (int i = 0; i < VTA_BATCH; i++) {
+        for (int b = 0; b < VTA_BLOCK_OUT; b++) {
+          ap_uint<8> v = S[i][b].range(7, 0);
+          alux_lut_d[k][i * VTA_BLOCK_OUT + b][lut_entry] = v;
+          alux_lut_o[k][i * VTA_BLOCK_OUT + b][lut_entry] = v;
+        }
+      }
+    }
+    return;
+  }
+  // RSUM / RMAX: a tree over the src lanes (wraps as the ADD), the same value to every dst lane
+  acc_T sum = 0, mx = S[0][0];
+  for (int i = 0; i < VTA_BATCH; i++) {
+    for (int b = 0; b < VTA_BLOCK_OUT; b++) {
+      sum = (acc_T) (sum + S[i][b]);
+      mx = S[i][b] > mx ? S[i][b] : mx;
+    }
+  }
+  const acc_T red = f.use_imm ? imm : (op == VTA_ALUX_RSUM ? sum : mx);
+  for (int i = 0; i < VTA_BATCH; i++) {
+    for (int b = 0; b < VTA_BLOCK_OUT; b++) {
+      const int c = i * VTA_BLOCK_OUT + b;
+      const acc_T x = D[i][b];
+      const acc_T y = f.use_imm ? imm : S[i][b];
+      acc_T r = x;
+      out_T o0;
+      if (op < 4) {
+        alu_lane((uint32_t) op, x, y, r, o0);
+      } else if (op == VTA_ALUX_MUL) {
+        ap_int<16> m = y.range(15, 0);
+        r = (acc_T) (x * m);
+      } else if (op == VTA_ALUX_SUB) {
+        r = (acc_T) (x - y);
+      } else if (op == VTA_ALUX_CPY) {
+        r = y;
+      } else if (op == VTA_ALUX_LUT) {
+        ap_uint<8> v = alux_lut_d[c][x.range(3, 0)][x.range(7, 4)];
+        r = f.sign ? (acc_T) (ap_int<8>) v : (acc_T) v;
+      } else if (op == VTA_ALUX_RSUM || op == VTA_ALUX_RMAX) {
+        r = red;
+      } else if (op == VTA_ALUX_CLZ) {
+        r = alux_clz(x);
+      }
+      //#### JO added (2026-11-14, 400 MHz): registers after the operation (op decode -> result select was -0.041 ns), after
+      //#### the requantize add (requant_p) and before the lut_en read (clip compare -> LUTRAM address -> q0 was -0.053 ns)
+      r = alu_reg(r);
+      D[i][b] = r;
+      out_T o = requant_p(r, (out_T) r.range(VTA_OUT_WIDTH - 1, 0), f.rq_en, f.rq_round, f.rq_shift, f.rq_lo, f.rq_hi);
+      o = alu_reg(o);
+      if (f.lut_en) {
+        ap_uint<8> ob = o.range(7, 0);
+        o = (out_T) alux_lut_o[c][ob.range(3, 0)][ob.range(7, 4)];
+      }
+      O[i][b] = o;
+    }
+  }
+}
+#endif
+
+void alu(
+  insn_T insn_raw,
+  uop_T uop_mem[VTA_UOP_BUFF_DEPTH],
+  bus_T acc_mem[VTA_ACC_BUFF_DEPTH][ACC_MAT_AXI_RATIO],
+  bus_T inp_mem[VTA_INP_BUFF_DEPTH][INP_MAT_AXI_RATIO],
+  bus_T wgt_mem[VTA_WGT_BUFF_DEPTH][WGT_MAT_AXI_RATIO],
+  bus_T out_mem[VTA_ACC_BUFF_DEPTH][OUT_MAT_AXI_RATIO]) {
+#pragma HLS INLINE
+
+  VTAAluInsn insn = *((VTAAluInsn *) &insn_raw);
+#ifdef VTA_ALUX
+  //#### JO added (2026-11-11, ALU extension): copies and banks in registers / small RAMs, entries in LUTRAM
+#pragma HLS ARRAY_PARTITION variable = alux_lut_d complete dim = 1
+#pragma HLS ARRAY_PARTITION variable = alux_lut_d complete dim = 2
+#pragma HLS ARRAY_PARTITION variable = alux_lut_o complete dim = 1
+#pragma HLS ARRAY_PARTITION variable = alux_lut_o complete dim = 2
+#pragma HLS RESOURCE variable = alux_lut_d core = RAM_1P_LUTRAM
+#pragma HLS RESOURCE variable = alux_lut_o core = RAM_1P_LUTRAM
+  const ap_uint<4> op = (ap_uint<4>) VTA_ALU_FULL_OP(insn);
+  ap_uint<4> lut_entry = (ap_uint<4>) insn.imm;   // (imm + step) & 15, step in loop order
+  AluxFields af;
+  af.use_imm = insn.use_imm;
+  af.imm = (acc_T) insn.imm;
+  af.sign = insn.imm & 1;
+  af.rq_en = insn.rq_en;
+  af.rq_round = insn.rq_round;
+  af.rq_shift = insn.rq_shift;
+  af.rq_lo = (ap_int<8>) insn.rq_lo;
+  af.rq_hi = (ap_int<8>) insn.rq_hi;
+  af.lut_en = insn.lut_en;
+#endif
+
+#ifdef VTA_SYSTOLIC
+  //#### JO added (2026-11-02, docs/evta_runtime_compare.md 7.14): an op with an immediate reads only dst. One acc read and
+  //#### one acc write per step fit the two ports of acc_mem, so this loop runs at II = 1; the loop below reads src and dst
+  //#### and needs II = 2. Like that loop (DEPENDENCE inter false on acc_mem), it assumes that no step reads a dst written
+  //#### by a step still in the pipeline (the bundles' imm ops write each dst once per instruction).
+#ifdef VTA_ALUX
+  //#### JO changed (2026-11-11, ALU extension): only MIN / MAX / ADD / SHR without lut_en take this loop; the extended
+  //#### operations run in the vector loop below (II = 2), so their datapath exists once (in both loops: II 2 here,
+  //#### LUT 42.6k -> 82.0k, FF 23k -> 76k in C synthesis)
+  if (insn.use_imm && op < 4 && !insn.lut_en) {
+#else
+  if (insn.use_imm) {
+#endif
+    acc_idx_T imm_dst_offset_out = 0;
+    ALU_IMM_OUT_LOOP: for (int it_out = 0; it_out < insn.iter_out; it_out++) {
+      acc_idx_T dst_offset_in = imm_dst_offset_out;
+      ALU_IMM_IN_LOOP: for (int it_in = 0; it_in < insn.iter_in; it_in++) {
+        ALU_IMM_UOP: for (int upc = insn.uop_bgn; upc < insn.uop_end; upc++) {
+#pragma HLS PIPELINE II = 1
+          //#### JO (2026-11-03): registers (alu_reg) after the uop read and after the add: at II = 1 HLS put uop_mem -> add -> acc_mem
+          //#### address in one cycle, and the acc_mem address fans out to its 58 BRAMs (400 MHz WNS -0.819 ns)
+          uop_T uop = alu_reg(uop_mem[upc]);
+          acc_idx_T dst_idx = alu_reg((acc_idx_T) (uop.range(VTA_UOP_ALU_0_1, VTA_UOP_ALU_0_0) + dst_offset_in));
+          acc_T dst_tensor[VTA_BATCH][VTA_BLOCK_OUT];
+          read_tensor<bus_T, acc_T, acc_idx_T, VTA_BUS_WIDTH, VTA_ACC_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, acc_mem, dst_tensor);
+          out_T o_tensor[VTA_BATCH][VTA_BLOCK_OUT];
+          for (int i = 0; i < VTA_BATCH; i++) {
+            for (int b = 0; b < VTA_BLOCK_OUT; b++) {
+              alu_lane(insn.alu_opcode, dst_tensor[i][b], (acc_T) insn.imm, dst_tensor[i][b], o_tensor[i][b]);
+              //#### JO added (2026-11-04): requantize of the out write
+              o_tensor[i][b] = requant(dst_tensor[i][b], o_tensor[i][b], insn.rq_en, insn.rq_round, insn.rq_shift,
+                                       (ap_int<8>) insn.rq_lo, (ap_int<8>) insn.rq_hi);
+              //#### JO (2026-11-03): registers before the acc / out writes (multi4 400 MHz: acc read -> op -> acc_mem data)
+              dst_tensor[i][b] = alu_reg(dst_tensor[i][b]);
+              o_tensor[i][b] = alu_reg(o_tensor[i][b]);
+            }
+          }
+          write_tensor<bus_T, acc_T, acc_idx_T, VTA_BUS_WIDTH, VTA_ACC_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, dst_tensor, acc_mem);
+          write_tensor<bus_T, out_T, acc_idx_T, VTA_BUS_WIDTH, VTA_OUT_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, o_tensor, out_mem);
+        }
+        dst_offset_in += insn.dst_factor_in;
+      }
+      imm_dst_offset_out += insn.dst_factor_out;
+    }
+    return;
+  }
+#endif
+
+  // Loop offset
+  acc_idx_T dst_offset_out = 0;
+  inp_idx_T src_offset_out = 0;
+
+  // Outer Loop
+  EXE_OUT_LOOP: for (int it_out = 0; it_out < insn.iter_out; it_out++) {
+    acc_idx_T dst_offset_in = dst_offset_out;
+    inp_idx_T src_offset_in = src_offset_out;
+
+    // Inner Loop
+    EXE_IN_LOOP: for (int it_in = 0; it_in < insn.iter_in; it_in++) {
+      // Iterate over micro op
+      READ_ALU_UOP: for (int upc = insn.uop_bgn; upc < insn.uop_end; upc++) {
+#pragma HLS PIPELINE II = 2
+#ifdef VTA_ALUX
+        //#### JO added (2026-11-14, 400 MHz: offset select -> add -> acc_mem address was -0.055 ns): registers after the uop
+        //#### read and the address add, as the imm loop (both the read and the write move: the hazard window stays)
+        uop_T uop = alu_reg(uop_mem[upc]);
+        acc_idx_T dst_idx = alu_reg((acc_idx_T) (uop.range(VTA_UOP_ALU_0_1, VTA_UOP_ALU_0_0) + dst_offset_in));
+        acc_idx_T src_idx = alu_reg((acc_idx_T) (uop.range(VTA_UOP_ALU_1_1, VTA_UOP_ALU_1_0) + src_offset_in));
+#else
+        // Read micro-op fields
+        uop_T uop = uop_mem[upc];
+
+        // Decode
+        acc_idx_T dst_idx =
+            uop.range(VTA_UOP_ALU_0_1, VTA_UOP_ALU_0_0) + dst_offset_in;
+        acc_idx_T src_idx =
+            uop.range(VTA_UOP_ALU_1_1, VTA_UOP_ALU_1_0) + src_offset_in;
+#endif
+
+        // Read in src tensor
+        acc_T src_tensor[VTA_BATCH][VTA_BLOCK_OUT];
+        read_tensor<bus_T, acc_T, acc_idx_T, VTA_BUS_WIDTH, VTA_ACC_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(src_idx, acc_mem, src_tensor);
+        // Read in dst tensor
+        acc_T dst_tensor[VTA_BATCH][VTA_BLOCK_OUT];
+        read_tensor<bus_T, acc_T, acc_idx_T, VTA_BUS_WIDTH, VTA_ACC_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, acc_mem, dst_tensor);
+        // Output tensor
+        out_T o_tensor[VTA_BATCH][VTA_BLOCK_OUT];
+
+#ifdef VTA_ALUX
+        //#### JO added (2026-11-14, 400 MHz: acc_mem -> ADD -> result and acc_mem -> LUTSET data (to 32 LUTRAM copies) were
+        //#### -0.029 / -0.027 ns): a register on the two tensors read
+        for (int i = 0; i < VTA_BATCH; i++) {
+          for (int b = 0; b < VTA_BLOCK_OUT; b++) {
+            src_tensor[i][b] = alu_reg(src_tensor[i][b]);
+            dst_tensor[i][b] = alu_reg(dst_tensor[i][b]);
+          }
+        }
+        //#### JO added (2026-11-11, ALU extension): every operation through alux_step, no acc / out write for LUTSET
+        alux_step(af, op, lut_entry, dst_tensor, src_tensor, o_tensor);
+        lut_entry++;
+        for (int i = 0; i < VTA_BATCH; i++) {
+          for (int b = 0; b < VTA_BLOCK_OUT; b++) {
+            dst_tensor[i][b] = alu_reg(dst_tensor[i][b]);
+            o_tensor[i][b] = alu_reg(o_tensor[i][b]);
+          }
+        }
+        if (op != VTA_ALUX_LUTSET) {
+          write_tensor<bus_T, acc_T, acc_idx_T, VTA_BUS_WIDTH, VTA_ACC_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, dst_tensor, acc_mem);
+          write_tensor<bus_T, out_T, acc_idx_T, VTA_BUS_WIDTH, VTA_OUT_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, o_tensor, out_mem);
+        }
+#else
+        // Perform ALU op over matrix elements
+        for (int i = 0; i < VTA_BATCH; i++) {
+          for (int b = 0; b < VTA_BLOCK_OUT; b++) {
+            // Read in operands
+            acc_T src_0 = dst_tensor[i][b];
+            acc_T src_1 = insn.use_imm ? (acc_T) insn.imm : src_tensor[i][b];
+            aluop_shr_arg_T shft_by = src_1.range(VTA_SHR_ARG_BIT_WIDTH - 1, 0);
+            aluop_mul_arg_T mul_by = src_1.range(VTA_MUL_ARG_BIT_WIDTH - 1, 0);
+            if (insn.alu_opcode == VTA_ALU_OPCODE_MIN || insn.alu_opcode == VTA_ALU_OPCODE_MAX) {
+              // Compute Min/Max
+              acc_T mix_val = src_0 < src_1 ?
+                  (insn.alu_opcode == VTA_ALU_OPCODE_MIN ? src_0 : src_1) :
+                  (insn.alu_opcode == VTA_ALU_OPCODE_MIN ? src_1 : src_0);
+              dst_tensor[i][b] = mix_val;
+              o_tensor[i][b] = (out_T) mix_val.range(VTA_OUT_WIDTH - 1, 0);
+            } else if (insn.alu_opcode == VTA_ALU_OPCODE_ADD) {
+              // Compute Sum
+              acc_T add_val =
+                  src_0.range(VTA_ACC_WIDTH - 1, 0) + src_1.range(VTA_ACC_WIDTH - 1, 0);
+              dst_tensor[i][b] = add_val;
+              o_tensor[i][b] = (out_T) add_val.range(VTA_OUT_WIDTH - 1, 0);
+            } else if (insn.alu_opcode == VTA_ALU_OPCODE_SHR) {
+              // Compute Shift Right
+              acc_T shr_val = src_0 >> shft_by;
+              dst_tensor[i][b] = shr_val;
+              o_tensor[i][b] = (out_T) shr_val.range(VTA_OUT_WIDTH - 1, 0);
+            }
+#ifdef VTA_SYSTOLIC
+            //#### JO added (2026-11-04): requantize of the out write
+            o_tensor[i][b] = requant(dst_tensor[i][b], o_tensor[i][b], insn.rq_en, insn.rq_round, insn.rq_shift,
+                                     (ap_int<8>) insn.rq_lo, (ap_int<8>) insn.rq_hi);
+            //#### JO (2026-11-03): registers before the writes as in the imm loop above (both loops drive acc_mem's data)
+            dst_tensor[i][b] = alu_reg(dst_tensor[i][b]);
+            o_tensor[i][b] = alu_reg(o_tensor[i][b]);
+#endif
+          }
+        }
+
+        // Write the results back into accumulator
+        write_tensor<bus_T, acc_T, acc_idx_T, VTA_BUS_WIDTH, VTA_ACC_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, dst_tensor, acc_mem);
+        // Write the results back in the output buffer
+        write_tensor<bus_T, out_T, acc_idx_T, VTA_BUS_WIDTH, VTA_OUT_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(dst_idx, o_tensor, out_mem);
+#endif
+      }
+      // Update offsets
+      dst_offset_in += insn.dst_factor_in;
+      src_offset_in += insn.src_factor_in;
+    }
+    // Update offsets
+    dst_offset_out += insn.dst_factor_out;
+    src_offset_out += insn.src_factor_out;
+  }
+}
+
+void compute(
+  volatile uint32_t &done,
+  volatile uop_T *uops,
+  volatile bus_T *biases,
+  hls::stream<insn_T> &gemm_queue,
+  hls::stream<bool> &l2g_dep_queue,
+  hls::stream<bool> &s2g_dep_queue,
+  hls::stream<bool> &g2l_dep_queue,
+  hls::stream<bool> &g2s_dep_queue,
+  bus_T inp_mem[VTA_INP_BUFF_DEPTH][INP_MAT_AXI_RATIO],
+  bus_T wgt_mem[VTA_WGT_BUFF_DEPTH][WGT_MAT_AXI_RATIO],
+  bus_T out_mem[VTA_ACC_BUFF_DEPTH][OUT_MAT_AXI_RATIO]
+#ifdef VTA_SYSTOLIC
+  , bus_T acc_mem[VTA_ACC_BUFF_DEPTH][ACC_MAT_AXI_RATIO],
+  hls::stream<sa_uop_T> &gemm_uop,
+  hls::stream<bool> &gemm_done
+#endif
+#ifdef VTA_HW_PROFILE
+  , uint32_t &load_count,
+  uint32_t &gemm_count,
+  uint32_t &alu_count
+#endif
+  ) {
+PRAGMA_HLS(HLS INTERFACE s_axilite port = done bundle = CONTROL_BUS offset = VTA_COMPUTE_DONE_WR_OFFSET)
+//#### JO added: profiling counters at the offsets vtalib's pynq_driver.cc reads with PROFILE_ENABLE
+//#### (COMPUTE_LOAD/GEMM/ALU_COUNT_OFFSET). Not volatile: HLS makes a volatile reference an in/out pair
+//#### (like done: done_i 0x10 / done_o 0x18), which would put the counter at offset + 8.
+#ifdef VTA_HW_PROFILE
+#pragma HLS INTERFACE s_axilite port = load_count bundle = CONTROL_BUS offset = 0x50
+#pragma HLS INTERFACE s_axilite port = gemm_count bundle = CONTROL_BUS offset = 0x60
+#pragma HLS INTERFACE s_axilite port = alu_count bundle = CONTROL_BUS offset = 0x70
+#endif
+#pragma HLS INTERFACE m_axi port = uops offset = slave bundle = uop_port
+#pragma HLS INTERFACE m_axi port = biases offset = slave bundle = data_port
+#pragma HLS INTERFACE axis port = gemm_queue
+#pragma HLS INTERFACE axis port = l2g_dep_queue
+#pragma HLS INTERFACE axis port = s2g_dep_queue
+#pragma HLS INTERFACE axis port = g2l_dep_queue
+#pragma HLS INTERFACE axis port = g2s_dep_queue
+#pragma HLS INTERFACE bram port = inp_mem
+#pragma HLS INTERFACE bram port = wgt_mem
+#pragma HLS INTERFACE bram port = out_mem
+#pragma HLS INTERFACE s_axilite port = return bundle = CONTROL_BUS
+//#### JO changed (2026-10-27, systolic Phase A): with VTA_MEM_OREG the inp/wgt BRAMs register port B
+//#### (vivado.tcl), so compute reads them with latency 2
+#ifdef VTA_MEM_OREG
+#pragma HLS RESOURCE variable = inp_mem core = RAM_1P latency = 2
+#pragma HLS RESOURCE variable = wgt_mem core = RAM_1P latency = 2
+#else
+#pragma HLS RESOURCE variable = inp_mem core = RAM_1P
+#pragma HLS RESOURCE variable = wgt_mem core = RAM_1P
+#endif
+#pragma HLS RESOURCE variable = out_mem core = RAM_1P
+
+  // Micro-op storage
+  static uop_T uop_mem[VTA_UOP_BUFF_DEPTH];
+
+#ifdef VTA_SYSTOLIC
+//#### JO changed (2026-10-27, systolic Phase D, docs/evta_systolic_design.md §3): acc_mem is a BD BRAM shared with gemm_sa
+//#### (both ports muxed by gemm_sa busy); GEMM steps go to gemm_sa on gemm_uop, one gemm_done comes back per instruction.
+//#### The dependence pushes of a GEMM instruction ride on its last step and gemm_sa pushes them when that step is
+//#### written (gemm_sa_bd merges them into g2l/g2s), so load/store never reuse a buffer gemm_sa still reads, and a load
+//#### waiting for its buffer does not also wait for compute to read the done (that cost ~one GEMM instruction per
+//#### input block: compute is inside the next instruction's II=1 loop). compute only counts the outstanding GEMM
+//#### instructions (gemm_done) and waits for all of them before any other instruction.
+#pragma HLS INTERFACE bram port = acc_mem
+#pragma HLS INTERFACE axis port = gemm_uop
+#pragma HLS INTERFACE axis port = gemm_done
+#pragma HLS RESOURCE variable = acc_mem core = RAM_T2P_BRAM latency = 2
+#pragma HLS ARRAY_RESHAPE variable = acc_mem complete dim=2
+#pragma HLS DEPENDENCE variable = acc_mem inter false
+  static ap_uint<16> sa_out = 0;         // GEMM instructions in gemm_sa
+  bool sa_deferred = false;
+#define SA_RETIRE() { gemm_done.read(); sa_out--; }
+#define SA_POLL() { if (sa_out != 0 && !gemm_done.empty()) SA_RETIRE(); }
+
+  insn_T raw_insn;
+  SA_WAIT_INSN: while (gemm_queue.empty()) SA_POLL();
+  raw_insn = gemm_queue.read();
+  VTAInsn insn;
+  insn_T raw_copy = raw_insn;
+  insn.generic = *((VTAGenericInsn *) &raw_copy);
+  if (insn.generic.pop_prev_dep) {
+    SA_WAIT_L2G: while (l2g_dep_queue.empty()) SA_POLL();
+    l2g_dep_queue.read();
+  }
+  if (insn.generic.pop_next_dep) {
+    SA_WAIT_S2G: while (s2g_dep_queue.empty()) SA_POLL();
+    s2g_dep_queue.read();
+  }
+  // everything but GEMM and a token-free uop LOAD waits for gemm_sa (acc/out access, token order)
+  if (insn.generic.opcode != VTA_OPCODE_GEMM &&
+      !(insn.generic.opcode == VTA_OPCODE_LOAD && insn.mem.memory_type == VTA_MEM_ID_UOP &&
+        !insn.generic.push_prev_dep && !insn.generic.push_next_dep)) {
+    SA_DRAIN: while (sa_out != 0) SA_RETIRE();
+  }
+#else
+  // Accumulator storage
+  static bus_T acc_mem[VTA_ACC_BUFF_DEPTH][ACC_MAT_AXI_RATIO];
+#pragma HLS ARRAY_RESHAPE variable = acc_mem complete dim=2
+// This is necessary to obtain II=1
+#pragma HLS DEPENDENCE variable = acc_mem inter false
+
+  // Pop GEMM instruction
+  insn_T raw_insn = gemm_queue.read();
+  // Cast to GenericInsn
+  VTAInsn insn;
+  insn_T raw_copy = raw_insn;
+  insn.generic = *((VTAGenericInsn *) &raw_copy);
+
+  // Pop dependence token if instructed
+  if (insn.generic.pop_prev_dep) {
+    l2g_dep_queue.read();
+  }
+  if (insn.generic.pop_next_dep) {
+    s2g_dep_queue.read();
+  }
+#endif
+
+  // Set done value
+  done = 0;
+  // Perform action based on opcode
+  if (insn.generic.opcode == VTA_OPCODE_FINISH) {
+    // Set done flag if we reach a FINISH instruction
+    done = 1;
+  } else if (insn.generic.opcode == VTA_OPCODE_LOAD) {
+    // Initialize indices
+    memop_sram_T sram_idx = insn.mem.sram_base;
+    memop_dram_T dram_idx = insn.mem.dram_base;
+    memop_sram_T x_width =
+        (insn.mem.x_pad_0 + insn.mem.x_size + insn.mem.x_pad_1);
+    memop_sram_T y_offset_0 = x_width * insn.mem.y_pad_0;
+    memop_sram_T y_offset_1 = x_width * insn.mem.y_pad_1;
+
+    if (insn.mem.memory_type == VTA_MEM_ID_UOP) {
+      // Perform data transfer
+      memcpy(&uop_mem[sram_idx],
+             (const uop_T*) &uops[dram_idx],
+             insn.mem.x_size * sizeof(uop_T));
+    } else if (insn.mem.memory_type == VTA_MEM_ID_ACC) {
+      // Perform data transfer from DRAM
+      load_pad_2d<bus_T, ACC_MAT_AXI_RATIO, VTA_ACC_ELEM_BYTES>(
+          biases,
+          acc_mem,
+          sram_idx,
+          dram_idx,
+          insn.mem.y_size,
+          insn.mem.x_size,
+          insn.mem.x_stride,
+          insn.mem.x_pad_0,
+          insn.mem.x_pad_1,
+          y_offset_0,
+          y_offset_1);
+    }
+  } else if (insn.generic.opcode == VTA_OPCODE_GEMM) {
+#ifdef VTA_SYSTOLIC
+    if (gemm_sa_issue(raw_copy, uop_mem, gemm_uop)) {
+      sa_out++; sa_deferred = true;   // its pushes ride on the last step
+    }
+#ifndef __SYNTHESIS__
+    // C simulation: the C model runs the steps (and pushes the tokens) now
+    gemm_sa_csim(gemm_uop, gemm_done, acc_mem, inp_mem, wgt_mem, out_mem, g2l_dep_queue, g2s_dep_queue);
+    while (sa_out != 0) SA_RETIRE();
+#endif
+#else
+    gemm(raw_copy, uop_mem, acc_mem, inp_mem, wgt_mem, out_mem);
+#endif
+  } else if (insn.generic.opcode == VTA_OPCODE_ALU) {
+    alu(raw_copy, uop_mem, acc_mem, inp_mem, wgt_mem, out_mem);
+  }
+
+#ifdef VTA_HW_PROFILE
+  //#### JO added: counts since the previous FINISH, so after a run they hold that run's totals
+  //#### load: DRAM elements loaded by compute (uop: x_size, acc: x_size * y_size)
+  //#### gemm/alu: inner-loop iterations, iter_out * iter_in * (uop_end - uop_bgn), as the simulator counts
+  static uint32_t load_cnt = 0;
+  static uint32_t gemm_cnt = 0;
+  static uint32_t alu_cnt = 0;
+  if (insn.generic.opcode == VTA_OPCODE_LOAD) {
+    if (insn.mem.memory_type == VTA_MEM_ID_UOP) {
+      load_cnt += insn.mem.x_size;
+    } else if (insn.mem.memory_type == VTA_MEM_ID_ACC) {
+      load_cnt += (uint32_t) insn.mem.x_size * (uint32_t) insn.mem.y_size;
+    }
+  } else if (insn.generic.opcode == VTA_OPCODE_GEMM) {
+    gemm_cnt += (uint32_t) insn.gemm.iter_out * (uint32_t) insn.gemm.iter_in *
+               (uint32_t) (insn.gemm.uop_end - insn.gemm.uop_bgn);
+  } else if (insn.generic.opcode == VTA_OPCODE_ALU) {
+    alu_cnt += (uint32_t) insn.alu.iter_out * (uint32_t) insn.alu.iter_in *
+              (uint32_t) (insn.alu.uop_end - insn.alu.uop_bgn);
+  }
+  load_count = load_cnt;
+  gemm_count = gemm_cnt;
+  alu_count = alu_cnt;
+  if (insn.generic.opcode == VTA_OPCODE_FINISH) {
+    load_cnt = 0;
+    gemm_cnt = 0;
+    alu_cnt = 0;
+  }
+#endif
+
+  // Push dependence token if instructed
+#ifdef VTA_SYSTOLIC
+  if (!sa_deferred) {   //#### JO added: a GEMM's pushes are pushed by gemm_sa
+#endif
+  if (insn.generic.push_prev_dep) {
+    g2l_dep_queue.write(1);
+  }
+  if (insn.generic.push_next_dep) {
+    g2s_dep_queue.write(1);
+  }
+#ifdef VTA_SYSTOLIC
+  }
+#endif
+}
+
+void store(
+  volatile bus_T *outputs,
+  hls::stream<insn_T> &store_queue,
+  hls::stream<bool> &g2s_dep_queue,
+  hls::stream<bool> &s2g_dep_queue,
+  bus_T out_mem[VTA_ACC_BUFF_DEPTH][OUT_MAT_AXI_RATIO]) {
+#pragma HLS INTERFACE m_axi port = outputs offset = slave bundle = data_port
+#pragma HLS INTERFACE axis port = store_queue
+#pragma HLS INTERFACE axis port = g2s_dep_queue
+#pragma HLS INTERFACE axis port = s2g_dep_queue
+#pragma HLS INTERFACE bram port = out_mem
+#pragma HLS INTERFACE s_axilite port = return bundle = CONTROL_BUS
+#pragma HLS RESOURCE variable = out_mem core = RAM_1P
+
+  // Pop store instruction
+  insn_T raw_insn = store_queue.read();
+  // Cast to MemInsn
+  insn_T raw_copy = raw_insn;
+  VTAMemInsn insn = *((VTAMemInsn *) &raw_copy);
+
+  // Pop dependence token if instructed
+  if (insn.pop_prev_dep) {
+    g2s_dep_queue.read();
+  }
+
+  // Initialize indices
+  memop_sram_T sram_idx = insn.sram_base;
+  memop_dram_T dram_idx = insn.dram_base;
+
+  // Copy along y dimension
+  for (int y = 0; y < insn.y_size; y++) {
+#pragma HLS PIPELINE
+    // Perform data transfer
+    memcpy(
+      const_cast<bus_T*>(&outputs[dram_idx * OUT_MAT_AXI_RATIO]),
+      (const bus_T*) &out_mem[sram_idx][0],
+      insn.x_size * VTA_OUT_ELEM_BYTES);
+#pragma HLS RESOURCE variable = sram_idx core = Mul_LUT
+    sram_idx += insn.x_size;
+    dram_idx += insn.x_stride;
+  }
+
+  // Push dependence token if instructed
+  if (insn.push_prev_dep) {
+    s2g_dep_queue.write(1);
+  }
+}
+
+void vta(
+  uint32_t insn_count,
+  volatile insn_T *insns,
+  volatile uop_T *uops,
+  volatile bus_T *inputs,
+  volatile bus_T *weights,
+  volatile bus_T *biases,
+  volatile bus_T *outputs) {
+#pragma HLS INTERFACE s_axilite port = insn_count bundle = CONTROL_BUS
+#pragma HLS INTERFACE m_axi port = insns offset = slave bundle = ins_port
+#pragma HLS INTERFACE m_axi port = uops offset = slave bundle = uop_port
+#pragma HLS INTERFACE m_axi port = inputs offset = slave bundle = data_port
+#pragma HLS INTERFACE m_axi port = weights offset = slave bundle = data_port
+#pragma HLS INTERFACE m_axi port = biases offset = slave bundle = data_port
+#pragma HLS INTERFACE m_axi port = outputs offset = slave bundle = data_port
+#pragma HLS INTERFACE s_axilite port = return bundle = CONTROL_BUS
+
+  // Instantiate temporary instruction queues (used for peeking)
+  hls::stream<insn_T> tmp_load_queue;
+  PRAGMA_HLS(HLS stream depth=STREAM_IN_DEPTH variable=tmp_load_queue)
+  hls::stream<insn_T> tmp_gemm_queue;
+  PRAGMA_HLS(HLS stream depth=STREAM_IN_DEPTH variable=tmp_gemm_queue)
+  hls::stream<insn_T> tmp_store_queue;
+  PRAGMA_HLS(HLS stream depth=STREAM_IN_DEPTH variable=tmp_store_queue)
+
+  // Instatiate physical instruction queues
+  hls::stream<insn_T> load_queue;
+  PRAGMA_HLS(HLS stream depth=STREAM_IN_DEPTH variable=load_queue)
+  hls::stream<insn_T> gemm_queue;
+  PRAGMA_HLS(HLS stream depth=STREAM_IN_DEPTH variable=gemm_queue)
+  hls::stream<insn_T> store_queue;
+  PRAGMA_HLS(HLS stream depth=STREAM_IN_DEPTH variable=store_queue)
+
+  // Dependence queues
+  hls::stream<bool> l2g_dep_queue;
+  PRAGMA_HLS(HLS stream depth=STREAM_IN_DEPTH variable=l2g_dep_queue)
+  hls::stream<bool> s2g_dep_queue;
+  PRAGMA_HLS(HLS stream depth=STREAM_IN_DEPTH variable=s2g_dep_queue)
+  hls::stream<bool> g2l_dep_queue;
+  PRAGMA_HLS(HLS stream depth=STREAM_IN_DEPTH variable=g2l_dep_queue)
+  hls::stream<bool> g2s_dep_queue;
+  PRAGMA_HLS(HLS stream depth=STREAM_IN_DEPTH variable=g2s_dep_queue)
+
+  // Instantiate memories
+  bus_T inp_mem[VTA_INP_BUFF_DEPTH][INP_MAT_AXI_RATIO];
+  bus_T wgt_mem[VTA_WGT_BUFF_DEPTH][WGT_MAT_AXI_RATIO];
+  bus_T out_mem[VTA_ACC_BUFF_DEPTH][OUT_MAT_AXI_RATIO];
+#ifdef VTA_SYSTOLIC
+  //#### JO added (systolic Phase D): acc_mem and the gemm_sa streams live outside compute
+  static bus_T acc_mem[VTA_ACC_BUFF_DEPTH][ACC_MAT_AXI_RATIO];
+  hls::stream<sa_uop_T> gemm_uop;
+  hls::stream<bool> gemm_done;
+#define SA_ARGS , acc_mem, gemm_uop, gemm_done
+#else
+#define SA_ARGS
+#endif
+
+  // Push all instructions into the queues
+  fetch(insn_count, insns, tmp_load_queue, tmp_gemm_queue, tmp_store_queue);
+
+  // Global done indicator
+  uint32_t done = 0;
+#ifdef VTA_HW_PROFILE
+  //#### JO added
+  uint32_t load_count = 0, gemm_count = 0, alu_count = 0;
+#endif
+
+  // Temporary instructions
+  insn_T tmp_load;
+  insn_T tmp_gemv;
+  insn_T tmp_store;
+
+  // Peeking status
+  bool tmp_load_popped = false;
+  bool tmp_gemm_popped = false;
+  bool tmp_store_popped = false;
+  int exit_counter = 0;
+
+  // Main control loop
+  while (true) {
+    // First execute as many load instructions as possible
+    while (!tmp_load_queue.empty() || tmp_load_popped == true) {
+      // Pop the load instruction
+      if (!tmp_load_popped) {
+        tmp_load_queue.read(tmp_load);
+        tmp_load_popped = true;
+      }
+      // Check dependences and invoke the load stage
+      VTAGenericInsn insn = *((VTAGenericInsn *) &tmp_load);
+      if ((insn.pop_next_dep && !g2l_dep_queue.empty()) ||
+          !insn.pop_next_dep) {
+        // Push the instruction in the load queue
+        load_queue.write(tmp_load);
+        tmp_load_popped = false;
+        load(inputs, weights, load_queue, g2l_dep_queue, l2g_dep_queue, inp_mem, wgt_mem);
+      } else {
+        // Execution of load stage pending on completion of other stages, so break here...
+        break;
+      }
+    }
+    // Next execute as many gemm instructions as possible
+    while (!tmp_gemm_queue.empty() || tmp_gemm_popped == true) {
+      // Pop the gemm instruction
+      if (!tmp_gemm_popped) {
+        tmp_gemm_queue.read(tmp_gemv);
+        tmp_gemm_popped = true;
+      }
+      // Check dependences and invoke the load stage
+      VTAGenericInsn insn = *((VTAGenericInsn *) &tmp_gemv);
+      if (
+        (insn.pop_prev_dep && !l2g_dep_queue.empty() &&
+         insn.pop_next_dep && !s2g_dep_queue.empty()) ||
+        (!insn.pop_prev_dep && insn.pop_next_dep &&
+         !s2g_dep_queue.empty()) ||
+        (insn.pop_prev_dep && !l2g_dep_queue.empty() &&
+        !insn.pop_next_dep) ||
+        (!insn.pop_prev_dep && !insn.pop_next_dep)
+      ) {
+        // Push the instruction in the load queue
+        gemm_queue.write(tmp_gemv);
+        tmp_gemm_popped = false;
+#ifdef VTA_HW_PROFILE
+        //#### JO added
+        compute(done, uops, biases, gemm_queue, l2g_dep_queue, s2g_dep_queue,
+                g2l_dep_queue, g2s_dep_queue, inp_mem, wgt_mem, out_mem SA_ARGS,
+                load_count, gemm_count, alu_count);
+#else
+        compute(done, uops, biases, gemm_queue, l2g_dep_queue, s2g_dep_queue,
+                g2l_dep_queue, g2s_dep_queue, inp_mem, wgt_mem, out_mem SA_ARGS);
+#endif
+      } else {
+        // Execution of load stage pending on completion of other stages,
+        // so break here...
+        break;
+      }
+    }
+    // Finally execute as many store instructions as possible
+    while (!tmp_store_queue.empty() || tmp_store_popped == true) {
+      // Pop the load instruction
+      if (!tmp_store_popped) {
+        tmp_store_queue.read(tmp_store);
+        tmp_store_popped = true;
+      }
+      // Check dependences and invoke the load stage
+      VTAGenericInsn insn = *((VTAGenericInsn *) &tmp_store);
+
+      if ((insn.pop_prev_dep && !g2s_dep_queue.empty()) ||
+          !insn.pop_prev_dep) {
+        // Push the instruction in the load queue
+        store_queue.write(tmp_store);
+        tmp_store_popped = false;
+        store(outputs, store_queue, g2s_dep_queue, s2g_dep_queue, out_mem);
+      } else {
+        // Execution of load stage pending on completion of other stages, so break here...
+        break;
+      }
+    }
+    // Check if we get a signal that we are done
+    if (done) {
+      break;
+    }
+    exit_counter++;
+    if (exit_counter > 1000) {
+      if (tmp_load_popped) {
+        if (g2l_dep_queue.empty()) {
+          printf("waiting on g2l\n");
+        }
+      }
+      if (tmp_gemm_popped) {
+        VTAGenericInsn insn = *((VTAGenericInsn *) &tmp_gemv);
+        if (l2g_dep_queue.empty() && insn.pop_prev_dep) {
+          printf("waiting on l2g\n");
+        }
+        if (s2g_dep_queue.empty() && insn.pop_next_dep) {
+          printf("waiting on s2g\n");
+        }
+      }
+      if (tmp_store_popped) {
+        if (g2s_dep_queue.empty()) {
+          printf("waiting on g2s\n");
+        }
+      }
+      break;
+    }
+  }
+
+  // Ensure that the tokens are empty
+  bool tmp_tok;
+  int l2g_count = 0;
+  int s2g_count = 0;
+  int g2l_count = 0;
+  int g2s_count = 0;
+  while (l2g_dep_queue.read_nb(tmp_tok)) {
+    l2g_count++;
+  }
+  while (s2g_dep_queue.read_nb(tmp_tok)) {
+    s2g_count++;
+  }
+  while (g2l_dep_queue.read_nb(tmp_tok)) {
+    g2l_count++;
+  }
+  while (g2s_dep_queue.read_nb(tmp_tok)) {
+    g2s_count++;
+  }
+
+  assert(l2g_count == 0 && s2g_count == 0 && g2l_count == 0 && g2s_count == 0);
+}

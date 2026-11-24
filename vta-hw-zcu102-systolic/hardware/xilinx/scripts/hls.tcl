@@ -70,6 +70,11 @@ if {[info exists ::env(VTA_ALU_MUL)] && $::env(VTA_ALU_MUL) eq "1"} {
 if {[info exists ::env(VTA_ALU_BC)] && $::env(VTA_ALU_BC) eq "1"} {
     append cflags " -DVTA_ALU_BC"
 }
+#### JO added (2026-11-23): Makefile ALUX_STEP1=1 -> src/vta_alux1.cc (ALU extension step 1, the 11-14 source) instead of vta.cc
+set vta_src vta.cc
+if {[info exists ::env(VTA_ALUX_STEP1)] && $::env(VTA_ALUX_STEP1) eq "1"} {
+    set vta_src vta_alux1.cc
+}
 
 # Get the VTA configuration paramters
 set ::device $FPGA_DEVICE
@@ -124,7 +129,7 @@ proc init_design {} {
 if {$run_csim} {
 open_project vta_sim
 set_top vta
-add_files $src_dir/vta.cc -cflags $cflags
+add_files $src_dir/$vta_src -cflags $cflags
 add_files -tb $sim_dir/vta_test.cc -cflags $cflags
 #### JO added (2026-11-11): random ALU programs against the reference model (only with VTA_ALUX)
 add_files -tb $sim_dir/alux_test.cc -cflags $cflags
@@ -150,7 +155,7 @@ proc export_ip {} {
 if {[stage_on fetch]} {
 open_project vta_fetch
 set_top fetch
-add_files $src_dir/vta.cc -cflags $cflags
+add_files $src_dir/$vta_src -cflags $cflags
 open_solution "soln"
 init_design
 csynth_design
@@ -162,7 +167,7 @@ close_project
 if {[stage_on load]} {
 open_project vta_load
 set_top load
-add_files $src_dir/vta.cc -cflags $cflags
+add_files $src_dir/$vta_src -cflags $cflags
 open_solution "soln"
 init_design
 csynth_design
@@ -174,7 +179,7 @@ close_project
 if {[stage_on compute]} {
 open_project vta_compute
 set_top compute
-add_files $src_dir/vta.cc -cflags $cflags
+add_files $src_dir/$vta_src -cflags $cflags
 open_solution "soln"
 init_design
 csynth_design
@@ -186,7 +191,7 @@ close_project
 if {[stage_on store]} {
 open_project vta_store
 set_top store
-add_files $src_dir/vta.cc -cflags $cflags
+add_files $src_dir/$vta_src -cflags $cflags
 open_solution "soln"
 init_design
 csynth_design

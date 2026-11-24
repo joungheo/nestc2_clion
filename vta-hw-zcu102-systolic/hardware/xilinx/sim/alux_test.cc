@@ -90,7 +90,10 @@ void addRandom(Prog &p) {
  //#### its own inner loop (hazard_slots(..., 0)); the cosim drops those with a stale read in VTA_ALUX_WSLOTS slots
  for (;;) {
 #ifdef VTA_ALUX
-  int op = rnd(p, 18);   // #### JO: 16 since 2026-11-15 (MADD, MULSHR, SHRV, SHRR), 18 (SQACC, LUTC)
+  //#### JO changed (2026-11-23): VTA_ALUX_OPS=<n> draws operations 0..n-1 (12 for the step 1 source vta_alux1.cc)
+  //int op = rnd(p, 18);   // #### JO: 16 since 2026-11-15 (MADD, MULSHR, SHRV, SHRR), 18 (SQACC, LUTC)
+  static const int nops = getenv("VTA_ALUX_OPS") ? atoi(getenv("VTA_ALUX_OPS")) : 18;
+  int op = rnd(p, nops);
 #else
   int op = rnd(p, 5);    // #### JO (2026-11-23): VTA_ALU_MUL: 0-3 and MUL (imm only)
 #endif
