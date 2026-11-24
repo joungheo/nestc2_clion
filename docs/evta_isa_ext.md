@@ -532,6 +532,20 @@ multi4 (4 copy lockstep, copy당):
 
 - multi4 Resnet18 번들에는 EVTA avgpool이 없어(`EVTA_RES_CHECK avgpool` 0건) 이득이 없다. +0.1 ms는 HP 클럭 3 % 차이로 보인다.
 - `MultiEVTAResnet50Test`는 281 (0.832588)로 single `Resnet50TvTest`의 값을 낸다(두 bitstream 같음). 11-22에 만든 multi4 copy가 Tv 모델인 것으로 보인다(이번 변경과 무관).
+- **multi4 Resnet18 / VGG16 / DeiT 번들을 지금 컴파일러로 다시 만들었다(2026-11-24).** 위 표의 Resnet18 값은 11-06 번들이다.
+  - 그 전 multi4 번들: Resnet18 / VGG16 11-06(1장 profile, VGG16 정규화 전, round shift 없음, conv + 2x2 pool 융합 전), DeiT 11-10(행 pruning, attention layout 등 11-10 뒤 DeiT 최적화 전부 없음).
+  - 이번: `gen_multi4_bundles.sh`가 single과 같은 모델 / profile / 옵션을 쓴다(Resnet18 `calib/..._n200.yaml`, VGG16 `norm/` 모델 + `calib/..._n100.yaml`, `-vta-round-shift`, DeiT `deit_prune.onnx` + `deit_calib_prune.yaml` + `-quantization-schema=symmetric`).
+    보드 `Debug2_remote`의 model-compiler를 먼저 다시 빌드했다(11-21 빌드라 11-22 컴파일러 수정 전; CMake 재실행 없이 4분). 같은 model-compiler로 다시 만든 single 세 번들은 `hw/`의 것과 바이트 단위로 같고, multi4 copy 0도 single과 같다.
+  - 보드(`_amul` hp322, `-s _systimed -l`): `EVTA_RES_CHECK` Resnet18 24 / VGG16 48 / DeiT 16건 0 differ(multi, Dir 안의 single 둘 다). VGG16 top-1 8 (0.607698), DeiT 281 (0.719773)으로 single 번들과 같다.
+    VGG16 `multi_model.h`의 `MODEL_EXPECT`는 0 → 8(정규화 모델의 값, single도 8).
+
+| 모델 (copy당 중앙값 ms, 25회) | 11-06 / 11-10 번들 | 11-24 번들 | Dir 안의 1 copy |
+|---|---|---|---|
+| MultiEVTAResnet18Test | 24.02 | 24.02 (166.5 fps) | 22.94 |
+| MultiEVTAVgg16Cifar10Test | 8.47 (`-n 5`) | **8.17** (489.8 fps) | 6.99 |
+| MultiEVTADeiTTest | 117.6 (`-n 5`) | **97.1** (41.2 fps) | 83.4 |
+
+  - DeiT는 `_amul`에 layer norm / softmax / GELU 확장 연산이 없어 CPU로 간다(single `_alux3`는 약 37 ms). 4 copy에서는 그 CPU 일이 L2 / DDR을 나눠 써 1 copy보다 14 ms 느리다.
 
 ## 6. 다른 모델 돌리기 (VGG, Resnet50, MobileNet 등)
 
