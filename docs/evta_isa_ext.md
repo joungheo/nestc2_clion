@@ -541,7 +541,7 @@ multi4 (4 copy lockstep, copy당):
 
 | 모델 (copy당 중앙값 ms, 25회) | 11-06 / 11-10 번들 | 11-24 번들 | Dir 안의 1 copy |
 |---|---|---|---|
-| MultiEVTAResnet18Test | 24.02 | 24.02 (166.5 fps) | 22.94 |
+| MultiEVTAResnet18Test | 24.02 (`-n 5`; 위 표 23.99) | 24.02 (166.5 fps) | 22.94 |
 | MultiEVTAVgg16Cifar10Test | 8.47 (`-n 5`) | **8.17** (489.8 fps) | 6.99 |
 | MultiEVTADeiTTest | 117.6 (`-n 5`) | **97.1** (41.2 fps) | 83.4 |
 
