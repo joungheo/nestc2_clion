@@ -1,4 +1,4 @@
-# EVTA와 AMD DPU 비교: ResNet50, MobileNetV2 (2026-11-22)
+# EVTA와 AMD DPU 비교: ResNet50, MobileNetV2 (2026-11-22, 11-24 다시 잼)
 
 ZCU102에서 우리 EVTA와 AMD의 DPU(Vitis AI의 NPU IP)를 **같은 float 모델, 같은 테스트 이미지**로 견준다.
 여기에는 무엇으로, 어떻게 재었는지와 그 결과를 모두 적는다.
@@ -23,17 +23,18 @@ ZCU102에서 우리 EVTA와 AMD의 DPU(Vitis AI의 NPU IP)를 **같은 float 모
 | ResNet50 | DPU S (B4096 1개, 1 thread) | 79.9 | 655 | 57 % | 76.1 → 76.0 % (−0.1 %p) |
 | | DPU T (B4096 3개, 여러 thread) | 189.7 | 1,555 | 45 % | |
 | | 우리 EVTA 1개 `Resnet50TvTest` | 14.6 | 119.6 | **58 %** | 76.15 → **75.29 %** (−0.86 %p) |
-| | 우리 EVTA 4개 `MultiEVTAResnet50TvTest` | 52.9 | 432 | **53 %** | 같은 bundle |
+| | 우리 EVTA 4개 `MultiEVTAResnet50TvTest` (`_amul`, 11-24) | 52.9 | 433 | **53 %** | 같은 bundle |
 | MobileNetV2 | DPU S | 270.0 | 163 | 14 % | 70.13 → 67.67 % (−2.46 %p) |
 | | DPU T | 764.4 | 460 | 13 % | |
 | | 우리 EVTA 1개 `MobileNetV2TfTest` | 69.5 | 45.7 | **22 %** | 71.80 → **68.43 %** (−3.37 %p) |
-| | 우리 EVTA 4개 `MultiEVTAMobileNetV2TfTest` | 233 | 153 | **19 %** | 같은 bundle |
+| | 우리 EVTA 4개 `MultiEVTAMobileNetV2TfTest` (`_amul`, 11-24) | 235.6 | 155 | **19 %** | 같은 bundle |
 
 - **가동률은 우리가 같거나 높다.** 곱셈기를 놀리지 않는 효율은 뒤지지 않는다.
 - **절대 성능은 DPU가 3.3–5.5배다.** peak 차이만큼이다.
   - EVTA 1개 204.8 GOPS 대 B4096 1개 1,151 GOPS (5.6배).
   - EVTA 4개 819 대 B4096 3개 3,453 GOPS (4.2배).
-- **EVTA 4개 판은 아직 ALU 확장이 없는 bitstream이다(§3).** MobileNetV2의 residual add와 avgpool이 CPU에서 돈다. ALU 확장 multi4 bitstream이 나오면 다시 잰다.
+- **EVTA 4개는 `_amul`(ALU MUL immediate만, 11-24)로 다시 쟀다(§6.4).** avgpool이 EVTA로 갔지만 `_rq` 때와 거의 같다(52.9 / 233 → 52.9 / 235.6 fps). ALU 확장 3단계 multi4는 배치·배선이 안 되어 멈췄다([evta_multi4_alux3.md](evta_multi4_alux3.md) §4.2).
+- **클럭당으로 보면 우리 EVTA 4개(2,048 op)가 B4096 1개(4,096 op)의 반이다.** 그래서 우리 multi4를 DPU **S**(B4096 1개)와 견주면 ResNet50 52.9 대 79.9 fps(66 %), MobileNetV2 235.6 대 270.0 fps(87 %)다. 이 두 모델에서 이 차이를 줄이는 것이 다음 목표다(§6.4).
 
 ## 2. 비교 대상: AMD DPU 수치
 
@@ -73,10 +74,10 @@ ZCU102에서 우리 EVTA와 AMD의 DPU(Vitis AI의 NPU IP)를 **같은 float 모
 | EVTA 1개 bitstream | `vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_alux3_400mhz_rq.bin` (보드 `/lib/firmware`, 2026-11-15; `vtabundles_xcmpl/hw/script/run_all.sh`의 `SYS_BIN`) |
 | | systolic GEMM 16 × 16, 400 MHz, requantize(`_rq`), ALU 확장 3단계(`_alux3`), WNS +0.022 ns ([evta_isa_ext.md](evta_isa_ext.md) §8.15) |
 | | peak 16 × 16 MAC × 2 × 400 MHz = **204.8 GOPS** |
-| EVTA 4개 bitstream | `vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz_rq.bin` (2026-11-04; `hw_multievtax4/script/run_all.sh`의 `SYS_BIN`) |
-| | EVTA 4개, 각 400 MHz `_rq`, **ALU 확장 없음**, WNS +0.002 ns ([evta_isa_ext.md](evta_isa_ext.md) §7.18) |
+| EVTA 4개 bitstream | 11-24부터 `vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_amul_400mhz_hp322_rq.bin` (`hw_multievtax4/script/run_all.sh`의 `SYS_BIN`): `_rq` + ALU MUL immediate, HP 포트 321.7 MHz ([evta_multi4_alux3.md](evta_multi4_alux3.md) §6.2) |
+| | 11-22의 §6.1은 `vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz_rq.bin` (2026-11-04, 각 400 MHz `_rq`, **ALU 확장 없음**, WNS +0.002 ns, [evta_isa_ext.md](evta_isa_ext.md) §7.18) |
 | | peak 4 × 204.8 = **819.2 GOPS** |
-| | ALU 확장 3단계까지 넣은 판(`_ni`, LUT 243,945 = 89.3 %)은 배치·배선 중이다([evta_todo.md](evta_todo.md) 순서 7) |
+| | ALU 확장 3단계 multi4(`_ni`, crossbar, 1단계)는 배치·배선이 안 되어 멈췄다([evta_multi4_alux3.md](evta_multi4_alux3.md) §4.2) |
 | runtime | `vtalib-zcu102-systolic` (commit `a9b4ad1` 시점), 보드 실행 파일은 PC docker `nestc-build`의 cross build |
 | 컴파일러 | NEST-C `model-compiler` (`Debug2_remote`, commit `a9b4ad1`); `-quantization-pow2-mse`는 `ab4aacf`부터 |
 | 보드 | ZCU102 (Cortex-A53 4코어 1.2 GHz), PYNQ 2.4 |
@@ -253,6 +254,50 @@ EVTA 4개용(`vta/multievta_bundles`):
 - ImageNetV2는 같은 모델에서도 ImageNet val보다 12–13 %p 낮다(float: ResNet50 76.15 대 63.34, TF-slim MobileNetV2 71.80 대 59.24, QAT 70.91 대 58.71 %). 그래서 DPU 수치와는 ImageNet val로만 견준다.
 - calibration을 바꾸기 전(Glow 기본: 10칸 histogram, 거듭제곱 scale을 늘 올림) torchvision ResNet50의 손실은 −4.3 %p였다(hold1000). 자세한 것은 [evta_accuracy.md](evta_accuracy.md) §7에 있다.
 
+### 6.4 다시 잼: EVTA 1개 `_alux3`, EVTA 4개 `_amul` (2026-11-24)
+
+- **bitstream:** EVTA 1개 `..._16_16_19_18_sa_alux3_400mhz_rq.bin`, EVTA 4개 `..._4evta_sa_amul_400mhz_hp322_rq.bin` (각 `run_all.sh`의 `SYS_BIN`).
+- **실행 파일:** 보드에서 11-24 17:18에 다시 링크(`build_systimed`, `build_multievtax4_systimed`; vtalib-zcu102-systolic `398f358`, `run_prof.sh`의 `exe :` 줄). bundle `.cpp`는 11-24 이전 생성(11-22 정확도 수정 뒤; model-compiler 줄 없음). 11-22의 §6.1은 PC cross build(`_pcsystimed`)였다.
+- **조건:** OMP 1(copy마다 CPU 1코어), 25회 중 2–25회 중앙값, `cat_285.png`(VGG16은 CIFAR-10 `airplane/0001.png`). 로그: 보드 `~/JO/dpu_meas_261124/`.
+- **EVTA 4개는 lockstep 없이**(`-l` 없이, copy가 서로 기다리지 않고 각자 돈다) 잰 값을 쓴다. DPU T(여러 thread가 각자 돈다)와 같은 조건이다. `-l`(매 추론을 4 copy가 함께 시작)은 가장 느린 copy를 기다리므로 1.5–2 ms 길다(아래 표 괄호).
+  - 11-22 §6.1(17.06 ms)과 ubun의 `_amul` 측정(18.69 ms, [evta_multi4_alux3.md](evta_multi4_alux3.md) §6.2)의 차이도 이것이다: 앞은 `-l` 없이, 뒤는 `-l`.
+
+**DPU와 견주는 두 모델** (DPU와 같은 float 원본, ImageNet val 정확도는 §6.2)
+
+| 모델 | | 장당 시간 | fps | GOPS | 가동률 | DPU 대비 fps |
+|---|---|---|---|---|---|---|
+| ResNet50 | 우리 EVTA 1개 `Resnet50TvTest` | 68.41 ms (EVTA conv 61.73) | 14.6 | 119.6 | 58 % | DPU S 79.9의 18 % |
+| | 우리 EVTA 4개 `MultiEVTAResnet50TvTest` | 75.57 ms (`-l` 77.88) | **52.9** (`-l` 51.4) | 433 | 53 % | DPU T 189.7의 28 %, **DPU S 79.9의 66 %** |
+| | DPU S / T | | 79.9 / 189.7 | 655 / 1,555 | 57 / 45 % | |
+| MobileNetV2 | 우리 EVTA 1개 `MobileNetV2TfTest` | 14.41 ms (conv 7.65) | 69.4 | 45.7 | 22 % | DPU S 270.0의 26 % |
+| | 우리 EVTA 4개 `MultiEVTAMobileNetV2TfTest` | 16.98 ms (`-l` 18.72) | **235.6** (`-l` 213.7) | 155 | 19 % | DPU T 764.4의 31 %, **DPU S 270.0의 87 %** |
+| | DPU S / T | | 270.0 / 764.4 | 163 / 460 | 14 / 13 % | |
+
+- 11-22(`_rq`, `_pcsystimed`)와 같다: ResNet50 52.9 → 52.9, MobileNetV2 233 → 235.6 fps. `_amul`의 EVTA avgpool은 장당 0.1 ms 남짓이다.
+- **EVTA 4개는 클럭당 2,048 op로 B4096 1개(4,096 op)의 반이다.** 클럭도 400 대 281 MHz라 peak는 819 대 1,151 GOPS(71 %)다. 그래서 multi4를 DPU S와 견주는 것이 구조끼리의 비교에 가깝다.
+  - ResNet50: peak 비(71 %)보다 조금 낮은 66 %. 가동률 53 % 대 57 %다.
+  - MobileNetV2: 87 %. 가동률 19 % 대 14 %로 우리가 높다(우리 연산량이 9 % 큰 것을 빼도 높다).
+- **EVTA 4개의 copy 하나는 EVTA 1개보다 느리다:** ResNet50 68.4 → 75.6 ms(+10 %), MobileNetV2 14.4 → 17.0 ms(+18 %).
+  - 같은 multi4 bitstream에서 copy 하나만 돌리면(`singlevta*`, 100회) 72.1 / 14.85 ms다. buffer가 작은 것(16/15/18/17 대 16/16/19/18)과 ALU 확장이 없는 것이 +3.7 / +0.45 ms이고, 나머지 +3.5 / +2.1 ms는 4 copy가 같이 돌 때의 DDR / CPU 경쟁이다.
+  - MobileNetV2는 CPU 쪽 시간(`cpu conv/fc` 6.85 ms, 이름으로 나눈 값이라 depthwise EVTA 호출도 들어 있다)이 커서 경쟁에 더 약하다.
+
+**나머지 모델** (int8, 같은 조건; 정확도는 [evta_accuracy.md](evta_accuracy.md))
+
+| 모델 (연산량) | EVTA 1개 `_alux3` | | | EVTA 4개 `_amul` (4장 동시, `-l` 없이) | | | 참고: EVTA 4개 bitstream에서 copy 1개만 |
+|---|---|---|---|---|---|---|---|
+| | 장당 ms | fps | GOPS (가동률) | copy 장당 ms (`-l`) | fps | GOPS (가동률) | ms |
+| `Resnet50Test` Caffe2 (8.25 GOP) | 64.48 | 15.5 | 128.0 (62 %) | 75.60 (78.04) | 52.9 | 433 (53 %) | 72.11 |
+| `MobileNetV2Test` QAT (0.658 GOP) | 14.39 | 69.5 | 45.7 (22 %) | 16.98 (18.74) | 235.6 | 155 (19 %) | 14.91 |
+| `Resnet18Test` (3.70 GOP) | 22.73 | 44.0 | 162.8 (79 %) | 23.46 (24.00) | 170.5 | 631 (77 %) | 22.93 |
+| `Vgg16Cifar10Test` (0.630 GOP) | 6.75 | 148.1 | 93.3 (46 %) | 8.01 (8.13) | 499.5 | 315 (38 %) | 6.99 |
+| `DeiTTest` DeiT-tiny (2.18 GOP) | 37.09 | 27.0 | 58.8 (29 %) | 90.66 (97.07) | 44.1 | 96 (12 %) | 83.37 |
+
+- 가동률 = GOPS / peak(EVTA 1개 204.8, 4개 819.2 GOPS). GOPS는 bundle이 EVTA에 보낸 연산량 × fps다.
+- **Resnet18**이 가장 잘 돈다(EVTA 4개 631 GOPS, 77 %). 3 × 3 conv가 대부분이고 CPU 일이 거의 없다.
+- **VGG16 CIFAR-10**은 32 × 32 입력이라 tile이 작아(마지막 층 2 × 2) 가동률이 낮다.
+- **DeiT**는 EVTA 4개에서 나쁘다(장당 90.7 ms, EVTA 1개 37.1 ms의 2.4배). `_amul`에는 ALU 확장 2·3단계가 없어 layer norm / softmax / residual add가 CPU로 가고, 4 copy가 CPU와 DDR을 나눠 쓴다(copy 1개만이면 83.4 ms). DeiT는 EVTA 1개 `_alux3`가 4개 `_amul`의 61 %의 처리량을 낸다.
+- **이미 있던 문제:** `MultiEVTAResnet50Test`의 copy는 torchvision 모델로 만들어져 있다(분류 281 (0.832588) = `Resnet50TvTest`; [evta_multi4_alux3.md](evta_multi4_alux3.md) §6.2). 그래서 그 줄의 EVTA 4개 값은 Tv 모델의 값이고 연산량도 8.178 GOP다.
+
 ## 7. 조건이 다른 점 (해석할 때 주의)
 
 - **calibration 셋:**
@@ -280,6 +325,11 @@ sudo /bin/sh -c "imagenet_eval/eval_board.sh hw/MobileNetV2TfTest/vtaMobileNetV2
 sudo /bin/sh -c "imagenet_eval/eval_board.sh hw/MobileNetV2ValTest/vtaMobileNetV2ValBundle_sys dpu_mbv2val"
 sudo /bin/sh -c "hw/script/run_prof.sh -s _pcsystimed -n 25 Resnet50TvTest MobileNetV2TfTest MobileNetV2ValTest"
 sudo /bin/sh -c "hw_multievtax4/script/run_prof.sh -s _pcsystimed -n 25 MultiEVTAResnet50TvTest MultiEVTAMobileNetV2TfTest"
+# 11-24 (§6.4): 보드에서 빌드한 실행 파일, 7개 모델; EVTA 4개는 -l 있이 / 없이 둘 다
+(cd build_systimed && cmake . && make -j2 vtaTvResnet50Bundle vtaMobileNetV2TfBundle vtaCaffe2Resnet50Bundle vtaMobileNetV2Bundle vtaMxnetResnet18Bundle vtaVGG16Cifar10Bundle vtaDeiTBundle)
+(cd build_multievtax4_systimed && cmake . && make -j2 multivtaTvResnet50Bundle multivtaMobileNetV2TfBundle multivtaCaffe2Resnet50Bundle multivtaMobileNetV2Bundle multivtaMxnetResnet18Bundle multivtaVGG16Cifar10Bundle multivtaDeiTBundle)
+sudo /bin/sh -c "hw/script/run_prof.sh -s _systimed -n 25 Resnet50TvTest MobileNetV2TfTest Resnet50Test MobileNetV2Test Resnet18Test Vgg16Cifar10Test DeiTTest"
+sudo /bin/sh -c "hw_multievtax4/script/run_prof.sh -s _systimed -n 25 [-l] MultiEVTAResnet50TvTest MultiEVTAMobileNetV2TfTest MultiEVTAResnet50Test MultiEVTAMobileNetV2Test MultiEVTAResnet18Test MultiEVTAVgg16Cifar10Test MultiEVTADeiTTest"
 ```
 
 - PC cross build dir:
@@ -294,5 +344,6 @@ sudo /bin/sh -c "hw_multievtax4/script/run_prof.sh -s _pcsystimed -n 25 MultiEVT
 ## 9. 남은 일
 
 - ResNet50 / MobileNetV2 Tf의 남은 손실(DPU보다 0.8–0.9 %p 큼)이 어느 층에서 나는지 찾는다. Glow Interpreter 층 출력과 float 층 출력을 견주고, per-channel weight scale과 calibration 그림 수를 시험한다.
-- ALU 확장 3단계 EVTA 4개 bitstream(`_ni`)이 나오면 §6.1의 EVTA 4개 줄을 다시 잰다. DeiT도 같이 잰다.
+- ~~ALU 확장 3단계 EVTA 4개 bitstream이 나오면 다시 잰다~~: 멈춤. EVTA 4개는 `_amul`로 다시 쟀다(§6.4).
+- EVTA 4개 ResNet50 / MobileNetV2를 DPU S에 가깝게: copy 하나가 EVTA 1개보다 10–18 % 느린 까닭(DDR / CPU 경쟁, 작은 buffer)부터 줄인다. `MultiEVTAResnet50Test` copy를 Caffe2 모델로 다시 만든다.
 - 보드의 ImageNet val PNG(`~xilinx/JO/imagenet_val_tv224`, `imagenet_val_tf224`, 합 8.8 GB)는 다시 잴 때를 위해 둔다. 보드 디스크가 차면 실행이 조용히 끝나므로 다른 큰 파일(dump 등)은 쓴 뒤 지운다(2026-11-23 여유 11 GB).
