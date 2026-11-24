@@ -21,7 +21,7 @@
 
 ---
 
-### 2026-11-24 ubuntu2 (이 commit) — ResNet50Tv의 CPU 전처리와 layer4.0 relu를 EVTA로 (EVTA 1개 68.41 → 63.68 ms, multi4 52.9 → 56.6 fps)
+### 2026-11-24 ubuntu2 16ff33a — ResNet50Tv의 CPU 전처리와 layer4.0 relu를 EVTA로 (EVTA 1개 68.41 → 63.68 ms, multi4 52.9 → 56.6 fps)
 - **바뀐 것:** [evta_dpu_compare.md](evta_dpu_compare.md) §6.5.
   - `lib/Backends/VTA/VTASave.cpp`: `findInputPreprocess`가 제자리 elemsub / elemdiv를 받는다. `findResidualFusions`: relu가 2^-q 큰 scale로 갈 때(q < 0) `CLIP` + `RQ round 1`, 제자리 add의 residual은 만든 conv를 하나 더 센다.
   - `vtalib-zcu102-systolic/lib/Bundle/VTABundle.cpp` `lowerEpilogue`: 단항 kind 3 `clip((x + 2^(k-1)) >> k)`를 기본 ALU로. `tests/epi_conv_test.cc`에 경우 추가.
