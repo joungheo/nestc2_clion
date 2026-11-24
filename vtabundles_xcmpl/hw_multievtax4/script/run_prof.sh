@@ -149,7 +149,10 @@ case $SUFFIX in
 [ "$HWD" = hw ] && RD="$RUNS inferences per executable (BUNDLE_RUNS)" || RD="$RUNS runs per EVTA copy (MULTI_RUNS)"
 { echo "== run_prof.sh $HWD $(date '+%F %T')"
   echo "  bitstream from $BSRC"; bin_info $BIN
-  echo "  build     : -s $SUFFIX = ${BLD}$SUFFIX ($SD)"
+  #### JO changed (2026-11-24): _pcsys* executables are copied from the PC into <Dir>/, there is no build dir on the board
+  #echo "  build     : -s $SUFFIX = ${BLD}$SUFFIX ($SD)"
+  case $SUFFIX in _pcsys*) echo "  build     : -s $SUFFIX = <Dir>/*$SUFFIX copied from the PC (no build dir here; $SD)";;
+    *) echo "  build     : -s $SUFFIX = ${BLD}$SUFFIX ($SD)";; esac
   echo "  runs      : $RD"
   echo "  lockstep  : $([ -n "${MULTI_LOCKSTEP:-}" ] && echo on '(-l)' || echo off)   real time: $([ -n "$RT" ] && echo "$RT (-r)" || echo off)   OMP_NUM_THREADS: $OMP"
   echo "  Dirs      : $*"
@@ -174,7 +177,9 @@ for D in "$@"; do
   echo "================ $D ($EXE)"
   #### JO changed: also record it in the summary
   # [ -x $D/$EXE ] || { echo "$D/$EXE not built (cd ../build${SUFFIX} && make $3)"; continue; }
-  [ -x $D/$EXE ] || { echo "$D/$EXE not built (cd ${BLD}${SUFFIX} && make $3)"
+  #### JO changed (2026-11-24): the hint for _pcsys* (cross-built on the PC, docs/evta_user_manual.md 4.2)
+  BH="cd ${BLD}${SUFFIX} && make $3"; case $SUFFIX in _pcsys*) BH="cross-build $3 on the PC with BUNDLE_EXE_SUFFIX=$SUFFIX, scp it to $D/";; esac
+  [ -x $D/$EXE ] || { echo "$D/$EXE not built ($BH)"
                       printf "%-30s %-34s NOT BUILT\n" $D $EXE >> $SUM; continue; }
   #### JO changed (2026-11-01): record the loaded bitstream in /tmp/evta_bitstream (vtalib's pynq_driver.cc checks the
   #### EVTA count of its name before mapping the registers: a missing EVTA is an SError, not a clean error)
