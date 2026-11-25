@@ -5,7 +5,8 @@
 ####           (logits, as MobileNetV2Test; 1001 classes, 0 = background):
 ####             curl -LO https://storage.googleapis.com/download.tensorflow.org/models/tflite_11_05_08/mobilenet_v2_1.0_224.tgz
 ####             tar xzf mobilenet_v2_1.0_224.tgz && python3 ../MobileNetV2Test/tfl2onnx.py mobilenet_v2_1.0_224.tflite mobilenetv2_tf_f32.onnx
-####           into Debug2_remote/vta/bundles/MobileNetV2TfTest (needs the tflite / onnx Python packages)
+####           (needs the tflite / onnx Python packages); the result is in git here since 2026-11-25 (mobilenetv2_tf_f32.onnx,
+####           14 MB; gen_calib_bundle.sh reads it when Debug2_remote/vta/bundles/MobileNetV2TfTest has no copy)
 ####   test:   ImageNet val (ILSVRC2012, 50,000 images) as the DPU numbers, TF-slim preprocessing (centre crop 87.5 %, resize to
 ####           224 bilinear): imagenet_eval/prep_imagenet_val.py tf; eval_board.sh picks the set by Dir (imagenet_eval/eval_sets.txt)
 ####   calibration: calib/mobilenetv2_tf_calib_n200_b2048.yaml.gz, 200 ImageNetV2 images (no image of the test set), 2048 bins,

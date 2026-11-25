@@ -54,7 +54,9 @@ case $D in
     PF="-image-layout=NCHW -image-mode=0to1 -image-channel-order=BGR"; MC="-network-name=resnet50 -vta-round-shift"
     DEF="-quantization-calibration=KL -quantization-pow2-mse=2" ;;
   MobileNetV2TfTest)
-    NET=mobilenetv2_tf; M=$O/mobilenetv2_tf_f32.onnx; IN=input; SHAPE=[1,3,224,224]
+    #### JO changed (2026-11-25): the ONNX is in git (vta/bundles/MobileNetV2TfTest, 14 MB); a copy in $O still wins
+    NET=mobilenetv2_tf; M=$O/mobilenetv2_tf_f32.onnx; [ -s $M ] || M=$H/../vta/bundles/MobileNetV2TfTest/mobilenetv2_tf_f32.onnx
+    IN=input; SHAPE=[1,3,224,224]
     PF="-do-not-lower-nodes-for-profiling=Convolution -image-layout=NCHW -image-mode=neg1to1 -image-channel-order=RGB"
     MC="-network-name=mobilenetv2 -enable-channelwise-depthwise -vta-round-shift -vta-evta-depthwise"
     DEF="-quantization-calibration=KL -quantization-pow2-mse=2" ;;
