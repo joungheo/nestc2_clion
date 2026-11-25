@@ -122,7 +122,15 @@ done
 export OMP_NUM_THREADS=$OMP
 #### JO changed (2026-10-29): hw_<set>/: MULTI_RUNS = runs per EVTA copy of the multi-EVTA mains (4 x for single_thread_main)
 # [ "$HWD" = hw ] && export BUNDLE_RUNS=$RUNS || unset BUNDLE_RUNS
-if [ "$HWD" = hw ]; then export BUNDLE_RUNS=$RUNS; unset MULTI_RUNS; else export MULTI_RUNS=$RUNS; unset BUNDLE_RUNS; fi
+#if [ "$HWD" = hw ]; then export BUNDLE_RUNS=$RUNS; unset MULTI_RUNS; else export MULTI_RUNS=$RUNS; unset BUNDLE_RUNS; fi
+#### JO changed (2026-11-26): BUNDLE_RUNS only for the builds with the timed_bundle.py wrapper (suffix with "timed" or "prof");
+#### a hw/ executable of the generic main (MULTI_SINGLE: MobileNetV2, DeiT, since 11-26 Resnet18 / Resnet50 / VGG16 with the
+#### systolic vtalib) called its bundle twice with BUNDLE_RUNS and no wrapper (_sys: one timed image); now MULTI_RUNS = runs as the
+#### multi4 copy 0 (4 x runs inferences). The stock mains read neither.
+case "$HWD:$SUFFIX" in
+  hw:*timed*|hw:*prof*) export BUNDLE_RUNS=$RUNS; unset MULTI_RUNS;;
+  *) export MULTI_RUNS=$RUNS; unset BUNDLE_RUNS;;
+esac
 #### JO added (2026-10-28): _sys* executables are built with vtalib-zcu102-systolic (weight-stationary uop order)
 #### -> run them on the systolic bitstream SYS_BIN of run_all.sh; BIN=<file> in the environment still wins
 #### JO changed (2026-11-21): also _pcsys* (systolic vtalib executables cross-built on the host PC, docs/evta_user_manual.md 4.2)
@@ -149,7 +157,8 @@ case $SUFFIX in
   _prof) SD="EVTA time per EVTA call (VTA_SYNC events), HLS vtalib";;  _timed) SD="wall time per bundle statement, HLS vtalib";;
   _sysprof) SD="EVTA time per EVTA call (VTA_SYNC events), systolic vtalib";;  _systimed) SD="wall time per bundle statement, systolic vtalib";;
   _sys) SD="no timing, systolic vtalib";;  _pcsys*) SD="systolic vtalib, cross-built on the host PC";;  *) SD="";; esac
-[ "$HWD" = hw ] && RD="$RUNS inferences per executable (BUNDLE_RUNS)" || RD="$RUNS runs per EVTA copy (MULTI_RUNS)"
+#[ "$HWD" = hw ] && RD="$RUNS inferences per executable (BUNDLE_RUNS)" || RD="$RUNS runs per EVTA copy (MULTI_RUNS)"
+[ -n "${BUNDLE_RUNS:-}" ] && RD="$RUNS inferences per executable (BUNDLE_RUNS)" || RD="$RUNS runs per EVTA copy (MULTI_RUNS; a generic main alone: 4 x $RUNS)"
 { echo "== run_prof.sh $HWD $(date '+%F %T')"
   echo "  bitstream from $BSRC"; bin_info $BIN
   #### JO changed (2026-11-24): _pcsys* executables are copied from the PC into <Dir>/, there is no build dir on the board

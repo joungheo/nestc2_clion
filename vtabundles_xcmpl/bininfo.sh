@@ -19,8 +19,12 @@ bin_info() {
   fi
   #### JO added (2026-11-23): "_amul" = ALU MUL with an immediate only (HLS ALUMUL=1; avgpool on the EVTA, VTAHasAluMul)
   case $b in *_amul*) f="$f ALU-MUL-imm";; esac
+  #### JO added (2026-11-26): "_dw" = the depthwise window unit (DWU=1, VTAHasDwUnit, docs/evta_dw_unit.md; EVTA_DWU=0 off)
+  case $b in *_dw_*|*_dw.*) f="$f DW-window";; esac
   case $b in *_prof*) f="$f AXI-perf-monitor";; esac
-  case $b in *hp333*) f="$f HP-333MHz";; esac
+  #case $b in *hp333*) f="$f HP-333MHz";; esac
+  #### JO changed (2026-11-26): any _hp<MHz> (hp333, hp322, hp304: the HP port clock)
+  [[ $b =~ _hp([0-9]+) ]] && f="$f HP-${BASH_REMATCH[1]}MHz"
   echo "  bitstream : /lib/firmware/$b"
   if [ -f /lib/firmware/$b ]; then
     echo "              $(stat -c '%y' /lib/firmware/$b | cut -c1-16), md5 $(md5sum < /lib/firmware/$b | cut -c1-8)"
@@ -54,6 +58,7 @@ exe_info() {
     case ${BASH_REMATCH[1]:-1} in 1) need="$need e1a7924";; 2) need="$need c50e968";; *) need="$need 8191320";; esac
   fi
   case $b in *_amul*) need="$need 398f358";; esac
+  case $b in *_dw_*|*_dw.*) need="$need 818a73c";; esac
   for x in $need; do git -C .. merge-base --is-ancestor $x $have 2>/dev/null; [ $? = 1 ] && w="$w $x"; done
   [ -n "$w" ] && echo "  WARNING   : vtalib $have predates$w that $b needs: rebuild the executable (the bitstream's features stay unused)"
   return 0
