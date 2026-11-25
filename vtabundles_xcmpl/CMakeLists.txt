@@ -270,9 +270,10 @@ add_bundle_if_present(MultiEVTAMobileNetV2TfTest singlevtaMobileNetV2TfBundle si
 add_bundle_if_present(MultiEVTAMobileNetV2TfTest multivtaMobileNetV2TfBundle multi_threads_main.cpp
   mobilenetv2.cpp mobilenetv2_1.cpp mobilenetv2_2.cpp mobilenetv2_3.cpp)
 # foreach(t multivtaCaffe2Resnet50Bundle multivtaVGG16Cifar10Bundle)
+#### JO changed (2026-11-26): + Resnet18 (generic main now)
 foreach(t multivtaCaffe2Resnet50Bundle multivtaVGG16Cifar10Bundle singlevtaDeiTBundle multivtaDeiTBundle
           singlevtaMobileNetV2Bundle multivtaMobileNetV2Bundle singlevtaTvResnet50Bundle multivtaTvResnet50Bundle
-          singlevtaMobileNetV2TfBundle multivtaMobileNetV2TfBundle)
+          singlevtaMobileNetV2TfBundle multivtaMobileNetV2TfBundle singlevtaMxnetResnet18Bundle multivtaMxnetResnet18Bundle)
   if(TARGET ${t})
     target_link_libraries(${t} pthread)
   endif()

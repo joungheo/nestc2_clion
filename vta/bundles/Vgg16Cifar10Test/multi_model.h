@@ -35,7 +35,9 @@
 #define MODEL_OUTPUT "output"
 // 1: the output is the logits (softmax in the main)
 #define MODEL_SOFTMAX 1
-#define MODEL_EXPECT 0
+//#define MODEL_EXPECT 0
+//#### JO changed (2026-11-26): 8 as MultiEVTAVgg16Cifar10Test since the input normalization (11-22), airplane/0001.png is classified 8
+#define MODEL_EXPECT 8
 // copy 0 alone: the single-thread executable links only its .cpp
 #define MODEL_COPY0 \
     {&vgg16_cifar10_config, vgg16_cifar10_load_module, vgg16_cifar10_destroy_module, vgg16_cifar10, "vgg16_cifar10.weights.bin", initVTARuntime, destroyVTARuntime}

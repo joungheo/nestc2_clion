@@ -16,745 +16,597 @@
 *
 *****************************************************************************/
 
+//#### JO added (2026-11-09): DeiTTest copy of MobileNetV2Test/multi_threads_main.cpp with MODEL_MEAN / MODEL_STD (per channel
+//#### normalization of the input) and MODEL_PRINT_TOP5.
+//#### JO changed (2026-11-22): the one copy for every single-EVTA model main (DeiT, MobileNetV2, and the eval mains of Resnet18 /
+//#### Resnet50 / VGG16, <x>EvalMain.cpp): the same file in each vta/bundles/<Dir>/, the model in its multi_model.h.
+//#### JO added (2026-11-06): one bundle copy per EVTA in its own pthread for any image classifier (multi_model.h names
+//#### the copies' entries, the input and the output, MultiEVTAResnet50Test / MultiEVTAVgg16Cifar10Test); the same as
+//#### MultiEVTAResnet18Test/multi_threads_main.cpp: every copy runs MULTI_RUNS (default 25) inferences, the copies start
+//#### each one together (barrier), MULTI_LOCKSTEP=1 also before every EVTA call (evta_lockstep_hook, timed builds).
+//#### single_thread_main.cpp includes this file with MULTI_SINGLE: copy 0 alone, 4 x MULTI_RUNS inferences.
+//#### The copies' weights are the same bytes; load_module shares their VTA buffers (vtalib VTAConstBufferAlloc).
+
 #include <sys/time.h>
+#include <unistd.h>   //#### JO added (2026-11-24): usleep (MULTI_STAGGER_US)
+#include <sys/stat.h>   //#### JO added (2026-11-25): mkdir (INPUT_INT8_SAVE)
 #include "VTARuntime.h"
 #include <assert.h>
 #include <inttypes.h>
 #include <iostream>
+#include <math.h>
 #include <png.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <string>
 #include <vector>
+#include <algorithm>
 
-#include "mxnet_exported_resnet18.h"
-#include "mxnet_exported_resnet18_1.h"
-#include "mxnet_exported_resnet18_2.h"
-#include "mxnet_exported_resnet18_3.h"
-
+#include "multi_model.h"
 #include "vta/runtime.h"
 
-/// This is an example demonstrating how to use auto-generated bundles and
-/// create standalone executables that can perform neural network computations.
-/// This example loads and runs the compiled resnet50 network model.
-/// This example is using the dynamic bundle API (default).
+struct ModelCopy {
+  BundleConfig *config;
+  void (*load)(uint8_t *);
+  void (*destroy)();
+  int (*run)(uint8_t *, uint8_t *, uint8_t *);
+  const char *weights;
+  void (*initRuntime)();
+  void (*destroyRuntime)();
+};
+#ifdef MULTI_SINGLE
+static ModelCopy copies[] = {MODEL_COPY0};
+#else
+static ModelCopy copies[] = MODEL_COPIES;
+#endif
+static const int nCopies = sizeof(copies) / sizeof(copies[0]);
+static std::vector<std::string> inputImageFilenames;
 
-#define DEFAULT_HEIGHT 224
-#define DEFAULT_WIDTH 224
-
-//===----------------------------------------------------------------------===//
-//                   Image processing helpers
-//===----------------------------------------------------------------------===//
-std::vector<std::string> inputImageFilenames;
-
-/// \returns the index of the element at x,y,z,w.
-size_t getXYZW(const size_t *dims, size_t x, size_t y, size_t z, size_t w) {
-  return (x * dims[1] * dims[2] * dims[3]) + (y * dims[2] * dims[3]) +
-         (z * dims[3]) + w;
-}
-
-/// \returns the index of the element at x,y,z.
-size_t getXYZ(const size_t *dims, size_t x, size_t y, size_t z) {
-  return (x * dims[1] * dims[2]) + (y * dims[2]) + z;
-}
-
-/// Reads a PNG image from a file into a newly allocated memory block \p imageT
-/// representing a WxHxNxC tensor and returns it. The client is responsible for
-/// freeing the memory block.
-bool readPngImage(const char *filename, std::pair<float, float> range,
-                  float *&imageT, size_t *imageDims) {
+/// Reads a PNG image into a newly allocated H x W x C float array (values mapped to [lo, hi]).
+static bool readPngImage(const char *filename, float lo, float hi, float *&imageT, size_t *imageDims) {
   unsigned char header[8];
-  // open file and test for it being a png.
   FILE *fp = fopen(filename, "rb");
-  // Can't open the file.
-  if (!fp) {
+  if (!fp || fread(header, 1, 8, fp) != 8 || png_sig_cmp(header, 0, 8))
     return true;
-  }
-
-  // Validate signature.
-  size_t fread_ret = fread(header, 1, 8, fp);
-  if (fread_ret != 8) {
+  png_structp png_ptr = png_create_read_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
+  png_infop info_ptr = png_ptr ? png_create_info_struct(png_ptr) : nullptr;
+  if (!info_ptr || setjmp(png_jmpbuf(png_ptr)))
     return true;
-  }
-  if (png_sig_cmp(header, 0, 8)) {
-    return true;
-  }
-
-  // Initialize stuff.
-  png_structp png_ptr =
-      png_create_read_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
-  if (!png_ptr) {
-    return true;
-  }
-
-  png_infop info_ptr = png_create_info_struct(png_ptr);
-  if (!info_ptr) {
-    return true;
-  }
-
-  if (setjmp(png_jmpbuf(png_ptr))) {
-    return true;
-  }
-
   png_init_io(png_ptr, fp);
   png_set_sig_bytes(png_ptr, 8);
   png_read_info(png_ptr, info_ptr);
-
   size_t width = png_get_image_width(png_ptr, info_ptr);
   size_t height = png_get_image_height(png_ptr, info_ptr);
   int color_type = png_get_color_type(png_ptr, info_ptr);
-  int bit_depth = png_get_bit_depth(png_ptr, info_ptr);
-
   const bool isGray = color_type == PNG_COLOR_TYPE_GRAY;
   const size_t numChannels = isGray ? 1 : 3;
-
-  (void)bit_depth;
-  assert(bit_depth == 8 && "Invalid image");
-  assert((color_type == PNG_COLOR_TYPE_RGB_ALPHA ||
-          color_type == PNG_COLOR_TYPE_RGB || isGray) &&
-         "Invalid image");
-  bool hasAlpha = (color_type == PNG_COLOR_TYPE_RGB_ALPHA);
-
-  int number_of_passes = png_set_interlace_handling(png_ptr);
-  (void)number_of_passes;
-  assert(number_of_passes == 1 && "Invalid image");
-
+  const bool hasAlpha = color_type == PNG_COLOR_TYPE_RGB_ALPHA;
+  assert(png_get_bit_depth(png_ptr, info_ptr) == 8 && "Invalid image");
+  png_set_interlace_handling(png_ptr);
   png_read_update_info(png_ptr, info_ptr);
-
-  // Error during image read.
-  if (setjmp(png_jmpbuf(png_ptr))) {
-    return true;
-  }
-
-  auto *row_pointers = (png_bytep *)malloc(sizeof(png_bytep) * height);
-  for (size_t y = 0; y < height; y++) {
-    row_pointers[y] = (png_byte *)malloc(png_get_rowbytes(png_ptr, info_ptr));
-  }
-
-  png_read_image(png_ptr, row_pointers);
+  std::vector<png_bytep> rows(height);
+  for (size_t y = 0; y < height; y++)
+    rows[y] = (png_byte *)malloc(png_get_rowbytes(png_ptr, info_ptr));
+  png_read_image(png_ptr, rows.data());
   png_read_end(png_ptr, info_ptr);
-
   imageDims[0] = width;
   imageDims[1] = height;
   imageDims[2] = numChannels;
-  imageT = static_cast<float *>(
-      calloc(1, width * height * numChannels * sizeof(float)));
-
-  float scale = ((range.second - range.first) / 255.0);
-  float bias = range.first;
-
-  for (size_t row_n = 0; row_n < height; row_n++) {
-    png_byte *row = row_pointers[row_n];
-    for (size_t col_n = 0; col_n < width; col_n++) {
-      png_byte *ptr =
-          &(row[col_n * (hasAlpha ? (numChannels + 1) : numChannels)]);
-      if (isGray) {
-        imageT[getXYZ(imageDims, row_n, col_n, 0)] =
-            float(ptr[0]) * scale + bias;
-      } else {
-        imageT[getXYZ(imageDims, row_n, col_n, 2)] =
-            float(ptr[0]) * scale + bias;
-        imageT[getXYZ(imageDims, row_n, col_n, 1)] =
-            float(ptr[1]) * scale + bias;
-        imageT[getXYZ(imageDims, row_n, col_n, 0)] =
-            float(ptr[2]) * scale + bias;
-      }
+  imageT = static_cast<float *>(calloc(1, width * height * numChannels * sizeof(float)));
+  const double scale = (hi - lo) / 255.0;  // double as in the single mains (the same float values)
+  for (size_t r = 0; r < height; r++)
+    for (size_t c = 0; c < width; c++) {
+      png_byte *p = &rows[r][c * (hasAlpha ? numChannels + 1 : numChannels)];
+      // the same element order as the single bundle's main (getXYZ(dims, row, col, z)): z = RGB index, or
+      // 2 - RGB index with MODEL_PNG_REVERSE (the mains differ: Resnet50 keeps RGB, VGG16 / Resnet18 reverse it)
+      for (size_t z = 0; z < numChannels; z++)
+        imageT[(r * height + c) * numChannels + z] =
+            float(p[isGray ? 0 : MODEL_PNG_REVERSE ? numChannels - 1 - z : z]) * scale + lo;
     }
-  }
-
-  for (size_t y = 0; y < height; y++) {
-    free(row_pointers[y]);
-  }
-  free(row_pointers);
+  for (size_t y = 0; y < height; y++)
+    free(rows[y]);
   png_destroy_read_struct(&png_ptr, &info_ptr, (png_infopp)NULL);
   fclose(fp);
-  printf("Loaded image: %s\n", filename);
-
+  if (!getenv("EVAL_LIST")) printf("Loaded image: %s\n", filename);
   return false;
 }
 
-/// Loads and normalizes all PNGs into a tensor memory block \p resultT in the
-/// NCHW 3x224x224 format.
-static void loadImagesAndPreprocess(const std::vector<std::string> &filenames,
-                                    float *&resultT, size_t *resultDims) {
-  assert(filenames.size() > 0 &&
-         "There must be at least one filename in filenames");
-
-  //for normalization range setting
-
-  //for resnet18v2.onnx
-  //std::pair<float, float> range = std::make_pair(0., 1.0);
-
-  //for mxnet_exported_resnet18.onnx
-  std::pair<float, float> range = std::make_pair(0., 255.0);
-
-  unsigned numImages = filenames.size();
-  // N x C x H x W
-  resultDims[0] = numImages;
-  resultDims[1] = 3;
-  resultDims[2] = DEFAULT_HEIGHT;
-  resultDims[3] = DEFAULT_WIDTH;
-  size_t resultSizeInBytes =
-      numImages * 3 * DEFAULT_HEIGHT * DEFAULT_WIDTH * sizeof(float);
-  resultT = static_cast<float *>(malloc(resultSizeInBytes));
-  // We iterate over all the png files, reading them all into our result tensor
-  // for processing
-  for (unsigned n = 0; n < numImages; n++) {
-    float *imageT{nullptr};
-    size_t dims[3];
-    bool loadSuccess = !readPngImage(filenames[n].c_str(), range, imageT, dims);
-    assert(loadSuccess && "Error reading input image.");
-    (void)loadSuccess;
-
-    assert((dims[0] == DEFAULT_HEIGHT && dims[1] == DEFAULT_WIDTH) &&
-           "All images must have the same Height and Width");
-
-    // Convert to BGR, as this is what NN is expecting.
-    for (unsigned z = 0; z < 3; z++) {
-      for (unsigned y = 0; y < dims[1]; y++) {
-        for (unsigned x = 0; x < dims[0]; x++) {
-          resultT[getXYZW(resultDims, n, 2 - z, x, y)] =
-              imageT[getXYZ(dims, x, y, z)];
-        }
+/// The input tensor as the single bundles' mains make it: BGR, N x C x H x W (MODEL_NHWC: N x H x W x C)
+static float *loadInput(const char *filename) {
+  const size_t H = MODEL_HEIGHT, W = MODEL_WIDTH;
+  float *imageT = nullptr;
+  size_t dims[3];
+  bool failed = readPngImage(filename, MODEL_RANGE_LO, MODEL_RANGE_HI, imageT, dims);
+  assert(!failed && dims[0] == W && dims[1] == H && "Error reading input image.");
+  (void)failed;
+  float *t = static_cast<float *>(malloc(3 * H * W * sizeof(float)));
+  for (size_t z = 0; z < 3; z++)
+    for (size_t y = 0; y < H; y++)
+      for (size_t x = 0; x < W; x++) {
+        // single mains: resultT[getXYZW(dims, 0, 2 - z, x, y)] = imageT[getXYZ(dims, x, y, z)]
+        float v = imageT[(x * H + y) * 3 + z];
+        if (MODEL_NHWC)
+          t[(x * W + y) * 3 + (2 - z)] = v;
+        else
+          t[((2 - z) * H + x) * W + y] = v;
       }
+  free(imageT);
+#ifdef MODEL_MEAN
+  //#### JO added (2026-11-09): per channel (x - mean) / std after the [lo, hi] mapping (DeiT: ImageNet mean / std, NCHW)
+  {
+    const float mean[3] = MODEL_MEAN, sd[3] = MODEL_STD;
+    for (size_t c = 0; c < 3; c++)
+      for (size_t i = 0; i < H * W; i++) {
+        float &v = MODEL_NHWC ? t[i * 3 + c] : t[c * H * W + i];
+        v = (v - mean[c]) / sd[c];
+      }
+  }
+#endif
+  return t;
+}
+
+//#### JO added (2026-11-25): int8 input (vtalib-zcu102-systolic VTA_INPUT_INT8, docs/evta_dpu_compare.md 6.10). An int8 input
+//#### (<name>.i8, made by INPUT_INT8_SAVE: InputI8Header, then N x C x H x W bytes in the bundle input's layout) is handed to
+//#### vtalib (VTASetInputInt8) and the bundle's conv0 pack reads it instead of quantizing the float input.
+//#### JO changed (2026-11-25): int8 is the default. For an image <dir>/<name>.png the main looks for <name>.i8 in
+//#### $INPUT_INT8_DIR, then in <dir>, then in ./i8 (the executable's Dir: run_prof.sh runs there); none found: the float
+//#### image (INPUT_INT8=0: always float). The float image is passed too: an .i8 made with another quantize than the
+//#### bundle's (another bundle) is reported once by vtalib and the float image is used. A path that is itself an .i8 has
+//#### no float image (exit 6 on a mismatch).
+struct Input {
+  void *data;        // the float image (nullptr: an .i8 path)
+  size_t bytes;      // its bytes
+  bool i8, hasFloat;  // hasFloat: the copies' input variables hold the float image (data may be freed by then)
+  int8_t *i8data;    // the int8 input (i8)
+  std::string from;  // what was loaded, for the log
+#ifdef VTA_INPUT_INT8
+  VTAInputInt8 d;
+#endif
+};
+static bool isI8Path(const char *p) {
+  const size_t n = strlen(p);
+  return n > 3 && !strcmp(p + n - 3, ".i8");
+}
+#ifdef VTA_INPUT_INT8
+struct InputI8Header {
+  char magic[8];   // "EVTAI8" + 2 zero bytes
+  VTAInputInt8 d;
+};
+// reads an .i8 into x (false: no such file); a file that is not an int8 input of this model's size exits
+static bool readI8(const char *filename, Input &x) {
+  FILE *fp = fopen(filename, "rb");
+  if (!fp)
+    return false;
+  InputI8Header h;
+  if (fread(&h, sizeof(h), 1, fp) != 1 || memcmp(h.magic, "EVTAI8\0\0", 8)) {
+    fprintf(stderr, "%s: not an int8 input (INPUT_INT8_SAVE)\n", filename);
+    exit(1);
+  }
+  const size_t n = (size_t)h.d.N * h.d.C * h.d.H * h.d.W;
+  if (n != 3 * MODEL_HEIGHT * MODEL_WIDTH) {
+    fprintf(stderr, "%s: %zu bytes, the model input has %d\n", filename, n, 3 * MODEL_HEIGHT * MODEL_WIDTH);
+    exit(1);
+  }
+  x.i8data = static_cast<int8_t *>(malloc(n));
+  if (fread(x.i8data, n, 1, fp) != 1) {
+    fprintf(stderr, "%s: short file\n", filename);
+    exit(1);
+  }
+  fclose(fp);
+  x.i8 = true;
+  x.d = h.d;
+  x.from = filename;
+  return true;
+}
+#endif
+static Input loadAny(const char *filename) {
+  Input x = {nullptr, 3 * MODEL_HEIGHT * MODEL_WIDTH * sizeof(float), false, false, nullptr, filename};
+  const bool quiet = getenv("EVAL_LIST") != nullptr;
+  if (isI8Path(filename)) {
+#ifdef VTA_INPUT_INT8
+    if (!readI8(filename, x)) {
+      fprintf(stderr, "cannot open %s\n", filename);
+      exit(1);
     }
+    if (!quiet) printf("Input: int8 %s (scale %g offset %d), no float image\n", filename, x.d.scale, x.d.offset);
+    return x;
+#else
+    fprintf(stderr, "%s: int8 inputs need vtalib-zcu102-systolic (VTA_INPUT_INT8)\n", filename);
+    exit(1);
+#endif
   }
-  printf("Loaded images size in bytes is: %lu\n", resultSizeInBytes);
+  x.data = loadInput(filename);
+  x.hasFloat = true;
+#ifdef VTA_INPUT_INT8
+  const char *e = getenv("INPUT_INT8");
+  if (!e || atoi(e) != 0) {
+    const std::string p = filename;
+    const size_t sl = p.rfind('/'), b = sl == std::string::npos ? 0 : sl + 1, dot = p.rfind('.');
+    const std::string name = p.substr(b, (dot == std::string::npos || dot < b ? p.size() : dot) - b) + ".i8";
+    std::vector<std::string> cand;
+    if (const char *dir = getenv("INPUT_INT8_DIR"))
+      cand.push_back(std::string(dir) + "/" + name);
+    cand.push_back(p.substr(0, b) + name);
+    cand.push_back("i8/" + name);
+    for (auto &c : cand)
+      if (readI8(c.c_str(), x))
+        break;
+  }
+  if (!quiet) {
+    if (x.i8)
+      printf("Input: int8 %s (scale %g offset %d; float image %s kept for a mismatch)\n", x.from.c_str(), x.d.scale,
+             x.d.offset, filename);
+    else
+      printf("Input: float %s (%s)\n", filename,
+             e && atoi(e) == 0 ? "INPUT_INT8=0" : "no <name>.i8 in $INPUT_INT8_DIR, the image's dir or ./i8");
+  }
+#endif
+  return x;
+}
+// the input into a copy's input variable: the float image if there is one (the int8 input goes to vtalib)
+static void copyInput(const Input &x, uint8_t *dst) {
+  if (x.data)
+    memcpy(dst, x.data, x.bytes);
+}
+static void freeInput(Input &x) {
+  free(x.data);
+  free(x.i8data);
+  x.data = nullptr;
+  x.i8data = nullptr;
+}
+static void setInputMode(const Input &x) {
+#ifdef VTA_INPUT_INT8
+  VTASetInputInt8(x.i8 ? &x.d : nullptr, x.i8data, x.hasFloat);
+#else
+  (void)x;
+#endif
 }
 
-/// Parse images file names into a vector.
-void parseCommandLineOptions(int argc, char **argv) {
-  int arg = 1;
-  while (arg < argc) {
-    inputImageFilenames.push_back(argv[arg++]);
-  }
+static const SymbolTableEntry &getMutableWeightVar(const BundleConfig &config, const char *name) {
+  for (unsigned i = 0; i < config.numSymbols; ++i)
+    if (!strncmp(config.symbolTable[i].name, name, strlen(name)))
+      return config.symbolTable[i];
+  printf("Expected to find variable '%s'\n", name);
+  exit(1);
 }
 
-//===----------------------------------------------------------------------===//
-//                 Wrapper code for executing a bundle
-//===----------------------------------------------------------------------===//
-/// Find in the bundle's symbol table a weight variable whose name starts with
-/// \p name.
-const SymbolTableEntry *getWeightVar(const BundleConfig &config,
-                                     const char *name) {
-  for (unsigned i = 0, e = config.numSymbols; i < e; ++i) {
-    if (!strncmp(config.symbolTable[i].name, name, strlen(name))) {
-      return &config.symbolTable[i];
-    }
-  }
-  return nullptr;
-}
-
-/// Find in the bundle's symbol table a mutable weight variable whose name
-/// starts with \p name.
-const SymbolTableEntry &getMutableWeightVar(const BundleConfig &config,
-                                            const char *name) {
-  const SymbolTableEntry *mutableWeightVar = getWeightVar(config, name);
-  if (!mutableWeightVar) {
-    printf("Expected to find variable '%s'\n", name);
-  }
-  assert(mutableWeightVar && "Expected to find a mutable weight variable");
-  assert(mutableWeightVar->kind != 0 &&
-         "Weight variable is expected to be mutable");
-  return *mutableWeightVar;
-}
-
-/// Allocate an aligned block of memory.
-void *alignedAlloc(const BundleConfig &config, size_t size) {
-  void *ptr;
-  // Properly align the memory region.
-  int res = posix_memalign(&ptr, config.alignment, size);
-  assert(res == 0 && "posix_memalign failed");
-  assert((size_t)ptr % config.alignment == 0 && "Wrong alignment");
+static void *alignedAlloc(const BundleConfig &config, size_t size) {
+  void *ptr = nullptr;
+  if (posix_memalign(&ptr, config.alignment, size) != 0)
+    exit(1);
   memset(ptr, 0, size);
-  (void)res;
   return ptr;
 }
 
-/// Initialize the constant weights memory block by loading the weights from the
-/// weights file.
-uint8_t *initConstantWeights(const char *weightsFileName,
-                                    const BundleConfig &config) {
-  // Load weights.
-  FILE *weightsFile = fopen(weightsFileName, "rb");
-  if (!weightsFile) {
+static uint8_t *initConstantWeights(const char *weightsFileName, const BundleConfig &config) {
+  FILE *f = fopen(weightsFileName, "rb");
+  if (!f) {
     fprintf(stderr, "Could not open the weights file: %s\n", weightsFileName);
     exit(1);
   }
-  fseek(weightsFile, 0, SEEK_END);
-  size_t fileSize = ftell(weightsFile);
-  fseek(weightsFile, 0, SEEK_SET);
-  uint8_t *baseConstantWeightVarsAddr =
-      static_cast<uint8_t *>(alignedAlloc(config, fileSize));
-//  printf("Allocated weights of size: %lu\n", fileSize);
-//  printf("Expected weights of size: %" PRIu64 "\n",
-//         config.constantWeightVarsMemSize);
-  assert(fileSize == config.constantWeightVarsMemSize &&
-         "Wrong weights file size");
-  int result = fread(baseConstantWeightVarsAddr, fileSize, 1, weightsFile);
-  if (result != 1) {
+  fseek(f, 0, SEEK_END);
+  size_t fileSize = ftell(f);
+  fseek(f, 0, SEEK_SET);
+  assert(fileSize == config.constantWeightVarsMemSize && "Wrong weights file size");
+  uint8_t *p = static_cast<uint8_t *>(alignedAlloc(config, fileSize));
+  if (fread(p, fileSize, 1, f) != 1)
     perror("Could not read the weights file");
-  } else {
-    printf("Loaded weights of size: %lu from the file %s\n", fileSize,
-           weightsFileName);
+  else
+    printf("Loaded weights of size: %lu from the file %s\n", fileSize, weightsFileName);
+  fclose(f);
+  return p;
+}
+
+/// argmax of the output (after a softmax when the graph has none, MODEL_SOFTMAX), its probability in *conf
+static int classify(const BundleConfig &config, uint8_t *mutableWeightVars, float *conf) {
+  const SymbolTableEntry &out = getMutableWeightVar(config, MODEL_OUTPUT);
+  const float *r = (const float *)(mutableWeightVars + out.offset);
+  const int n = (int)out.size;
+  std::vector<float> p(r, r + n);
+  if (MODEL_SOFTMAX) {
+    float m = -INFINITY, sum = 0;
+    for (float v : p) m = std::max(m, v);
+    for (float &v : p) sum += (v = expf(v - m));
+    for (float &v : p) v /= sum;
   }
-  fclose(weightsFile);
-  return baseConstantWeightVarsAddr;
-}
-
-/// The assumed layout of the area for mutable WeightVars is:
-/// data | gpu_0/data | results
-uint8_t *allocateMutableWeightVars(const BundleConfig &config) {
-  auto *weights = static_cast<uint8_t *>(
-      alignedAlloc(config, config.mutableWeightVarsMemSize));
-//  printf("Allocated mutable weight variables of size: %" PRIu64 "\n",
-//         config.mutableWeightVarsMemSize);
-  return weights;
-}
-
-#include <math.h>
-void softmax(float* in, float* result)
-{
-  float max = -INFINITY;
-//    for(size_t i = 0; i < N; i++) {
-//      max[i] = -INFINITY;
-//    }
-
-//    for (size_t i = 0; i < N; i++) {
-  for (size_t j = 0; j < 1000; j++) {
-    if (in[j] > max) {
-      max = in[j];
-    }
+  int best = 0;
+  for (int i = 1; i < n; i++)
+    if (p[i] > p[best]) best = i;
+  *conf = p[best];
+#ifdef MODEL_PRINT_TOP5
+  //#### JO added (2026-11-09): the 5 largest outputs (before the softmax) once, to compare with image-classifier
+  static bool printed = false;
+  if (!printed) {
+    printed = true;
+    std::vector<int> ix(n);
+    for (int i = 0; i < n; i++) ix[i] = i;
+    std::partial_sort(ix.begin(), ix.begin() + 5, ix.end(), [&](int a, int b) { return r[a] > r[b]; });
+    for (int k = 0; k < 5; k++) printf("  top%d: %d  %f\n", k + 1, ix[k], r[ix[k]]);
   }
-  //  }
-
-  float sum = 0.0;
-  //memset(sum, 0x00, sizeof(float));
-  //for (size_t i = 0; i < N; i++) {
-  for (size_t j = 0; j < 1000; j++) {
-    sum += expf(in[j]- max);
-  }
-  //}
-
-  //for (size_t i = 0; i < N; i++) {
-  for (size_t j = 0; j < 1000; j++) {
-    result[j] = expf(in[j]-max)/sum;
-  }
-  //}
+#endif
+  return best;
 }
 
-
-/// Dump the result of the inference by looking at the results vector and
-/// finding the index of the max element.
-int dumpInferenceResults(const BundleConfig &config,
-                                 uint8_t *mutableWeightVars, char* resultName) {
-  const SymbolTableEntry &outputWeights =
-      getMutableWeightVar(config, resultName);
-  int maxIdx = 0;
-  float maxValue = 0;
-  float *results = (float *)(mutableWeightVars + outputWeights.offset);
-  int size = (int)outputWeights.size;
-  float softmax_result[1000];
-  softmax(results, &softmax_result[0]);
-  for (int i = 0; i < size; ++i) {
-    if (softmax_result[i] > maxValue) {
-      maxValue = softmax_result[i];
-      maxIdx = i;
-    }
-  }
-  return maxIdx;
-}
-
-uint8_t *copyMutableWeightVars(const BundleConfig &config, const char *name, float* inputT) {
-
-  uint8_t *mutableWeightVarsAddr = allocateMutableWeightVars(config);
-
-  const SymbolTableEntry &inputDataVar = getMutableWeightVar(config, name);
-//  printf("[copyMutableWeightVars] Copying data into mutable weight vars: %lu bytes\n",
-//         inputDataVar.size*4);
-//  printf( "inputDataVar.offset = %d\n", inputDataVar.offset);
-  memcpy(mutableWeightVarsAddr + inputDataVar.offset, inputT,
-         inputDataVar.size*4);
-
-  return mutableWeightVarsAddr;
-}
-
-void transpose(float* &in, float* &out) {
-
-  float (*inPtr)[1][3][DEFAULT_HEIGHT][DEFAULT_WIDTH];
-  float (*outPtr)[1][DEFAULT_HEIGHT][DEFAULT_WIDTH][3];
-
-  inPtr = (float (*)[1][3][DEFAULT_HEIGHT][DEFAULT_WIDTH])in;
-  outPtr = (float (*)[1][DEFAULT_HEIGHT][DEFAULT_WIDTH][3])out;
-
-
-  for (int j=0; j<3; j++){
-    for (int k=0; k<DEFAULT_HEIGHT; k++){
-      for (int l=0; l<DEFAULT_WIDTH; l++){
-        (*outPtr)[0][k][l][j] = (*inPtr)[0][j][k][l];
-      }
-    }
-  }
-
-}
-
-#define NHWC 1
-
-/// The assumed layout of the area for mutable WeightVars is:
-/// data | gpu_0/data | results
-uint8_t *initMutableWeightVars(const BundleConfig &config, char* varName) {
-  uint8_t *mutableWeightVarsAddr = allocateMutableWeightVars(config);
-  size_t inputDims[4];
-  float *inputT{nullptr};
-  loadImagesAndPreprocess(inputImageFilenames, inputT, inputDims);
-  // Copy image data into the gpu_0/data input variable in the
-  // mutableWeightVars area.
-  size_t imageDataSizeInBytes =
-      inputDims[0] * inputDims[1] * inputDims[2] * inputDims[3] * sizeof(float);
-//  printf("Copying image data into mutable weight vars: %lu bytes\n",
-//         imageDataSizeInBytes);
-  const SymbolTableEntry &inputGPUDataVar =
-      getMutableWeightVar(config, varName);
-
-  if(NHWC == 1) {
-    float* tmp = (float *)malloc(sizeof(float[1][DEFAULT_HEIGHT][DEFAULT_WIDTH][3]));
-    memset(tmp, 0, imageDataSizeInBytes);
-    transpose(inputT, tmp);
-    memcpy(inputT, tmp, imageDataSizeInBytes);
-    free(tmp);
-
-
-  }
-
-  memcpy(mutableWeightVarsAddr + inputGPUDataVar.offset, inputT,
-         imageDataSizeInBytes);
-  free(inputT);
-
-  return mutableWeightVarsAddr;
-}
-
-uint8_t *initActivations(const BundleConfig &config) {
-  return static_cast<uint8_t *>(
-      alignedAlloc(config, config.activationsMemSize));
-}
-
-
-float* getInferenceResultVar(const BundleConfig &config,
-                                    uint8_t *mutableWeightVars, const char* name) {
-  const SymbolTableEntry &outputWeights = getMutableWeightVar(config, name);
-  float *results = (float *)(mutableWeightVars + outputWeights.offset);
-  return results;
-}
-
-struct ThreadArg{
-  uint8_t *constantWeightVarsAddr;
-  uint8_t *mutableWeightVarsAddr;
-  uint8_t *activationsAddr;
-};
-
-
-int shared = 0;
-pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t mutex_init = PTHREAD_MUTEX_INITIALIZER;
-//#### JO added (2026-10-29): runs per copy and the per-run start barrier of the 4 threads
-pthread_barrier_t runBarrier;
-int multiRuns() {
+static int multiRuns() {
   const char *e = getenv("MULTI_RUNS");
   return e && atoi(e) > 0 ? atoi(e) : 25;
 }
-//#### JO added (2026-10-29): MULTI_LOCKSTEP=1 -> the 4 copies also meet before every EVTA call, so each conv runs on
-//#### the 4 EVTAs at once. The _prof/_timed builds call this hook before each EVTA call (timed_bundle.py); the other
-//#### builds do not call it.
-pthread_barrier_t convBarrier;
-bool lockstepOn = false;
+
+static pthread_barrier_t runBarrier, convBarrier;
+static bool lockstepOn = false;
 extern "C" void evta_lockstep_hook() {
   if (lockstepOn) pthread_barrier_wait(&convBarrier);
 }
 
+struct ThreadArg {
+  int copy, runs, bad;
+  uint8_t *constantWeights, *mutableWeights, *activations;
+  double t1, tEnd;   //#### JO added (2026-11-24): start of run 2 and end of the last run (ms, MULTI_FREE throughput)
+  const Input *input;   //#### JO added (2026-11-25)
+};
 
-void *thread_main(void *thread_arg) {
-  initVTARuntime();
-  // Allocate and initialize constant and mutable weights.
-  uint8_t *constantWeightVarsAddr = ((ThreadArg* )thread_arg)->constantWeightVarsAddr;
-  uint8_t *mutableWeightVarsAddr = ((ThreadArg* )thread_arg)->mutableWeightVarsAddr;
-  uint8_t *activationsAddr = ((ThreadArg* )thread_arg)->activationsAddr;
+//#### JO added (2026-11-24): MULTI_FREE=1: the copies do not wait for each other before each inference (only once before
+//#### the first), as independent streams (DPU "multi thread"); MULTI_STAGGER_US=<us>: copy j starts j * us later.
+//#### main prints the throughput from the start of everyone's 2nd run to the last end: images / time.
+static bool multiFree() {
+  const char *e = getenv("MULTI_FREE");
+  return e && atoi(e) > 0;
+}
+static double nowMs() {
+  timeval t;
+  gettimeofday(&t, NULL);
+  return t.tv_sec * 1000.0 + t.tv_usec / 1000.0;
+}
 
-
-
-  mxnet_exported_resnet18_load_module(constantWeightVarsAddr);
-
-  //#### JO changed (2026-10-29): every copy runs the same number of inferences (MULTI_RUNS, default 25) and the
-  //#### four start each one together (barrier): with the shared counter a copy ran 24 or 25 of 99, started apart
-  // while(1){
-  //   pthread_mutex_lock(&mutex);
-  //   if(shared<1000) shared++;
-  //   pthread_mutex_unlock(&mutex);
-  //   if(shared>=100) break;
-  for (int run = 0; run < multiRuns(); run++) {
-    pthread_barrier_wait(&runBarrier);
-    pthread_mutex_lock(&mutex);
-    shared++;
-    pthread_mutex_unlock(&mutex);
-    // Perform the computation.
-    mxnet_exported_resnet18(constantWeightVarsAddr, mutableWeightVarsAddr,
-                            activationsAddr);
-
-    int maxIdx = dumpInferenceResults(mxnet_exported_resnet18_config,
-                                      (uint8_t *) mutableWeightVarsAddr,
-                                      "resnetv10_dense0_fwd__1");
-    if (maxIdx != 281) {
-      std::cout << "The maxIdx should be 281: " << maxIdx << "\n";
-      //#### JO changed (2026-10-29): keep going, a thread that left would hang the others at the barrier
-      // return nullptr;
+static void *threadMain(void *a) {
+  ThreadArg *t = static_cast<ThreadArg *>(a);
+  ModelCopy &m = copies[t->copy];
+  m.initRuntime();
+  m.load(t->constantWeights);
+  float conf = 0;
+  int idx = -1;
+  const bool freeRun = multiFree();
+  const char *sg = getenv("MULTI_STAGGER_US");
+  const int stagger = sg ? atoi(sg) : 0;
+  setInputMode(*t->input);   //#### JO added (2026-11-25): int8 input
+  for (int run = 0; run < t->runs; run++) {
+#ifndef MULTI_SINGLE
+    //pthread_barrier_wait(&runBarrier);
+    if (!freeRun || run == 0)
+      pthread_barrier_wait(&runBarrier);
+    if (run == 0 && stagger > 0)
+      usleep(stagger * t->copy);
+#endif
+    if (run == 1)
+      t->t1 = nowMs();
+    m.run(t->constantWeights, t->mutableWeights, t->activations);
+    idx = classify(*m.config, t->mutableWeights, &conf);
+    if (idx != MODEL_EXPECT) {
+      // keep going: a thread that left would hang the others at the barrier
+      std::cout << "copy " << t->copy << " run " << run << ": the result should be " << MODEL_EXPECT << ": " << idx << "\n";
+      t->bad++;
     }
-    std::cout <<shared<<std::endl;
   }
-
-
-
-  mxnet_exported_resnet18_destroy_module();
-
-
-  // Free all resources.
-  free(activationsAddr);
-  free(constantWeightVarsAddr);
-  free(mutableWeightVarsAddr);
-  destroyVTARuntime();
+  t->tEnd = nowMs();
+  printf("copy %d: %d runs, Result: %d Confidence: %f, %d wrong\n", t->copy, t->runs, idx, conf, t->bad);
+  m.destroy();
+  m.destroyRuntime();
   return nullptr;
 }
 
-void *thread_main1(void *thread_arg) {
-
-  initVTARuntime1();
-  // Allocate and initialize constant and mutable weights.
-  uint8_t *constantWeightVarsAddr = ((ThreadArg* )thread_arg)->constantWeightVarsAddr;
-  uint8_t *mutableWeightVarsAddr = ((ThreadArg* )thread_arg)->mutableWeightVarsAddr;
-  uint8_t *activationsAddr = ((ThreadArg* )thread_arg)->activationsAddr;
-
-
-
-  mxnet_exported_resnet18_1_load_module(constantWeightVarsAddr);
-
-  //#### JO changed (2026-10-29): every copy runs the same number of inferences (MULTI_RUNS, default 25) and the
-  //#### four start each one together (barrier): with the shared counter a copy ran 24 or 25 of 99, started apart
-  // while(1){
-  //   pthread_mutex_lock(&mutex);
-  //   if(shared<100) shared++;
-  //   pthread_mutex_unlock(&mutex);
-  //   if(shared>=100) break;
-  for (int run = 0; run < multiRuns(); run++) {
-    pthread_barrier_wait(&runBarrier);
-    pthread_mutex_lock(&mutex);
-    shared++;
-    pthread_mutex_unlock(&mutex);
-    // Perform the computation.
-    mxnet_exported_resnet18_1(constantWeightVarsAddr, mutableWeightVarsAddr,
-                              activationsAddr);
-
-    int maxIdx = dumpInferenceResults(mxnet_exported_resnet18_1_config,
-                                      (uint8_t *) mutableWeightVarsAddr,
-                                      "resnetv10_dense0_fwd__1");
-    if (maxIdx != 281) {
-      std::cout << "The maxIdx should be 281: " << maxIdx << "\n";
-      //#### JO changed (2026-10-29): keep going, a thread that left would hang the others at the barrier
-      // return nullptr;
-    }
-    std::cout <<shared<<std::endl;
+#ifdef VTA_INPUT_INT8
+//#### JO added (2026-11-25): INPUT_INT8_SAVE=<dir>: copy 0 runs the first image once as float (vtalib records the bundle's
+//#### quantize), then every image (the arguments, or the EVAL_LIST images) is quantized by vtalib (VTAInputQuantize, the
+//#### bytes the bundle's pack makes) and written to <dir>/<name>.i8; with EVAL_LIST also <dir>/eval_list.txt (the .i8 paths
+//#### and the labels, for EVAL_LIST). Then exits. INPUT_INT8_SAVE=i8 in the executable's Dir makes the files the default
+//#### int8 input of that Dir's runs (loadAny looks in ./i8).
+static int saveInt8Inputs(const char *dir) {
+  std::vector<std::pair<std::string, int>> list;
+  if (const char *el = getenv("EVAL_LIST")) {
+    FILE *lf = fopen(el, "r");
+    char path[4096];
+    int label;
+    while (lf && fscanf(lf, "%4095s %d", path, &label) == 2)
+      list.push_back({path, label});
+    if (lf) fclose(lf);
+  } else {
+    for (auto &p : inputImageFilenames)
+      list.push_back({p, -1});
   }
-
-
-
-  mxnet_exported_resnet18_1_destroy_module();
-
-
-  // Free all resources.
-  free(activationsAddr);
-  free(constantWeightVarsAddr);
-  free(mutableWeightVarsAddr);
-  destroyVTARuntime1();
-  return nullptr;
-}
-
-void *thread_main2(void *thread_arg) {
-  initVTARuntime2();
-  // Allocate and initialize constant and mutable weights.
-  uint8_t *constantWeightVarsAddr = ((ThreadArg* )thread_arg)->constantWeightVarsAddr;
-  uint8_t *mutableWeightVarsAddr = ((ThreadArg* )thread_arg)->mutableWeightVarsAddr;
-  uint8_t *activationsAddr = ((ThreadArg* )thread_arg)->activationsAddr;
-
-
-
-  mxnet_exported_resnet18_2_load_module(constantWeightVarsAddr);
-
-  //#### JO changed (2026-10-29): every copy runs the same number of inferences (MULTI_RUNS, default 25) and the
-  //#### four start each one together (barrier): with the shared counter a copy ran 24 or 25 of 99, started apart
-  // while(1){
-  //   pthread_mutex_lock(&mutex);
-  //   if(shared<100) shared++;
-  //   pthread_mutex_unlock(&mutex);
-  //   if(shared>=100) break;
-  for (int run = 0; run < multiRuns(); run++) {
-    pthread_barrier_wait(&runBarrier);
-    pthread_mutex_lock(&mutex);
-    shared++;
-    pthread_mutex_unlock(&mutex);
-    // Perform the computation.
-    mxnet_exported_resnet18_2(constantWeightVarsAddr, mutableWeightVarsAddr,
-                              activationsAddr);
-
-    int maxIdx = dumpInferenceResults(mxnet_exported_resnet18_2_config,
-                                      (uint8_t *) mutableWeightVarsAddr,
-                                      "resnetv10_dense0_fwd__1");
-    if (maxIdx != 281) {
-      std::cout << "The maxIdx should be 281: " << maxIdx << "\n";
-      //#### JO changed (2026-10-29): keep going, a thread that left would hang the others at the barrier
-      // return nullptr;
-    }
-    std::cout <<shared<<std::endl;
+  if (list.empty() || isI8Path(list[0].first.c_str())) {
+    printf("INPUT_INT8_SAVE: no .png images\n");
+    return 1;
   }
-
-
-
-  mxnet_exported_resnet18_2_destroy_module();
-
-
-  // Free all resources.
-  free(activationsAddr);
-  free(constantWeightVarsAddr);
-  free(mutableWeightVarsAddr);
-  destroyVTARuntime2();
-  return nullptr;
-}
-
-void *thread_main3(void *thread_arg) {
-
-  initVTARuntime3();
-  // Allocate and initialize constant and mutable weights.
-  uint8_t *constantWeightVarsAddr = ((ThreadArg* )thread_arg)->constantWeightVarsAddr;
-  uint8_t *mutableWeightVarsAddr = ((ThreadArg* )thread_arg)->mutableWeightVarsAddr;
-  uint8_t *activationsAddr = ((ThreadArg* )thread_arg)->activationsAddr;
-
-  mxnet_exported_resnet18_3_load_module(constantWeightVarsAddr);
-
-  //#### JO changed (2026-10-29): every copy runs the same number of inferences (MULTI_RUNS, default 25) and the
-  //#### four start each one together (barrier): with the shared counter a copy ran 24 or 25 of 99, started apart
-  // while(1){
-  //   pthread_mutex_lock(&mutex);
-  //   if(shared<100) shared++;
-  //   pthread_mutex_unlock(&mutex);
-  //   if(shared>=100) break;
-  for (int run = 0; run < multiRuns(); run++) {
-    pthread_barrier_wait(&runBarrier);
-    pthread_mutex_lock(&mutex);
-    shared++;
-    pthread_mutex_unlock(&mutex);
-    // Perform the computation.
-    mxnet_exported_resnet18_3(constantWeightVarsAddr, mutableWeightVarsAddr,
-                              activationsAddr);
-
-    int maxIdx = dumpInferenceResults(mxnet_exported_resnet18_3_config,
-                                      (uint8_t *) mutableWeightVarsAddr,
-                                      "resnetv10_dense0_fwd__1");
-    if (maxIdx != 281) {
-      std::cout << "The maxIdx should be 281: " << maxIdx << "\n";
-      //#### JO changed (2026-10-29): keep going, a thread that left would hang the others at the barrier
-      // return nullptr;
-    }
-    std::cout <<shared<<std::endl;
+  ModelCopy &m = copies[0];
+  const BundleConfig &c = *m.config;
+  uint8_t *cw = initConstantWeights(m.weights, c);
+  uint8_t *mw = static_cast<uint8_t *>(alignedAlloc(c, c.mutableWeightVarsMemSize));
+  uint8_t *act = static_cast<uint8_t *>(alignedAlloc(c, c.activationsMemSize));
+  const SymbolTableEntry &in = getMutableWeightVar(c, MODEL_INPUT);
+  m.initRuntime();
+  m.load(cw);
+  float *x = loadInput(list[0].first.c_str());
+  memcpy(mw + in.offset, x, 3 * MODEL_HEIGHT * MODEL_WIDTH * sizeof(float));
+  free(x);
+  m.run(cw, mw, act);
+  InputI8Header h;
+  memset(&h, 0, sizeof(h));
+  memcpy(h.magic, "EVTAI8", 6);
+  if (!VTAInputInt8Info(&h.d)) {
+    printf("INPUT_INT8_SAVE: this bundle has no conv0 pack (preprocess_conv0pack_stream), no int8 input\n");
+    return 1;
   }
-
-
-
-  mxnet_exported_resnet18_3_destroy_module();
-
-
-  // Free all resources.
-  free(activationsAddr);
-  free(constantWeightVarsAddr);
-  free(mutableWeightVarsAddr);
-  destroyVTARuntime3();
-  return nullptr;
+  const size_t n = (size_t)h.d.N * h.d.C * h.d.H * h.d.W;
+  std::vector<int8_t> q(n);
+  mkdir(dir, 0775);   // one level; an existing dir is fine
+  FILE *lo = nullptr;
+  if (getenv("EVAL_LIST"))
+    lo = fopen((std::string(dir) + "/eval_list.txt").c_str(), "w");
+  int done = 0;
+  for (auto &e : list) {
+    const std::string &p = e.first;
+    const size_t sl = p.rfind('/'), b = sl == std::string::npos ? 0 : sl + 1, dot = p.rfind('.');
+    const std::string out = std::string(dir) + "/" + p.substr(b, (dot == std::string::npos || dot < b ? p.size() : dot) - b) + ".i8";
+    x = loadInput(p.c_str());
+    VTAInputQuantize(x, q.data());
+    free(x);
+    FILE *fo = fopen(out.c_str(), "wb");
+    if (!fo || fwrite(&h, sizeof(h), 1, fo) != 1 || fwrite(q.data(), n, 1, fo) != 1) {
+      printf("INPUT_INT8_SAVE: cannot write %s\n", out.c_str());
+      return 1;
+    }
+    fclose(fo);
+    if (lo) fprintf(lo, "%s %d\n", out.c_str(), e.second);
+    done++;
+  }
+  if (lo) fclose(lo);
+  printf("INPUT_INT8_SAVE %d images to %s: N %d C %d H %d W %d nchw %d scale %g offset %d lut %08x\n", done, dir, h.d.N,
+         h.d.C, h.d.H, h.d.W, h.d.nchw, h.d.scale, h.d.offset, h.d.lutHash);
+  m.destroy();
+  m.destroyRuntime();
+  free(cw);
+  free(mw);
+  free(act);
+  return 0;
 }
+#endif
 
 int main(int argc, char **argv) {
-  pthread_t thread[4];
-  parseCommandLineOptions(argc, argv);
-
-  int retval0;
-
-  ThreadArg thread_arg;
-  uint8_t *constantWeightVarsAddr = (uint8_t *)initConstantWeights(
-      "mxnet_exported_resnet18.weights.bin", mxnet_exported_resnet18_config);
-  uint8_t *mutableWeightVarsAddr =
-      (uint8_t *)initMutableWeightVars(mxnet_exported_resnet18_config, "data");
-  uint8_t *activationsAddr =
-      (uint8_t *)initActivations(mxnet_exported_resnet18_config);
-  thread_arg.constantWeightVarsAddr = constantWeightVarsAddr;
-  thread_arg.mutableWeightVarsAddr = mutableWeightVarsAddr;
-  thread_arg.activationsAddr = activationsAddr;
-
-
-  ThreadArg thread_arg1;
-  uint8_t *constantWeightVarsAddr_1 = (uint8_t *)initConstantWeights(
-      "mxnet_exported_resnet18_1.weights.bin", mxnet_exported_resnet18_1_config);
-  uint8_t *mutableWeightVarsAddr_1 =
-      (uint8_t *)initMutableWeightVars(mxnet_exported_resnet18_1_config, "data");
-  uint8_t *activationsAddr_1 =
-      (uint8_t *)initActivations(mxnet_exported_resnet18_1_config);
-  thread_arg1.constantWeightVarsAddr = constantWeightVarsAddr_1;
-  thread_arg1.mutableWeightVarsAddr = mutableWeightVarsAddr_1;
-  thread_arg1.activationsAddr = activationsAddr_1;
-
-
-  ThreadArg thread_arg2;
-  uint8_t *constantWeightVarsAddr_2 = (uint8_t *)initConstantWeights(
-      "mxnet_exported_resnet18_2.weights.bin", mxnet_exported_resnet18_2_config);
-  uint8_t *mutableWeightVarsAddr_2 =
-      (uint8_t *)initMutableWeightVars(mxnet_exported_resnet18_2_config, "data");
-  uint8_t *activationsAddr_2 =
-      (uint8_t *)initActivations(mxnet_exported_resnet18_2_config);
-  thread_arg2.constantWeightVarsAddr = constantWeightVarsAddr_2;
-  thread_arg2.mutableWeightVarsAddr = mutableWeightVarsAddr_2;
-  thread_arg2.activationsAddr = activationsAddr_2;
-
-
-  ThreadArg thread_arg3;
-  uint8_t *constantWeightVarsAddr_3 = (uint8_t *)initConstantWeights(
-      "mxnet_exported_resnet18_3.weights.bin", mxnet_exported_resnet18_3_config);
-  uint8_t *mutableWeightVarsAddr_3 =
-      (uint8_t *)initMutableWeightVars(mxnet_exported_resnet18_3_config, "data");
-  uint8_t *activationsAddr_3 =
-      (uint8_t *)initActivations(mxnet_exported_resnet18_3_config);
-  thread_arg3.constantWeightVarsAddr = constantWeightVarsAddr_3;
-  thread_arg3.mutableWeightVarsAddr = mutableWeightVarsAddr_3;
-  thread_arg3.activationsAddr = activationsAddr_3;
-
-
-  double result;
+  for (int i = 1; i < argc; i++)
+    inputImageFilenames.push_back(argv[i]);
+#ifdef VTA_INPUT_INT8
+  if (const char *sd = getenv("INPUT_INT8_SAVE"))
+    return saveInt8Inputs(sd);
+#endif
+  if (inputImageFilenames.empty() && !getenv("EVAL_LIST")) {
+    printf("usage: %s <image.png>\n", argv[0]);
+    return 1;
+  }
+#ifndef MODEL_LABEL_OFFSET
+#define MODEL_LABEL_OFFSET 0
+#endif
+#ifdef MULTI_SINGLE
+  //#### JO added (2026-11-10): accuracy over a labeled image set. EVAL_LIST=<file> with one "<image.png> <class>" per line
+  //#### (vtabundles_xcmpl/imagenet_eval/): copy 0 loads its weights once and classifies every image; prints one
+  //#### "EV <n> <pred> <class>" line per image (EVAL_QUIET=1: only every 500th) and the top-1 count at the end.
+  if (const char *el = getenv("EVAL_LIST")) {
+    FILE *lf = fopen(el, "r");
+    if (!lf) {
+      printf("cannot open EVAL_LIST %s\n", el);
+      return 1;
+    }
+    const bool quiet = getenv("EVAL_QUIET") && atoi(getenv("EVAL_QUIET")) > 0;
+    ModelCopy &m = copies[0];
+    const BundleConfig &c = *m.config;
+    uint8_t *cw = initConstantWeights(m.weights, c);
+    uint8_t *mw = static_cast<uint8_t *>(alignedAlloc(c, c.mutableWeightVarsMemSize));
+    uint8_t *act = static_cast<uint8_t *>(alignedAlloc(c, c.activationsMemSize));
+    const SymbolTableEntry &in = getMutableWeightVar(c, MODEL_INPUT);
+    m.initRuntime();
+    m.load(cw);
+    char path[4096];
+    int label, n = 0, ok = 0;
+    timeval t1, t2;
+    gettimeofday(&t1, NULL);
+    while (fscanf(lf, "%4095s %d", path, &label) == 2) {
+      //#### JO changed (2026-11-25): .png (float) or .i8 (int8) per line
+      Input x = loadAny(path);
+      copyInput(x, mw + in.offset);
+      setInputMode(x);
+      m.run(cw, mw, act);
+      float conf = 0;
+      const int pred = classify(c, mw, &conf);
+      //#### JO added (2026-11-22): MODEL_LABEL_OFFSET (multi_model.h) = model class - list class (MobileNetV2: 1, class 0 is
+      //#### the background); the EV line prints the list class
+      ok += pred == label + MODEL_LABEL_OFFSET;
+      n++;
+      if (!quiet || n % 500 == 0)
+        printf("EV %d %d %d  top1 %d/%d\n", n, pred, label, ok, n);
+      //#### JO added (2026-11-16): EVAL_HASH=1 prints a hash (FNV-1a) of the output's bytes per image, to compare two
+      //#### builds byte for byte over an image set (prune_rows_onnx.py)
+      static const bool hashOut = getenv("EVAL_HASH") && atoi(getenv("EVAL_HASH")) > 0;
+      if (hashOut) {
+        const SymbolTableEntry &out = getMutableWeightVar(c, MODEL_OUTPUT);
+        const uint8_t *ob = mw + out.offset;
+        uint64_t h = 1469598103934665603ull;
+        for (size_t i = 0; i < out.size * sizeof(float); i++) h = (h ^ ob[i]) * 1099511628211ull;
+        printf("EH %d %016llx\n", n, (unsigned long long)h);
+      }
+      freeInput(x);
+    }
+    gettimeofday(&t2, NULL);
+    fclose(lf);
+    printf("EVAL top1 %d / %d = %.2f %%  (%.1f s)\n", ok, n, n ? 100.0 * ok / n : 0.0,
+           (t2.tv_sec - t1.tv_sec) + (t2.tv_usec - t1.tv_usec) / 1e6);
+    m.destroy();
+    m.destroyRuntime();
+    return 0;
+  }
+#endif
+  Input input = loadAny(inputImageFilenames[0].c_str());
+#ifdef MULTI_SINGLE
+  //#### JO changed (2026-11-10): with BUNDLE_RUNS=<n> (run_prof.sh -n, the _timed / _prof builds: the timed_bundle.py wrapper runs
+  //#### the first call n - 1 times) two calls here, so n inferences in all (it was 4 x MULTI_RUNS + n - 2 = 123 for n = 25)
+  // const int runs = 4 * multiRuns();
+  const char *br = getenv("BUNDLE_RUNS");
+  const int runs = br && atoi(br) > 2 ? 2 : 4 * multiRuns();
+  std::vector<int> sel = {0};
+#else
+  //#### MULTI_MASK=<bits>: only these copies (copy i = EVTA i, e.g. 6 = EVTAs 1 and 2 at once), default all
+  const char *mk = getenv("MULTI_MASK");
+  const int mask = mk && *mk ? (int)strtol(mk, nullptr, 0) : (1 << nCopies) - 1, runs = multiRuns();
+  std::vector<int> sel;
+  for (int i = 0; i < nCopies; i++)
+    if (mask >> i & 1) sel.push_back(i);
+  printf("MULTI_MASK 0x%x: %zu copies\n", mask, sel.size());
+#endif
+  const int n = (int)sel.size();
+  std::vector<ThreadArg> args(n);
+  for (int j = 0; j < n; j++) {
+    const int i = sel[j];
+    const BundleConfig &c = *copies[i].config;
+    args[j] = {i, runs, 0, initConstantWeights(copies[i].weights, c),
+               static_cast<uint8_t *>(alignedAlloc(c, c.mutableWeightVarsMemSize)),
+               static_cast<uint8_t *>(alignedAlloc(c, c.activationsMemSize)), 0, 0, &input};
+    const SymbolTableEntry &in = getMutableWeightVar(c, MODEL_INPUT);
+    copyInput(input, args[j].mutableWeights + in.offset);
+  }
+  free(input.data);   // the int8 input stays: vtalib reads it at every run (freed at the end)
+  input.data = nullptr;
+  pthread_barrier_init(&runBarrier, NULL, n);
+  const char *e = getenv("MULTI_LOCKSTEP");
+  lockstepOn = n > 1 && e && atoi(e) > 0;
+  pthread_barrier_init(&convBarrier, NULL, n);
+  if (lockstepOn)
+    std::cout << "MULTI_LOCKSTEP: the " << n << " copies start every EVTA call together\n";
   timeval t1, t2;
   gettimeofday(&t1, NULL);
-  long t1s= t1.tv_sec;
-  long t1u= t1.tv_usec;
-  pthread_barrier_init(&runBarrier, NULL, 4);  //#### JO added (2026-10-29)
-  {  //#### JO added (2026-10-29): lockstep (see evta_lockstep_hook)
-    const char *e = getenv("MULTI_LOCKSTEP");
-    lockstepOn = e && atoi(e) > 0;
-    pthread_barrier_init(&convBarrier, NULL, 4);
-    if (lockstepOn) std::cout << "MULTI_LOCKSTEP: the 4 copies start every EVTA call together\n";
+  std::vector<pthread_t> th(n);
+  for (int i = 0; i < n; i++)
+    pthread_create(&th[i], NULL, threadMain, &args[i]);
+  int bad = 0;
+  for (int i = 0; i < n; i++) {
+    pthread_join(th[i], NULL);
+    bad += args[i].bad;
   }
-  pthread_create(&thread[0],NULL,thread_main, (void*) &thread_arg);
-  pthread_create(&thread[1],NULL,thread_main1, (void*) &thread_arg1);
-  pthread_create(&thread[2],NULL,thread_main2, (void*) &thread_arg2);
-  pthread_create(&thread[3],NULL,thread_main3, (void*) &thread_arg3);
-  pthread_join(thread[0], (void **)&retval0);
-  pthread_join(thread[1], (void **)&retval0);
-  pthread_join(thread[2], (void **)&retval0);
-  pthread_join(thread[3], (void **)&retval0);
-
   gettimeofday(&t2, NULL);
-  // Report the results.
-  result = (t2.tv_sec - t1s)*1000.0 + (t2.tv_usec - t1u)/1000.0;
-  std::cout<<"Inference time: "<<result<<"ms\n";
-  return 0;
+  std::cout << "Inference time: " << (t2.tv_sec - t1.tv_sec) * 1000.0 + (t2.tv_usec - t1.tv_usec) / 1000.0 << "ms\n";
+  //#### JO added (2026-11-24): throughput over runs 2..runs of every copy (MULTI_FREE / MULTI_STAGGER_US compare)
+  if (runs > 1) {
+    double a0 = 1e300, a1 = 0;
+    for (auto &a : args) a0 = std::min(a0, a.t1), a1 = std::max(a1, a.tEnd);
+    const int imgs = n * (runs - 1);
+    printf("THROUGHPUT %d copies%s stagger %s us: %d images in %.3f ms = %.1f images/s (%.3f ms per image per copy)\n", n,
+           multiFree() ? " free" : " barrier", getenv("MULTI_STAGGER_US") ? getenv("MULTI_STAGGER_US") : "0", imgs,
+           a1 - a0, imgs * 1000.0 / (a1 - a0), (a1 - a0) * n / imgs);
+  }
+  for (auto &a : args) {
+    free(a.activations);
+    free(a.constantWeights);
+    free(a.mutableWeights);
+  }
+  freeInput(input);
+  return bad != 0;
 }

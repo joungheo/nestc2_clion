@@ -18,6 +18,8 @@
 
 //#### JO added (2026-11-09): DeiTTest copy of MobileNetV2Test/multi_threads_main.cpp with MODEL_MEAN / MODEL_STD (per channel
 //#### normalization of the input) and MODEL_PRINT_TOP5.
+//#### JO changed (2026-11-22): the one copy for every single-EVTA model main (DeiT, MobileNetV2, and the eval mains of Resnet18 /
+//#### Resnet50 / VGG16, <x>EvalMain.cpp): the same file in each vta/bundles/<Dir>/, the model in its multi_model.h.
 //#### JO added (2026-11-06): one bundle copy per EVTA in its own pthread for any image classifier (multi_model.h names
 //#### the copies' entries, the input and the output, MultiEVTAResnet50Test / MultiEVTAVgg16Cifar10Test); the same as
 //#### MultiEVTAResnet18Test/multi_threads_main.cpp: every copy runs MULTI_RUNS (default 25) inferences, the copies start
@@ -26,6 +28,8 @@
 //#### The copies' weights are the same bytes; load_module shares their VTA buffers (vtalib VTAConstBufferAlloc).
 
 #include <sys/time.h>
+#include <unistd.h>   //#### JO added (2026-11-24): usleep (MULTI_STAGGER_US)
+#include <sys/stat.h>   //#### JO added (2026-11-25): mkdir (INPUT_INT8_SAVE)
 #include "VTARuntime.h"
 #include <assert.h>
 #include <inttypes.h>
@@ -105,16 +109,16 @@ static bool readPngImage(const char *filename, float lo, float hi, float *&image
     free(rows[y]);
   png_destroy_read_struct(&png_ptr, &info_ptr, (png_infopp)NULL);
   fclose(fp);
-  printf("Loaded image: %s\n", filename);
+  if (!getenv("EVAL_LIST")) printf("Loaded image: %s\n", filename);
   return false;
 }
 
 /// The input tensor as the single bundles' mains make it: BGR, N x C x H x W (MODEL_NHWC: N x H x W x C)
-static float *loadInput() {
+static float *loadInput(const char *filename) {
   const size_t H = MODEL_HEIGHT, W = MODEL_WIDTH;
   float *imageT = nullptr;
   size_t dims[3];
-  bool failed = readPngImage(inputImageFilenames[0].c_str(), MODEL_RANGE_LO, MODEL_RANGE_HI, imageT, dims);
+  bool failed = readPngImage(filename, MODEL_RANGE_LO, MODEL_RANGE_HI, imageT, dims);
   assert(!failed && dims[0] == W && dims[1] == H && "Error reading input image.");
   (void)failed;
   float *t = static_cast<float *>(malloc(3 * H * W * sizeof(float)));
@@ -141,6 +145,123 @@ static float *loadInput() {
   }
 #endif
   return t;
+}
+
+//#### JO added (2026-11-25): int8 input (vtalib-zcu102-systolic VTA_INPUT_INT8, docs/evta_dpu_compare.md 6.10). An int8 input
+//#### (<name>.i8, made by INPUT_INT8_SAVE: InputI8Header, then N x C x H x W bytes in the bundle input's layout) is handed to
+//#### vtalib (VTASetInputInt8) and the bundle's conv0 pack reads it instead of quantizing the float input.
+//#### JO changed (2026-11-25): int8 is the default. For an image <dir>/<name>.png the main looks for <name>.i8 in
+//#### $INPUT_INT8_DIR, then in <dir>, then in ./i8 (the executable's Dir: run_prof.sh runs there); none found: the float
+//#### image (INPUT_INT8=0: always float). The float image is passed too: an .i8 made with another quantize than the
+//#### bundle's (another bundle) is reported once by vtalib and the float image is used. A path that is itself an .i8 has
+//#### no float image (exit 6 on a mismatch).
+struct Input {
+  void *data;        // the float image (nullptr: an .i8 path)
+  size_t bytes;      // its bytes
+  bool i8, hasFloat;  // hasFloat: the copies' input variables hold the float image (data may be freed by then)
+  int8_t *i8data;    // the int8 input (i8)
+  std::string from;  // what was loaded, for the log
+#ifdef VTA_INPUT_INT8
+  VTAInputInt8 d;
+#endif
+};
+static bool isI8Path(const char *p) {
+  const size_t n = strlen(p);
+  return n > 3 && !strcmp(p + n - 3, ".i8");
+}
+#ifdef VTA_INPUT_INT8
+struct InputI8Header {
+  char magic[8];   // "EVTAI8" + 2 zero bytes
+  VTAInputInt8 d;
+};
+// reads an .i8 into x (false: no such file); a file that is not an int8 input of this model's size exits
+static bool readI8(const char *filename, Input &x) {
+  FILE *fp = fopen(filename, "rb");
+  if (!fp)
+    return false;
+  InputI8Header h;
+  if (fread(&h, sizeof(h), 1, fp) != 1 || memcmp(h.magic, "EVTAI8\0\0", 8)) {
+    fprintf(stderr, "%s: not an int8 input (INPUT_INT8_SAVE)\n", filename);
+    exit(1);
+  }
+  const size_t n = (size_t)h.d.N * h.d.C * h.d.H * h.d.W;
+  if (n != 3 * MODEL_HEIGHT * MODEL_WIDTH) {
+    fprintf(stderr, "%s: %zu bytes, the model input has %d\n", filename, n, 3 * MODEL_HEIGHT * MODEL_WIDTH);
+    exit(1);
+  }
+  x.i8data = static_cast<int8_t *>(malloc(n));
+  if (fread(x.i8data, n, 1, fp) != 1) {
+    fprintf(stderr, "%s: short file\n", filename);
+    exit(1);
+  }
+  fclose(fp);
+  x.i8 = true;
+  x.d = h.d;
+  x.from = filename;
+  return true;
+}
+#endif
+static Input loadAny(const char *filename) {
+  Input x = {nullptr, 3 * MODEL_HEIGHT * MODEL_WIDTH * sizeof(float), false, false, nullptr, filename};
+  const bool quiet = getenv("EVAL_LIST") != nullptr;
+  if (isI8Path(filename)) {
+#ifdef VTA_INPUT_INT8
+    if (!readI8(filename, x)) {
+      fprintf(stderr, "cannot open %s\n", filename);
+      exit(1);
+    }
+    if (!quiet) printf("Input: int8 %s (scale %g offset %d), no float image\n", filename, x.d.scale, x.d.offset);
+    return x;
+#else
+    fprintf(stderr, "%s: int8 inputs need vtalib-zcu102-systolic (VTA_INPUT_INT8)\n", filename);
+    exit(1);
+#endif
+  }
+  x.data = loadInput(filename);
+  x.hasFloat = true;
+#ifdef VTA_INPUT_INT8
+  const char *e = getenv("INPUT_INT8");
+  if (!e || atoi(e) != 0) {
+    const std::string p = filename;
+    const size_t sl = p.rfind('/'), b = sl == std::string::npos ? 0 : sl + 1, dot = p.rfind('.');
+    const std::string name = p.substr(b, (dot == std::string::npos || dot < b ? p.size() : dot) - b) + ".i8";
+    std::vector<std::string> cand;
+    if (const char *dir = getenv("INPUT_INT8_DIR"))
+      cand.push_back(std::string(dir) + "/" + name);
+    cand.push_back(p.substr(0, b) + name);
+    cand.push_back("i8/" + name);
+    for (auto &c : cand)
+      if (readI8(c.c_str(), x))
+        break;
+  }
+  if (!quiet) {
+    if (x.i8)
+      printf("Input: int8 %s (scale %g offset %d; float image %s kept for a mismatch)\n", x.from.c_str(), x.d.scale,
+             x.d.offset, filename);
+    else
+      printf("Input: float %s (%s)\n", filename,
+             e && atoi(e) == 0 ? "INPUT_INT8=0" : "no <name>.i8 in $INPUT_INT8_DIR, the image's dir or ./i8");
+  }
+#endif
+  return x;
+}
+// the input into a copy's input variable: the float image if there is one (the int8 input goes to vtalib)
+static void copyInput(const Input &x, uint8_t *dst) {
+  if (x.data)
+    memcpy(dst, x.data, x.bytes);
+}
+static void freeInput(Input &x) {
+  free(x.data);
+  free(x.i8data);
+  x.data = nullptr;
+  x.i8data = nullptr;
+}
+static void setInputMode(const Input &x) {
+#ifdef VTA_INPUT_INT8
+  VTASetInputInt8(x.i8 ? &x.d : nullptr, x.i8data, x.hasFloat);
+#else
+  (void)x;
+#endif
 }
 
 static const SymbolTableEntry &getMutableWeightVar(const BundleConfig &config, const char *name) {
@@ -222,7 +343,22 @@ extern "C" void evta_lockstep_hook() {
 struct ThreadArg {
   int copy, runs, bad;
   uint8_t *constantWeights, *mutableWeights, *activations;
+  double t1, tEnd;   //#### JO added (2026-11-24): start of run 2 and end of the last run (ms, MULTI_FREE throughput)
+  const Input *input;   //#### JO added (2026-11-25)
 };
+
+//#### JO added (2026-11-24): MULTI_FREE=1: the copies do not wait for each other before each inference (only once before
+//#### the first), as independent streams (DPU "multi thread"); MULTI_STAGGER_US=<us>: copy j starts j * us later.
+//#### main prints the throughput from the start of everyone's 2nd run to the last end: images / time.
+static bool multiFree() {
+  const char *e = getenv("MULTI_FREE");
+  return e && atoi(e) > 0;
+}
+static double nowMs() {
+  timeval t;
+  gettimeofday(&t, NULL);
+  return t.tv_sec * 1000.0 + t.tv_usec / 1000.0;
+}
 
 static void *threadMain(void *a) {
   ThreadArg *t = static_cast<ThreadArg *>(a);
@@ -231,10 +367,20 @@ static void *threadMain(void *a) {
   m.load(t->constantWeights);
   float conf = 0;
   int idx = -1;
+  const bool freeRun = multiFree();
+  const char *sg = getenv("MULTI_STAGGER_US");
+  const int stagger = sg ? atoi(sg) : 0;
+  setInputMode(*t->input);   //#### JO added (2026-11-25): int8 input
   for (int run = 0; run < t->runs; run++) {
 #ifndef MULTI_SINGLE
-    pthread_barrier_wait(&runBarrier);
+    //pthread_barrier_wait(&runBarrier);
+    if (!freeRun || run == 0)
+      pthread_barrier_wait(&runBarrier);
+    if (run == 0 && stagger > 0)
+      usleep(stagger * t->copy);
 #endif
+    if (run == 1)
+      t->t1 = nowMs();
     m.run(t->constantWeights, t->mutableWeights, t->activations);
     idx = classify(*m.config, t->mutableWeights, &conf);
     if (idx != MODEL_EXPECT) {
@@ -243,20 +389,163 @@ static void *threadMain(void *a) {
       t->bad++;
     }
   }
+  t->tEnd = nowMs();
   printf("copy %d: %d runs, Result: %d Confidence: %f, %d wrong\n", t->copy, t->runs, idx, conf, t->bad);
   m.destroy();
   m.destroyRuntime();
   return nullptr;
 }
 
+#ifdef VTA_INPUT_INT8
+//#### JO added (2026-11-25): INPUT_INT8_SAVE=<dir>: copy 0 runs the first image once as float (vtalib records the bundle's
+//#### quantize), then every image (the arguments, or the EVAL_LIST images) is quantized by vtalib (VTAInputQuantize, the
+//#### bytes the bundle's pack makes) and written to <dir>/<name>.i8; with EVAL_LIST also <dir>/eval_list.txt (the .i8 paths
+//#### and the labels, for EVAL_LIST). Then exits. INPUT_INT8_SAVE=i8 in the executable's Dir makes the files the default
+//#### int8 input of that Dir's runs (loadAny looks in ./i8).
+static int saveInt8Inputs(const char *dir) {
+  std::vector<std::pair<std::string, int>> list;
+  if (const char *el = getenv("EVAL_LIST")) {
+    FILE *lf = fopen(el, "r");
+    char path[4096];
+    int label;
+    while (lf && fscanf(lf, "%4095s %d", path, &label) == 2)
+      list.push_back({path, label});
+    if (lf) fclose(lf);
+  } else {
+    for (auto &p : inputImageFilenames)
+      list.push_back({p, -1});
+  }
+  if (list.empty() || isI8Path(list[0].first.c_str())) {
+    printf("INPUT_INT8_SAVE: no .png images\n");
+    return 1;
+  }
+  ModelCopy &m = copies[0];
+  const BundleConfig &c = *m.config;
+  uint8_t *cw = initConstantWeights(m.weights, c);
+  uint8_t *mw = static_cast<uint8_t *>(alignedAlloc(c, c.mutableWeightVarsMemSize));
+  uint8_t *act = static_cast<uint8_t *>(alignedAlloc(c, c.activationsMemSize));
+  const SymbolTableEntry &in = getMutableWeightVar(c, MODEL_INPUT);
+  m.initRuntime();
+  m.load(cw);
+  float *x = loadInput(list[0].first.c_str());
+  memcpy(mw + in.offset, x, 3 * MODEL_HEIGHT * MODEL_WIDTH * sizeof(float));
+  free(x);
+  m.run(cw, mw, act);
+  InputI8Header h;
+  memset(&h, 0, sizeof(h));
+  memcpy(h.magic, "EVTAI8", 6);
+  if (!VTAInputInt8Info(&h.d)) {
+    printf("INPUT_INT8_SAVE: this bundle has no conv0 pack (preprocess_conv0pack_stream), no int8 input\n");
+    return 1;
+  }
+  const size_t n = (size_t)h.d.N * h.d.C * h.d.H * h.d.W;
+  std::vector<int8_t> q(n);
+  mkdir(dir, 0775);   // one level; an existing dir is fine
+  FILE *lo = nullptr;
+  if (getenv("EVAL_LIST"))
+    lo = fopen((std::string(dir) + "/eval_list.txt").c_str(), "w");
+  int done = 0;
+  for (auto &e : list) {
+    const std::string &p = e.first;
+    const size_t sl = p.rfind('/'), b = sl == std::string::npos ? 0 : sl + 1, dot = p.rfind('.');
+    const std::string out = std::string(dir) + "/" + p.substr(b, (dot == std::string::npos || dot < b ? p.size() : dot) - b) + ".i8";
+    x = loadInput(p.c_str());
+    VTAInputQuantize(x, q.data());
+    free(x);
+    FILE *fo = fopen(out.c_str(), "wb");
+    if (!fo || fwrite(&h, sizeof(h), 1, fo) != 1 || fwrite(q.data(), n, 1, fo) != 1) {
+      printf("INPUT_INT8_SAVE: cannot write %s\n", out.c_str());
+      return 1;
+    }
+    fclose(fo);
+    if (lo) fprintf(lo, "%s %d\n", out.c_str(), e.second);
+    done++;
+  }
+  if (lo) fclose(lo);
+  printf("INPUT_INT8_SAVE %d images to %s: N %d C %d H %d W %d nchw %d scale %g offset %d lut %08x\n", done, dir, h.d.N,
+         h.d.C, h.d.H, h.d.W, h.d.nchw, h.d.scale, h.d.offset, h.d.lutHash);
+  m.destroy();
+  m.destroyRuntime();
+  free(cw);
+  free(mw);
+  free(act);
+  return 0;
+}
+#endif
+
 int main(int argc, char **argv) {
   for (int i = 1; i < argc; i++)
     inputImageFilenames.push_back(argv[i]);
-  if (inputImageFilenames.empty()) {
+#ifdef VTA_INPUT_INT8
+  if (const char *sd = getenv("INPUT_INT8_SAVE"))
+    return saveInt8Inputs(sd);
+#endif
+  if (inputImageFilenames.empty() && !getenv("EVAL_LIST")) {
     printf("usage: %s <image.png>\n", argv[0]);
     return 1;
   }
-  float *input = loadInput();
+#ifndef MODEL_LABEL_OFFSET
+#define MODEL_LABEL_OFFSET 0
+#endif
+#ifdef MULTI_SINGLE
+  //#### JO added (2026-11-10): accuracy over a labeled image set. EVAL_LIST=<file> with one "<image.png> <class>" per line
+  //#### (vtabundles_xcmpl/imagenet_eval/): copy 0 loads its weights once and classifies every image; prints one
+  //#### "EV <n> <pred> <class>" line per image (EVAL_QUIET=1: only every 500th) and the top-1 count at the end.
+  if (const char *el = getenv("EVAL_LIST")) {
+    FILE *lf = fopen(el, "r");
+    if (!lf) {
+      printf("cannot open EVAL_LIST %s\n", el);
+      return 1;
+    }
+    const bool quiet = getenv("EVAL_QUIET") && atoi(getenv("EVAL_QUIET")) > 0;
+    ModelCopy &m = copies[0];
+    const BundleConfig &c = *m.config;
+    uint8_t *cw = initConstantWeights(m.weights, c);
+    uint8_t *mw = static_cast<uint8_t *>(alignedAlloc(c, c.mutableWeightVarsMemSize));
+    uint8_t *act = static_cast<uint8_t *>(alignedAlloc(c, c.activationsMemSize));
+    const SymbolTableEntry &in = getMutableWeightVar(c, MODEL_INPUT);
+    m.initRuntime();
+    m.load(cw);
+    char path[4096];
+    int label, n = 0, ok = 0;
+    timeval t1, t2;
+    gettimeofday(&t1, NULL);
+    while (fscanf(lf, "%4095s %d", path, &label) == 2) {
+      //#### JO changed (2026-11-25): .png (float) or .i8 (int8) per line
+      Input x = loadAny(path);
+      copyInput(x, mw + in.offset);
+      setInputMode(x);
+      m.run(cw, mw, act);
+      float conf = 0;
+      const int pred = classify(c, mw, &conf);
+      //#### JO added (2026-11-22): MODEL_LABEL_OFFSET (multi_model.h) = model class - list class (MobileNetV2: 1, class 0 is
+      //#### the background); the EV line prints the list class
+      ok += pred == label + MODEL_LABEL_OFFSET;
+      n++;
+      if (!quiet || n % 500 == 0)
+        printf("EV %d %d %d  top1 %d/%d\n", n, pred, label, ok, n);
+      //#### JO added (2026-11-16): EVAL_HASH=1 prints a hash (FNV-1a) of the output's bytes per image, to compare two
+      //#### builds byte for byte over an image set (prune_rows_onnx.py)
+      static const bool hashOut = getenv("EVAL_HASH") && atoi(getenv("EVAL_HASH")) > 0;
+      if (hashOut) {
+        const SymbolTableEntry &out = getMutableWeightVar(c, MODEL_OUTPUT);
+        const uint8_t *ob = mw + out.offset;
+        uint64_t h = 1469598103934665603ull;
+        for (size_t i = 0; i < out.size * sizeof(float); i++) h = (h ^ ob[i]) * 1099511628211ull;
+        printf("EH %d %016llx\n", n, (unsigned long long)h);
+      }
+      freeInput(x);
+    }
+    gettimeofday(&t2, NULL);
+    fclose(lf);
+    printf("EVAL top1 %d / %d = %.2f %%  (%.1f s)\n", ok, n, n ? 100.0 * ok / n : 0.0,
+           (t2.tv_sec - t1.tv_sec) + (t2.tv_usec - t1.tv_usec) / 1e6);
+    m.destroy();
+    m.destroyRuntime();
+    return 0;
+  }
+#endif
+  Input input = loadAny(inputImageFilenames[0].c_str());
 #ifdef MULTI_SINGLE
   //#### JO changed (2026-11-10): with BUNDLE_RUNS=<n> (run_prof.sh -n, the _timed / _prof builds: the timed_bundle.py wrapper runs
   //#### the first call n - 1 times) two calls here, so n inferences in all (it was 4 x MULTI_RUNS + n - 2 = 123 for n = 25)
@@ -280,11 +569,12 @@ int main(int argc, char **argv) {
     const BundleConfig &c = *copies[i].config;
     args[j] = {i, runs, 0, initConstantWeights(copies[i].weights, c),
                static_cast<uint8_t *>(alignedAlloc(c, c.mutableWeightVarsMemSize)),
-               static_cast<uint8_t *>(alignedAlloc(c, c.activationsMemSize))};
+               static_cast<uint8_t *>(alignedAlloc(c, c.activationsMemSize)), 0, 0, &input};
     const SymbolTableEntry &in = getMutableWeightVar(c, MODEL_INPUT);
-    memcpy(args[j].mutableWeights + in.offset, input, 3 * MODEL_HEIGHT * MODEL_WIDTH * sizeof(float));
+    copyInput(input, args[j].mutableWeights + in.offset);
   }
-  free(input);
+  free(input.data);   // the int8 input stays: vtalib reads it at every run (freed at the end)
+  input.data = nullptr;
   pthread_barrier_init(&runBarrier, NULL, n);
   const char *e = getenv("MULTI_LOCKSTEP");
   lockstepOn = n > 1 && e && atoi(e) > 0;
@@ -303,10 +593,20 @@ int main(int argc, char **argv) {
   }
   gettimeofday(&t2, NULL);
   std::cout << "Inference time: " << (t2.tv_sec - t1.tv_sec) * 1000.0 + (t2.tv_usec - t1.tv_usec) / 1000.0 << "ms\n";
+  //#### JO added (2026-11-24): throughput over runs 2..runs of every copy (MULTI_FREE / MULTI_STAGGER_US compare)
+  if (runs > 1) {
+    double a0 = 1e300, a1 = 0;
+    for (auto &a : args) a0 = std::min(a0, a.t1), a1 = std::max(a1, a.tEnd);
+    const int imgs = n * (runs - 1);
+    printf("THROUGHPUT %d copies%s stagger %s us: %d images in %.3f ms = %.1f images/s (%.3f ms per image per copy)\n", n,
+           multiFree() ? " free" : " barrier", getenv("MULTI_STAGGER_US") ? getenv("MULTI_STAGGER_US") : "0", imgs,
+           a1 - a0, imgs * 1000.0 / (a1 - a0), (a1 - a0) * n / imgs);
+  }
   for (auto &a : args) {
     free(a.activations);
     free(a.constantWeights);
     free(a.mutableWeights);
   }
+  freeInput(input);
   return bad != 0;
 }
