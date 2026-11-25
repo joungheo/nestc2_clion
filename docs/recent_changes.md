@@ -7,7 +7,7 @@
 - `git pull` 한 뒤 이 파일의 맨 위부터 지난번에 본 줄까지 읽는다.
 - push할 때, 다른 PC나 보드가 무엇을 해야 하는 변경이면 **맨 위에** 항목을 하나 더한다(같은 commit에 넣는다).
   - 해야 할 일이 없는 변경(문서만, 측정 기록만)은 적지 않아도 된다.
-- 항목 형식: `### 2026-11-25 ubun (이 commit) — VTASave `-vta-skip-evta-invalidate`: EVTA만 읽는 출력의 invalidate를 뺌 (MobileNetV2 −0.5 ms)
+- 항목 형식: `### 2026-11-25 ubun 0b1439b7 — VTASave `-vta-skip-evta-invalidate`: EVTA만 읽는 출력의 invalidate를 뺌 (MobileNetV2 −0.5 ms)
 - **바뀐 것:** `lib/Backends/VTA/VTASave.cpp` `dropEvtaOnlyInvalidates`(기본 켬; bundle `.cpp`의 옵션 목록에 줄이 하나 는다).
   CNN bundle의 invalidate가 하나만 남는다. DeiT는 그대로다. MobileNetV2Tf multi4 246.5 → 254.5 fps([evta_dpu_compare.md](evta_dpu_compare.md) §6.9).
 - **다른 쪽이 할 일:** `model-compiler 다시 빌드`(보드 `Debug2_remote`, PC `nestc-build`). `bundle 다시 생성`: CNN bundle(MobileNetV2 / Resnet / VGG16, single과 multi4)은
