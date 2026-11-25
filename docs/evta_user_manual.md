@@ -307,6 +307,8 @@ sudo cp /home/xilinx/JO/npuprg/bit/<목적>_<YYMMDD>/vtahw_<dir>.bin /lib/firmwa
     혼자 13.54 → 12.09 ms. 11-26부터 기본(위). 만든 과정과 명령: [evta_dw_unit.md](evta_dw_unit.md) §9.
     multi4 빌드는 이 판부터 `VTA_CONTAIN=1`(`run_flow.sh` / `m4_build.sh` 앞 환경 변수; pblock `CONTAIN_ROUTING`)을 쓴다.
   - single `..._16_16_19_18_sa_alux3_dw_375mhz_rq.bin`(11-25): `_alux3` + `_dw`, 375 MHz. MobileNetV2Tf 1장 13.90 ms.
+  - single `..._16_16_19_18_sa_alux3_dw_387mhz_rq.bin`(11-26): `_alux3` + `_dw`(sa_dw 입력 등록 고친 판), 387.5 MHz. MobileNetV2 / Tf 13.05 → 11.7 ms, 다른 모델은
+    클럭 때문에 1–3 % 느려 single 기본은 `_alux3` 그대로. [evta_perf_latest.md](evta_perf_latest.md) §3.
   - 이름 조각(`_amul`, `_amul_bc`, `_rq2`, `_hp322` …)의 뜻: [evta_isa_ext.md](evta_isa_ext.md) §5 "bitstream 이름 읽는 법".
 - **최종판은 아니다.** 다음 판의 후보(RQ ALU 연산, multi4 ALU 확장, KV260)가 있다.
 - **짝이 되는 vtalib:** `_alux3`의 기능은 `vtalib-zcu102-systolic` commit `8191320`(11-15) 뒤로 빌드한 실행 파일만 쓴다. 보드의 `_sys*`는 그 전 판이다(§4.3).
@@ -779,12 +781,19 @@ sudo /bin/sh -c "hw_multievtax4/script/run_prof.sh -s _sysprof -n 25 -l -r Multi
 | 옵션 | 뜻 |
 |---|---|
 | `-s _prof` (기본) / `_timed` / `_sysprof` / `_systimed` / `_sys` / `_pcsys…` | 어느 build dir의 실행 파일인지. `_sys*`와 PC cross build `_pcsys*`(§4.2)는 `SYS_BIN`(systolic)을 올린다 |
-| `-n <runs>` | 추론 횟수(기본 25). multi는 copy당 |
+| `-n <runs>` | 추론 횟수(기본 25). multi는 copy당. `hw/`의 범용 main 실행 파일(`MULTI_SINGLE`: MobileNetV2, DeiT, 11-26부터 systolic vtalib의 Resnet18 / 50 / VGG16)은 timed / prof 빌드가 아니면 4 × n장(`MULTI_RUNS`; 11-26 전에는 `_sys`에서 1장만 쟀다) |
 | `-l` | multi-EVTA lockstep: 모든 EVTA 호출 앞에서 copy들이 barrier로 만나 같은 conv를 동시에 돈다 |
 | `-r` | `chrt -f 10`(SCHED_FIFO). 4 ms scheduler tick 때문에 흔들리는 run이 없어진다. 시간 측정에는 붙인다 |
 | `-t <n>` | `OMP_NUM_THREADS`(기본 1). `-t 4`면 4코어 |
 | 환경 `BIN=<file>` | bitstream 바꾸기 |
 | `-h`, `--help` | 옵션 설명을 출력하고 끝난다(sudo 없이 된다). `run_all.sh --help`, `load_bit.sh --help`도 있다 |
+
+**모델 7개의 최신 시간을 한 번에(`perf_record.sh`, 2026-11-26):** int8 입력 만들기, `EVTA_RES_CHECK`, multi4와 single을 bitstream을 번갈아 가며 3번씩.
+결과와 방법은 [evta_perf_latest.md](evta_perf_latest.md).
+```bash
+sudo /bin/sh -c "vtabundles_xcmpl/perf_record.sh -r 3 [i8] [check] [m4] [single]"     # 기본 bitstream = 각 run_all.sh의 SYS_BIN
+sudo /bin/sh -c "M4_BITS='<a>.bin <b>.bin' S1_BITS='<c>.bin <d>.bin' vtabundles_xcmpl/perf_record.sh -r 3 m4 single"
+```
 
 넣을 것:
 - `<suffix>`: 실행 파일을 빌드한 build dir(§4.1 표). systolic bitstream이면 `_sysprof`(EVTA 호출마다 시간) 또는 `_systimed`(문장마다 시간)

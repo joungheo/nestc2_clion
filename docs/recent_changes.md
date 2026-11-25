@@ -21,6 +21,19 @@
 
 ---
 
+### 2026-11-26 ubuntu2 (`70a02e0`, `8f3bda0`, `b580636`, 이 commit) — 보드 bundle 다시 생성, 범용 main, 새 single `_dw` bitstream, 최신 성능 기록
+- **바뀐 것:**
+  - 보드에서 bundle 다시 생성(지금 컴파일러, invalidate 빼기): single Resnet18 / Resnet50 / Resnet50Tv / VGG16 / MobileNetV2, multi4 같은 다섯 + DeiT.
+    옛 multi4 Resnet50(torchvision이 남아 있었다)과 MobileNetV2(다른 profile)는 이제 single과 같은 weights. 옛 것: 보드 `~/JO/ubuntu2_wt/old_bundles_261126/`.
+  - `vtabundles_xcmpl/CMakeLists.txt`: systolic vtalib이면 single Resnet18 / 50 / 50Tv / VGG16도 범용 main(int8 입력). multi4 Resnet18 / 50 / 50Tv / VGG16 / DeiT의
+    `multi_threads_main.cpp`를 범용 판으로(`MultiEVTAResnet18Test/multi_model.h` 새로).
+  - `run_prof.sh`: `hw/`의 `_sys` 범용 main이 1장만 재던 것을 고침. `perf_record.sh` 새로. `bininfo.sh` `_dw`, `_hp<MHz>`.
+  - bitstream: single `/lib/firmware/vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_alux3_dw_387mhz_rq.bin`(`bit/evta_single_alux3_dw_387MHz_261126/`, vtalib 818a73c 이후). single 기본은 그대로.
+  - [evta_perf_latest.md](evta_perf_latest.md).
+- **다른 쪽이 할 일:**
+  - `pull`. 보드의 systolic 실행 파일(`build_sys*`, `build_multievtax4_sys*`의 모델 7개)은 다시 빌드해 두었다. `i8/` 입력도 만들어 두었다.
+  - PC cross build(`_pcsys*`)를 쓰면 `실행 파일 다시 빌드`(main이 바뀐 Dir)와, 보드의 새 bundle을 PC `hw*/<Dir>`로 가져오기.
+
 ### 2026-11-26 ubuntu2 (이 commit) — multi4 `SYS_BIN` 기본 = `..._4evta_sa_amul_dw_400mhz_hp304_rq.bin`
 - **바뀐 것:** `vtabundles_xcmpl/hw_multievtax4/script/run_all.sh`, `collect_hw_bundles.py`(다음 collect가 옛 이름을 되쓰지 않게). 전 기본 `..._amul_400mhz_hp322_rq.bin`은 `BIN=`으로.
 - **다른 쪽이 할 일:** `pull`만(bitstream은 보드 `/lib/firmware`에 있다). 818a73c 전 vtalib으로 만든 실행 파일도 이 판에서 돈다(창 모드 없이, `_amul`과 같은 결과).

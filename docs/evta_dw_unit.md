@@ -308,4 +308,7 @@ python3 vtabundles_xcmpl/hwtest/bit2bin.py rs_mamuldwc_h.bit vtahw_zcu102_1x16_i
 - 같은 bitstream에서 `EVTA_DWU=0`(대각 GEMM)은 260.6 fps로 `_amul`과 같다: 이득은 모두 창 모드에서 왔다.
 - 4개 동시에서 copy당 EVTA conv 시간이 6.7 → 5.3 ms로 줄었다.
 - 2026-11-26부터 multi4 기본 `SYS_BIN`이 이 판이다(`hw_multievtax4/script/run_all.sh`, `collect_hw_bundles.py`).
+- 2026-11-26 single도 만들었다: `_alux3` + DWU, ExtraTimingOpt −0.092 ns → phys_opt AggressiveExplore −0.070 → PLL만 387.5 MHz(`mmcm_set.tcl ... 11.625`),
+  WNS +0.010 ns. `..._16_16_19_18_sa_alux3_dw_387mhz_rq.bin`: MobileNetV2 / Tf 13.05 → 11.7 ms, 다른 모델 1–3 % 느림(클럭). single 기본은 바꾸지 않았다.
+  모델 7개의 최신 시간(multi4 두 판, single 두 판): [evta_perf_latest.md](evta_perf_latest.md).
 - 남은 것: DPU 비교 문서([evta_dpu_compare.md](evta_dpu_compare.md)) 갱신, PP8(§7).
