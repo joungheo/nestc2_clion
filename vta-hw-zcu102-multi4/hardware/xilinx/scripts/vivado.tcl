@@ -116,7 +116,7 @@ foreach stage {fetch load compute store} {
 #### JO added (systolic Phase D): RTL sources of gemm_sa_bd (from vta-hw-zcu102-systolic, Makefile VTA_SA_RTL)
 if {$systolic} {
   set rtl_dir $::env(VTA_SA_RTL)
-  add_files -norecurse [list $rtl_dir/sa_pe.v $rtl_dir/sa_array.v $rtl_dir/sa_ctrl.v $rtl_dir/sa_rmw.v $rtl_dir/gemm_sa.v $rtl_dir/gemm_sa_bd.v]
+  add_files -norecurse [list $rtl_dir/sa_pe.v $rtl_dir/sa_array.v $rtl_dir/sa_ctrl.v $rtl_dir/sa_rmw.v $rtl_dir/sa_dw.v $rtl_dir/gemm_sa.v $rtl_dir/gemm_sa_bd.v]
   update_compile_order -fileset sources_1
 }
 
@@ -275,8 +275,13 @@ proc add_evta {i} {
     #set_property -dict [ list CONFIG.DW $sa_dw CONFIG.SW $sa_sw CONFIG.WW $sa_ww \
     #  CONFIG.UB [expr {(($sa_dw + $sa_sw + $sa_ww + 5 + 7) / 8) * 8}] ] $sa
     #### JO changed (2026-11-04, requantize): + 24 bits (rq), was + 6
-    set_property -dict [ list CONFIG.DW $sa_dw CONFIG.SW $sa_sw CONFIG.WW $sa_ww \
-      CONFIG.UB [expr {(($sa_dw + $sa_sw + $sa_ww + 30 + 7) / 8) * 8}] ] $sa
+    #### JO changed (2026-11-25, docs/evta_dw_unit.md): Makefile DWU=1 (env VTA_DWU) -> gemm_sa DWU, uop + 2 bits (dw, emit)
+    #set_property -dict [ list CONFIG.DW $sa_dw CONFIG.SW $sa_sw CONFIG.WW $sa_ww \
+    #  CONFIG.UB [expr {(($sa_dw + $sa_sw + $sa_ww + 30 + 7) / 8) * 8}] ] $sa
+    set sa_dwu [expr {[info exists ::env(VTA_DWU)] && $::env(VTA_DWU) eq "1" ? 1 : 0}]
+    if {$i == 0} { puts "gemm_sa depthwise window unit (DWU) $sa_dwu" }
+    set_property -dict [ list CONFIG.DW $sa_dw CONFIG.SW $sa_sw CONFIG.WW $sa_ww CONFIG.DWU $sa_dwu \
+      CONFIG.UB [expr {(($sa_dw + $sa_sw + $sa_ww + 30 + 2 * $sa_dwu + 7) / 8) * 8}] ] $sa
     set acc [ create_bd_cell -type ip -vlnv xilinx.com:ip:blk_mem_gen:8.4 acc_mem_$i ]
     init_bram_property $acc 512 $OUT_MEM_DEPTH true true
     connect_bd_intf_net [get_bd_intf_pins gemm_sa_$i/mem_acc_a] [get_bd_intf_pins acc_mem_$i/BRAM_PORTA]

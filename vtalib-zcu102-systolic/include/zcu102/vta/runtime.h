@@ -239,6 +239,10 @@ TVM_DLL void VTAUopPush(VTACommandHandle cmdH,
                         uint32_t opcode,
                         uint32_t use_imm,
                         int32_t imm_val);
+//#### JO added (2026-11-24, docs/evta_dw_unit.md 3): a step of a depthwise window GEMM (dw_win; bitstreams "_dw"): the step
+//#### shifts inp[src] into the window, emit = 1 adds sum_k w[wgt][j][k] * win_k[j] to acc[dst][j]
+TVM_DLL void VTAUopPushDw(VTACommandHandle cmdH, uint32_t dst_index, uint32_t src_index, uint32_t wgt_index, uint32_t emit);
+
 
 /*!
  * \brief Mark start of a micro op loop.

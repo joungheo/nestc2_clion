@@ -366,6 +366,40 @@ class Device {
   }
 
   void RunGEMM(const VTAGemInsn* op) {
+    //#### JO added (2026-11-24, docs/evta_dw_unit.md 3): depthwise window mode (bitstreams "_dw"): every step shifts the
+    //#### window {win1, win2, inp[src]}; an emit step (uop bit VTA_UOP_DW_EMIT) adds sum_k w[wgt][j][k] * win_k[j] to acc[dst][j]
+    if (op->dw_win && !op->reset_reg) {
+      prof_->gemm_counter += op->iter_out * op->iter_in * (op->uop_end - op->uop_bgn);
+      if (prof_->SkipExec()) return;
+      int8_t win[3][VTA_BLOCK_IN] = {};
+      for (uint32_t y = 0; y < op->iter_out; ++y)
+        for (uint32_t x = 0; x < op->iter_in; ++x)
+          for (uint32_t uindex = op->uop_bgn; uindex < op->uop_end; ++uindex) {
+            VTAUop* uop_ptr = static_cast<VTAUop*>(uop_.BeginPtr(uindex));
+            uint64_t bits;
+            memcpy(&bits, uop_ptr, sizeof bits);
+            uint32_t acc_idx = uop_ptr->dst_idx + y * op->dst_factor_out + x * op->dst_factor_in;
+            uint32_t inp_idx = uop_ptr->src_idx + y * op->src_factor_out + x * op->src_factor_in;
+            uint32_t wgt_idx = uop_ptr->wgt_idx + y * op->wgt_factor_out + x * op->wgt_factor_in;
+            BitPacker<VTA_INP_WIDTH> inp(inp_.BeginPtr(inp_idx));
+            for (uint32_t j = 0; j < VTA_BLOCK_IN; ++j) {
+              win[0][j] = win[1][j];
+              win[1][j] = win[2][j];
+              win[2][j] = (int8_t)inp.GetSigned(j);
+            }
+            if (!((bits >> VTA_UOP_DW_EMIT) & 1)) continue;
+            BitPacker<VTA_ACC_WIDTH> acc(acc_.BeginPtr(acc_idx));
+            BitPacker<VTA_WGT_WIDTH> wgt(wgt_.BeginPtr(wgt_idx));
+            for (uint32_t j = 0; j < VTA_BLOCK_OUT; ++j) {
+              int32_t sum = acc.GetSigned(j);
+              for (uint32_t k = 0; k < 3; ++k) sum += win[k][j] * wgt.GetSigned(j * VTA_BLOCK_IN + k);
+              acc.SetSigned(j, sum);
+              out_[acc_idx][j] = vta_alu_ref::requant(sum, (int8_t)(sum & 255), op->rq_en, (int)op->rq_round,
+                                                       (int)op->rq_shift, (int)op->rq_lo, (int)op->rq_hi);
+            }
+          }
+      return;
+    }
     if (!op->reset_reg) {
       prof_->gemm_counter += op->iter_out * op->iter_in * (op->uop_end - op->uop_bgn);
       if (prof_->SkipExec()) return;

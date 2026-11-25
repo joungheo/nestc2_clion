@@ -57,7 +57,14 @@ typedef ap_uint<VTA_BUS_WIDTH> bus_T;
 //#### (VTA_SA_RQ), the int8 that sa_rmw.v writes to out
 //#define VTA_SA_UOP_WIDTH (VTA_SA_UOP_B + 6)
 #define VTA_SA_RQ (VTA_SA_UOP_B + 6)
+//#### JO changed (2026-11-24, docs/evta_dw_unit.md 4): VTA_DWU (Makefile DWU=1): bit VTA_SA_DW = insn.dw_win, VTA_SA_DW + 1 = the
+//#### uop's dw_emit (depthwise window mode, gemm_sa sa_dw.v); the TDATA width in bytes stays the same (72 single, 64 multi)
+#ifdef VTA_DWU
+#define VTA_SA_DW (VTA_SA_UOP_B + 30)
+#define VTA_SA_UOP_WIDTH (VTA_SA_UOP_B + 32)
+#else
 #define VTA_SA_UOP_WIDTH (VTA_SA_UOP_B + 30)
+#endif
 typedef ap_uint<VTA_SA_UOP_WIDTH> sa_uop_T;
 #endif
 

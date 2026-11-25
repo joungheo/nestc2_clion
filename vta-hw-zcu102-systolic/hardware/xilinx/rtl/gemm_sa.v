@@ -3,16 +3,19 @@
 // unit computes acc[dst] += inp[src] . wgt[wgt]^T on a 16 x 16 weight-stationary DSP48E2 array and writes acc and out
 // exactly as vta.cc gemm() does. One done token per GEMM instruction (uop with last) goes back on m_done.
 // busy: uops queued or in flight (acc_mem / out_mem port muxes select this unit while it is 1).
+// #### JO changed (2026-11-24, docs/evta_dw_unit.md 4): DWU = 1 adds sa_dw (depthwise window mode, uop bits dw / emit);
+// its row replaces the array's for dw steps. DWU = 0 is the unit as before.
 `timescale 1ns / 1ps
 module gemm_sa #(
   parameter N = 16,
   parameter DW = 12, SW = 12, WW = 11,
   parameter L_RD = 2,                 // inp/wgt read latency; acc read latency is 2
-  parameter PW = 20
+  parameter PW = 20,
+  parameter DWU = 0
 ) (
   input  wire                 clk,
   input  wire                 rstn,
-  input  wire [DW+SW+WW+29:0] s_uop_tdata,   // {rq, bias, g2s, g2l, first, last, reset, wgt, src, dst} (#### JO 2026-11-04: + bias, rq)
+  input  wire [DW+SW+WW+31:0] s_uop_tdata,   // {emit, dw, rq, bias, g2s, g2l, first, last, reset, wgt, src, dst} (#### JO 2026-11-04: + bias, rq; 11-24: + dw, emit)
   input  wire                 s_uop_tvalid,
   output wire                 s_uop_tready,
   output wire [7:0]           m_done_tdata,
@@ -49,17 +52,29 @@ module gemm_sa #(
   wire [23:0] trq;      // #### JO added (2026-11-04): requantize of the out writes {hi, lo, shift, round, en}
   wire [1:0] tk, dtok;
   wire [DW-1:0] td;
-  wire [PW*N-1:0] row;
+  wire [PW*N-1:0] row, arow, drow;
+  wire dv, tdw;
 
-  sa_ctrl #(.N(N), .DW(DW), .SW(SW), .WW(WW), .L_RD(L_RD)) ctrl (
+  sa_ctrl #(.N(N), .DW(DW), .SW(SW), .WW(WW), .L_RD(L_RD), .DWU(DWU)) ctrl (
     .clk(clk), .rst(rst),
     .s_uop_tdata(s_uop_tdata), .s_uop_tvalid(s_uop_tvalid), .s_uop_tready(s_uop_tready),
     .inp_en(inp_en), .inp_addr(inp_addr), .wgt_en(wgt_en), .wgt_addr(wgt_addr),
-    .arr_flag(flag), .arr_go(go),
+    .arr_flag(flag), .arr_go(go), .arr_dv(dv), .tag_dw(tdw),
     .tag_valid(tv), .tag_dst(td), .tag_reset(tz), .tag_bias(tb), .tag_src(ts), .tag_rq(trq), .tag_last(tl), .tag_tok(tk), .idle(idle));
 
   sa_array #(.N(N), .PW(PW)) array (
-    .clk(clk), .rst(rst), .x_in(inp_data), .f_in(flag), .go(go), .wd(wgt_data), .row_out(row));
+    .clk(clk), .rst(rst), .x_in(inp_data), .f_in(flag), .go(go), .wd(wgt_data), .row_out(arow));
+
+  generate
+    if (DWU) begin : g_dw
+      sa_dw #(.N(N), .PW(PW)) dwu (
+        .clk(clk), .rst(rst), .x_in(inp_data), .f_in(flag), .dv(dv), .go(go), .wd(wgt_data), .row_out(drow));
+      assign row = tdw ? drow : arow;
+    end else begin : g_nodw
+      assign drow = 0;
+      assign row = arow;
+    end
+  endgenerate
 
   sa_rmw #(.N(N), .PW(PW), .DW(DW)) rmw (
     .clk(clk), .rst(rst), .row(row), .tag_valid(tv), .tag_dst(td), .tag_reset(tz), .tag_bias(tb), .tag_src(ts[DW-1:0]), .tag_rq(trq), .tag_last(tl), .tag_tok(tk),

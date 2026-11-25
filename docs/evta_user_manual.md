@@ -302,6 +302,10 @@ sudo cp /home/xilinx/JO/npuprg/bit/<목적>_<YYMMDD>/vtahw_<dir>.bin /lib/firmwa
 - **systolic, EVTA 4개:** `SYS_BIN` 기본은 2026-11-24부터 `..._16_15_18_17_4evta_sa_amul_400mhz_hp322_rq.bin`(11-23, MUL immediate, HP 포트 321.7 MHz)이다.
   - 그 전 기본 `..._4evta_sa_400mhz_rq.bin`(11-04, ALU 확장 없음, avgpool CPU). per copy MobileNetV2 19.23 → 18.69, Resnet50 78.47 → 77.99 ms.
   - `..._4evta_sa_amul_bc_400mhz_hp282_rq.bin`(11-24): 보드는 통과했지만 CNN 이득이 없고 HP 클럭이 낮아(281.7 MHz) Resnet50이 1.3 ms 느리다. 쓰지 않는다.
+  - `..._4evta_sa_amul_dw_400mhz_hp304_rq.bin`(11-25): `_amul` + depthwise 창 장치(`_dw`, HP 304.3 MHz). MobileNetV2Tf 4개 동시 260.1 → 287.4 fps,
+    혼자 13.54 → 12.09 ms. 아직 기본은 아니다(`BIN=`으로). 만든 과정과 명령: [evta_dw_unit.md](evta_dw_unit.md) §9.
+    multi4 빌드는 이 판부터 `VTA_CONTAIN=1`(`run_flow.sh` / `m4_build.sh` 앞 환경 변수; pblock `CONTAIN_ROUTING`)을 쓴다.
+  - single `..._16_16_19_18_sa_alux3_dw_375mhz_rq.bin`(11-25): `_alux3` + `_dw`, 375 MHz. MobileNetV2Tf 1장 13.90 ms.
   - 이름 조각(`_amul`, `_amul_bc`, `_rq2`, `_hp322` …)의 뜻: [evta_isa_ext.md](evta_isa_ext.md) §5 "bitstream 이름 읽는 법".
 - **최종판은 아니다.** 다음 판의 후보(RQ ALU 연산, multi4 ALU 확장, KV260)가 있다.
 - **짝이 되는 vtalib:** `_alux3`의 기능은 `vtalib-zcu102-systolic` commit `8191320`(11-15) 뒤로 빌드한 실행 파일만 쓴다. 보드의 `_sys*`는 그 전 판이다(§4.3).
@@ -910,6 +914,7 @@ diff -r /tmp/dumpA /tmp/dumpB && echo same; sudo rm -rf /tmp/dumpA /tmp/dumpB   
 | `EVTA_NO_BIT_CHECK=1` | 0 | 올라간 bitstream의 EVTA 수 검사를 건너뛴다(위험: EVTA 수가 모자라면 SError) |
 | `EVTA_BIAS_RESET=0\|1` | bitstream 이름 | bias reset 강제(이름에 `bias`나 `_rq`가 있으면 켜짐). [evta_isa_ext.md](evta_isa_ext.md) |
 | `EVTA_REQUANT=0\|1` | bitstream 이름 | out 쓰기 requantize 강제(이름에 `_rq`). 기능이 없는 bitstream에서 1이면 결과가 틀린다 |
+| `EVTA_DWU=0\|1` | bitstream 이름(`_dw`) | systolic: depthwise 3 x 3를 창 장치로(`0`이면 대각 GEMM). 시뮬레이터는 늘 1 ([evta_dw_unit.md](evta_dw_unit.md)) |
 | `EVTA_ALUX=0\|1`, `EVTA_ALUX2`, `EVTA_ALUX3` | bitstream 이름 | systolic: ALU 확장 사용(`_alux<k>`). `0`이면 같은 실행 파일이 CPU 대체 경로로 |
 | `EVTA_ALU_INP=0` | 1 | systolic: layer norm / softmax의 int8 입력을 inp + identity GEMM 대신 int32로 acc에 |
 | `EVTA_AVGPOOL=0` | 1 | systolic: `avgpool_evta`를 끄고 CPU avgpool |
@@ -993,6 +998,7 @@ WS=7,17 python3 hazard_dump.py /tmp/rd
 |---|---|---|
 | `run_alu_ext_test.sh [rows] [seed]` | g++ 있는 아무 기계 | 정수 layer norm ALU 프로그램 vs bundle CPU 함수(수 초) |
 | `run_lut_conv_test.sh` | PC (llvm-8 헤더) | 시뮬레이터 vtalib을 빌드해 conv 출력 LUT, `layernorm_evta`, `softmax_evta`를 CPU와 비교(약 1분) |
+| `run_dw_test.sh` | PC | 시뮬레이터 vtalib으로 `dw_convolution_evta` 15모양을 창 모드와 대각 판(`EVTA_DWU=0`) 둘 다 CPU와 비교 |
 | `run_epi_test.sh` | PC | conv epilogue를 세 방식(rq 끔, `EVTA_REQUANT=1`, `EVTA_ALUX=0`)으로 CPU와 비교 |
 | `sudo -n /bin/sh -c "run_alux_board_tests.sh [build\|run\|all]"` | 보드 (`_alux` bitstream 올린 뒤) | 위 시험들을 보드 EVTA에서. `EVTA_ALUX=0`이면 CPU 대체 경로. `CROSS=1`이면 PC에서 빌드 |
 | `WS=7,17 hazard_dump.py <EVTA_REPLAY_DUMP dir>` | 아무 데 | ALU hazard 검사: vector ALU 명령이 최근 W step 안에 쓴 acc 자리를 읽는지 |

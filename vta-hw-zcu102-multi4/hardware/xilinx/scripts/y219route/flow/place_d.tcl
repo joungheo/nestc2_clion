@@ -30,6 +30,21 @@ if {[info exists ::env(VTA_MMCM_MULT)] && $::env(VTA_MMCM_MULT) ne ""} {
   puts "CHK pll period [get_property PERIOD [get_clocks clk_out1_vta_pll_clk_0]]"
 }
 foreach pb [get_pblocks] { set_property CONTAIN_ROUTING false $pb }
+#### JO added (2026-11-25): VTA_CONTAIN=1 keeps the nets inside one half in that half: CONTAIN_ROUTING on the one-rectangle
+# pblocks pb_evta_<i> / pb_hpslice and a new pb_lo (crossbar, width converter, resets: below the row, as the PS). multi4 amuldw had
+# 549 nets with a PIP in row Y219, 156 + 47 + 30 of them compute_1 / gemm_sa_1 / acc_mem_1 nets between cells below the row
+# (rowcls: driver -> load hierarchies); RapidWright's detours for them broke compute_1's timing (-5.4 ns). Two-rectangle
+# pblocks (pb_fence) do not hold (vivado.tcl 2026-10-24); a one-rectangle one should.
+if {[info exists ::env(VTA_CONTAIN)] && $::env(VTA_CONTAIN) ne "" && $::env(VTA_CONTAIN) ne "0"} {
+  set lo {SLICE_X0Y0:SLICE_X96Y218 RAMB36_X0Y0:RAMB36_X12Y42 RAMB18_X0Y0:RAMB18_X12Y85 DSP48E2_X0Y0:DSP48E2_X17Y85}
+  create_pblock pb_lo
+  resize_pblock [get_pblocks pb_lo] -add $lo
+  set_property PARENT pb_fence [get_pblocks pb_lo]
+  set c [get_cells -quiet -filter {PBLOCK == pb_fence} {vta_i/axi_xbar vta_i/reg_dwc* vta_i/proc_sys_reset_ps*}]
+  if {[llength $c]} { add_cells_to_pblock [get_pblocks pb_lo] $c }
+  puts "CHK pb_lo: [llength $c] cells: $c"
+  foreach pb [get_pblocks -quiet {pb_evta_0 pb_evta_1 pb_evta_2 pb_evta_3 pb_hpslice pb_lo}] { set_property CONTAIN_ROUTING true $pb; puts "CHK contain $pb [get_property GRID_RANGES $pb]" }
+}
 #### JO changed (2026-11-04): VTA_PLACE_DIRECTIVE picks another placer directive (multi4 rq missed 400 MHz by 7 ps with Explore)
 #place_design -directive Explore
 place_design -directive [expr {[info exists ::env(VTA_PLACE_DIRECTIVE)] && $::env(VTA_PLACE_DIRECTIVE) ne "" ? $::env(VTA_PLACE_DIRECTIVE) : "Explore"}]

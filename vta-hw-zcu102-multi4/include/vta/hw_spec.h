@@ -383,7 +383,11 @@ typedef struct {
   //#### JO changed (2026-11-11, ALU extension): lut_en as VTAAluInsn (GELU on the GEMM output; "alux" bitstreams)
   //uint64_t pad_0          : 7;
   uint64_t lut_en         : 1;
-  uint64_t pad_0          : 6;
+  //#### JO changed (2026-11-24, docs/evta_dw_unit.md 3): dw_win: the steps run in depthwise window mode (bitstreams "_dw"):
+  //#### win = {win1, win2, inp[src]}; a step whose uop has bit VTA_UOP_DW_EMIT adds sum_k w[wgt][j][k] * win_k[j] to acc[dst][j]
+  //uint64_t pad_0          : 6;
+  uint64_t dw_win         : 1;
+  uint64_t pad_0          : 5;
   uint64_t pad_1          : 64;
 } VTAGemInsn;
 
@@ -533,6 +537,9 @@ typedef struct {
   /*! \brief Weight index (indexes weight buffer) */
   uint64_t wgt_idx    : VTA_LOG_WGT_BUFF_DEPTH;
 } VTAUop;
+
+//#### JO added (2026-11-24, docs/evta_dw_unit.md 3): bit 63 of a 64-bit uop of a dw_win GEMM: this step writes acc[dst]
+#define VTA_UOP_DW_EMIT 63
 
 #ifdef __cplusplus
 }

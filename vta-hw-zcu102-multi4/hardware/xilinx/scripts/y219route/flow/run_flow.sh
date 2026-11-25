@@ -15,7 +15,9 @@ RW=${RW:-$HOME/tools/rapidwright}
 #viv() { docker exec -e VTA_IMPL_DIR=${VTA_IMPL_DIR:-} -u ubuntu -w $PWD vivado2020-build bash -c "source /tools/Xilinx/v2020.1/Vivado/2020.1/settings64.sh; vivado -mode batch -nojournal -log $1.log -source $2 -tclargs ${*:3} > /dev/null 2>&1"; }
 #### JO changed (2026-11-23): VTA_FENCE_ROWS / VTA_MMCM_MULT too (place_d.tcl); CRIT / RWARGS for Y219RWRoute.java
 #viv() { docker exec -e VTA_IMPL_DIR=${VTA_IMPL_DIR:-} -e VTA_PLACE_DIRECTIVE=${VTA_PLACE_DIRECTIVE:-} -u ubuntu -w $PWD vivado2020-build bash -c "source /tools/Xilinx/v2020.1/Vivado/2020.1/settings64.sh; vivado -mode batch -nojournal -log $1.log -source $2 -tclargs ${*:3} > /dev/null 2>&1"; }
-viv() { docker exec -e VTA_IMPL_DIR=${VTA_IMPL_DIR:-} -e VTA_PLACE_DIRECTIVE=${VTA_PLACE_DIRECTIVE:-} -e VTA_FENCE_ROWS="${VTA_FENCE_ROWS:-}" -e VTA_MMCM_MULT=${VTA_MMCM_MULT:-} -u ubuntu -w $PWD vivado2020-build bash -c "source /tools/Xilinx/v2020.1/Vivado/2020.1/settings64.sh; vivado -mode batch -nojournal -log $1.log -source $2 -tclargs ${*:3} > /dev/null 2>&1"; }
+#### JO changed (2026-11-25): VTA_CONTAIN too (place_d.tcl)
+#viv() { docker exec -e VTA_IMPL_DIR=${VTA_IMPL_DIR:-} -e VTA_PLACE_DIRECTIVE=${VTA_PLACE_DIRECTIVE:-} -e VTA_FENCE_ROWS="${VTA_FENCE_ROWS:-}" -e VTA_MMCM_MULT=${VTA_MMCM_MULT:-} -u ubuntu -w $PWD vivado2020-build bash -c "source /tools/Xilinx/v2020.1/Vivado/2020.1/settings64.sh; vivado -mode batch -nojournal -log $1.log -source $2 -tclargs ${*:3} > /dev/null 2>&1"; }
+viv() { docker exec -e VTA_IMPL_DIR=${VTA_IMPL_DIR:-} -e VTA_PLACE_DIRECTIVE=${VTA_PLACE_DIRECTIVE:-} -e VTA_FENCE_ROWS="${VTA_FENCE_ROWS:-}" -e VTA_MMCM_MULT=${VTA_MMCM_MULT:-} -e VTA_CONTAIN=${VTA_CONTAIN:-} -u ubuntu -w $PWD vivado2020-build bash -c "source /tools/Xilinx/v2020.1/Vivado/2020.1/settings64.sh; vivado -mode batch -nojournal -log $1.log -source $2 -tclargs ${*:3} > /dev/null 2>&1"; }
 viv place_$T $F/place_d.tcl routed_$T
 grep -A3 "WNS(ns)" routed_$T.timing.rpt | sed -n 3p
 RAPIDWRIGHT_PATH=$RW/d2025.2 nice -n 10 taskset -c 0-7 java -XX:ActiveProcessorCount=8 -Dcrit=${CRIT:-0.95} -Drwargs="${RWARGS:-}" -Xmx${RW_XMX:-64g} \

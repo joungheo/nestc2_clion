@@ -383,7 +383,10 @@ typedef struct {
   uint64_t rq_shift       : 5;
   int64_t  rq_lo          : 8;
   int64_t  rq_hi          : 8;
-  uint64_t pad_0          : 8;
+  //#### JO changed (2026-11-24, docs/evta_dw_unit.md 3): depthwise window mode (sim_driver.cc), as the zcu102 header
+  //uint64_t pad_0          : 8;
+  uint64_t dw_win         : 1;
+  uint64_t pad_0          : 7;
   uint64_t pad_1          : 64;
 } VTAGemInsn;
 
@@ -538,6 +541,9 @@ typedef struct {
   /*! \brief Weight index (indexes weight buffer) */
   uint64_t wgt_idx    : VTA_LOG_WGT_BUFF_DEPTH;
 } VTAUop;
+
+//#### JO added (2026-11-24, docs/evta_dw_unit.md 3): bit 63 of a 64-bit uop of a dw_win GEMM: this step writes acc[dst]
+#define VTA_UOP_DW_EMIT 63
 
 
 #ifdef __cplusplus

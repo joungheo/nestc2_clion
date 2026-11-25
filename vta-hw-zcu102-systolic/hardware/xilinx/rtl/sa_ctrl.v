@@ -9,18 +9,22 @@
 // carries it and src.
 // #### JO changed (2026-11-04, requantize): uop bits DW+SW+WW+6 .. +29 = rq {hi, lo, shift, round, en} of the instruction
 // (VTAGemInsn rq_*), carried in the FIFO and the tag to sa_rmw (the int8 written to out).
+// #### JO changed (2026-11-24, depthwise window, docs/evta_dw_unit.md 4): uop bits DW+SW+WW+30 = dw (insn.dw_win), +31 = emit
+// (DWU = 1; 0: both 0). A dw step goes to sa_dw with the inp row (arr_dv); only an emit step's tag is valid (acc written);
+// the tag carries dw (row from sa_dw instead of sa_array). The last step of a dw instruction is an emit step (vtalib).
 `timescale 1ns / 1ps
 module sa_ctrl #(
   parameter N = 16,
   parameter DW = 12, SW = 12, WW = 11,   // acc/out, inp, wgt index widths
   parameter L_RD = 2,                   // inp/wgt BRAM read latency (address cycle -> data cycle)
   parameter FD = 5,                     // log2 uop FIFO depth (32)
-  parameter RD = 3                      // log2 run queue depth (8)
+  parameter RD = 3,                     // log2 run queue depth (8)
+  parameter DWU = 0                     // #### JO added (2026-11-24): depthwise window mode
 ) (
   input  wire                 clk,
   input  wire                 rst,
   // uop stream
-  input  wire [DW+SW+WW+29:0] s_uop_tdata,   // {rq, bias, g2s, g2l, first, last, reset, wgt, src, dst}
+  input  wire [DW+SW+WW+31:0] s_uop_tdata,   // {emit, dw, rq, bias, g2s, g2l, first, last, reset, wgt, src, dst}
   input  wire                 s_uop_tvalid,
   output wire                 s_uop_tready,
   // inp_mem read
@@ -32,6 +36,7 @@ module sa_ctrl #(
   // to sa_array
   output wire                 arr_flag,      // with the inp data (P+L_RD)
   output wire                 arr_go,        // bank 0 data valid (g+L_RD)
+  output wire                 arr_dv,        // #### JO added (2026-11-24): a dw step, with the inp data (P+L_RD)
   // tag to the RMW (P+L_RD+33)
   output wire                 tag_valid,
   output wire [DW-1:0]        tag_dst,
@@ -41,6 +46,7 @@ module sa_ctrl #(
   output wire [23:0]          tag_rq,         // #### JO added (2026-11-04)
   output wire                 tag_last,
   output wire [1:0]           tag_tok,        // {g2s, g2l} of the instruction (on its last step)
+  output wire                 tag_dw,         // #### JO added (2026-11-24): the row comes from sa_dw
   output wire                 idle           // nothing queued or in the array
 );
   //#### JO changed (2026-11-04): + bias
@@ -48,7 +54,8 @@ module sa_ctrl #(
   //localparam UW = DW + SW + WW + 5;          // FIFO entry: {bias, g2s, g2l, last, reset, wgt, src, dst} (first only makes newrun)
   //#### JO changed (2026-11-04): + rq on top; UB0 = the entry without it
   localparam UB0 = DW + SW + WW + 5;
-  localparam UW = UB0 + 24;                  // FIFO entry: {rq, bias, g2s, g2l, last, reset, wgt, src, dst}
+  //localparam UW = UB0 + 24;                  // FIFO entry: {rq, bias, g2s, g2l, last, reset, wgt, src, dst}
+  localparam UW = UB0 + 26;                  // #### JO (2026-11-24): {emit, dw, rq, bias, g2s, g2l, last, reset, wgt, src, dst}
   localparam TD = L_RD + 33;                 // issue presented -> RMW
 
   // ---------------- uop FIFO (entry = {newrun, uop}) ----------------
@@ -72,6 +79,7 @@ module sa_ctrl #(
   wire [1:0]    in_tok   = s_uop_tdata[DW+SW+WW+4:DW+SW+WW+3];
   wire          in_bias  = s_uop_tdata[DW+SW+WW+5];
   wire [23:0]   in_rq    = s_uop_tdata[DW+SW+WW+29:DW+SW+WW+6];
+  wire [1:0]    in_dwe   = DWU ? s_uop_tdata[DW+SW+WW+31:DW+SW+WW+30] : 2'b00;   // {emit, dw}
   wire          in_newrun = !have_prev || in_wgt != prev_wgt || in_first;
   assign s_uop_tready = !rst && !f_full && !(in_newrun && q_full);
   wire          enq = s_uop_tvalid && s_uop_tready;
@@ -80,7 +88,10 @@ module sa_ctrl #(
   wire [UW:0]   head = fifo[rp[FD-1:0]];
   wire          h_newrun = head[UW];
   //#### JO changed (2026-11-04): the fields below rq at the positions of the entry without it (UB0)
-  wire [23:0]   h_rq     = head[UW-1:UB0];
+  wire [23:0]   h_rq     = head[UB0+23:UB0];
+  wire          h_dw     = head[UB0+24];
+  wire          h_emit   = head[UB0+25];
+  wire          h_wr     = !h_dw || h_emit;   // the step writes acc
   wire          h_bias   = head[UB0-1];
   wire [1:0]    h_tok    = head[UB0-2:UB0-3];
   wire          h_last   = head[UB0-4];
@@ -101,7 +112,7 @@ module sa_ctrl #(
       wp <= 0; rp <= 0; qw <= 0; qr <= 0; have_prev <= 1'b0; pend <= 1'b0; cnt <= 0;
     end else begin
       if (enq) begin
-        fifo[wp[FD-1:0]] <= {in_newrun, in_rq, in_bias, in_tok, s_uop_tdata[DW+SW+WW+1:0]};
+        fifo[wp[FD-1:0]] <= {in_newrun, in_dwe, in_rq, in_bias, in_tok, s_uop_tdata[DW+SW+WW+1:0]};
         wp <= wp + 1'b1;
         prev_wgt <= in_wgt; have_prev <= 1'b1;
         if (in_newrun) begin runq[qw[RD-1:0]] <= in_wgt; qw <= qw + 1'b1; end
@@ -130,26 +141,30 @@ module sa_ctrl #(
   end
 
   // ---------------- flag / go pipes (L_RD) and the tag pipe (TD) ----------------
-  reg [L_RD:0] flag_p, go_p;                   // [0] = presented cycle
+  reg [L_RD:0] flag_p, go_p, dv_p;             // [0] = presented cycle
   always @(posedge clk) begin
-    if (rst) begin flag_p <= 0; go_p <= 0; end
+    if (rst) begin flag_p <= 0; go_p <= 0; dv_p <= 0; end
     else begin
       flag_p <= {flag_p[L_RD-1:0], latch};
       go_p   <= {go_p[L_RD-1:0], start};
+      dv_p   <= {dv_p[L_RD-1:0], issue && h_dw};
     end
   end
   assign arr_flag = flag_p[L_RD];
   assign arr_go   = go_p[L_RD];
+  assign arr_dv   = dv_p[L_RD];
 
   //#### JO changed (2026-11-04): + {src, bias} on top
   //#### JO changed (2026-11-04): + rq on top
   //reg [DW+SW+5:0] tagp [0:TD];                 // {src, bias, tok[1:0], valid, last, reset, dst}; [0] = presented cycle
-  reg [DW+SW+29:0] tagp [0:TD];                // {rq, src, bias, tok[1:0], valid, last, reset, dst}; [0] = presented cycle
+  //#### JO changed (2026-11-24): + dw on top; valid only for steps that write (not the window-filling dw steps)
+  reg [DW+SW+30:0] tagp [0:TD];                // {dw, rq, src, bias, tok[1:0], valid, last, reset, dst}; [0] = presented cycle
   integer t;
   always @(posedge clk) begin
-    tagp[0] <= rst ? {(DW+SW+30){1'b0}} : {h_rq, h_src, h_bias, h_tok, issue, h_last, h_reset, h_dst};
-    for (t = 1; t <= TD; t = t + 1) tagp[t] <= rst ? {(DW+SW+30){1'b0}} : tagp[t-1];
+    tagp[0] <= rst ? {(DW+SW+31){1'b0}} : {h_dw, h_rq, h_src, h_bias, h_tok, issue && h_wr, h_last, h_reset, h_dst};
+    for (t = 1; t <= TD; t = t + 1) tagp[t] <= rst ? {(DW+SW+31){1'b0}} : tagp[t-1];
   end
+  assign tag_dw    = tagp[TD][DW+SW+30];
   assign tag_rq    = tagp[TD][DW+SW+29:DW+SW+6];
   assign tag_bias  = tagp[TD][DW+5];
   assign tag_src   = tagp[TD][DW+SW+5:DW+6];

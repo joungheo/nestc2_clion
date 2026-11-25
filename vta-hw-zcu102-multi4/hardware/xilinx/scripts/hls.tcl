@@ -70,6 +70,10 @@ if {[info exists ::env(VTA_ALU_MUL)] && $::env(VTA_ALU_MUL) eq "1"} {
 if {[info exists ::env(VTA_ALU_BC)] && $::env(VTA_ALU_BC) eq "1"} {
     append cflags " -DVTA_ALU_BC"
 }
+#### JO added (2026-11-25): Makefile DWU=1 -> the depthwise window mode bits on the gemm_sa uops (vta.cc VTA_DWU, "_dw")
+if {[info exists ::env(VTA_DWU)] && $::env(VTA_DWU) eq "1"} {
+    append cflags " -DVTA_DWU"
+}
 #### JO added (2026-11-23): Makefile ALUX_STEP1=1 -> src/vta_alux1.cc (ALU extension step 1, the 11-14 source) instead of vta.cc
 set vta_src vta.cc
 if {[info exists ::env(VTA_ALUX_STEP1)] && $::env(VTA_ALUX_STEP1) eq "1"} {

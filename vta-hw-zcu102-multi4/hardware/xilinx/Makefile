@@ -84,13 +84,20 @@ endif
 #### JO added (2026-11-23): ALUX_STEP1=1 (with ALUX=1) -> src/vta_alux1.cc, the ALU extension step 1 (11-14 source), "_alux1" in the IP name
 ALUX_STEP1 ?= 0
 #IP_NAME := $(CONF)_$(NUM_EVTA)evta$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(SYSTOLIC)),_sa)$(if $(filter 1,$(ALUX)),_alux)$(if $(filter 1,$(ALUX_NOIMM)),_ni)$(if $(filter 1,$(ALUMUL)),_amul)$(if $(filter 1,$(ALUBC)),_bc)
-IP_NAME := $(CONF)_$(NUM_EVTA)evta$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(SYSTOLIC)),_sa)$(if $(filter 1,$(ALUX)),_alux$(if $(filter 1,$(ALUX_STEP1)),1))$(if $(filter 1,$(ALUX_NOIMM)),_ni)$(if $(filter 1,$(ALUMUL)),_amul)$(if $(filter 1,$(ALUBC)),_bc)
+#### JO added (2026-11-25, docs/evta_dw_unit.md): DWU=1 -> the depthwise window unit (gemm_sa sa_dw.v, vta.cc VTA_DWU), "_dw" in the name
+DWU ?= 0
+ifeq ($(DWU)$(SYSTOLIC),10)
+$(error DWU=1 needs SYSTOLIC=1 (the unit is in gemm_sa))
+endif
+#IP_NAME := $(CONF)_$(NUM_EVTA)evta$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(SYSTOLIC)),_sa)$(if $(filter 1,$(ALUX)),_alux$(if $(filter 1,$(ALUX_STEP1)),1))$(if $(filter 1,$(ALUX_NOIMM)),_ni)$(if $(filter 1,$(ALUMUL)),_amul)$(if $(filter 1,$(ALUBC)),_bc)
+IP_NAME := $(CONF)_$(NUM_EVTA)evta$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(SYSTOLIC)),_sa)$(if $(filter 1,$(ALUX)),_alux$(if $(filter 1,$(ALUX_STEP1)),1))$(if $(filter 1,$(ALUX_NOIMM)),_ni)$(if $(filter 1,$(ALUMUL)),_amul)$(if $(filter 1,$(ALUBC)),_bc)$(if $(filter 1,$(DWU)),_dw)
 BUILD_NAME := $(IP_NAME)$(if $(FREQ),_$(FREQ)mhz)$(if $(BUILD_TAG),_$(BUILD_TAG))
 export VTA_SYSTOLIC := $(SYSTOLIC)
 export VTA_ALUX := $(ALUX)
 export VTA_ALUX_NOIMM := $(ALUX_NOIMM)
 export VTA_ALU_MUL := $(ALUMUL)
 export VTA_ALU_BC := $(ALUBC)
+export VTA_DWU := $(DWU)
 export VTA_ALUX_STEP1 := $(ALUX_STEP1)
 export VTA_IMPL_STRATEGY := $(IMPL_STRATEGY)
 #### JO added (2026-11-04): IMPL_TO_STEP=opt_design stops impl_1 after opt_design (multi4 Y219 flow input)

@@ -29,6 +29,7 @@ ZCU102에서 우리 EVTA와 AMD의 DPU(Vitis AI의 NPU IP)를 **같은 float 모
 | | 우리 EVTA 1개 `MobileNetV2TfTest` | 69.5 | 45.7 | **22 %** | 71.80 → **68.43 %** (−3.37 %p) |
 | | 우리 EVTA 4개 `MultiEVTAMobileNetV2TfTest` (`_amul`, 11-24) | 235.6 | 155 | **19 %** | 같은 bundle |
 
+- **2026-11-25: depthwise 창 장치를 넣은 multi4(`..._4evta_sa_amul_dw_400mhz_hp304_rq.bin`)로 MobileNetV2Tf 4개 동시 287.4 fps, DPU S 270.0 fps보다 빠르다**(같은 날 `_amul` 260.1 fps; [evta_dw_unit.md](evta_dw_unit.md) §9).
 - **가동률은 우리가 같거나 높다.** 곱셈기를 놀리지 않는 효율은 뒤지지 않는다.
 - **절대 성능은 DPU가 3.3–5.5배다.** peak 차이만큼이다.
   - EVTA 1개 204.8 GOPS 대 B4096 1개 1,151 GOPS (5.6배).

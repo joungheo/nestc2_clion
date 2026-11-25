@@ -78,7 +78,13 @@ endif
 #### JO added (2026-11-23): ALUX_STEP1=1 (with ALUX=1) -> src/vta_alux1.cc, the ALU extension step 1 (11-14 source), "_alux1" in the IP name
 ALUX_STEP1 ?= 0
 #IP_NAME := $(CONF)$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(MEM_OREG)),_oreg)$(if $(filter 1,$(SYSTOLIC)),_sa)$(if $(filter 1,$(ALUX)),_alux)$(if $(filter 1,$(ALUX_NOIMM)),_ni)$(if $(filter 1,$(ALUMUL)),_amul)$(if $(filter 1,$(ALUBC)),_bc)
-IP_NAME := $(CONF)$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(MEM_OREG)),_oreg)$(if $(filter 1,$(SYSTOLIC)),_sa)$(if $(filter 1,$(ALUX)),_alux$(if $(filter 1,$(ALUX_STEP1)),1))$(if $(filter 1,$(ALUX_NOIMM)),_ni)$(if $(filter 1,$(ALUMUL)),_amul)$(if $(filter 1,$(ALUBC)),_bc)
+#### JO added (2026-11-24, docs/evta_dw_unit.md): DWU=1 -> the depthwise window unit (gemm_sa sa_dw.v, vta.cc VTA_DWU), "_dw" in the name
+DWU ?= 0
+ifeq ($(DWU)$(SYSTOLIC),10)
+$(error DWU=1 needs SYSTOLIC=1 (the unit is in gemm_sa))
+endif
+#IP_NAME := $(CONF)$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(MEM_OREG)),_oreg)$(if $(filter 1,$(SYSTOLIC)),_sa)$(if $(filter 1,$(ALUX)),_alux$(if $(filter 1,$(ALUX_STEP1)),1))$(if $(filter 1,$(ALUX_NOIMM)),_ni)$(if $(filter 1,$(ALUMUL)),_amul)$(if $(filter 1,$(ALUBC)),_bc)
+IP_NAME := $(CONF)$(if $(filter 1,$(PROFILE)),_prof)$(if $(filter 1,$(MEM_OREG)),_oreg)$(if $(filter 1,$(SYSTOLIC)),_sa)$(if $(filter 1,$(ALUX)),_alux$(if $(filter 1,$(ALUX_STEP1)),1))$(if $(filter 1,$(ALUX_NOIMM)),_ni)$(if $(filter 1,$(ALUMUL)),_amul)$(if $(filter 1,$(ALUBC)),_bc)$(if $(filter 1,$(DWU)),_dw)
 #### JO changed (2026-10-28, systolic D8): IMPL_STRATEGY=<Vivado impl strategy>, BUILD_TAG=<suffix of the vivado dir>
 #BUILD_NAME := $(IP_NAME)$(if $(FREQ),_$(FREQ)mhz)
 IMPL_STRATEGY ?=
@@ -92,6 +98,7 @@ export VTA_ALUX := $(ALUX)
 export VTA_ALUX_NOIMM := $(ALUX_NOIMM)
 export VTA_ALU_MUL := $(ALUMUL)
 export VTA_ALU_BC := $(ALUBC)
+export VTA_DWU := $(DWU)
 export VTA_ALUX_STEP1 := $(ALUX_STEP1)
 export VTA_FREQ := $(FREQ)
 HW_BUILD_PATH := $(BUILD_DIR)/vivado/$(BUILD_NAME)

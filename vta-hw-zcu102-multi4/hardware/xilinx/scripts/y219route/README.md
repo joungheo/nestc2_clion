@@ -47,6 +47,10 @@ misses): `flow/mmcm_hp_set.tcl -tclargs <dcp with no row nets> <out> 46.25` sets
 (47.875 = 333.0). amul 2026-11-23: opt / RapidWright four times -0.092 / -0.192 ns on `saxigp4_rdata[123]` -> `hpslice2`; HP 321.7 MHz:
 EVTA 400 MHz WNS 0.000, HP +0.009, WHS +0.004 ns, board pass (`docs/evta_multi4_alux3.md` §6.2).
 `run_flow.sh` takes `VTA_PLACE_DIRECTIVE` (placer directive in `place_d.tcl`, default Explore) and `RW_XMX` (RapidWright heap, default 64g).
+`VTA_CONTAIN=1` (2026-11-25) turns CONTAIN_ROUTING on in `place_d.tcl` for the one-rectangle pblocks (`pb_evta_<i>`, `pb_hpslice`, a new
+`pb_lo` with the crossbar / width converter / PS reset below the row): multi4 amuldw had 549 nets with a PIP in the row, half of them
+EVTA 1 nets between cells below it; with it 29, RapidWright then only moves those, `route_s.tcl opt` and the HP clock at 304.3 MHz
+(`mmcm_hp_set.tcl ... 43.75`) give WNS +0.002 ns, board pass (`docs/evta_dw_unit.md` §8). Use it for the next multi4 builds.
 
 ## Tools
 - `Y219RWRoute.java` reroute the nets with a PIP in the row (`-Dpips=stuck_int_pips.txt`: only stuck-cell PIPs,

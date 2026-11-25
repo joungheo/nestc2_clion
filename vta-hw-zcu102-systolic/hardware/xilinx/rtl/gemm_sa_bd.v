@@ -9,7 +9,8 @@
 module gemm_sa_bd #(
   parameter DW = 12, SW = 12, WW = 11,
   parameter L_RD = 2,
-  parameter UB = 40                      // uop TDATA width of the HLS stream (bytes)
+  parameter UB = 40,                     // uop TDATA width of the HLS stream (bytes)
+  parameter DWU = 0                      // #### JO added (2026-11-24): depthwise window mode (uop bits DW+SW+WW+30, +31)
 ) (
   (* X_INTERFACE_PARAMETER = "ASSOCIATED_BUSIF s_uop:m_done:s_g2l:m_g2l:s_g2s:m_g2s:hls_acc_a:hls_acc_b:hls_out:mem_acc_a:mem_acc_b:mem_out:mem_inp:mem_wgt0:mem_wgt1:mem_wgt2:mem_wgt3:mem_wgt4:mem_wgt5:mem_wgt6:mem_wgt7:mem_wgt8:mem_wgt9:mem_wgt10:mem_wgt11:mem_wgt12:mem_wgt13:mem_wgt14:mem_wgt15, ASSOCIATED_RESET rstn" *)
   input  wire                 clk,
@@ -240,9 +241,9 @@ module gemm_sa_bd #(
   assign sa_g2s_r     = m_g2s_tready;
   assign s_g2s_tready = m_g2s_tready && !sa_g2s_v;
 
-  gemm_sa #(.N(N), .DW(DW), .SW(SW), .WW(WW), .L_RD(L_RD)) sa (
+  gemm_sa #(.N(N), .DW(DW), .SW(SW), .WW(WW), .L_RD(L_RD), .DWU(DWU)) sa (
     .clk(clk), .rstn(rstn),
-    .s_uop_tdata(s_uop_tdata[DW+SW+WW+29:0]), .s_uop_tvalid(s_uop_tvalid), .s_uop_tready(s_uop_tready),
+    .s_uop_tdata(DWU ? s_uop_tdata[DW+SW+WW+31:0] : {2'b00, s_uop_tdata[DW+SW+WW+29:0]}), .s_uop_tvalid(s_uop_tvalid), .s_uop_tready(s_uop_tready),
     .m_done_tdata(m_done_tdata), .m_done_tvalid(m_done_tvalid), .m_done_tready(m_done_tready),
     .m_g2l_tvalid(sa_g2l_v), .m_g2l_tready(sa_g2l_r), .m_g2s_tvalid(sa_g2s_v), .m_g2s_tready(sa_g2s_r),
     .inp_en(inp_en), .inp_addr(inp_addr), .inp_data(mem_inp_dout),

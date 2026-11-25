@@ -66,6 +66,7 @@ void VTAUopPush(VTACommandHandle cmd,
                 uint32_t opcode,
                 uint32_t use_imm,
                 int32_t imm_val) ;
+void VTAUopPushDw(VTACommandHandle cmd, uint32_t dst_index, uint32_t src_index, uint32_t wgt_index, uint32_t emit);   //#### JO added (2026-11-24)
 
 void VTAUopLoopBegin(uint32_t extent,
                      uint32_t dst_factor,

@@ -71,7 +71,14 @@ void* VTABufferAlloc(size_t size) {
   return b;
 }
 
+//#### JO added (2026-11-25, docs/evta_dw_unit.md 8): called with every buffer VTABufferFree gets (VTABundle.cpp's depthwise
+//#### window-weight cache drops its entry for that address; the pool can hand the address out again with other contents).
+extern "C" {
+void (*VTABufferFreeHook)(void *) = nullptr;
+}
+
 void VTABufferFree(void* buffer) {
+  if (VTABufferFreeHook) VTABufferFreeHook(buffer);
   vta::DataBuffer* b = vta::DataBuffer::FromHandle(buffer);
   {
     std::lock_guard<std::mutex> lock(buf_pool_mutex);
@@ -229,6 +236,11 @@ void VTAUopPush(VTACommandHandle cmd,
   static_cast<vta::CommandQueue*>(cmd)->record_kernel()
       ->Push(mode, reset_out, dst_index, src_index,
              wgt_index, opcode, use_imm, imm_val);
+}
+
+//#### JO added (2026-11-24, docs/evta_dw_unit.md): a depthwise window step (bitstreams "_dw")
+void VTAUopPushDw(VTACommandHandle cmd, uint32_t dst_index, uint32_t src_index, uint32_t wgt_index, uint32_t emit) {
+  static_cast<vta::CommandQueue*>(cmd)->record_kernel()->PushDw(dst_index, src_index, wgt_index, emit != 0);
 }
 
 void VTAUopLoopBegin(VTACommandHandle cmd,

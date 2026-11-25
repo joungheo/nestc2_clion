@@ -126,6 +126,26 @@ class UopKernel {
       }
     }
   }
+  //#### JO added (2026-11-24, docs/evta_dw_unit.md 3): a step of a depthwise window GEMM (dw_win): uop bit VTA_UOP_DW_EMIT =
+  //#### emit; no VerifyDep (the window-filling steps do not write acc)
+  void PushDw(uint32_t dst_index, uint32_t src_index, uint32_t wgt_index, bool emit) {
+    VTAUop op;
+    memset(&op, 0, sizeof op);
+    op.dst_idx = dst_index;
+    op.src_idx = src_index;
+    op.wgt_idx = wgt_index;
+    if (emit) {
+      uint64_t b;
+      memcpy(&b, &op, sizeof b);
+      b |= 1ull << VTA_UOP_DW_EMIT;
+      memcpy(&op, &b, sizeof b);
+    }
+    seq_.push_back(op);
+    if (mode_ == 0xFFFFFFFF) mode_ = 0; else CHECK(mode_ == 0);
+    if (reset_out_ == 0xFFFFFFFF) reset_out_ = 0; else CHECK(reset_out_ == 0);
+    dw_ = true;
+  }
+  bool dw_{false};
   /*! \brief Dump kernel micro ops to stdout. */
   void Dump() {
     uint32_t size = seq_.size();

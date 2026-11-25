@@ -34,6 +34,11 @@
 int alux_test(unsigned seed, int ninsn);
 #endif
 
+#ifdef VTA_DWU
+//#### JO added (2026-11-24, docs/evta_dw_unit.md): sim/dwu_test.cc, the depthwise window mode
+int dwu_test(unsigned seed, int ho, int wo, int s);
+#endif
+
 int main(void) {
 #if DEBUG == 1
     printParameters();
@@ -67,6 +72,14 @@ int main(void) {
       const char *e = getenv("VTA_ALUX_SEEDS");
       int seeds = e ? atoi(e) : 20;
       for (int s = 1; s <= seeds; s++) status |= alux_test(s, 48);
+    }
+#endif
+
+#ifdef VTA_DWU
+    {
+      static const int cs[][3] = {{1, 1, 1}, {2, 3, 1}, {4, 56, 1}, {14, 14, 1}, {7, 7, 2}, {3, 28, 2}, {1, 5, 2}, {5, 9, 1}};
+      unsigned seed = 1;
+      for (auto &c : cs) status |= dwu_test(seed++, c[0], c[1], c[2]);
     }
 #endif
 

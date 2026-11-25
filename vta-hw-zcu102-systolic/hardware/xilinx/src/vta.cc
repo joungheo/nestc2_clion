@@ -432,6 +432,11 @@ bool gemm_sa_issue(
         u.range(VTA_SA_RQ + 7, VTA_SA_RQ + 3) = insn.rq_shift;
         u.range(VTA_SA_RQ + 15, VTA_SA_RQ + 8) = (ap_uint<8>) insn.rq_lo;
         u.range(VTA_SA_RQ + 23, VTA_SA_RQ + 16) = (ap_uint<8>) insn.rq_hi;
+#ifdef VTA_DWU
+        //#### JO added (2026-11-24, docs/evta_dw_unit.md 3): depthwise window mode, the step's emit bit
+        u[VTA_SA_DW] = insn.dw_win;
+        u[VTA_SA_DW + 1] = uop[VTA_UOP_DW_EMIT];
+#endif
         gemm_uop.write(u);
       }
       dst_offset_in += insn.dst_factor_in;
@@ -456,8 +461,42 @@ void gemm_sa_csim(
   bus_T out_mem[VTA_ACC_BUFF_DEPTH][OUT_MAT_AXI_RATIO],
   hls::stream<bool> &g2l_dep_queue,
   hls::stream<bool> &g2s_dep_queue) {
+#ifdef VTA_DWU
+  static inp_T win[3][VTA_BLOCK_IN];   //#### JO added (2026-11-24): the depthwise window (docs/evta_dw_unit.md 3)
+#endif
   while (!gemm_uop.empty()) {
     sa_uop_T u = gemm_uop.read();
+#ifdef VTA_DWU
+    if (u[VTA_SA_DW]) {
+      acc_idx_T d = u.range(VTA_LOG_ACC_BUFF_DEPTH - 1, 0);
+      inp_idx_T si = u.range(VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH - 1, VTA_LOG_ACC_BUFF_DEPTH);
+      wgt_idx_T wi = u.range(VTA_SA_UOP_B - 1, VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH);
+      inp_T x[VTA_BATCH][VTA_BLOCK_IN];
+      read_tensor<bus_T, inp_T, inp_idx_T, VTA_BUS_WIDTH, VTA_INP_WIDTH, VTA_BATCH, VTA_BLOCK_IN>(si, inp_mem, x);
+      for (int j = 0; j < VTA_BLOCK_IN; j++) { win[0][j] = win[1][j]; win[1][j] = win[2][j]; win[2][j] = x[0][j]; }
+      if (u[VTA_SA_DW + 1]) {
+        wgt_T w[VTA_BLOCK_OUT][VTA_BLOCK_IN];
+        read_tensor<bus_T, wgt_T, wgt_idx_T, VTA_BUS_WIDTH, VTA_WGT_WIDTH, VTA_BLOCK_OUT, VTA_BLOCK_IN>(wi, wgt_mem, w);
+        acc_T a[VTA_BATCH][VTA_BLOCK_OUT];
+        read_tensor<bus_T, acc_T, acc_idx_T, VTA_BUS_WIDTH, VTA_ACC_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(d, acc_mem, a);
+        out_T o[VTA_BATCH][VTA_BLOCK_OUT];
+        for (int j = 0; j < VTA_BLOCK_OUT; j++) {
+          sum_T t = 0;
+          for (int k = 0; k < 3; k++) t += (sum_T) (mul_T) (win[k][j] * w[j][k]);
+          a[0][j] += (acc_T) t;
+          o[0][j] = requant(a[0][j], (out_T) a[0][j].range(VTA_OUT_WIDTH - 1, 0), u[VTA_SA_RQ],
+                            (ap_uint<2>) u.range(VTA_SA_RQ + 2, VTA_SA_RQ + 1), (ap_uint<5>) u.range(VTA_SA_RQ + 7, VTA_SA_RQ + 3),
+                            (ap_int<8>) u.range(VTA_SA_RQ + 15, VTA_SA_RQ + 8), (ap_int<8>) u.range(VTA_SA_RQ + 23, VTA_SA_RQ + 16));
+        }
+        write_tensor<bus_T, acc_T, acc_idx_T, VTA_BUS_WIDTH, VTA_ACC_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(d, a, acc_mem);
+        write_tensor<bus_T, out_T, acc_idx_T, VTA_BUS_WIDTH, VTA_OUT_WIDTH, VTA_BATCH, VTA_BLOCK_OUT>(d, o, out_mem);
+      }
+      if (u[VTA_SA_UOP_B + 3]) g2l_dep_queue.write(1);
+      if (u[VTA_SA_UOP_B + 4]) g2s_dep_queue.write(1);
+      if (u[VTA_SA_UOP_B + 1]) gemm_done.write(1);
+      continue;
+    }
+#endif
     acc_idx_T dst_idx = u.range(VTA_LOG_ACC_BUFF_DEPTH - 1, 0);
     inp_idx_T src_idx = u.range(VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH - 1, VTA_LOG_ACC_BUFF_DEPTH);
     wgt_idx_T wgt_idx = u.range(VTA_SA_UOP_B - 1, VTA_LOG_ACC_BUFF_DEPTH + VTA_LOG_INP_BUFF_DEPTH);

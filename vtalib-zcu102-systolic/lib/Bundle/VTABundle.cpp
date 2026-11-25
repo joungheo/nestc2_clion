@@ -36,6 +36,9 @@
 #endif
 //#### JO added (2026-11-25): the int8 input API (not in vta/vtalib's VTABundle.h, which this file is built with)
 #include "../../include/Bundle/VTAInputInt8.h"
+//#### JO added (2026-11-24, docs/evta_dw_unit.md): declared here as VTARequant below (the board build includes vta/vtalib's
+//#### runtime.h); defined in this copy's lib/zcu102/api.cc and lib/simulator/runtime.cc
+extern "C" void VTAUopPushDw(VTACommandHandle cmd, uint32_t dst_index, uint32_t src_index, uint32_t wgt_index, uint32_t emit);
 
 #define RESET_IOCTL _IOWR('X', 101, unsigned long)
 
@@ -175,8 +178,11 @@ struct gemmop_mxn {
   //#### JO added (2026-11-10, EVTA_CONV_BURST): wgt entries between the weights of consecutive kernels in gemmop_1x1 (1: one
   //#### input channel block's weights loaded per GEMM; cBlocks: all of a thread's weights loaded at once, [kernel][channel])
   uint32_t wgt_kernel_factor_ = 1;
+  //#### JO added (2026-11-24, docs/evta_dw_unit.md): 1 = the depthwise window program (gemmop_dw), another uop kernel
+  uint32_t dw_win_ = 0;
   bool operator==(gemmop_mxn &op){
     if(tile_size_h_==op.tile_size_h_ &&
+       dw_win_ == op.dw_win_ &&
        in_kernel_factor_ == op.in_kernel_factor_ &&
        wgt_kernel_factor_ == op.wgt_kernel_factor_ &&
        tile_size_w_ == op.tile_size_w_ &&
@@ -269,6 +275,27 @@ int gemmop_mxn(void *param,VTACommandHandle cmdh ) {
   VTAUopLoopEnd(cmdh);
   VTAUopLoopEnd(cmdh);
 
+  return 0;
+}
+
+//#### JO added (2026-11-24, docs/evta_dw_unit.md 3, 5): the depthwise 3 x 3 conv in window mode (bitstreams "_dw"). Weights:
+//#### KH entries per block (entry ky: row j = channel j, column kx). it_out = the blocks (dst + T, src + one input tile,
+//#### wgt + KH), it_in = ky (src + one input row, wgt + 1); uops = the output rows x the input pixels of a row
+//#### ((tile_w - 1) * s + KW steps; the first two fill the window, then every s-th writes the next output pixel). One weight
+//#### block per (block, ky) over the whole tile: the run is longer than gemm_sa's 17-cycle weight fill.
+int gemmop_dw(void *param, VTACommandHandle cmdh) {
+  struct gemmop_mxn *ctx = (struct gemmop_mxn *)(param);
+  const uint32_t s = ctx->stride_w_, wi = (ctx->tile_size_w_ - 1) * s + ctx->kernel_w_;
+  VTAUopLoopBegin(cmdh, ctx->n_kernel_, ctx->tile_size_h_ * ctx->tile_size_w_, ctx->in_kernel_factor_, ctx->kernel_h_);
+  VTAUopLoopBegin(cmdh, ctx->kernel_h_, 0, ctx->in_tile_size_w_, 1);
+  for (uint32_t oy = 0; oy < ctx->tile_size_h_; oy++)
+    for (uint32_t x = 0; x < wi; x++) {
+      const bool e = x + 1 >= ctx->kernel_w_ && (x + 1 - ctx->kernel_w_) % s == 0;
+      VTAUopPushDw(cmdh, ctx->output_base_addr_ + oy * ctx->tile_size_w_ + (e ? (x + 1 - ctx->kernel_w_) / s : 0),
+                   ctx->input_base_addr_ + oy * ctx->stride_h_ * ctx->in_tile_size_w_ + x, ctx->weight_base_addr_, e);
+    }
+  VTAUopLoopEnd(cmdh);
+  VTAUopLoopEnd(cmdh);
   return 0;
 }
 
@@ -746,6 +773,27 @@ bool VTAHasAluMul() {
   }
   return on;
 }
+
+//#### JO added (2026-11-24, docs/evta_dw_unit.md): the depthwise window unit of gemm_sa (Makefile DWU=1, "_dw" in the bitstream
+//#### name), always in the simulator; EVTA_DWU=0|1 overrides. dw_convolution_evta then runs 3 x 3 depthwise convs in window mode
+bool VTAHasDwUnit() {
+  static int on = -1;
+  if (on < 0) {
+    const char *e = getenv("EVTA_DWU");
+    if (e && *e) on = atoi(e) > 0;
+    else {
+#if (NESTC_USE_VTASIM)
+      on = 1;
+#else
+      char name[256] = {0};
+      FILE *f = fopen("/tmp/evta_bitstream", "r");
+      on = f && fgets(name, sizeof(name), f) && strstr(name, "_dw") && strncmp(name, "FAILED", 6);
+      if (f) fclose(f);
+#endif
+    }
+  }
+  return on;
+}
 static void *outLutBuffer(const int8_t *T) {
   static std::mutex m;
   static std::map<const int8_t *, std::pair<void *, std::vector<int8_t>>> bufs;
@@ -917,6 +965,9 @@ static void pushBiasReset(VTACommandHandle &cmdh, uint32_t idEVTA, uint32_t base
 struct ConvDw {
   void *shift;   // int32 per channel, VTA buffer
   int lo, hi;
+  //#### JO added (2026-11-24, docs/evta_dw_unit.md): the weights for the window mode (KH entries per block, gemmop_dw),
+  //#### else nullptr (the diagonal weights of the bundle, gemmop_mxn)
+  void *winW = nullptr;
 };
 // acc[base + f * T + i] >>= acc[src + f], i < T, f < nF
 struct DwShrContext {
@@ -1339,7 +1390,7 @@ void conv_kernel(uint32_t sizeOutTileH,
                              ((max(resizedOutTileW, minW0) - 1) * stride_size + KW);
     uint32_t n = min(KN / nVirtualThread / 16, ACC_MEM_ENTRY / nVirtualThread / (padT + 2));
     n = min(n, INP_MEM_ENTRY / nVirtualThread / inTile0);
-    n = min(n, WGT_MEM_ENTRY / nVirtualThread / (KH * KW));
+    n = min(n, WGT_MEM_ENTRY / nVirtualThread / (dw->winW ? KH : KH * KW));   //#### JO: window mode KH (2026-11-24)
     for (; n > 0; n--)
       if ((KN / 16) % (n * nVirtualThread) == 0) break;
     nFilterinLoop = n;
@@ -1584,7 +1635,9 @@ void conv_kernel(uint32_t sizeOutTileH,
           if (channelIdx == 0 && !wgtKeep)   //#### JO: + !wgtKeep (2026-11-16)
             loadBuffer2D(vtaCmdH, vta_filter_buf, filter_offset, cBlocks, nFilterinLoop, cBlocks, 0, 0, 0, 0,
                          weightSramBaseAddr, 1);
-        } else
+        } else if (dw && dw->winW)   //#### JO added (2026-11-24): window-mode weights, KH entries per block
+          loadBuffer2D(vtaCmdH, dw->winW, filter_offset / KW, KH, nFilterinLoop, KH, 0, 0, 0, 0, weightSramBaseAddr, 1);
+        else
           loadBuffer2D(vtaCmdH, vta_filter_buf, filter_offset, KH * KW, nFilterinLoop, KH * KW * cBlocks, 0, 0, 0, 0,
                        weightSramBaseAddr, 1);
         VTADepPush(vtaCmdH, 1, 2);
@@ -1625,6 +1678,7 @@ void conv_kernel(uint32_t sizeOutTileH,
         if (dw) {   //#### JO added (2026-11-08)
           gemm_ctx.input_base_addr_ = threadIdx * (INP_MEM_ENTRY / nVirtualThread);
           gemm_ctx.in_kernel_factor_ = resizedInTileH * resizedInTileW;
+          gemm_ctx.dw_win_ = dw->winW != nullptr;   //#### JO added (2026-11-24)
         }
 
         void **uopHandle_gemm;
@@ -1644,6 +1698,9 @@ void conv_kernel(uint32_t sizeOutTileH,
           vGemmUOpHandle[idEVTA].push_back(newHandle);
         }
 
+        if (gemm_ctx.dw_win_)   //#### JO added (2026-11-24, docs/evta_dw_unit.md): depthwise window mode
+          VTAPushGEMMOp(vtaCmdH, uopHandle_gemm, &gemmop_dw, &gemm_ctx, 0);
+        else
         if(KH>1)
           VTAPushGEMMOp(vtaCmdH, uopHandle_gemm, &gemmop_mxn, &gemm_ctx, 0);
         else
@@ -4151,9 +4208,11 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
                          res ? res->a2 : 0, res ? res->b2 : 0, res && res->add ? res->buf == output : 0,
                          res ? res->madd : 0, res ? res->mulV : 0, res ? res->mulT : 0,   //#### JO (2026-11-15)
                          pool != nullptr, stream, gEvtaClipHi,   //#### JO: + gEvtaClipHi (2026-11-06)
-                         dw != nullptr, dw ? dw->lo : 0, dw ? dw->hi : 0};   //#### JO: + depthwise (2026-11-08)
+                         dw != nullptr, dw ? dw->lo : 0, dw ? dw->hi : 0,   //#### JO: + depthwise (2026-11-08)
+                         dw && dw->winW};   //#### JO: + window mode (2026-11-24)
   //#### JO changed (2026-11-02): a fused max pool writes its output, not the conv's
-  void *replayBufs[] = {input, kernel, doBias ? bias : nullptr, pool ? pool->out : (void *)output,
+  //#### JO changed (2026-11-24): the window-mode weights instead of the kernel (docs/evta_dw_unit.md)
+  void *replayBufs[] = {input, dw && dw->winW ? dw->winW : (void *)kernel, doBias ? bias : nullptr, pool ? pool->out : (void *)output,
                         res && res->add ? res->buf : nullptr, dw ? dw->shift : nullptr,
                         res && res->T ? outLutBuffer(res->T) : nullptr};
   void *dumpBuf = pool ? pool->out : (void *)output;
@@ -5221,6 +5280,45 @@ int convolution_wo_tr_res(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *
 //#### shift int32 per channel (0..31); out = clip((bias + sum) >> shift, lo, hi). The schedule (nVirtualThread, tiles)
 //#### is shrunk until a block fits (an odd number of blocks: nVirtualThread 1); EVTA_SCHED takes it with KN 0.
 //#### EVTA_RES_CHECK=1 compares with a CPU loop of the same arithmetic.
+//#### JO added (2026-11-24, docs/evta_dw_unit.md 3): the window-mode weights of a depthwise kernel buffer (bundle layout:
+//#### block b, tap ky * KW + kx at entry b * KH * KW + tap, diagonal byte (c % 16) * 17) -> entry b * KH + ky, byte j * 16 + kx.
+//#### Made once per kernel buffer. 2026-11-25: the entry is dropped when VTABufferFree gets the kernel's address
+//#### (VTABufferFreeHook; a freed buffer's address can come back from the pool with other taps). Before, every call
+//#### invalidated and re-read the whole kernel to compare the taps: +0.05 ms per call at 576 / 960 channels (board, 375 MHz).
+extern "C" void (*VTABufferFreeHook)(void *);
+static std::mutex dwWinMutex;
+static std::map<void *, void *> dwWinBufs;   // kernel -> window-mode weights
+static void dwWindowFreed(void *buf) {
+  void *w = nullptr;
+  {
+    std::lock_guard<std::mutex> g(dwWinMutex);
+    auto it = dwWinBufs.find(buf);
+    if (it == dwWinBufs.end()) return;
+    w = it->second;
+    dwWinBufs.erase(it);
+  }
+  VTABufferFree(w);
+}
+static void *dwWindowWeights(void *kernel, int C, int KH, int KW) {
+  std::lock_guard<std::mutex> g(dwWinMutex);
+  VTABufferFreeHook = dwWindowFreed;
+  void *&e = dwWinBufs[kernel];
+  if (e) return e;
+  VTABufferInvalidate(kernel, 0, (size_t)(C / 16) * KH * KW * 256);
+  const int8_t *k = (const int8_t *)VTABufferGetVirtAddr(kernel);
+  const size_t nb = (size_t)(C / 16) * KH * 256;
+  e = VTABufferAlloc(nb);
+  int8_t *w = (int8_t *)VTABufferGetVirtAddr(e);
+  memset(w, 0, nb);
+  for (int blk = 0; blk < C / 16; blk++)
+    for (int ky = 0; ky < KH; ky++)
+      for (int j = 0; j < 16; j++)
+        for (int kx = 0; kx < KW; kx++)
+          w[((size_t)blk * KH + ky) * 256 + j * 16 + kx] = k[((size_t)blk * KH * KW + ky * KW + kx) * 256 + j * 17];
+  VTABufferFlush(e, 0, nb);
+  return e;
+}
+
 int dw_convolution_evta(int8_t *input, void *kernel, void *bias, void *shift, int8_t *output, int N, int H, int W, int C,
                         int KH, int KW, int pad, int stride, int out_h, int out_w, int lo, int hi, void *vtaCmdH,
                         int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA) {
@@ -5244,6 +5342,13 @@ int dw_convolution_evta(int8_t *input, void *kernel, void *bias, void *shift, in
     else { printf("dw_convolution_evta: no schedule\n"); return -1; }
   }
   ConvDw d = {shift, lo, hi};
+  //#### JO added (2026-11-24, docs/evta_dw_unit.md): 3 x 3 in window mode on a "_dw" bitstream when a tile's uops (rows x
+  //#### input pixels of a row) fit a quarter of the uop buffer; the weights rearranged once per kernel buffer
+  {
+    const uint32_t th = std::max<uint32_t>(tileHSize, evtaMinTile(MIN_H_SIZE)), tw = std::max<uint32_t>(tileWSize, evtaMinTile(MIN_W_SIZE));
+    if (KH == 3 && KW == 3 && VTAHasDwUnit() && th * ((tw - 1) * stride + KW) <= GEMM_UOP_BUFF_DEPTH / 4)
+      d.winW = dwWindowWeights(kernel, C, KH, KW);
+  }
   int rc = convolution_wo_tr_impl(input, (int8_t *)kernel, (int32_t *)bias, output, N, H, W, C, C, KH, KW, pad, stride,
                                   false, true, 0, out_h, out_w, vtaCmdH, nVirtualThread, tileHSize, tileWSize, idEVTA,
                                   nullptr, nullptr, &d);

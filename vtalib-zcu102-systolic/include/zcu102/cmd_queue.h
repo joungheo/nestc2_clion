@@ -981,6 +981,7 @@ class CommandQueue {
     //insn->reset_reg = kernel->reset_out_;
     insn->reset_reg = kernel->reset_out_ == 2 ? 1 : kernel->reset_out_;
     insn->bias_reset = kernel->reset_out_ == 2;
+    insn->dw_win = kernel->dw_;   //#### JO added (2026-11-24, docs/evta_dw_unit.md)
     ApplyRequant(insn);   //#### JO added (2026-11-04)
     insn->uop_bgn = kernel->sram_begin_;
     insn->uop_end = kernel->sram_end_;

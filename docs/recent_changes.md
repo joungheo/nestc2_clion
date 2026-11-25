@@ -21,6 +21,17 @@
 
 ---
 
+### 2026-11-25 ubuntu2 (이 commit, "depthwise window unit") — depthwise 창 장치 `_dw`: multi4 MobileNetV2Tf 260.1 → 287.4 fps
+- **바뀐 것:** ISA(`dw_win`, uop `dw` / `emit`), `vta-hw-zcu102-systolic` / `-multi4` HLS·RTL(`sa_dw.v`, Makefile `DWU=1`), multi4 `place_d.tcl` / `run_flow.sh`
+  `VTA_CONTAIN=1`, `vtalib-zcu102-systolic`(`dw_convolution_evta` 창 판, `VTAHasDwUnit`, `EVTA_DWU`, `VTABufferFreeHook`, 시뮬레이터). bundle / 컴파일러는 그대로.
+  [evta_dw_unit.md](evta_dw_unit.md) §9.
+- **다른 쪽이 할 일:**
+  - `실행 파일 다시 빌드`(systolic vtalib의 build dir 모두; 새 vtalib이 없으면 `_dw` bitstream에서도 대각 GEMM으로 돈다). `_dw`가 없는 bitstream에서는 출력·시간 그대로.
+  - `bitstream`: 보드에 이미 있다. multi4 `/lib/firmware/vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_amul_dw_400mhz_hp304_rq.bin`
+    (`bit/evta_multi4_amul_dw_400MHz_261125/`), single `..._16_16_19_18_sa_alux3_dw_375mhz_rq.bin`(`bit/evta_single_alux3_dw_375MHz_261125/`).
+    `SYS_BIN` 기본은 아직 `_amul`이다. 쓰려면 `BIN=<파일>`.
+  - multi4 bitstream을 새로 빌드할 때는 `VTA_CONTAIN=1`을 붙인다(`y219route/README.md`).
+
 ### 2026-11-25 ubun 1cdf422d — vtalib-systolic: 호출마다 CPU 시간을 줄임 (MobileNetV2Tf multi4 257.5 → 262.2 fps)
 - **바뀐 것:** `vtalib-zcu102-systolic/include/zcu102/cmd_queue.h`(buffer 조합마다 명령 사본 `EVTA_REPLAY_VARIANTS`, 다음 replay 짐작), `lib/zcu102/api.cc`(buffer pool을 thread마다;
   `EVTA_BUF_POOL_SHARED=1`이면 전처럼). 출력 바이트는 같다. [mobilenetv2_multi4_sw.md](mobilenetv2_multi4_sw.md) §6.
