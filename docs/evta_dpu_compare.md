@@ -337,6 +337,53 @@ DPU S(270장/s)를 넘으려면 copy당 14.81 ms가 되어야 한다. 지금은 
 
 **다음:** depthwise를 더 효율적으로 한다. 지금은 16×16 GEMM의 대각선만 쓴다. depthwise는 copy당 약 6 ms로 가장 큰 덩어리다([evta_todo.md](evta_todo.md) §5).
 
+### 6.7 MobileNetV2Tf multi4: 호출 종류별 시간, EVTA run 안의 GEMM 하한 (2026-11-25, ubun)
+
+depthwise 장치와 conv 개선을 정하려고 다시 쟀다.
+
+**조건:**
+- bitstream: `..._4evta_sa_amul_400mhz_hp322_rq.bin`. lockstep 없음, 25회.
+- 실행 파일: 11-24 `build_multievtax4_systimed`(vtalib `16ff33a`). bundle은 11-22에 만든 것이다.
+- §6.6의 새 schedule 세 개는 `EVTA_SCHED`로 넣었다.
+
+**처리량:** 4개 동시 copy당 16.43–16.75 ms, **238.3 fps**. copy 0 혼자 14.84 ms(67.4 fps).
+
+**호출 종류별 시간**(`timing_<cpp>.csv`를 run 2부터 run마다 더한 값의 중앙값, ms):
+
+| | 혼자 (`singlevta`) | 4개 동시 (copy 넷) |
+|---|---|---|
+| conv(1×1 / 3×3, conv0 포함, EVTA) | 7.89 | 8.83 / 8.95 / 9.01 / 8.83 |
+| depthwise(`dw_convolution_evta`) | 5.95 | 6.29 / 6.35 / 6.37 / 6.31 |
+| `VTABufferInvalidate` | 0.48 | 0.50 |
+| fc(EVTA) | 0.29 | 0.32–0.36 |
+| 그 밖 | 약 0.2 | 약 0.3 |
+
+- 4개가 함께 돌아 늘어나는 몫은 대부분 conv다(+1.0 ms). depthwise는 +0.35 ms다.
+
+**EVTA run 안**(`EVTA_REPLAY_LOG=2`, `singlevta` 혼자, 마지막 run). GEMM 하한 = GEMM 안쪽 반복 수 / 400 MHz.
+
+| | 호출 | 벽시계 | EVTA run 합 | GEMM 하한 | ALU 반복 | DRAM wgt / inp / out |
+|---|---|---|---|---|---|---|
+| conv | 37 | 8.74 ms | 8.11 ms | 3.76 ms | 50,550 | 3.4 / 4.0 / 4.2 MB |
+| depthwise | 17 | 6.24 ms | 5.84 ms | 3.60 ms | 143,864 | 1.3 / 3.9 / 2.2 MB |
+| fc | 1 | 0.31 ms | 0.29 ms | 0.01 ms | 0 | 1.2 MB |
+
+- **depthwise는 연산이 묶고 있다.**
+  - 대각 GEMM 하한 3.60 ms와 채널별 SHR(ALU 143,864번, II 2로 약 0.72 ms)을 더하면 run 시간의 약 75 %다.
+  - 무거운 층은 112×112 / 56×56의 첫 세 층이다(0.75–1.0 ms씩).
+  - tap 9개를 한 번에 하는 장치(144 MAC/cycle)에 채널별 shift까지 넣으면, GEMM 하한은 약 0.4 ms가 되고 ALU 패스는 없어진다.
+  - 그러면 DMA(inp 3.9 + out 2.2 MB, weight는 대각을 풀어 1/16)가 남는다. depthwise는 2–2.5 ms 정도로 보고, multi4는 copy당 12.5–13 ms, 약 305–320 fps가 된다(계산값).
+- **conv는 EVTA run이 GEMM 하한의 2.2배다**(8.11 대 3.76 ms). 4개 동시이면 1.0 ms가 더 는다. depthwise 다음의 큰 덩어리다.
+
+**다시 재는 법**(`vtabundles_xcmpl/`):
+```bash
+S='112,112,32,0,3,1:2,4,112;112,112,32,16,1,1:1,16,112;112,112,16,96,1,1:2,2,112'
+sudo /bin/sh -c "EVTA_SCHED=\"$S\" hw_multievtax4/script/run_prof.sh -s _systimed -n 25 MultiEVTAMobileNetV2TfTest"
+sudo /bin/sh -c "PROF_EXE=singlevtaMobileNetV2TfBundle EVTA_REPLAY_LOG=2 EVTA_SCHED=\"$S\" hw_multievtax4/script/run_prof.sh -s _systimed -n 3 MultiEVTAMobileNetV2TfTest"
+```
+- `EVTA_RUN` 줄의 필드는 EVTA, replay id, segment, 명령 수, us, GEMM 반복, ALU 반복, 그리고 uop / wgt / inp / acc / out 바이트다.
+- 같은 모양의 호출은 replay id를 같이 쓴다(40개 id, 호출 55개). 그래서 마지막 run의 `segment 0` 순서와 `timing.csv`의 EVTA 호출 순서로 짝을 지었다.
+
 ## 7. 조건이 다른 점 (해석할 때 주의)
 
 - **calibration 셋:**
