@@ -364,25 +364,44 @@ depthwise 장치와 conv 개선을 정하려고 다시 쟀다.
 
 | | 호출 | 벽시계 | EVTA run 합 | GEMM 하한 | ALU 반복 | DRAM wgt / inp / out |
 |---|---|---|---|---|---|---|
-| conv | 37 | 8.74 ms | 8.11 ms | 3.76 ms | 50,550 | 3.4 / 4.0 / 4.2 MB |
+| conv(`convolution_wo_tr`) | 35 | 8.66 ms | 7.77 ms | 3.73 ms | 46,550 | 2.2 / 4.0 / 4.2 MB |
 | depthwise | 17 | 6.24 ms | 5.84 ms | 3.60 ms | 143,864 | 1.3 / 3.9 / 2.2 MB |
 | fc | 1 | 0.31 ms | 0.29 ms | 0.01 ms | 0 | 1.2 MB |
+| avgpool | 1 | 0.08 ms | 0.06 ms | 0.02 ms | 4,000 | |
 
 - **depthwise는 연산이 묶고 있다.**
   - 대각 GEMM 하한 3.60 ms와 채널별 SHR(ALU 143,864번, II 2로 약 0.72 ms)을 더하면 run 시간의 약 75 %다.
   - 무거운 층은 112×112 / 56×56의 첫 세 층이다(0.75–1.0 ms씩).
   - tap 9개를 한 번에 하는 장치(144 MAC/cycle)에 채널별 shift까지 넣으면, GEMM 하한은 약 0.4 ms가 되고 ALU 패스는 없어진다.
   - 그러면 DMA(inp 3.9 + out 2.2 MB, weight는 대각을 풀어 1/16)가 남는다. depthwise는 2–2.5 ms 정도로 보고, multi4는 copy당 12.5–13 ms, 약 305–320 fps가 된다(계산값).
-- **conv는 EVTA run이 GEMM 하한의 2.2배다**(8.11 대 3.76 ms). 4개 동시이면 1.0 ms가 더 는다. depthwise 다음의 큰 덩어리다.
+- **conv는 EVTA run이 GEMM 하한의 2.1배다**(7.77 대 3.73 ms). 4개 동시이면 1.0 ms가 더 는다. depthwise 다음의 큰 덩어리다.
+
+**conv 쪽에서 GEMM 하한 밖의 시간**(같은 측정을 층별로 나눈 것; 혼자 / 4개 동시 copy 0, ms):
+
+| 무엇 | 시간 | 내용 |
+|---|---|---|
+| conv0(stream) | 1.66 / 1.83 (GEMM 하한 0.31) | **CPU 입력 묶기가 묶고 있다.** `EVTA_INPUT_STREAM=0`으로 나누면 CPU `preprocess_conv0pack_stream` 1.31 + EVTA run 0.78(0.84 벽시계)이다. stream은 그중 0.5 ms를 겹칠 뿐이다 |
+| 호출마다 CPU 쪽 | conv 0.89 + depthwise 0.39 | 벽시계 − EVTA run. 호출마다 20–25 us(replay 재배치, flush, 시작 / 기다림) |
+| `VTABufferInvalidate` | 0.48 / 0.50 | EVTA conv / depthwise 출력마다 한 번(가장 큰 것은 expanded_conv_1 expand 출력 1.2 MB의 0.09 ms). 출력을 읽는 쪽이 EVTA뿐이어도 부른다 |
+| 7×7 project 세 개(960 → 160 / 320) | 1.02 (GEMM 하한 0.30) | weight LOAD에 묶임(150–300 KB, 0.6–0.65 GB/s) |
+| expanded_conv_1 expand(112×112, 16 → 96) | 0.78 / 0.88 (GEMM 하한 0.38) | 출력 1.2 MB STORE |
+| 나머지 conv 28개 | 하한의 1.5–2배 | run마다 약 30–60 us 더 |
+
+- 먼저 할 것(소프트웨어만, EVTA 1개에도 듣는다):
+  1. conv0 입력 묶기를 빠르게 한다(1.31 ms; 입력 600 KB float → 416 KB).
+  2. 출력을 EVTA만 읽는 buffer의 invalidate를 뺀다(0.5 ms). 단, CPU가 그 buffer에 남긴 dirty line이 없는지(buffer pool 재사용) 확인해야 한다.
+  3. 호출마다의 CPU 쪽 시간을 줄인다(1.3 ms).
+- 셋을 합쳐 copy당 2 ms 남짓이면, depthwise 장치 없이도 DPU S(14.8 ms)에 닿는다(계산값).
 
 **다시 재는 법**(`vtabundles_xcmpl/`):
 ```bash
 S='112,112,32,0,3,1:2,4,112;112,112,32,16,1,1:1,16,112;112,112,16,96,1,1:2,2,112'
 sudo /bin/sh -c "EVTA_SCHED=\"$S\" hw_multievtax4/script/run_prof.sh -s _systimed -n 25 MultiEVTAMobileNetV2TfTest"
 sudo /bin/sh -c "PROF_EXE=singlevtaMobileNetV2TfBundle EVTA_REPLAY_LOG=2 EVTA_SCHED=\"$S\" hw_multievtax4/script/run_prof.sh -s _systimed -n 3 MultiEVTAMobileNetV2TfTest"
+# conv0 without the input stream (CPU pack and EVTA run apart): add EVTA_INPUT_STREAM=0 to the line above
 ```
 - `EVTA_RUN` 줄의 필드는 EVTA, replay id, segment, 명령 수, us, GEMM 반복, ALU 반복, 그리고 uop / wgt / inp / acc / out 바이트다.
-- 같은 모양의 호출은 replay id를 같이 쓴다(40개 id, 호출 55개). 그래서 마지막 run의 `segment 0` 순서와 `timing.csv`의 EVTA 호출 순서로 짝을 지었다.
+- 같은 모양의 호출은 replay id를 같이 쓴다(40개 id, EVTA 호출 54개). 그래서 마지막 run의 `segment 0` 순서와 `timing.csv`의 EVTA 호출 순서로 짝을 지었다. EVTA run이 없는 호출(`preprocess_conv0pack_stream`)은 빼야 한다.
 
 ## 7. 조건이 다른 점 (해석할 때 주의)
 
