@@ -11,16 +11,20 @@ DPU S(B4096 하나, 270장/s)를 EVTA 4개(`MultiEVTAMobileNetV2TfTest`)로 넘�
 | 단계 | 무엇을 | 혼자 1장 | 4개 동시 | commit |
 |---|---|---|---|---|
 | 출발 (§6.7) | 11-22 bundle + 새 schedule(`EVTA_SCHED`) | 14.84 ms | 238.3 fps | |
-| conv0 입력 묶기 (§6.8) | float → int8 + 묶기를 NEON으로 다시 씀 | 14.35 ms | 246.5 fps | `b5c4e7d` |
-| invalidate 빼기 (§6.9) | EVTA만 읽는 출력의 cache invalidate를 안 함 | 13.85 ms | 254.5 fps | `0b1439b` |
-| 지금 컴파일러로 bundle 다시 만듦 | 위 둘 + schedule이 bundle 안에 | 13.43 ms¹ | **251.6 fps**² | 보드 bundle 19:00 |
-| int8 입력 (§6.10) | 미리 quantize한 `.i8`을 읽음(선택, 기본은 float) | 13.79 ms³ | **257.0 fps**² | `d4d8ddf2` |
+| conv0 입력 묶기 (§3.1) | float → int8 + 묶기를 NEON으로 다시 씀 | 14.35 ms | 246.5 fps | `b5c4e7d` |
+| invalidate 빼기 (§3.2) | EVTA만 읽는 출력의 cache invalidate를 안 함 | 13.85 ms | 254.5 fps | `0b1439b` |
+| bundle 다시 만듦 (§3.3) | 위 둘 + schedule이 bundle 안에 | 13.43 ms¹ | 251.6 fps² | 보드 19:00 |
+| int8 입력 (§3.4) | 미리 quantize한 `.i8`을 읽음(저녁부터 기본, 없으면 float) | | 257.0 fps² | `d4d8ddf2`, `9680e43f` |
+| 호출마다 CPU 시간 (§6) | 명령 사본, thread별 buffer pool, 다음 replay 짐작 | | 262.2 fps² | `1cdf422d` |
+| **지금** (공유 `_systimed`, 번갈아 3번) | int8 입력 | **13.04 ms**¹ / 13.54 ms³ | **263.5 fps** | |
+| | float 입력(`INPUT_INT8=0`) | 13.28 ms¹ / 13.77 ms³ | 256.4 fps | |
 
-1. single bitstream(`_alux3`) 위의 `MobileNetV2TfTest`. 나머지 "혼자"는 multi4 bitstream 위 copy 0(`singlevta`)다. 같은 bundle이라도 bitstream에 따라 0.4–0.5 ms 다르다.
-2. 같은 때 번갈아 3번씩 잰 평균(§4). DPU S 270장/s의 93.2 %(float), 95.2 %(int8)다.
-3. multi4 bitstream 위 copy 0, float 14.01 ms와 같은 때 잼.
+1. single bitstream(`_alux3`) 위의 `MobileNetV2TfTest`.
+2. 그 단계를 잴 때 같은 때 번갈아 3번씩 잰 평균(§4, §6.3). 위아래 줄의 측정 때가 달라서 단계끼리는 ±2 fps쯤 흔들린다.
+3. multi4 bitstream 위 copy 0(`singlevta`). 같은 bundle이라도 bitstream에 따라 0.4–0.5 ms 다르다.
 
-- 하루 동안 multi4가 238.3 → 251.6 fps(+5.6 %, float 입력), int8 입력이면 257.0 fps(+7.8 %)다.
+- 하루 동안 4개 동시 처리량이 238.3 → 263.5 fps(+10.6 %, int8 입력)이다. float 입력이면 256.4 fps(+7.6 %)다.
+- DPU S 270장/s와 견주면 int8 입력이 97.6 %, float 입력이 95.0 %다. DPU 수치가 미리 int8로 만든 입력으로 잰 것인지는 확인하지 못했다.
 - 모든 단계에서 출력 바이트가 같다. EVTA conv 출력 dump, `EVTA_RES_CHECK`, ImageNet val 출력 hash(200장, 1,000장)로 확인했다. 분류는 cat_285가 계속 282 (0.322088)이다.
 
 ## 2. 어디에 시간이 갔나 (출발점, §6.7)
@@ -88,6 +92,61 @@ conv 쪽에서 GEMM 하한(GEMM 반복 / 400 MHz) 밖의 시간이 소프트웨�
 
 ## 5. 남은 것
 
-- **호출마다 CPU 쪽 시간**(§6.7의 3번, 한 장 약 1.3 ms) — 아래 §6에 이어 적는다.
+- **호출마다 CPU 쪽 시간**(§6.7의 3번) — §6에서 줄였다. 남은 것은 호출 사이 bundle 코드(한 장 0.27 ms, 4개 동시 0.44 ms)와 run 시작(0.06 ms)이다.
 - **depthwise**(copy당 약 6 ms, 연산에 묶임): ubuntu2가 depthwise 장치를 만들고 있다. tap 9개를 한 번에 하고 채널별 shift를 넣으면 2–2.5 ms가 된다는 계산이다(§6.7).
 - **7×7 project conv 세 개**는 weight LOAD에 묶여 있다(1.02 ms 대 GEMM 하한 0.30 ms).
+
+## 6. 호출마다의 CPU 시간 (`1cdf422d`)
+
+### 6.1 나눠 잼 (`EVTA_CALL_TIME=1`, `9680e43f`)
+- vtalib-systolic `cmd_queue.h` `CallTimes`: replay된 EVTA 호출마다 시간을 아래로 나눠 thread가 끝날 때 replay id별로 찍는다(`EVTA_CALL_TIME` 줄).
+
+  | 이름 | 구간 |
+  |---|---|
+  | bundle | 앞 호출이 끝난 때 → vtalib conv 진입(`VTACallTimeMark`). bundle 코드, buffer alloc / free, epilogue 설정, `_timed`의 시간 재기 |
+  | pre | conv 진입 → `ReplayBegin`(key 만들기 등) |
+  | find | `ReplayBegin` → replay를 찾음(key 문자열, hash, buffer 주소가 바뀌었으면 명령 고치기 + flush) |
+  | start | `VTADeviceRunStart`(레지스터 쓰기) |
+  | hook | segment hook(conv0 입력 묶기, EVTA run과 겹침) |
+  | wait | `VTADeviceRunWait`(EVTA run) |
+
+- MobileNetV2Tf, int8 입력, 한 장(호출 54개)당:
+
+  | | 혼자 | 4개 동시 copy당 |
+  |---|---|---|
+  | bundle | 0.29 ms | 0.49–0.57 ms |
+  | pre | 0.02 ms | 0.03 ms |
+  | **find** | **0.24 ms** | **0.54–0.71 ms** |
+  | start | 0.06 ms | 0.06 ms |
+  | wait | 12.9 ms | 13.5–13.8 ms |
+
+- §6.7에서 본 "호출마다 20–25 us"(벽시계 − EVTA run)는 invalidate(§3.2)를 뺀 뒤 이렇게 남았다. EVTA run 밖의 CPU 시간은 혼자 한 장 0.6 ms, 4개 동시 copy당 1.1–1.3 ms다.
+- **find가 큰 까닭:**
+  - 같은 모양의 호출은 replay 하나를 같이 쓴다(40개 id, 호출 54개). buffer가 다르면 그때마다 명령의 주소(relocation)를 고치고 명령 전체를 flush했다. 혼자일 때 한 장에 44번이고, 한 번에 5–10 us다.
+  - 4개 동시이면 buffer pool이 copy 넷에 하나라서 copy들이 서로의 buffer를 매번 다른 순서로 가져갔다. 그래서 거의 모든 호출의 주소가 바뀌었다(25장에 1,281번).
+
+### 6.2 바꾼 것 (vtalib-systolic, 출력 바이트는 같음)
+1. **buffer 조합마다 명령 사본**(`RunReplay`, `MakeVariant`; `EVTA_REPLAY_VARIANTS`, 기본 8, `0`이면 전처럼).
+   - 처음 보는 buffer 주소 조합이면 명령만 복사해 주소를 넣고 flush해 둔다. uop는 주소와 상관없어서 같이 쓴다.
+   - 다음에 같은 조합이면 그 사본을 그대로 돌린다. 한도를 넘으면 전처럼 원본을 고친다.
+2. **buffer pool을 thread마다**(`api.cc` `VTABufferAlloc` / `Free`; `EVTA_BUF_POOL_SHARED=1`이면 전처럼 하나).
+   - 크기별 free list를 thread마다 두고, 마지막에 돌려준 것을 먼저 준다. 그러면 copy마다 매 장 같은 buffer를 받는다.
+   - 자기 list에 없으면 다른 thread의 것을 가져간다(첫 장). 전체 상한(`EVTA_BUF_POOL_MB`)은 그대로다.
+3. **다음 replay를 먼저 짐작**(`ReplayBegin`): bundle은 매 장 같은 순서로 EVTA를 부른다. 그래서 지난번 이 replay 다음에 온 replay의 key와 먼저 견준다(`memcmp` 한 번). 틀리면 전처럼 문자열 + hash로 찾는다.
+
+### 6.3 결과
+- 주소 고치기: 혼자 4,370 → 0번(100장), 4개 동시 1,281 → 0–61번(copy당 25장). 사본은 53–100개다.
+- find: 혼자 한 장 0.24–0.32 → **0.09 ms**, 4개 동시 copy당 0.54–0.71 → 0.39–0.45 ms.
+- 같은 때 번갈아 잼(따로 빌드한 실행 파일, 환경 변수로 전 / 후, int8 입력):
+
+  | | 전 (`EVTA_REPLAY_VARIANTS=0 EVTA_BUF_POOL_SHARED=1`) | 후 |
+  |---|---|---|
+  | 4개 동시 | 257.5 / 257.8 / 257.2 fps (평균 257.5) | 261.0 / 262.0 / 263.6 fps (평균 **262.2**, +1.8 %) |
+  | 혼자 1장 (multi4 bitstream copy 0) | 13.80 / 13.78 ms | **13.54** / 13.54 ms (−0.25 ms) |
+
+- 맞는지: conv 출력 dump 416개(2장)가 전과 같다. `EVTA_RES_CHECK`(multi4) 228건 0 differ, 282 (0.322088).
+
+### 6.4 남은 CPU 시간
+- bundle(호출 사이 bundle 코드): 혼자 한 장 0.27 ms, 4개 동시 0.44 ms. 호출 하나에 3–5 us이고, epilogue가 있는 호출이나 CPU 문장이 끼는 곳은 9–19 us다. `_timed` 빌드의 문장별 시간 재기도 여기에 들어 있다.
+- start 0.06 ms, find 0.09 ms. 이 둘은 더 줄여도 이득이 작다.
+

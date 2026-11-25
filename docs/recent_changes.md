@@ -21,6 +21,11 @@
 
 ---
 
+### 2026-11-25 ubun 1cdf422d — vtalib-systolic: 호출마다 CPU 시간을 줄임 (MobileNetV2Tf multi4 257.5 → 262.2 fps)
+- **바뀐 것:** `vtalib-zcu102-systolic/include/zcu102/cmd_queue.h`(buffer 조합마다 명령 사본 `EVTA_REPLAY_VARIANTS`, 다음 replay 짐작), `lib/zcu102/api.cc`(buffer pool을 thread마다;
+  `EVTA_BUF_POOL_SHARED=1`이면 전처럼). 출력 바이트는 같다. [mobilenetv2_multi4_sw.md](mobilenetv2_multi4_sw.md) §6.
+- **다른 쪽이 할 일:** `실행 파일 다시 빌드`(systolic vtalib의 build dir; PC cross build도). 보드의 MobileNetV2Tf `_sys` / `_systimed` 네 build dir은 다시 빌드했다.
+
 ### 2026-11-25 ubun 9680e43f — int8 입력이 기본(`.i8`이 없거나 맞지 않으면 float), `EVTA_CALL_TIME`
 - **바뀐 것:** 공통 main `multi_threads_main.cpp`(10곳), `vtalib-zcu102-systolic`(`VTASetInputInt8(d, data, hasFloat)`, `cmd_queue.h` `CallTimes`, `api.cc`),
   `run_prof.sh`(summary에 `input int8 / float`). main은 그림 `<이름>.png`의 `<이름>.i8`을 `$INPUT_INT8_DIR`, 그림의 dir, 실행 Dir의 `i8/`에서 찾는다.

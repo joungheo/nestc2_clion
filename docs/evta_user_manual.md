@@ -929,6 +929,8 @@ diff -r /tmp/dumpA /tmp/dumpB && echo same; sudo rm -rf /tmp/dumpA /tmp/dumpB   
 | `PROF_EXE` | (없음) | `run_prof.sh`: Dir의 run 줄 가운데 그 실행 파일만 돌린다(multi4 Dir의 multivta / singlevta 중 하나) |
 | `PROF_INPUT=<file>` | (없음) | `run_prof.sh`: run 줄의 그림 대신 이 입력을 모든 실행 파일에 준다(예: int8 입력 `<name>.i8`). golden 비교는 하지 않는다(2026-11-25) |
 | `INPUT_INT8`, `INPUT_INT8_DIR=<dir>` | 1, (없음) | 공통 main(systolic vtalib): 그림 `<dir>/<이름>.png`의 int8 입력 `<이름>.i8`을 `$INPUT_INT8_DIR`, 그림의 dir, 실행 Dir의 `i8/` 차례로 찾아 있으면 그것으로 돈다(기본, 2026-11-25 저녁부터). 없으면 float. `INPUT_INT8=0`이면 늘 float. float 그림도 함께 넘겨서, `.i8`의 quantize가 bundle과 다르면 경고 한 번 찍고 float로 돈다. main은 `Input: int8 ...` / `Input: float ...` 줄을 찍고 `run_prof.sh` summary에 `input int8 <file>` / `input float <png>`가 붙는다 |
+| `EVTA_REPLAY_VARIANTS` | 8 | systolic(보드): replay 하나에 buffer 주소 조합마다 둘 명령 사본 수. `0`이면 호출마다 주소를 고치고 flush(전 방식). [mobilenetv2_multi4_sw.md](mobilenetv2_multi4_sw.md) §6 |
+| `EVTA_BUF_POOL_SHARED=1` | 0 | systolic(보드): buffer pool을 thread 모두에 하나로(전 방식). 기본은 thread마다 크기별 free list |
 | `EVTA_CALL_TIME=1` | 0 | systolic(보드): replay된 EVTA 호출마다 CPU 시간을 나눠(bundle, pre, find, start, hook, wait) thread가 끝날 때 replay id별로 찍는다([mobilenetv2_multi4_sw.md](mobilenetv2_multi4_sw.md) §6) |
 | `INPUT_INT8_SAVE=<dir>` | (없음) | 공통 main(`multi_threads_main.cpp`, systolic vtalib): copy 0이 첫 그림을 float로 한 번 돌려 bundle의 quantize(scale / offset / table)를 얻고, 인자의 그림(또는 `EVAL_LIST`의 그림)마다 `<dir>/<이름>.i8`을 쓰고 끝낸다. `EVAL_LIST`이면 `<dir>/eval_list.txt`도 쓴다. 그림 인자나 `EVAL_LIST` 줄이 `.i8`이면 main은 그 바이트를 입력 자리에 넣고 conv0 묶기가 int8로 읽는다(quantize가 다르면 exit 6). [evta_dpu_compare.md](evta_dpu_compare.md) §6.10 |
 | `BUNDLE_RUNS` | | `_prof` / `_timed` 실행 파일의 추론 수(`run_prof.sh -n`이 설정) |
