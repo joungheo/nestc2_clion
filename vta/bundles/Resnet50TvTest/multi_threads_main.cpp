@@ -146,6 +146,66 @@ static float *loadInput(const char *filename) {
   return t;
 }
 
+//#### JO added (2026-11-25): int8 input (vtalib-zcu102-systolic VTA_INPUT_INT8, docs/evta_dpu_compare.md 6.10). An image path
+//#### ending in .i8 is an int8 input made by INPUT_INT8_SAVE (InputI8Header, then N x C x H x W bytes in the bundle input's
+//#### layout): its bytes go into the input in the float image's place and the bundle's conv0 pack reads them as int8
+//#### (VTASetInputInt8; it exits if the bundle quantizes with another scale / offset / table). A .png stays float.
+struct Input {
+  void *data;
+  size_t bytes;
+  bool i8;
+#ifdef VTA_INPUT_INT8
+  VTAInputInt8 d;
+#endif
+};
+static bool isI8Path(const char *p) {
+  const size_t n = strlen(p);
+  return n > 3 && !strcmp(p + n - 3, ".i8");
+}
+#ifdef VTA_INPUT_INT8
+struct InputI8Header {
+  char magic[8];   // "EVTAI8" + 2 zero bytes
+  VTAInputInt8 d;
+};
+#endif
+static Input loadAny(const char *filename) {
+  if (!isI8Path(filename)) {
+    Input x = {loadInput(filename), 3 * MODEL_HEIGHT * MODEL_WIDTH * sizeof(float), false};
+    return x;
+  }
+#ifdef VTA_INPUT_INT8
+  InputI8Header h;
+  FILE *fp = fopen(filename, "rb");
+  if (!fp || fread(&h, sizeof(h), 1, fp) != 1 || memcmp(h.magic, "EVTAI8\0\0", 8)) {
+    fprintf(stderr, "%s: not an int8 input (INPUT_INT8_SAVE)\n", filename);
+    exit(1);
+  }
+  const size_t n = (size_t)h.d.N * h.d.C * h.d.H * h.d.W;
+  if (n != 3 * MODEL_HEIGHT * MODEL_WIDTH) {
+    fprintf(stderr, "%s: %zu bytes, the model input has %d\n", filename, n, 3 * MODEL_HEIGHT * MODEL_WIDTH);
+    exit(1);
+  }
+  Input x = {malloc(n), n, true, h.d};
+  if (fread(x.data, n, 1, fp) != 1) {
+    fprintf(stderr, "%s: short file\n", filename);
+    exit(1);
+  }
+  fclose(fp);
+  if (!getenv("EVAL_LIST")) printf("Loaded int8 input: %s (scale %g offset %d)\n", filename, h.d.scale, h.d.offset);
+  return x;
+#else
+  fprintf(stderr, "%s: int8 inputs need vtalib-zcu102-systolic (VTA_INPUT_INT8)\n", filename);
+  exit(1);
+#endif
+}
+static void setInputMode(const Input &x) {
+#ifdef VTA_INPUT_INT8
+  VTASetInputInt8(x.i8 ? &x.d : nullptr);
+#else
+  (void)x;
+#endif
+}
+
 static const SymbolTableEntry &getMutableWeightVar(const BundleConfig &config, const char *name) {
   for (unsigned i = 0; i < config.numSymbols; ++i)
     if (!strncmp(config.symbolTable[i].name, name, strlen(name)))
@@ -226,6 +286,7 @@ struct ThreadArg {
   int copy, runs, bad;
   uint8_t *constantWeights, *mutableWeights, *activations;
   double t1, tEnd;   //#### JO added (2026-11-24): start of run 2 and end of the last run (ms, MULTI_FREE throughput)
+  const Input *input;   //#### JO added (2026-11-25)
 };
 
 //#### JO added (2026-11-24): MULTI_FREE=1: the copies do not wait for each other before each inference (only once before
@@ -251,6 +312,7 @@ static void *threadMain(void *a) {
   const bool freeRun = multiFree();
   const char *sg = getenv("MULTI_STAGGER_US");
   const int stagger = sg ? atoi(sg) : 0;
+  setInputMode(*t->input);   //#### JO added (2026-11-25): int8 input
   for (int run = 0; run < t->runs; run++) {
 #ifndef MULTI_SINGLE
     //pthread_barrier_wait(&runBarrier);
@@ -276,9 +338,88 @@ static void *threadMain(void *a) {
   return nullptr;
 }
 
+#ifdef VTA_INPUT_INT8
+//#### JO added (2026-11-25): INPUT_INT8_SAVE=<dir>: copy 0 runs the first image once as float (vtalib records the bundle's
+//#### quantize), then every image (the arguments, or the EVAL_LIST images) is quantized by vtalib (VTAInputQuantize, the
+//#### bytes the bundle's pack makes) and written to <dir>/<name>.i8; with EVAL_LIST also <dir>/eval_list.txt (the .i8 paths
+//#### and the labels, for EVAL_LIST). Then exits.
+static int saveInt8Inputs(const char *dir) {
+  std::vector<std::pair<std::string, int>> list;
+  if (const char *el = getenv("EVAL_LIST")) {
+    FILE *lf = fopen(el, "r");
+    char path[4096];
+    int label;
+    while (lf && fscanf(lf, "%4095s %d", path, &label) == 2)
+      list.push_back({path, label});
+    if (lf) fclose(lf);
+  } else {
+    for (auto &p : inputImageFilenames)
+      list.push_back({p, -1});
+  }
+  if (list.empty() || isI8Path(list[0].first.c_str())) {
+    printf("INPUT_INT8_SAVE: no .png images\n");
+    return 1;
+  }
+  ModelCopy &m = copies[0];
+  const BundleConfig &c = *m.config;
+  uint8_t *cw = initConstantWeights(m.weights, c);
+  uint8_t *mw = static_cast<uint8_t *>(alignedAlloc(c, c.mutableWeightVarsMemSize));
+  uint8_t *act = static_cast<uint8_t *>(alignedAlloc(c, c.activationsMemSize));
+  const SymbolTableEntry &in = getMutableWeightVar(c, MODEL_INPUT);
+  m.initRuntime();
+  m.load(cw);
+  float *x = loadInput(list[0].first.c_str());
+  memcpy(mw + in.offset, x, 3 * MODEL_HEIGHT * MODEL_WIDTH * sizeof(float));
+  free(x);
+  m.run(cw, mw, act);
+  InputI8Header h;
+  memset(&h, 0, sizeof(h));
+  memcpy(h.magic, "EVTAI8", 6);
+  if (!VTAInputInt8Info(&h.d)) {
+    printf("INPUT_INT8_SAVE: this bundle has no conv0 pack (preprocess_conv0pack_stream), no int8 input\n");
+    return 1;
+  }
+  const size_t n = (size_t)h.d.N * h.d.C * h.d.H * h.d.W;
+  std::vector<int8_t> q(n);
+  FILE *lo = nullptr;
+  if (getenv("EVAL_LIST"))
+    lo = fopen((std::string(dir) + "/eval_list.txt").c_str(), "w");
+  int done = 0;
+  for (auto &e : list) {
+    const std::string &p = e.first;
+    const size_t sl = p.rfind('/'), b = sl == std::string::npos ? 0 : sl + 1, dot = p.rfind('.');
+    const std::string out = std::string(dir) + "/" + p.substr(b, (dot == std::string::npos || dot < b ? p.size() : dot) - b) + ".i8";
+    x = loadInput(p.c_str());
+    VTAInputQuantize(x, q.data());
+    free(x);
+    FILE *fo = fopen(out.c_str(), "wb");
+    if (!fo || fwrite(&h, sizeof(h), 1, fo) != 1 || fwrite(q.data(), n, 1, fo) != 1) {
+      printf("INPUT_INT8_SAVE: cannot write %s\n", out.c_str());
+      return 1;
+    }
+    fclose(fo);
+    if (lo) fprintf(lo, "%s %d\n", out.c_str(), e.second);
+    done++;
+  }
+  if (lo) fclose(lo);
+  printf("INPUT_INT8_SAVE %d images to %s: N %d C %d H %d W %d nchw %d scale %g offset %d lut %08x\n", done, dir, h.d.N,
+         h.d.C, h.d.H, h.d.W, h.d.nchw, h.d.scale, h.d.offset, h.d.lutHash);
+  m.destroy();
+  m.destroyRuntime();
+  free(cw);
+  free(mw);
+  free(act);
+  return 0;
+}
+#endif
+
 int main(int argc, char **argv) {
   for (int i = 1; i < argc; i++)
     inputImageFilenames.push_back(argv[i]);
+#ifdef VTA_INPUT_INT8
+  if (const char *sd = getenv("INPUT_INT8_SAVE"))
+    return saveInt8Inputs(sd);
+#endif
   if (inputImageFilenames.empty() && !getenv("EVAL_LIST")) {
     printf("usage: %s <image.png>\n", argv[0]);
     return 1;
@@ -310,9 +451,11 @@ int main(int argc, char **argv) {
     timeval t1, t2;
     gettimeofday(&t1, NULL);
     while (fscanf(lf, "%4095s %d", path, &label) == 2) {
-      float *x = loadInput(path);
-      memcpy(mw + in.offset, x, 3 * MODEL_HEIGHT * MODEL_WIDTH * sizeof(float));
-      free(x);
+      //#### JO changed (2026-11-25): .png (float) or .i8 (int8) per line
+      Input x = loadAny(path);
+      memcpy(mw + in.offset, x.data, x.bytes);
+      free(x.data);
+      setInputMode(x);
       m.run(cw, mw, act);
       float conf = 0;
       const int pred = classify(c, mw, &conf);
@@ -342,7 +485,7 @@ int main(int argc, char **argv) {
     return 0;
   }
 #endif
-  float *input = loadInput(inputImageFilenames[0].c_str());
+  Input input = loadAny(inputImageFilenames[0].c_str());
 #ifdef MULTI_SINGLE
   //#### JO changed (2026-11-10): with BUNDLE_RUNS=<n> (run_prof.sh -n, the _timed / _prof builds: the timed_bundle.py wrapper runs
   //#### the first call n - 1 times) two calls here, so n inferences in all (it was 4 x MULTI_RUNS + n - 2 = 123 for n = 25)
@@ -366,11 +509,11 @@ int main(int argc, char **argv) {
     const BundleConfig &c = *copies[i].config;
     args[j] = {i, runs, 0, initConstantWeights(copies[i].weights, c),
                static_cast<uint8_t *>(alignedAlloc(c, c.mutableWeightVarsMemSize)),
-               static_cast<uint8_t *>(alignedAlloc(c, c.activationsMemSize)), 0, 0};
+               static_cast<uint8_t *>(alignedAlloc(c, c.activationsMemSize)), 0, 0, &input};
     const SymbolTableEntry &in = getMutableWeightVar(c, MODEL_INPUT);
-    memcpy(args[j].mutableWeights + in.offset, input, 3 * MODEL_HEIGHT * MODEL_WIDTH * sizeof(float));
+    memcpy(args[j].mutableWeights + in.offset, input.data, input.bytes);
   }
-  free(input);
+  free(input.data);
   pthread_barrier_init(&runBarrier, NULL, n);
   const char *e = getenv("MULTI_LOCKSTEP");
   lockstepOn = n > 1 && e && atoi(e) > 0;

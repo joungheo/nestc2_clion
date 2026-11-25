@@ -252,4 +252,7 @@ int avgpool_evta(void *input, float inputScale, int8_t *output, float outputScal
 void preprocess_conv0pack_stream(const float *input, void *buf, int N, int H, int W, int C, int nchw, float scale,
                                  int32_t offset, const int8_t *lut, int KH, int KW, int stride, int pad, int CO,
                                  int padEnd = -1);
+//#### JO added (2026-11-25): int8 input (VTAInputInt8.h, its own file: vtalib's VTABundle.cpp is compiled with
+//#### vta/vtalib's VTABundle.h, the same include guard)
+#include "VTAInputInt8.h"
 #endif //VTALIB_EXAMPLE_VTABUNDLE_H

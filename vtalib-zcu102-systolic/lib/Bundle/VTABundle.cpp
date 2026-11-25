@@ -34,6 +34,8 @@
 #endif
 #include "Bundle/VTABundle.h"
 #endif
+//#### JO added (2026-11-25): the int8 input API (not in vta/vtalib's VTABundle.h, which this file is built with)
+#include "../../include/Bundle/VTAInputInt8.h"
 
 #define RESET_IOCTL _IOWR('X', 101, unsigned long)
 
@@ -3891,8 +3893,49 @@ struct InputStream {
   int32_t offset;
   const int8_t *lut;
   int KH, KW, stride, pad, CO, padEnd;
+  bool i8;   //#### JO added (2026-11-25): input holds int8 bytes (VTASetInputInt8)
 };
 static thread_local InputStream gInputStream = {nullptr};
+
+//#### JO added (2026-11-25): int8 input (VTABundle.h). gInputQ: the first call's quantize (the copies of a model are the
+//#### same); gInputI8: this thread's int8 input description (nullptr = float)
+static std::mutex gInputQMutex;
+static bool gInputQSet = false;
+static VTAInputInt8 gInputQ;
+static const int8_t *gInputQLut = nullptr;
+static thread_local VTAInputInt8 gInputI8Desc;
+static thread_local bool gInputI8 = false;
+static uint32_t inputLutHash(const int8_t *lut, int C) {
+  if (!lut)
+    return 0;
+  uint32_t h = 2166136261u;
+  for (int i = 0; i < C * 256; i++)
+    h = (h ^ (uint8_t)lut[i]) * 16777619u;
+  return h ? h : 1;
+}
+int VTAInputInt8Info(VTAInputInt8 *d) {
+  std::lock_guard<std::mutex> g(gInputQMutex);
+  if (gInputQSet && d)
+    *d = gInputQ;
+  return gInputQSet;
+}
+int VTAInputQuantize(const float *in, int8_t *out) {
+  VTAInputInt8 q;
+  const int8_t *lut;
+  {
+    std::lock_guard<std::mutex> g(gInputQMutex);
+    if (!gInputQSet)
+      return 0;
+    q = gInputQ, lut = gInputQLut;   // the bundle's constant table: valid while the bundle is loaded
+  }
+  preprocess_quantize_input(in, out, q.N, q.H, q.W, q.C, q.nchw, q.scale, q.offset, lut);
+  return 1;
+}
+void VTASetInputInt8(const VTAInputInt8 *d) {
+  gInputI8 = d != nullptr;
+  if (d)
+    gInputI8Desc = *d;
+}
 
 //#### JO added (2026-11-25): EVTA_INPUT_STREAM_TIME=1 prints per stream the CPU time of the pack and of the flushes
 static bool inputStreamTimeOn() {
@@ -3914,9 +3957,13 @@ static void inputStreamTo(InputStream *s, int rows) {
     return;
   const bool tm = inputStreamTimeOn();
   const double t0 = tm ? inputStreamNow() : 0;
-  preprocess_conv0pack_rows(s->input, (int8_t *)VTABufferGetVirtAddr(s->buf), s->N, s->H, s->W, s->C, s->nchw,
-                            s->scale, s->offset, s->lut, s->KH, s->KW, s->stride, s->pad, s->CO, s->done, rows,
-                            s->padEnd);
+  if (s->i8)
+    preprocess_conv0pack_rows_i8((const int8_t *)s->input, (int8_t *)VTABufferGetVirtAddr(s->buf), s->N, s->H, s->W,
+                                 s->C, s->nchw, s->KH, s->KW, s->stride, s->pad, s->CO, s->done, rows, s->padEnd);
+  else
+    preprocess_conv0pack_rows(s->input, (int8_t *)VTABufferGetVirtAddr(s->buf), s->N, s->H, s->W, s->C, s->nchw,
+                              s->scale, s->offset, s->lut, s->KH, s->KW, s->stride, s->pad, s->CO, s->done, rows,
+                              s->padEnd);
   const double t1 = tm ? inputStreamNow() : 0;
   const size_t rowBytes = (size_t)s->W2 * 16;
   for (int b = 0; b < s->N * s->CB; b++)
@@ -3952,8 +3999,24 @@ void preprocess_conv0pack_stream(const float *input, void *buf, int N, int H, in
     on = !e || atoi(e) != 0;
   }
   const int KH2 = (KH + stride - 1) / stride, pe = padEnd < 0 ? pad : padEnd;
+  //#### JO added (2026-11-25): record the quantize (VTAInputQuantize), check an int8 input against it
+  const VTAInputInt8 q = {N, H, W, C, nchw, scale, offset, inputLutHash(lut, C)};
+  {
+    std::lock_guard<std::mutex> g(gInputQMutex);
+    if (!gInputQSet)
+      gInputQ = q, gInputQLut = lut, gInputQSet = true;
+  }
+  if (gInputI8 && memcmp(&q, &gInputI8Desc, sizeof(q))) {
+    const VTAInputInt8 &e = gInputI8Desc;
+    fprintf(stderr,
+            "VTASetInputInt8: the int8 input was made for N %d H %d W %d C %d nchw %d scale %g offset %d lut %08x, "
+            "this bundle quantizes N %d H %d W %d C %d nchw %d scale %g offset %d lut %08x\n",
+            e.N, e.H, e.W, e.C, e.nchw, e.scale, e.offset, e.lutHash, q.N, q.H, q.W, q.C, q.nchw, q.scale, q.offset,
+            q.lutHash);
+    exit(6);
+  }
   gInputStream = {buf, (H + pad + pe - KH) / stride + KH2, 0, (W + pad + pe - KW) / stride + 1, CO / 16,
-                  input, N, H, W, C, nchw, scale, offset, lut, KH, KW, stride, pad, CO, padEnd};
+                  input, N, H, W, C, nchw, scale, offset, lut, KH, KW, stride, pad, CO, padEnd, gInputI8};
   if (!on || N != 1)
     inputStreamEnd(&gInputStream);
 }

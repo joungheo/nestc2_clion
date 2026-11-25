@@ -56,6 +56,7 @@ options:
   -h, --help    this text
 environment:
   BIN=<file in /lib/firmware>   run on this bitstream instead of BIN / SYS_BIN of $RUN_ALL
+  PROF_INPUT=<file>             input of every executable instead of the run line's image (e.g. an int8 <name>.i8)
   EVTA_BIAS_RESET=0|1, EVTA_REQUANT=0|1 (override what the bitstream name turns on), EVTA_DUMP_CONV=<dir>,
   EVTA_RES_CHECK=1, EVTA_REPLAY=0, ... (docs/evta_user_manual.md); with sudo give them inside: sudo /bin/sh -c "X=1 $0 ..."
 output: the start lists the bitstream, its features and the settings; <Dir>/<suffix>.log per executable;
@@ -170,6 +171,9 @@ for D in "$@"; do
   while read -r line <&3; do
   eval "set -- $line"     # -> run dir exe input golden
   EXE=$3$SUFFIX; IN=$4; GOLD=$5
+  #### JO added (2026-11-25): PROF_INPUT=<file> instead of the run line's image (an int8 input <name>.i8 made with INPUT_INT8_SAVE,
+  #### docs/evta_dpu_compare.md 6.10); the golden output is not compared then
+  [ -n "${PROF_INPUT:-}" ] && { IN=$PROF_INPUT; GOLD=""; }
   #### JO added (2026-11-24): PROF_EXE=<name> runs only that executable of a Dir with several run lines (sched_search.py on multi4)
   [ -n "${PROF_EXE:-}" ] && [ "$3" != "$PROF_EXE" ] && continue
   #### JO added (2026-10-29): a Dir with several run lines (multi-EVTA: threaded + single-thread executable) gets one log

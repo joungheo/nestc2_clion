@@ -2303,70 +2303,146 @@ void preprocess_conv0pack(const float *input, int8_t *output, int N, int H, int 
                           int32_t offset, const int8_t *lut, int KH, int KW, int stride, int pad, int CO, int padEnd) {
   preprocess_conv0pack_rows(input, output, N, H, W, C, nchw, scale, offset, lut, KH, KW, stride, pad, CO, 0, -1, padEnd);
 }
+//#### JO changed (2026-11-25): the quantize of one image row in its own function (PreprocessRow), shared by the pack of a
+//#### float input and preprocess_quantize_input (the int8 input made outside the bundle: the same bytes by the same code)
+struct PreprocessRow {
+  const float *input;
+  int H, W, C, nchw;
+  float scale;
+  int32_t offset;
+  const int8_t *lut;
+#if defined(__aarch64__)
+  bool mul;
+  float32x4_t vs, vo;
+  uint8x16x4_t tab[3][4];
+#endif
+  PreprocessRow(const float *input, int H, int W, int C, int nchw, float scale, int32_t offset, const int8_t *lut)
+      : input(input), H(H), W(W), C(C), nchw(nchw), scale(scale), offset(offset), lut(lut) {
+#if defined(__aarch64__)
+    int fe;
+    mul = std::frexp(scale, &fe) == 0.5f && std::isnormal(1 / scale);
+    vs = vdupq_n_f32(mul ? 1 / scale : scale), vo = vdupq_n_f32((float)offset);
+    if (C == 3 && lut)
+      for (int c = 0; c < 3; c++)
+        for (int k = 0; k < 4; k++)
+          for (int j = 0; j < 4; j++)
+            tab[c][k].val[j] = vld1q_u8((const uint8_t *)lut + c * 256 + k * 64 + j * 16);
+#endif
+  }
+  // row h of image n, columns 0 .. w1 - 1, as w1 x C bytes at row
+  void operator()(int n, int h, int w1, int8_t *row) const {
+    // every member in a local: the byte stores below may alias them (reloaded at every pixel block otherwise)
+    const float *input = this->input;
+    const int H = this->H, W = this->W, C = this->C, nchw = this->nchw;
+    const float scale = this->scale;
+    const int32_t offset = this->offset;
+    const int8_t *lut = this->lut;
+    int w0 = 0;
+#if defined(__aarch64__)
+    if (C == 3) {
+      const float32x4_t vs = this->vs, vo = this->vo;
+      const bool mul = this->mul;
+      const bool noadd = mul && offset == 0;   //#### JO added (2026-11-25): no vaddq of a zero offset
+      uint8x16x4_t tab[3][4];
+      if (lut)
+        memcpy(tab, this->tab, sizeof(tab));
+      for (; w0 + 16 <= w1; w0 += 16) {
+        float32x4_t x[3][4];
+        if (nchw) {
+          for (int c = 0; c < 3; c++) {
+            const float *src = input + (((size_t)n * 3 + c) * H + h) * W + w0;
+            //#### JO added (2026-11-25): the next row of this plane (the input is mostly not in the cache when the bundle runs)
+            __builtin_prefetch(src + 2 * W);
+            for (int k = 0; k < 4; k++)
+              x[c][k] = vld1q_f32(src + 4 * k);
+          }
+        } else {
+          const float *src = input + (((size_t)n * H + h) * W + w0) * 3;
+          for (int k = 0; k < 4; k++) {
+            float32x4x3_t v = vld3q_f32(src + 12 * k);
+            x[0][k] = v.val[0], x[1][k] = v.val[1], x[2][k] = v.val[2];
+          }
+        }
+        int8x16x3_t q;
+        for (int c = 0; c < 3; c++) {
+          q.val[c] = noadd ? preprocessQuant16Mul(x[c], vs) : preprocessQuant16(x[c], vs, vo, mul);
+          if (lut)
+            q.val[c] = preprocessLut16(q.val[c], tab[c]);
+        }
+        vst3q_s8(row + (size_t)w0 * 3, q);
+      }
+    }
+#endif
+    for (int w = w0; w < w1; w++)
+      for (int c = 0; c < C; c++) {
+        int8_t v = preprocessQuant1(nchw ? input[(((size_t)n * C + c) * H + h) * W + w]
+                                         : input[(((size_t)n * H + h) * W + w) * C + c],
+                                    scale, offset);
+        row[(size_t)w * C + c] = lut ? lut[c * 256 + v + 128] : v;
+      }
+  }
+};
 // packed rows q0 .. q1 - 1 (-1 = all) of every image
 void preprocess_conv0pack_rows(const float *input, int8_t *output, int N, int H, int W, int C, int nchw, float scale,
                                int32_t offset, const int8_t *lut, int KH, int KW, int stride, int pad, int CO, int q0,
                                int q1, int padEnd) {
   const Conv0PackDims d(H, W, KH, KW, stride, pad, CO, padEnd);
   assert(CO <= 1024 && CO % 16 == 0 && stride * KW * C <= CO);
-#if defined(__aarch64__)
-  int fe;
-  const bool mul = std::frexp(scale, &fe) == 0.5f && std::isnormal(1 / scale);
-  const float32x4_t vs_ = vdupq_n_f32(mul ? 1 / scale : scale), vo_ = vdupq_n_f32((float)offset);
-  uint8x16x4_t tab_[3][4];
-  if (C == 3 && lut)
-    for (int c = 0; c < 3; c++)
-      for (int k = 0; k < 4; k++)
-        for (int j = 0; j < 4; j++)
-          tab_[c][k].val[j] = vld1q_u8((const uint8_t *)lut + c * 256 + k * 64 + j * 16);
-#endif
+  const PreprocessRow pr(input, H, W, C, nchw, scale, offset, lut);
   const int w1 = std::min(W, d.PW - pad);  // image columns the packed input reads
   for (int n = 0; n < N; n++)
+    conv0packRows(output, n, H, pad, d, KW, C, CO, [&](int h, int8_t *row) { pr(n, h, w1, row); }, q0, q1);
+}
+//#### JO added (2026-11-25): the int8 input (VTABundle.h VTASetInputInt8): input = what preprocess_quantize_input wrote,
+//#### N x C x H x W (nchw) or N x H x W x C bytes; the pack only moves bytes (no float read, no quantize)
+void preprocess_conv0pack_rows_i8(const int8_t *input, int8_t *output, int N, int H, int W, int C, int nchw, int KH,
+                                  int KW, int stride, int pad, int CO, int q0, int q1, int padEnd) {
+  const Conv0PackDims d(H, W, KH, KW, stride, pad, CO, padEnd);
+  assert(CO <= 1024 && CO % 16 == 0 && stride * KW * C <= CO);
+  const int w1 = std::min(W, d.PW - pad);
+  const size_t plane = (size_t)H * W;
+  for (int n = 0; n < N; n++)
     conv0packRows(output, n, H, pad, d, KW, C, CO, [&](int h, int8_t *row) {
+      if (!nchw) {
+        memcpy(row, input + ((size_t)n * H + h) * W * C, (size_t)w1 * C);
+        return;
+      }
+      const int8_t *p0 = input + (size_t)n * C * plane + (size_t)h * W;
       int w0 = 0;
 #if defined(__aarch64__)
       if (C == 3) {
-        // the constants in locals: the byte stores below may alias the captured ones (reloaded at every pixel block)
-        const float32x4_t vs = vs_, vo = vo_;
-        const bool noadd = mul && offset == 0;   //#### JO added (2026-11-25): no vaddq of a zero offset
-        uint8x16x4_t tab[3][4];
-        if (lut)
-          memcpy(tab, tab_, sizeof(tab));
+        const int8_t *p1 = p0 + plane, *p2 = p1 + plane;
+        __builtin_prefetch(p0 + 2 * W), __builtin_prefetch(p1 + 2 * W), __builtin_prefetch(p2 + 2 * W);
         for (; w0 + 16 <= w1; w0 += 16) {
-          float32x4_t x[3][4];
-          if (nchw) {
-            for (int c = 0; c < 3; c++) {
-              const float *src = input + (((size_t)n * 3 + c) * H + h) * W + w0;
-              //#### JO added (2026-11-25): the next row of this plane (the input is mostly not in the cache when the bundle runs)
-              __builtin_prefetch(src + 2 * W);
-              for (int k = 0; k < 4; k++)
-                x[c][k] = vld1q_f32(src + 4 * k);
-            }
-          } else {
-            const float *src = input + (((size_t)n * H + h) * W + w0) * 3;
-            for (int k = 0; k < 4; k++) {
-              float32x4x3_t v = vld3q_f32(src + 12 * k);
-              x[0][k] = v.val[0], x[1][k] = v.val[1], x[2][k] = v.val[2];
-            }
-          }
-          int8x16x3_t q;
-          for (int c = 0; c < 3; c++) {
-            q.val[c] = noadd ? preprocessQuant16Mul(x[c], vs) : preprocessQuant16(x[c], vs, vo, mul);
-            if (lut)
-              q.val[c] = preprocessLut16(q.val[c], tab[c]);
-          }
+          int8x16x3_t q = {{vld1q_s8(p0 + w0), vld1q_s8(p1 + w0), vld1q_s8(p2 + w0)}};
           vst3q_s8(row + (size_t)w0 * 3, q);
         }
       }
 #endif
       for (int w = w0; w < w1; w++)
-        for (int c = 0; c < C; c++) {
-          int8_t v = preprocessQuant1(nchw ? input[(((size_t)n * C + c) * H + h) * W + w]
-                                           : input[(((size_t)n * H + h) * W + w) * C + c],
-                                      scale, offset);
-          row[(size_t)w * C + c] = lut ? lut[c * 256 + v + 128] : v;
-        }
+        for (int c = 0; c < C; c++)
+          row[(size_t)w * C + c] = p0[c * plane + w];
     }, q0, q1);
+}
+//#### JO added (2026-11-25): the int8 input of preprocess_conv0pack_rows_i8: the quantize (+ table) of the float input,
+//#### in the input's own layout (NCHW stays NCHW), the bytes the float pack would write
+void preprocess_quantize_input(const float *input, int8_t *output, int N, int H, int W, int C, int nchw, float scale,
+                               int32_t offset, const int8_t *lut) {
+  const PreprocessRow pr(input, H, W, C, nchw, scale, offset, lut);
+  std::vector<int8_t> row((size_t)W * C + 64);
+  const size_t plane = (size_t)H * W;
+  for (int n = 0; n < N; n++)
+    for (int h = 0; h < H; h++) {
+      int8_t *o = output + (size_t)n * C * plane + (size_t)h * W * (nchw ? 1 : C);
+      if (!nchw) {
+        pr(n, h, W, o);
+        continue;
+      }
+      pr(n, h, W, row.data());
+      for (int w = 0; w < W; w++)
+        for (int c = 0; c < C; c++)
+          o[c * plane + w] = row[(size_t)w * C + c];
+    }
 }
 
 void transpose_nhwc2vtaio_zerofill_old(int8_t* input, int8_t* output, int N, int H, int W, int C){
