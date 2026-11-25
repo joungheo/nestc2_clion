@@ -484,6 +484,20 @@ sudo /bin/sh -c "PROF_EXE=singlevtaMobileNetV2TfBundle EVTA_REPLAY_LOG=2 EVTA_SC
     - invalidate 52 → 1, 측정 도구 출력과 같은 바이트, dump 208개 같음, `EVTA_RES_CHECK` 228개 0 differ, 282 (0.322088).
     - 지금 컴파일러로 만들면 §6.6의 112×112 schedule 세 개(`744b1fb`)가 bundle에 들어간다. 공유 bundle(11-22)과는 그 세 호출과 주석 두 줄만 다르다. weights는 같다.
     - 이 bundle로 multi4 252.2 fps, 혼자 13.95 ms(float 입력, 1번 잼; §6.10 같은 날 float 247.4 fps / 14.01 ms).
+- **공유 bundle을 다시 만듦**(같은 날 19:00, ubuntu2가 model / profile을 `Debug2_remote/vta/bundles/MobileNetV2TfTest/`에 넣은 뒤; md5가 ubun의 것과 같다):
+  - `gen_calib_bundle.sh MobileNetV2TfTest <profile>`, `gen_multi4_bundles.sh MultiEVTAMobileNetV2TfTest`, `collect_hw_bundles.py`, 보드 `build_sys`, `build_systimed`,
+    `build_multievtax4_sys`, `build_multievtax4_systimed`에서 다시 빌드했다. 이전 bundle과 실행 파일은 `~xilinx/JO/ubun_wt/old_mbv2tf/`에 두었다.
+  - 이전 실행 파일과 견줌(single은 `_alux3` single bitstream, multi4는 `_amul` hp322):
+    - conv 출력 dump 208개가 같다(single, multi4 copy 0). `EVTA_RES_CHECK` 228개 0 differ(single, multi4). 282 (0.322088).
+    - ImageNet val 1,000장: 출력 hash 1,000개가 같고, top-1 680 / 1000으로 같다.
+  - `run_prof.sh -s _systimed`(float 입력):
+
+    | | §6.4 (11-24) | 다시 만든 bundle |
+    |---|---|---|
+    | EVTA 1개 `MobileNetV2TfTest` (`_alux3`) | 14.41 ms | **13.43 ms** (74.5 fps) |
+    | EVTA 4개 `MultiEVTAMobileNetV2TfTest` | 235.6 fps | **250.7 fps** (혼자 copy 0 13.94 ms) |
+
+    11-24 뒤에 바뀐 것(새 schedule `744b1fb`, conv0 묶기 §6.8, invalidate §6.9, vtalib)이 모두 들어 있다.
 - 오늘 바꾼 두 가지(§6.8, §6.9)를 합치면 multi4가 238.3 → 254.5 fps(+6.8 %)이고, DPU S 270 fps의 94 %다.
 
 ### 6.10 int8 입력을 미리 만들어 읽음 (2026-11-25, ubun, `d4d8ddf2`)

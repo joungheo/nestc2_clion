@@ -21,6 +21,13 @@
 
 ---
 
+### 2026-11-25 19:00 ubun (보드) — MobileNetV2TfTest / MultiEVTAMobileNetV2TfTest bundle을 지금 컴파일러로 다시 만들고 보드 실행 파일을 다시 빌드
+- **바뀐 것:** 보드 `Debug2_remote/vta/bundles/MobileNetV2TfTest/`, `Debug2_remote/vta/multievta_bundles/MultiEVTAMobileNetV2TfTest/`의 bundle(model-compiler `0b1439b`,
+  invalidate 52 → 1, 112×112 schedule 세 개 `744b1fb`), `vtabundles_xcmpl/hw/MobileNetV2TfTest`, `hw_multievtax4/MultiEVTAMobileNetV2TfTest`,
+  그리고 그 `_sys` / `_systimed` 실행 파일(`build_sys`, `build_systimed`, `build_multievtax4_sys`, `build_multievtax4_systimed`). weights는 그대로다.
+  출력은 이전과 바이트가 같다(dump, ImageNet val 1,000장 hash). EVTA 1개 14.41 → 13.43 ms, EVTA 4개 235.6 → 250.7 fps([evta_dpu_compare.md](evta_dpu_compare.md) §6.9).
+- **다른 쪽이 할 일:** 없음(보드에서 다 했다). PC에서 cross build(`_pcsys*`)하는 쪽은 bundle을 보드에서 가져가야 같은 것을 빌드한다. 이전 것은 `~xilinx/JO/ubun_wt/old_mbv2tf/`.
+
 ### 2026-11-25 ubun d4d8ddf2 — int8 입력을 고를 수 있음(기본 float): `.i8` 파일, `INPUT_INT8_SAVE`, `PROF_INPUT` (MobileNetV2Tf multi4 247.4 → 253.2 fps)
 - **바뀐 것:** `vtalib-zcu102-systolic` `VTAInputInt8.h`(새 파일), `VTABundle.cpp`, `CPUBundle_generic.cpp`(float 묶기의 quantize를 `PreprocessRow`로 뺌, 같은 바이트).
   공통 main `multi_threads_main.cpp`(10곳 같은 파일), `vtabundles_xcmpl/hw*/script/run_prof.sh`(`PROF_INPUT`). [evta_dpu_compare.md](evta_dpu_compare.md) §6.10.
