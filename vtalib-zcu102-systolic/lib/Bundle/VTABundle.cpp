@@ -3894,22 +3894,49 @@ struct InputStream {
 };
 static thread_local InputStream gInputStream = {nullptr};
 
+//#### JO added (2026-11-25): EVTA_INPUT_STREAM_TIME=1 prints per stream the CPU time of the pack and of the flushes
+static bool inputStreamTimeOn() {
+  static const bool on = getenv("EVTA_INPUT_STREAM_TIME") && atoi(getenv("EVTA_INPUT_STREAM_TIME")) > 0;
+  return on;
+}
+static double inputStreamNow() {
+  struct timespec t;
+  clock_gettime(CLOCK_MONOTONIC, &t);
+  return t.tv_sec * 1e3 + t.tv_nsec * 1e-6;
+}
+static thread_local double gInputStreamPackMs = 0, gInputStreamFlushMs = 0;
+static thread_local int gInputStreamCalls = 0;
+
 // rows 0 .. rows - 1 (-1 = all) written and flushed
 static void inputStreamTo(InputStream *s, int rows) {
   rows = rows < 0 ? s->rows : std::min(rows, s->rows);
   if (rows <= s->done)
     return;
+  const bool tm = inputStreamTimeOn();
+  const double t0 = tm ? inputStreamNow() : 0;
   preprocess_conv0pack_rows(s->input, (int8_t *)VTABufferGetVirtAddr(s->buf), s->N, s->H, s->W, s->C, s->nchw,
                             s->scale, s->offset, s->lut, s->KH, s->KW, s->stride, s->pad, s->CO, s->done, rows,
                             s->padEnd);
+  const double t1 = tm ? inputStreamNow() : 0;
   const size_t rowBytes = (size_t)s->W2 * 16;
   for (int b = 0; b < s->N * s->CB; b++)
     VTABufferFlush(s->buf, ((size_t)b * s->rows + s->done) * rowBytes, (size_t)(rows - s->done) * rowBytes);
+  if (tm) {
+    gInputStreamPackMs += t1 - t0;
+    gInputStreamFlushMs += inputStreamNow() - t1;
+    gInputStreamCalls++;
+  }
   s->done = rows;
 }
 static void inputStreamHook(void *ctx, int tag) { inputStreamTo(static_cast<InputStream *>(ctx), tag); }
 static void inputStreamEnd(InputStream *s) {
   inputStreamTo(s, -1);
+  if (inputStreamTimeOn()) {
+    fprintf(stderr, "EVTA_INPUT_STREAM_TIME rows %d parts %d pack %.3f ms flush %.3f ms\n", s->rows, gInputStreamCalls,
+            gInputStreamPackMs, gInputStreamFlushMs);
+    gInputStreamPackMs = gInputStreamFlushMs = 0;
+    gInputStreamCalls = 0;
+  }
   s->buf = nullptr;
 }
 
