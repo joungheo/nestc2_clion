@@ -7,7 +7,15 @@
 - `git pull` 한 뒤 이 파일의 맨 위부터 지난번에 본 줄까지 읽는다.
 - push할 때, 다른 PC나 보드가 무엇을 해야 하는 변경이면 **맨 위에** 항목을 하나 더한다(같은 commit에 넣는다).
   - 해야 할 일이 없는 변경(문서만, 측정 기록만)은 적지 않아도 된다.
-- 항목 형식: `### 2026-11-25 ubun b5c4e7d — vtalib-systolic: conv0 입력 묶기를 빠르게 (MobileNetV2 1.23 → 0.73 ms, 같은 바이트)
+- 항목 형식: `### 2026-11-25 ubun (이 commit) — VTASave `-vta-skip-evta-invalidate`: EVTA만 읽는 출력의 invalidate를 뺌 (MobileNetV2 −0.5 ms)
+- **바뀐 것:** `lib/Backends/VTA/VTASave.cpp` `dropEvtaOnlyInvalidates`(기본 켬; bundle `.cpp`의 옵션 목록에 줄이 하나 는다).
+  CNN bundle의 invalidate가 하나만 남는다. DeiT는 그대로다. MobileNetV2Tf multi4 246.5 → 254.5 fps([evta_dpu_compare.md](evta_dpu_compare.md) §6.9).
+- **다른 쪽이 할 일:** `model-compiler 다시 빌드`(보드 `Debug2_remote`, PC `nestc-build`). `bundle 다시 생성`: CNN bundle(MobileNetV2 / Resnet / VGG16, single과 multi4)은
+  다시 만들 때 invalidate가 빠진다. 다시 만들지 않아도 결과는 같다(시간만 다름). vtalib는 바뀌지 않았다.
+  - 이 commit의 model-compiler로는 아직 bundle을 만들어 보지 않았다(ubun에 `nestc-build`가 없고 보드 공유 트리는 pull 못 함). 측정은 같은 함수를 떼어 만든 도구로
+    바꾼 bundle로 했다. 처음 다시 만드는 쪽은 invalidate 수(위 표)와 `EVTA_RES_CHECK` 0 differ를 확인해 주면 좋다.
+
+### 2026-11-25 ubun b5c4e7d — vtalib-systolic: conv0 입력 묶기를 빠르게 (MobileNetV2 1.23 → 0.73 ms, 같은 바이트)
 - **바뀐 것:** `vtalib-zcu102-systolic/lib/Bundle/CPUBundle_generic.cpp` `conv0packRows`, `preprocess_conv0pack_rows`
   (3×3 / 2를 3채널에 거는 conv0의 묶기, prefetch, offset 0이면 덧셈 없음). `VTABundle.cpp`: `EVTA_INPUT_STREAM_TIME=1`(`163dd9b`).
   MobileNetV2Tf 혼자 14.84 → 14.35 ms, multi4 238.3 → 246.5 fps([evta_dpu_compare.md](evta_dpu_compare.md) §6.8). 다른 모델의 conv0(7×7 등)은 그대로다.

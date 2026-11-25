@@ -459,6 +459,7 @@ python3 vtabundles_xcmpl/fold_onnx.py deit_tiny.onnx deit_fold.onnx 1,3,224,224
 | `-vta-evta-fc` | fc를 EVTA에서. weight와 bias는 compile time에 EVTA layout으로(`fullyconnected_evta_packed`) | §7.8 |
 | `-vta-evta-depthwise` | depthwise channelwise conv를 EVTA에서(`dw_convolution_evta`). `-enable-channelwise-depthwise`에만 걸림 | §7.21 |
 | `-vta-evta-avgpool` | global avgpool을 EVTA ALU에서(`avgpool_evta`, `_alux`만) | isa_ext §8.12 |
+| `-vta-skip-evta-invalidate` | EVTA 출력을 free할 때까지 EVTA 호출만 읽으면 그 출력의 `VTABufferInvalidate`를 뺌(bundle 본문을 줄 단위로 보고 정함; MobileNetV2 0.5 ms) | dpu_compare §6.9 |
 | `-vta-evta-elemadd` | packed int8 add를 정수 a A + b B >> N으로 EVTA ALU에서(`elemadd_evta`) | isa_ext §8.17 |
 | `-vta-elemadd-precise` (**꺼짐**) | 위를 22비트 곱수로(약 1.8배 ALU 시간) | isa_ext §8.17 |
 | `-vta-matmul-conv` | MatMul을 int8로, 상수 오른쪽 MatMul(Linear)을 EVTA 1x1 conv로 | §7.23 |

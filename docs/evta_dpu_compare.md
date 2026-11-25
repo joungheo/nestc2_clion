@@ -389,7 +389,7 @@ depthwise 장치와 conv 개선을 정하려고 다시 쟀다.
 
 - 먼저 할 것(소프트웨어만, EVTA 1개에도 듣는다):
   1. conv0 입력 묶기를 빠르게 한다(1.31 ms; 입력 600 KB float → 416 KB). 끝(§6.8): 혼자 1.23 → 0.73 ms, multi4 238.3 → 246.5 fps.
-  2. 출력을 EVTA만 읽는 buffer의 invalidate를 뺀다(0.5 ms). 단, CPU가 그 buffer에 남긴 dirty line이 없는지(buffer pool 재사용) 확인해야 한다.
+  2. 출력을 EVTA만 읽는 buffer의 invalidate를 뺀다(0.5 ms). 끝(§6.9): multi4 246.5 → 254.5 fps.
   3. 호출마다의 CPU 쪽 시간을 줄인다(1.3 ms).
 - 셋을 합쳐 copy당 2 ms 남짓이면, depthwise 장치 없이도 DPU S(14.8 ms)에 닿는다(계산값).
 
@@ -433,6 +433,49 @@ sudo /bin/sh -c "PROF_EXE=singlevtaMobileNetV2TfBundle EVTA_REPLAY_LOG=2 EVTA_SC
 - **4개 동시이면** 묶기가 1.0 ms로 늘어 아직 CPU에 묶인다. 4개 core가 DRAM을 같이 쓰기 때문이다.
 - **더 줄이려면** 입력 자체를 줄여야 한다. float 600 KB 대신 uint8 그림 150 KB를 받고, 채널별 256칸 표로 정규화와 quantize를 한 번에 한다. 그러려면 bundle 입력 형식(VTASave, main)을 바꿔야 한다.
   - DPU의 성능 수치는 int8로 준비한 입력으로 잰다고 알고 있다(확인 필요). 이 입력 쪽 시간은 견줄 때 따로 적는다.
+
+### 6.9 EVTA만 읽는 출력의 invalidate를 뺌 (2026-11-25, ubun, VTASave `-vta-skip-evta-invalidate`)
+
+§6.7의 2번이다.
+
+**문제:**
+- VTASave는 EVTA 출력마다 `VTABufferInvalidate`(cache line마다 `dc civac`)를 내보낸다. MobileNetV2에서는 52번, 한 장에 0.48 ms다.
+- invalidate는 그 출력을 CPU가 읽을 때만 필요하다. 그런데 MobileNetV2 출력의 대부분은 다음 EVTA 호출만 읽는다(DRAM에서 LOAD).
+
+**바꾼 것:**
+- `VTASave.cpp` `dropEvtaOnlyInvalidates`를 `exportBundleEntry`에서 bundle 본문에 건다. 옵션은 `-vta-skip-evta-invalidate`이고 기본은 켬이다.
+- 문장이 한 줄씩이라서(`timed_bundle.py`와 같은 전제) 생성된 코드를 줄 단위로 본다.
+  - 그 buffer의 이름: invalidate한 이름, 그리고 그 이름들로 선언한 모든 pointer(`int8_t* A = B;`, `VTABufferGetVirtAddr`)다.
+  - invalidate 뒤부터 그 buffer를 `VTABufferFree`하거나 다시 invalidate할 때까지, 이름이 나오는 줄이 모두 아래 셋 중 하나이면 invalidate를 뺀다.
+    - pointer 선언
+    - epilogue residual 저장(`<x>_epi.t[k] = ...;`). 이때 그 epilogue 이름도 함께 따라간다.
+    - 허용 목록의 호출: `convolution_wo_tr`, `_res`, `_pool`, `dw_convolution_evta`, `maxpool_evta`, `VTASetConvEpilogue`
+  - 그 밖(CPU 함수, `if (!avgpool_evta(...)) avgpool(...)` 같은 대체 경로, 함수 끝)이 나오면 invalidate를 남긴다.
+- 허용 목록 함수의 CPU 경로(대체 경로, `EVTA_RES_CHECK`, `EVTA_DUMP_CONV`)는 두 vtalib 모두 읽는 입력을 스스로 invalidate한다(확인함).
+  - `fullyconnected_evta_packed`는 대체 경로 `fc_packed_cpu`가 입력을 invalidate하지 않아서 목록에 넣지 않았다.
+- 남는 invalidate(보드의 지금 bundle에 걸어 봄):
+
+  | bundle | 전 | 후 | 남은 것 |
+  |---|---|---|---|
+  | MobileNetV2(Tf) | 52 | 1 | Conv_1 출력(avgpool 대체 경로가 CPU로 읽음) |
+  | Resnet18 | 21 | 1 | 마지막 conv 출력 |
+  | Resnet50Tv | 54 | 1 | 마지막 conv 출력 |
+  | VGG16 | 17 | 1 | 마지막 conv 출력 |
+  | DeiT | 75 | 75 | 읽는 호출(matmul, layer norm 등)이 목록 밖 |
+
+**보드**(`_amul` hp322, 25회, §6.8의 vtalib):
+- model-compiler는 아직 다시 빌드하지 않았다(보드 공유 트리를 pull할 수 없음).
+- 그래서 같은 함수를 떼어 만든 도구로 지금 bundle 4개(`MultiEVTAMobileNetV2TfTest`)를 바꿔 따로 빌드했다(`~/JO/ubun_wt/`).
+- VTASave.cpp 자체는 보드 `Debug2_remote`의 옵션으로 컴파일만 확인했다.
+
+| | §6.8 | 후 |
+|---|---|---|
+| `VTABufferInvalidate` 합 / 장 | 0.48 ms | 0.005 ms |
+| 혼자 1장 | 14.35 ms | **13.85 ms** |
+| 4개 동시 | 246.5 fps | **254.5 fps** (copy당 15.72–16.00 ms) |
+
+- 분류는 같다: 282 (0.322088).
+- 오늘 바꾼 두 가지(§6.8, §6.9)를 합치면 multi4가 238.3 → 254.5 fps(+6.8 %)이고, DPU S 270 fps의 94 %다.
 
 ## 7. 조건이 다른 점 (해석할 때 주의)
 
