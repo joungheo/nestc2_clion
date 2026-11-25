@@ -29,6 +29,7 @@
 
 #include <sys/time.h>
 #include <unistd.h>   //#### JO added (2026-11-24): usleep (MULTI_STAGGER_US)
+#include <sys/stat.h>   //#### JO added (2026-11-25): mkdir (INPUT_INT8_SAVE)
 #include "VTARuntime.h"
 #include <assert.h>
 #include <inttypes.h>
@@ -146,14 +147,20 @@ static float *loadInput(const char *filename) {
   return t;
 }
 
-//#### JO added (2026-11-25): int8 input (vtalib-zcu102-systolic VTA_INPUT_INT8, docs/evta_dpu_compare.md 6.10). An image path
-//#### ending in .i8 is an int8 input made by INPUT_INT8_SAVE (InputI8Header, then N x C x H x W bytes in the bundle input's
-//#### layout): its bytes go into the input in the float image's place and the bundle's conv0 pack reads them as int8
-//#### (VTASetInputInt8; it exits if the bundle quantizes with another scale / offset / table). A .png stays float.
+//#### JO added (2026-11-25): int8 input (vtalib-zcu102-systolic VTA_INPUT_INT8, docs/evta_dpu_compare.md 6.10). An int8 input
+//#### (<name>.i8, made by INPUT_INT8_SAVE: InputI8Header, then N x C x H x W bytes in the bundle input's layout) is handed to
+//#### vtalib (VTASetInputInt8) and the bundle's conv0 pack reads it instead of quantizing the float input.
+//#### JO changed (2026-11-25): int8 is the default. For an image <dir>/<name>.png the main looks for <name>.i8 in
+//#### $INPUT_INT8_DIR, then in <dir>, then in ./i8 (the executable's Dir: run_prof.sh runs there); none found: the float
+//#### image (INPUT_INT8=0: always float). The float image is passed too: an .i8 made with another quantize than the
+//#### bundle's (another bundle) is reported once by vtalib and the float image is used. A path that is itself an .i8 has
+//#### no float image (exit 6 on a mismatch).
 struct Input {
-  void *data;
-  size_t bytes;
-  bool i8;
+  void *data;        // the float image (nullptr: an .i8 path)
+  size_t bytes;      // its bytes
+  bool i8, hasFloat;  // hasFloat: the copies' input variables hold the float image (data may be freed by then)
+  int8_t *i8data;    // the int8 input (i8)
+  std::string from;  // what was loaded, for the log
 #ifdef VTA_INPUT_INT8
   VTAInputInt8 d;
 #endif
@@ -167,16 +174,13 @@ struct InputI8Header {
   char magic[8];   // "EVTAI8" + 2 zero bytes
   VTAInputInt8 d;
 };
-#endif
-static Input loadAny(const char *filename) {
-  if (!isI8Path(filename)) {
-    Input x = {loadInput(filename), 3 * MODEL_HEIGHT * MODEL_WIDTH * sizeof(float), false};
-    return x;
-  }
-#ifdef VTA_INPUT_INT8
-  InputI8Header h;
+// reads an .i8 into x (false: no such file); a file that is not an int8 input of this model's size exits
+static bool readI8(const char *filename, Input &x) {
   FILE *fp = fopen(filename, "rb");
-  if (!fp || fread(&h, sizeof(h), 1, fp) != 1 || memcmp(h.magic, "EVTAI8\0\0", 8)) {
+  if (!fp)
+    return false;
+  InputI8Header h;
+  if (fread(&h, sizeof(h), 1, fp) != 1 || memcmp(h.magic, "EVTAI8\0\0", 8)) {
     fprintf(stderr, "%s: not an int8 input (INPUT_INT8_SAVE)\n", filename);
     exit(1);
   }
@@ -185,22 +189,76 @@ static Input loadAny(const char *filename) {
     fprintf(stderr, "%s: %zu bytes, the model input has %d\n", filename, n, 3 * MODEL_HEIGHT * MODEL_WIDTH);
     exit(1);
   }
-  Input x = {malloc(n), n, true, h.d};
-  if (fread(x.data, n, 1, fp) != 1) {
+  x.i8data = static_cast<int8_t *>(malloc(n));
+  if (fread(x.i8data, n, 1, fp) != 1) {
     fprintf(stderr, "%s: short file\n", filename);
     exit(1);
   }
   fclose(fp);
-  if (!getenv("EVAL_LIST")) printf("Loaded int8 input: %s (scale %g offset %d)\n", filename, h.d.scale, h.d.offset);
-  return x;
-#else
-  fprintf(stderr, "%s: int8 inputs need vtalib-zcu102-systolic (VTA_INPUT_INT8)\n", filename);
-  exit(1);
+  x.i8 = true;
+  x.d = h.d;
+  x.from = filename;
+  return true;
+}
 #endif
+static Input loadAny(const char *filename) {
+  Input x = {nullptr, 3 * MODEL_HEIGHT * MODEL_WIDTH * sizeof(float), false, false, nullptr, filename};
+  const bool quiet = getenv("EVAL_LIST") != nullptr;
+  if (isI8Path(filename)) {
+#ifdef VTA_INPUT_INT8
+    if (!readI8(filename, x)) {
+      fprintf(stderr, "cannot open %s\n", filename);
+      exit(1);
+    }
+    if (!quiet) printf("Input: int8 %s (scale %g offset %d), no float image\n", filename, x.d.scale, x.d.offset);
+    return x;
+#else
+    fprintf(stderr, "%s: int8 inputs need vtalib-zcu102-systolic (VTA_INPUT_INT8)\n", filename);
+    exit(1);
+#endif
+  }
+  x.data = loadInput(filename);
+  x.hasFloat = true;
+#ifdef VTA_INPUT_INT8
+  const char *e = getenv("INPUT_INT8");
+  if (!e || atoi(e) != 0) {
+    const std::string p = filename;
+    const size_t sl = p.rfind('/'), b = sl == std::string::npos ? 0 : sl + 1, dot = p.rfind('.');
+    const std::string name = p.substr(b, (dot == std::string::npos || dot < b ? p.size() : dot) - b) + ".i8";
+    std::vector<std::string> cand;
+    if (const char *dir = getenv("INPUT_INT8_DIR"))
+      cand.push_back(std::string(dir) + "/" + name);
+    cand.push_back(p.substr(0, b) + name);
+    cand.push_back("i8/" + name);
+    for (auto &c : cand)
+      if (readI8(c.c_str(), x))
+        break;
+  }
+  if (!quiet) {
+    if (x.i8)
+      printf("Input: int8 %s (scale %g offset %d; float image %s kept for a mismatch)\n", x.from.c_str(), x.d.scale,
+             x.d.offset, filename);
+    else
+      printf("Input: float %s (%s)\n", filename,
+             e && atoi(e) == 0 ? "INPUT_INT8=0" : "no <name>.i8 in $INPUT_INT8_DIR, the image's dir or ./i8");
+  }
+#endif
+  return x;
+}
+// the input into a copy's input variable: the float image if there is one (the int8 input goes to vtalib)
+static void copyInput(const Input &x, uint8_t *dst) {
+  if (x.data)
+    memcpy(dst, x.data, x.bytes);
+}
+static void freeInput(Input &x) {
+  free(x.data);
+  free(x.i8data);
+  x.data = nullptr;
+  x.i8data = nullptr;
 }
 static void setInputMode(const Input &x) {
 #ifdef VTA_INPUT_INT8
-  VTASetInputInt8(x.i8 ? &x.d : nullptr);
+  VTASetInputInt8(x.i8 ? &x.d : nullptr, x.i8data, x.hasFloat);
 #else
   (void)x;
 #endif
@@ -342,7 +400,8 @@ static void *threadMain(void *a) {
 //#### JO added (2026-11-25): INPUT_INT8_SAVE=<dir>: copy 0 runs the first image once as float (vtalib records the bundle's
 //#### quantize), then every image (the arguments, or the EVAL_LIST images) is quantized by vtalib (VTAInputQuantize, the
 //#### bytes the bundle's pack makes) and written to <dir>/<name>.i8; with EVAL_LIST also <dir>/eval_list.txt (the .i8 paths
-//#### and the labels, for EVAL_LIST). Then exits.
+//#### and the labels, for EVAL_LIST). Then exits. INPUT_INT8_SAVE=i8 in the executable's Dir makes the files the default
+//#### int8 input of that Dir's runs (loadAny looks in ./i8).
 static int saveInt8Inputs(const char *dir) {
   std::vector<std::pair<std::string, int>> list;
   if (const char *el = getenv("EVAL_LIST")) {
@@ -381,6 +440,7 @@ static int saveInt8Inputs(const char *dir) {
   }
   const size_t n = (size_t)h.d.N * h.d.C * h.d.H * h.d.W;
   std::vector<int8_t> q(n);
+  mkdir(dir, 0775);   // one level; an existing dir is fine
   FILE *lo = nullptr;
   if (getenv("EVAL_LIST"))
     lo = fopen((std::string(dir) + "/eval_list.txt").c_str(), "w");
@@ -453,8 +513,7 @@ int main(int argc, char **argv) {
     while (fscanf(lf, "%4095s %d", path, &label) == 2) {
       //#### JO changed (2026-11-25): .png (float) or .i8 (int8) per line
       Input x = loadAny(path);
-      memcpy(mw + in.offset, x.data, x.bytes);
-      free(x.data);
+      copyInput(x, mw + in.offset);
       setInputMode(x);
       m.run(cw, mw, act);
       float conf = 0;
@@ -475,6 +534,7 @@ int main(int argc, char **argv) {
         for (size_t i = 0; i < out.size * sizeof(float); i++) h = (h ^ ob[i]) * 1099511628211ull;
         printf("EH %d %016llx\n", n, (unsigned long long)h);
       }
+      freeInput(x);
     }
     gettimeofday(&t2, NULL);
     fclose(lf);
@@ -511,9 +571,10 @@ int main(int argc, char **argv) {
                static_cast<uint8_t *>(alignedAlloc(c, c.mutableWeightVarsMemSize)),
                static_cast<uint8_t *>(alignedAlloc(c, c.activationsMemSize)), 0, 0, &input};
     const SymbolTableEntry &in = getMutableWeightVar(c, MODEL_INPUT);
-    memcpy(args[j].mutableWeights + in.offset, input.data, input.bytes);
+    copyInput(input, args[j].mutableWeights + in.offset);
   }
-  free(input.data);
+  free(input.data);   // the int8 input stays: vtalib reads it at every run (freed at the end)
+  input.data = nullptr;
   pthread_barrier_init(&runBarrier, NULL, n);
   const char *e = getenv("MULTI_LOCKSTEP");
   lockstepOn = n > 1 && e && atoi(e) > 0;
@@ -546,5 +607,6 @@ int main(int argc, char **argv) {
     free(a.constantWeights);
     free(a.mutableWeights);
   }
+  freeInput(input);
   return bad != 0;
 }

@@ -1836,6 +1836,8 @@ int VTAReplayBegin(VTACommandHandle cmdH, const void* key, int key_bytes, void* 
 }
 
 void VTAReplayEnd(VTACommandHandle cmdH, int ok) {}
+//#### JO added (2026-11-25): EVTA_CALL_TIME is board only (zcu102/cmd_queue.h)
+void VTACallTimeMark() {}
 
 void VTASetSegmentTag(VTACommandHandle cmdH, int tag) {}
 

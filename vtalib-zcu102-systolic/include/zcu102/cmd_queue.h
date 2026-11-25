@@ -19,6 +19,57 @@
 
 namespace vta {
 
+//#### JO added (2026-11-25, docs/mobilenetv2_multi4_sw.md 6): EVTA_CALL_TIME=1 splits the CPU time around every replayed
+//#### EVTA call of a thread and prints it per replay id when the thread ends (stderr, "EVTA_CALL_TIME" lines):
+//####   bundle: the end of the previous replayed call -> the vtalib conv entry (VTACallTimeMark; bundle code, wrappers)
+//####   pre:    the conv entry (or the previous call's end, entries without a mark) -> ReplayBegin (key, epilogue, ...)
+//####   find:   ReplayBegin -> the replay found (key string, hash lookup, relocation check)
+//####   start:  VTADeviceRunStart (register writes), hook: the segment hook (input stream), wait: VTADeviceRunWait
+//#### Gaps over 3 ms (between inferences) are left out.
+struct CallTimeAcc {
+  double bundle{0}, pre{0}, find{0}, start{0}, hook{0}, wait{0};
+  long calls{0}, runs{0};
+};
+struct CallTimes {
+  double last_end{0}, mark{0};
+  std::unordered_map<uint32_t, CallTimeAcc> by_id;
+  ~CallTimes() {
+    if (by_id.empty()) return;
+    std::vector<uint32_t> ids;
+    for (auto &p : by_id) ids.push_back(p.first);
+    std::sort(ids.begin(), ids.end());
+    CallTimeAcc all;
+    long inf = 0;
+    for (uint32_t id : ids) {
+      const CallTimeAcc &a = by_id[id];
+      inf = std::max(inf, a.calls);
+      fprintf(stderr, "EVTA_CALL_TIME id %u calls %ld runs %ld us/call bundle %.2f pre %.2f find %.2f start %.2f hook %.2f wait %.2f\n",
+              id, a.calls, a.runs, a.bundle / a.calls, a.pre / a.calls, a.find / a.calls, a.start / a.calls, a.hook / a.calls,
+              a.wait / a.calls);
+      all.bundle += a.bundle, all.pre += a.pre, all.find += a.find, all.start += a.start, all.hook += a.hook;
+      all.wait += a.wait, all.calls += a.calls, all.runs += a.runs;
+    }
+    // ids shared by several calls of one inference: the most frequent id's count is an upper bound of the inferences;
+    // the totals are printed per call and in all
+    fprintf(stderr, "EVTA_CALL_TIME all calls %ld runs %ld ms in all: bundle %.3f pre %.3f find %.3f start %.3f hook %.3f wait %.3f\n",
+            all.calls, all.runs, all.bundle / 1e3, all.pre / 1e3, all.find / 1e3, all.start / 1e3, all.hook / 1e3,
+            all.wait / 1e3);
+  }
+};
+inline bool CallTimeOn() {
+  static const bool on = getenv("EVTA_CALL_TIME") && atoi(getenv("EVTA_CALL_TIME")) > 0;
+  return on;
+}
+inline double CallTimeNow() {
+  struct timespec t;
+  clock_gettime(CLOCK_MONOTONIC, &t);
+  return t.tv_sec * 1e6 + t.tv_nsec * 1e-3;
+}
+inline CallTimes &CallTimesTL() {
+  static thread_local CallTimes t;
+  return t;
+}
+
 /*!
  * \brief The command queue object that handles the request.
  */
@@ -369,12 +420,13 @@ class CommandQueue {
   //#### EVTA_REPLAY=0 turns it off; EVTA_REPLAY_MB (default 16) limits the copies per EVTA; EVTA_REPLAY_LOG=1 prints them.
   int ReplayBegin(const void *key, int key_bytes, void *const *bufs, int nbufs) {
     if (!ReplayOn()) return 0;
+    const double tb = CallTimeOn() ? CallTimeNow() : 0;   //#### JO added (2026-11-25): EVTA_CALL_TIME
     if (rec_) DropRecording();
     if (insn_queue_.count() != 0) return 0;
     std::string k(static_cast<const char *>(key), key_bytes);
     auto it = replays_.find(k);
     if (it != replays_.end()) {
-      RunReplay(*it->second, bufs, nbufs);
+      RunReplay(*it->second, bufs, nbufs, tb);
       return 1;
     }
     if (replay_bytes_ >= ReplayLimit()) return 0;
@@ -754,8 +806,9 @@ class CommandQueue {
     rec_->bytes += ib + g.uop_bytes;
     rec_->insns += g.count;
   }
-  void RunReplay(Replay &r, void *const *bufs, int nbufs) {
+  void RunReplay(Replay &r, void *const *bufs, int nbufs, double tb = 0) {
     CHECK_EQ((size_t)nbufs, r.bufs.size());
+    const bool ct = CallTimeOn();
     bool moved = false;
     for (int i = 0; i < nbufs; i++) {
       vta_phy_addr_t a = bufs[i] ? DataBuffer::FromHandle(bufs[i])->phy_addr() : 0;
@@ -767,15 +820,40 @@ class CommandQueue {
         InsnAt(r.segs[c.seg].insn, c.idx)->dram_base = (uint32_t)(r.bufs[c.buf] / c.elem_bytes) + c.elem_offset;
       for (auto &g : r.segs) VTAFlushCache(g.insn, g.insn_phy, g.count * sizeof(VTAGenericInsn));
     }
+    CallTimeAcc *acc = nullptr;
+    double tc = 0;
+    if (ct) {
+      CallTimes &c = CallTimesTL();
+      acc = &c.by_id[r.id];
+      tc = CallTimeNow();
+      const double t0 = c.last_end, tm = c.mark > t0 ? c.mark : 0;
+      if (t0 > 0 && tb - t0 < 3000) {
+        acc->bundle += (tm ? tm : tb) - t0;
+        acc->pre += tm ? tb - tm : 0;
+      }
+      acc->find += tc - tb;
+      acc->calls++;
+      acc->runs += r.segs.size();
+    }
     for (size_t s = 0; s < r.segs.size(); s++) {
       ReplaySeg &g = r.segs[s];
       PreRunWait();
       struct timespec t0, t1;
       if (ReplayLogLevel() >= 2) clock_gettime(CLOCK_MONOTONIC, &t0);
+      double ta = ct ? CallTimeNow() : 0;
       if (seg_hook_ && s == 0) seg_hook_(seg_hook_ctx_, g.tag);
+      double th = ct ? CallTimeNow() : 0;
       VTADeviceRunStart(device_, g.insn_phy, g.count);
+      double ts = ct ? CallTimeNow() : 0;
       if (seg_hook_ && s + 1 < r.segs.size()) seg_hook_(seg_hook_ctx_, r.segs[s + 1].tag);
+      double tw = ct ? CallTimeNow() : 0;
       int timeout = VTADeviceRunWait(device_, 1u << 31);
+      if (ct) {
+        const double te = CallTimeNow();
+        acc->hook += (th - ta) + (tw - ts);
+        acc->start += ts - th;
+        acc->wait += te - tw;
+      }
       if (ReplayLogLevel() >= 2) {
         clock_gettime(CLOCK_MONOTONIC, &t1);
         fprintf(stderr, "EVTA_RUN %d %u %zu %u %.1f %llu %llu %llu %llu %llu %llu %llu\n", evta_index_, r.id, s, g.count,
@@ -800,6 +878,7 @@ class CommandQueue {
     }
     // the uop SRAM now holds the copies' uops
     uop_queue_.UopReset();
+    if (ct) CallTimesTL().last_end = CallTimeNow();
   }
   std::unordered_map<std::string, Replay *> replays_;
   int seg_tag_{-1};

@@ -57,6 +57,8 @@ options:
 environment:
   BIN=<file in /lib/firmware>   run on this bitstream instead of BIN / SYS_BIN of $RUN_ALL
   PROF_INPUT=<file>             input of every executable instead of the run line's image (e.g. an int8 <name>.i8)
+  INPUT_INT8=0                  float input (default: the main reads <name>.i8 of the image from \$INPUT_INT8_DIR, the image's
+                                dir or <Dir>/i8 when there is one; make them with INPUT_INT8_SAVE=i8 in the Dir)
   EVTA_BIAS_RESET=0|1, EVTA_REQUANT=0|1 (override what the bitstream name turns on), EVTA_DUMP_CONV=<dir>,
   EVTA_RES_CHECK=1, EVTA_REPLAY=0, ... (docs/evta_user_manual.md); with sudo give them inside: sudo /bin/sh -c "X=1 $0 ..."
 output: the start lists the bitstream, its features and the settings; <Dir>/<suffix>.log per executable;
@@ -264,6 +266,9 @@ for D in "$@"; do
   acc=$(awk -v d=$D '$1 == d {$1 = ""; sub(/^ /, ""); print; exit}' script/accuracy.txt 2>/dev/null)
   [ -n "$cls" ] && t="$t; $cls"
   [ -n "$acc" ] && t="$t; accuracy: $acc"
+  #### JO added (2026-11-25): the input the main used (int8 <name>.i8 or float, the main's "Input:" line; docs/evta_dpu_compare.md 6.10)
+  inp=$(sed -n 's/^Input: \(int8\|float\) \([^ ]*\).*/\1 \2/p' $D/$LOG | head -1)
+  [ -n "$inp" ] && t="$t; input $inp"
   printf "%-30s %-34s exit=%-3s omp=%-2s %-10s %s\n" $D $EXE $rc $OMP "$res" "$t" >> $SUM
   [ -n "$more" ] && echo "$more" >> $SUM
   echo "$XI" | sed 's/^  /    /' >> $SUM

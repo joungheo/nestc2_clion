@@ -3904,7 +3904,8 @@ static bool gInputQSet = false;
 static VTAInputInt8 gInputQ;
 static const int8_t *gInputQLut = nullptr;
 static thread_local VTAInputInt8 gInputI8Desc;
-static thread_local bool gInputI8 = false;
+static thread_local bool gInputI8 = false, gInputI8HasFloat = false;
+static thread_local const int8_t *gInputI8Data = nullptr;
 static uint32_t inputLutHash(const int8_t *lut, int C) {
   if (!lut)
     return 0;
@@ -3931,10 +3932,12 @@ int VTAInputQuantize(const float *in, int8_t *out) {
   preprocess_quantize_input(in, out, q.N, q.H, q.W, q.C, q.nchw, q.scale, q.offset, lut);
   return 1;
 }
-void VTASetInputInt8(const VTAInputInt8 *d) {
+void VTASetInputInt8(const VTAInputInt8 *d, const int8_t *data, int hasFloat) {
   gInputI8 = d != nullptr;
   if (d)
     gInputI8Desc = *d;
+  gInputI8Data = d ? data : nullptr;
+  gInputI8HasFloat = d && hasFloat;
 }
 
 //#### JO added (2026-11-25): EVTA_INPUT_STREAM_TIME=1 prints per stream the CPU time of the pack and of the flushes
@@ -4006,17 +4009,24 @@ void preprocess_conv0pack_stream(const float *input, void *buf, int N, int H, in
     if (!gInputQSet)
       gInputQ = q, gInputQLut = lut, gInputQSet = true;
   }
-  if (gInputI8 && memcmp(&q, &gInputI8Desc, sizeof(q))) {
+  bool i8 = gInputI8;
+  if (i8 && memcmp(&q, &gInputI8Desc, sizeof(q))) {
+    static std::atomic<bool> told{false};
     const VTAInputInt8 &e = gInputI8Desc;
-    fprintf(stderr,
-            "VTASetInputInt8: the int8 input was made for N %d H %d W %d C %d nchw %d scale %g offset %d lut %08x, "
-            "this bundle quantizes N %d H %d W %d C %d nchw %d scale %g offset %d lut %08x\n",
-            e.N, e.H, e.W, e.C, e.nchw, e.scale, e.offset, e.lutHash, q.N, q.H, q.W, q.C, q.nchw, q.scale, q.offset,
-            q.lutHash);
-    exit(6);
+    if (!gInputI8HasFloat || !told.exchange(true))
+      fprintf(stderr,
+              "VTASetInputInt8: the int8 input was made for N %d H %d W %d C %d nchw %d scale %g offset %d lut %08x, "
+              "this bundle quantizes N %d H %d W %d C %d nchw %d scale %g offset %d lut %08x%s\n",
+              e.N, e.H, e.W, e.C, e.nchw, e.scale, e.offset, e.lutHash, q.N, q.H, q.W, q.C, q.nchw, q.scale, q.offset,
+              q.lutHash, gInputI8HasFloat ? ": the float input is used" : "");
+    if (!gInputI8HasFloat)
+      exit(6);
+    i8 = false;
   }
+  //#### JO changed (2026-11-25): the int8 bytes from VTASetInputInt8's data when given
+  const float *src = i8 && gInputI8Data ? reinterpret_cast<const float *>(gInputI8Data) : input;
   gInputStream = {buf, (H + pad + pe - KH) / stride + KH2, 0, (W + pad + pe - KW) / stride + 1, CO / 16,
-                  input, N, H, W, C, nchw, scale, offset, lut, KH, KW, stride, pad, CO, padEnd, gInputI8};
+                  src, N, H, W, C, nchw, scale, offset, lut, KH, KW, stride, pad, CO, padEnd, i8};
   if (!on || N != 1)
     inputStreamEnd(&gInputStream);
 }
@@ -4096,9 +4106,12 @@ struct ConvBatch {
 };
 thread_local const ConvBatch *gConvBatch = nullptr;
 
+//#### JO added (2026-11-25): EVTA_CALL_TIME (zcu102/api.cc; not in vta/vtalib's runtime.h, which this file is built with)
+void VTACallTimeMark();
 static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *output, int N, int H, int W, int C, int KN, int KH, int KW, int pad_size,
                       int stride_size, bool doRelu, bool doBias, uint8_t shift, int out_h, int out_w, void* vtaCmdH, int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA,
                       const ConvEpi *res, const ConvPool *pool = nullptr, const ConvDw *dw = nullptr) {
+  VTACallTimeMark();
   //#### JO changed (2026-11-08): a depthwise conv's schedule under KN 0 (dw_convolution_evta checks it after the override)
   if (!dw)
   schedOverride(H, W, C, KN, KH, stride_size, nVirtualThread, tileHSize, tileWSize);  //#### JO added (2026-11-05)

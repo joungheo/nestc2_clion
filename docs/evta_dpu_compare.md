@@ -507,7 +507,7 @@ sudo /bin/sh -c "PROF_EXE=singlevtaMobileNetV2TfBundle EVTA_REPLAY_LOG=2 EVTA_SC
 - conv0 입력 묶기(`preprocess_conv0pack_stream`)가 float → int8 quantize를 한다. 이 시간은 추론 시간에 들어 있었다.
 - scale / offset / table은 컴파일러가 calibration profile과 schema로 정해 bundle 코드에 적는다. MobileNetV2Tf는 scale 1/128, offset 0, table 없음이다.
 
-**바꾼 것:** float 입력이 기본이고, int8 입력을 고를 수 있다.
+**바꾼 것:** int8 입력을 고를 수 있다. 같은 날 저녁부터는 int8이 기본이다: main이 그림 `<이름>.png`의 `<이름>.i8`을 `$INPUT_INT8_DIR`, 그림의 dir, 실행 Dir의 `i8/`에서 찾고, 없으면 float로 간다(`INPUT_INT8=0`이면 늘 float; quantize가 다른 `.i8`이면 경고 후 float). 아래는 처음(float 기본) 때의 설명이다.
 - vtalib-systolic(`VTAInputInt8.h`, `VTABundle.cpp`, `CPUBundle_generic.cpp`):
   - `preprocess_conv0pack_stream`은 첫 호출의 quantize를 기록한다(`VTAInputInt8Info`).
   - `VTAInputQuantize`는 그 quantize로 float 그림을 int8로 바꾼다. 묶기와 같은 함수(`PreprocessRow`)를 쓰므로 바이트가 같다.

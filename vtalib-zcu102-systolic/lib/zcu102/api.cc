@@ -307,6 +307,11 @@ void VTAReplayEnd(VTACommandHandle cmdH, int ok) {
   static_cast<vta::CommandQueue*>(cmdH)->ReplayEnd(ok != 0);
 }
 
+//#### JO added (2026-11-25): EVTA_CALL_TIME (cmd_queue.h CallTimes): the vtalib conv entry was reached now
+void VTACallTimeMark() {
+  if (vta::CallTimeOn()) vta::CallTimesTL().mark = vta::CallTimeNow();
+}
+
 //#### JO added (2026-11-05): CPU work while a replayed call runs (cmd_queue.h SetSegmentHook)
 void VTASetSegmentTag(VTACommandHandle cmdH, int tag) {
   static_cast<vta::CommandQueue*>(cmdH)->SetSegmentTag(tag);
