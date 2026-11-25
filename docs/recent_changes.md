@@ -21,6 +21,13 @@
 
 ---
 
+### 2026-11-25 ubun 9680e43f — int8 입력이 기본(`.i8`이 없거나 맞지 않으면 float), `EVTA_CALL_TIME`
+- **바뀐 것:** 공통 main `multi_threads_main.cpp`(10곳), `vtalib-zcu102-systolic`(`VTASetInputInt8(d, data, hasFloat)`, `cmd_queue.h` `CallTimes`, `api.cc`),
+  `run_prof.sh`(summary에 `input int8 / float`). main은 그림 `<이름>.png`의 `<이름>.i8`을 `$INPUT_INT8_DIR`, 그림의 dir, 실행 Dir의 `i8/`에서 찾는다.
+  [mobilenetv2_multi4_sw.md](mobilenetv2_multi4_sw.md) §3.4, 사용법은 [evta_user_manual.md](evta_user_manual.md) 환경 변수 표.
+- **다른 쪽이 할 일:** `실행 파일 다시 빌드`(systolic vtalib의 build dir; PC cross build도). `.i8`이 없는 Dir은 전처럼 float로 돈다(로그 `Input: float`).
+  보드 `hw/MobileNetV2TfTest/i8/`, `hw_multievtax4/MultiEVTAMobileNetV2TfTest/i8/`에는 `cat_285.i8`을 만들어 두었다. 같은 그림으로 float를 재려면 `INPUT_INT8=0`.
+
 ### 2026-11-25 19:00 ubun (보드) — MobileNetV2TfTest / MultiEVTAMobileNetV2TfTest bundle을 지금 컴파일러로 다시 만들고 보드 실행 파일을 다시 빌드
 - **바뀐 것:** 보드 `Debug2_remote/vta/bundles/MobileNetV2TfTest/`, `Debug2_remote/vta/multievta_bundles/MultiEVTAMobileNetV2TfTest/`의 bundle(model-compiler `0b1439b`,
   invalidate 52 → 1, 112×112 schedule 세 개 `744b1fb`), `vtabundles_xcmpl/hw/MobileNetV2TfTest`, `hw_multievtax4/MultiEVTAMobileNetV2TfTest`,
