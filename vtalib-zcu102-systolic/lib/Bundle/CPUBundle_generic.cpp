@@ -2091,6 +2091,14 @@ static inline int8x16_t preprocessQuant16(const float32x4_t x[4], float32x4_t vs
   }
   return vcombine_s8(vqmovn_s16(h[0]), vqmovn_s16(h[1]));
 }
+//#### JO added (2026-11-25): preprocessQuant16 with mul and offset 0 (x * (1 / scale), exact): one vaddq less per 4 values
+static inline int8x16_t preprocessQuant16Mul(const float32x4_t x[4], float32x4_t vs) {
+  int16x8_t h[2];
+  for (int i = 0; i < 2; i++)
+    h[i] = vcombine_s16(vqmovn_s32(vcvtaq_s32_f32(vmulq_f32(x[2 * i], vs))),
+                        vqmovn_s32(vcvtaq_s32_f32(vmulq_f32(x[2 * i + 1], vs))));
+  return vcombine_s8(vqmovn_s16(h[0]), vqmovn_s16(h[1]));
+}
 // lut[q + 128] for 16 values: 4 table lookups of 64 bytes (vqtbx keeps the lanes whose index is out of its table)
 static inline int8x16_t preprocessLut16(int8x16_t q, const uint8x16x4_t t[4]) {
   uint8x16_t i = veorq_u8(vreinterpretq_u8_s8(q), vdupq_n_u8(0x80)), d = vdupq_n_u8(64);
@@ -2231,6 +2239,24 @@ static void conv0packRows(int8_t *output, int n, int H, int pad, const Conv0Pack
       }
       int8_t *out = output + (((size_t)n * d.CB * d.H2 + q) * d.W2) * 16;
 #if defined(__aarch64__)
+      //#### JO added (2026-11-25): 3x3 / 2 over 3 channels (MobileNetV2 conv0: run 9, 18 of 32 channels): channels 0-15 =
+      //#### row 0 bytes 0-8 + row 1 bytes 0-6 (one vext + vbsl), 16-17 = row 1 bytes 7-8 (vext + vand); the vqtbl4q path
+      //#### below costs two 4-register lookups per pixel. Board bench of the MobileNetV2 conv0 pack (input not in the cache, OMP 1):
+      //#### 1.24 ms before, 0.86 ms with this, the prefetch below and preprocessQuant16Mul
+      if (d.s == 2 && run == 9 && CO == 32) {
+        const uint8_t *r0 = (const uint8_t *)rows.data(), *r1 = r0 + rowBytes;
+        const int W2 = d.W2;
+        static const uint8_t m9[16] = {255, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0};
+        static const uint8_t m2[16] = {255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+        const uint8x16_t k9 = vld1q_u8(m9), k2 = vld1q_u8(m2), z = vdupq_n_u8(0);
+        uint8_t *o0 = (uint8_t *)out, *o1 = o0 + plane;
+        for (int x = 0; x < W2; x++, r0 += 6, r1 += 6) {
+          const uint8x16_t a = vld1q_u8(r0), b = vld1q_u8(r1);
+          vst1q_u8(o0 + 16 * x, vbslq_u8(k9, a, vextq_u8(z, b, 7)));
+          vst1q_u8(o1 + 16 * x, vandq_u8(vextq_u8(b, z, 7), k2));
+        }
+        continue;
+      }
       if (tbl) {
         // everything the loop reads in locals: its byte stores may alias any memory, so d, vi[] would be reloaded
         const uint8_t *r0 = (const uint8_t *)rows.data(), *r1 = d.s == 2 ? r0 + rowBytes : r0;
@@ -2302,6 +2328,7 @@ void preprocess_conv0pack_rows(const float *input, int8_t *output, int N, int H,
       if (C == 3) {
         // the constants in locals: the byte stores below may alias the captured ones (reloaded at every pixel block)
         const float32x4_t vs = vs_, vo = vo_;
+        const bool noadd = mul && offset == 0;   //#### JO added (2026-11-25): no vaddq of a zero offset
         uint8x16x4_t tab[3][4];
         if (lut)
           memcpy(tab, tab_, sizeof(tab));
@@ -2310,6 +2337,8 @@ void preprocess_conv0pack_rows(const float *input, int8_t *output, int N, int H,
           if (nchw) {
             for (int c = 0; c < 3; c++) {
               const float *src = input + (((size_t)n * 3 + c) * H + h) * W + w0;
+              //#### JO added (2026-11-25): the next row of this plane (the input is mostly not in the cache when the bundle runs)
+              __builtin_prefetch(src + 2 * W);
               for (int k = 0; k < 4; k++)
                 x[c][k] = vld1q_f32(src + 4 * k);
             }
@@ -2322,7 +2351,7 @@ void preprocess_conv0pack_rows(const float *input, int8_t *output, int N, int H,
           }
           int8x16x3_t q;
           for (int c = 0; c < 3; c++) {
-            q.val[c] = preprocessQuant16(x[c], vs, vo, mul);
+            q.val[c] = noadd ? preprocessQuant16Mul(x[c], vs) : preprocessQuant16(x[c], vs, vo, mul);
             if (lut)
               q.val[c] = preprocessLut16(q.val[c], tab[c]);
           }
