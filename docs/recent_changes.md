@@ -7,7 +7,26 @@
 - `git pull` 한 뒤 이 파일의 맨 위부터 지난번에 본 줄까지 읽는다.
 - push할 때, 다른 PC나 보드가 무엇을 해야 하는 변경이면 **맨 위에** 항목을 하나 더한다(같은 commit에 넣는다).
   - 해야 할 일이 없는 변경(문서만, 측정 기록만)은 적지 않아도 된다.
-- 항목 형식: `### 2026-11-25 ubun 0b1439b7 — VTASave `-vta-skip-evta-invalidate`: EVTA만 읽는 출력의 invalidate를 뺌 (MobileNetV2 −0.5 ms)
+- 항목 형식: `### <날짜 시각> <PC> <commit> — <한 줄 요약>`, 그 아래에
+  - **바뀐 것**: 파일과 내용 한두 줄
+  - **다른 쪽이 할 일**: 아래 중 해당하는 것
+    - `pull`만
+    - `model-compiler 다시 빌드` (`lib/`, `include/`, `tools/`, `cmake/`가 바뀜; 보드 `Debug2_remote`, PC `nestc-build` 각각)
+    - `bundle 다시 생성` (컴파일러 출력이 바뀜: 어느 Dir인지)
+    - `실행 파일 다시 빌드` (`vtalib-zcu102-systolic/`, `vta/vtalib`, `vtabundles_xcmpl/` CMake가 바뀜: 어느 build dir인지)
+    - `bitstream` (새 판: 보드 경로 `bit/<dir>/`, `/lib/firmware` 파일 이름, 짝이 되는 vtalib commit)
+- 오래된 항목은 지우지 않는다. 자세한 내용은 항목에서 다른 문서로 링크한다.
+- 지금 빌드된 것이 어느 commit인지는 파일 자체에 적혀 있다(2026-11-24부터, [evta_user_manual.md](evta_user_manual.md) §4.4 "빌드 흔적"):
+  bundle `.cpp`의 둘째 줄 `// model-compiler:`, 실행 파일의 `NESTC_BUILD` 문자열(`run_prof.sh`가 실행마다 찍는다).
+
+---
+
+### 2026-11-25 ubun d4d8ddf2 — int8 입력을 고를 수 있음(기본 float): `.i8` 파일, `INPUT_INT8_SAVE`, `PROF_INPUT` (MobileNetV2Tf multi4 247.4 → 253.2 fps)
+- **바뀐 것:** `vtalib-zcu102-systolic` `VTAInputInt8.h`(새 파일), `VTABundle.cpp`, `CPUBundle_generic.cpp`(float 묶기의 quantize를 `PreprocessRow`로 뺌, 같은 바이트).
+  공통 main `multi_threads_main.cpp`(10곳 같은 파일), `vtabundles_xcmpl/hw*/script/run_prof.sh`(`PROF_INPUT`). [evta_dpu_compare.md](evta_dpu_compare.md) §6.10.
+- **다른 쪽이 할 일:** `pull`. `.i8` 입력을 쓰려면 `실행 파일 다시 빌드`(systolic vtalib의 build dir). bundle과 model-compiler는 그대로다. png 입력은 전과 같다.
+
+### 2026-11-25 ubun 0b1439b7 — VTASave `-vta-skip-evta-invalidate`: EVTA만 읽는 출력의 invalidate를 뺌 (MobileNetV2 −0.5 ms)
 - **바뀐 것:** `lib/Backends/VTA/VTASave.cpp` `dropEvtaOnlyInvalidates`(기본 켬; bundle `.cpp`의 옵션 목록에 줄이 하나 는다).
   CNN bundle의 invalidate가 하나만 남는다. DeiT는 그대로다. MobileNetV2Tf multi4 246.5 → 254.5 fps([evta_dpu_compare.md](evta_dpu_compare.md) §6.9).
 - **다른 쪽이 할 일:** `model-compiler 다시 빌드`(보드 `Debug2_remote`, PC `nestc-build`). `bundle 다시 생성`: CNN bundle(MobileNetV2 / Resnet / VGG16, single과 multi4)은
@@ -22,20 +41,6 @@
 - **다른 쪽이 할 일:** `실행 파일 다시 빌드`(systolic vtalib의 build dir; bundle은 그대로). 보드 공유 트리는 ubuntu2의 commit하지 않은
   수정(`vtalib-zcu102-systolic` 15개 파일, `run_prof.sh`, `sched_search.py`)이 있어 pull하지 않았다. 측정은 `~/JO/ubun_wt/`(git archive)의
   따로 빌드한 실행 파일(`<Dir>/*_pcsysubun`)로 했다.
-
-### <날짜 시각> <PC> <commit> — <한 줄 요약>`, 그 아래에
-  - **바뀐 것**: 파일과 내용 한두 줄
-  - **다른 쪽이 할 일**: 아래 중 해당하는 것
-    - `pull`만
-    - `model-compiler 다시 빌드` (`lib/`, `include/`, `tools/`, `cmake/`가 바뀜; 보드 `Debug2_remote`, PC `nestc-build` 각각)
-    - `bundle 다시 생성` (컴파일러 출력이 바뀜: 어느 Dir인지)
-    - `실행 파일 다시 빌드` (`vtalib-zcu102-systolic/`, `vta/vtalib`, `vtabundles_xcmpl/` CMake가 바뀜: 어느 build dir인지)
-    - `bitstream` (새 판: 보드 경로 `bit/<dir>/`, `/lib/firmware` 파일 이름, 짝이 되는 vtalib commit)
-- 오래된 항목은 지우지 않는다. 자세한 내용은 항목에서 다른 문서로 링크한다.
-- 지금 빌드된 것이 어느 commit인지는 파일 자체에 적혀 있다(2026-11-24부터, [evta_user_manual.md](evta_user_manual.md) §4.4 "빌드 흔적"):
-  bundle `.cpp`의 둘째 줄 `// model-compiler:`, 실행 파일의 `NESTC_BUILD` 문자열(`run_prof.sh`가 실행마다 찍는다).
-
----
 
 ### 2026-11-24 ubuntu2 744b1fb — MobileNetV2 112×112 층 3개의 schedule을 4개 동시 실행에서 다시 찾음, multi4 main에 `MULTI_FREE` / `MULTI_STAGGER_US`
 - **바뀐 것:**

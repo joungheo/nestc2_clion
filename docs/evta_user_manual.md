@@ -927,6 +927,8 @@ diff -r /tmp/dumpA /tmp/dumpB && echo same; sudo rm -rf /tmp/dumpA /tmp/dumpB   
 | `MULTI_RUNS`, `MULTI_LOCKSTEP` | 25, 0 | multi-EVTA main의 copy당 추론 수, lockstep(`run_prof.sh -n`, `-l`이 설정) |
 | `MULTI_FREE`, `MULTI_STAGGER_US` | 0, 0 | multi-EVTA main: 1이면 추론마다 barrier 없이 각자 돈다, copy i의 출발을 i × us 늦춘다. 2번째 run부터의 처리량을 `THROUGHPUT` 줄로 찍는다(`_sys`로 잴 것; 2026-11-24) |
 | `PROF_EXE` | (없음) | `run_prof.sh`: Dir의 run 줄 가운데 그 실행 파일만 돌린다(multi4 Dir의 multivta / singlevta 중 하나) |
+| `PROF_INPUT=<file>` | (없음) | `run_prof.sh`: run 줄의 그림 대신 이 입력을 모든 실행 파일에 준다(예: int8 입력 `<name>.i8`). golden 비교는 하지 않는다(2026-11-25) |
+| `INPUT_INT8_SAVE=<dir>` | (없음) | 공통 main(`multi_threads_main.cpp`, systolic vtalib): copy 0이 첫 그림을 float로 한 번 돌려 bundle의 quantize(scale / offset / table)를 얻고, 인자의 그림(또는 `EVAL_LIST`의 그림)마다 `<dir>/<이름>.i8`을 쓰고 끝낸다. `EVAL_LIST`이면 `<dir>/eval_list.txt`도 쓴다. 그림 인자나 `EVAL_LIST` 줄이 `.i8`이면 main은 그 바이트를 입력 자리에 넣고 conv0 묶기가 int8로 읽는다(quantize가 다르면 exit 6). [evta_dpu_compare.md](evta_dpu_compare.md) §6.10 |
 | `BUNDLE_RUNS` | | `_prof` / `_timed` 실행 파일의 추론 수(`run_prof.sh -n`이 설정) |
 
 **확인 (EVTA 결과를 CPU와 실행 중에 비교, 불일치 수 출력)**

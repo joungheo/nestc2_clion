@@ -477,6 +477,53 @@ sudo /bin/sh -c "PROF_EXE=singlevtaMobileNetV2TfBundle EVTA_REPLAY_LOG=2 EVTA_SC
 - 분류는 같다: 282 (0.322088).
 - 오늘 바꾼 두 가지(§6.8, §6.9)를 합치면 multi4가 238.3 → 254.5 fps(+6.8 %)이고, DPU S 270 fps의 94 %다.
 
+### 6.10 int8 입력을 미리 만들어 읽음 (2026-11-25, ubun, `d4d8ddf2`)
+
+**지금까지:**
+- bundle 입력은 float NCHW(224×224×3, 600 KB)다.
+- conv0 입력 묶기(`preprocess_conv0pack_stream`)가 float → int8 quantize를 한다. 이 시간은 추론 시간에 들어 있었다.
+- scale / offset / table은 컴파일러가 calibration profile과 schema로 정해 bundle 코드에 적는다. MobileNetV2Tf는 scale 1/128, offset 0, table 없음이다.
+
+**바꾼 것:** float 입력이 기본이고, int8 입력을 고를 수 있다.
+- vtalib-systolic(`VTAInputInt8.h`, `VTABundle.cpp`, `CPUBundle_generic.cpp`):
+  - `preprocess_conv0pack_stream`은 첫 호출의 quantize를 기록한다(`VTAInputInt8Info`).
+  - `VTAInputQuantize`는 그 quantize로 float 그림을 int8로 바꾼다. 묶기와 같은 함수(`PreprocessRow`)를 쓰므로 바이트가 같다.
+  - `VTASetInputInt8(d)` 뒤에는 그 thread의 묶기가 입력을 int8로 읽고 바이트만 옮긴다(`preprocess_conv0pack_rows_i8`).
+  - int8 입력을 만든 quantize(scale / offset / table hash / 모양)가 bundle과 다르면 둘을 찍고 exit 6이다.
+- 공통 main(`multi_threads_main.cpp`, 10곳 같은 파일):
+  - 그림 인자나 `EVAL_LIST` 줄이 `.i8`이면 int8 입력이다. 헤더 40바이트(`EVTAI8`, quantize) 다음에 N×C×H×W 바이트가 온다.
+  - `INPUT_INT8_SAVE=<dir>`: copy 0이 첫 그림을 float로 한 번 돌려 quantize를 얻는다. 그다음 그림마다 `<dir>/<이름>.i8`을 쓴다. `EVAL_LIST`이면 `<dir>/eval_list.txt`도 쓴다.
+  - scale은 calibration yaml이 아니라 bundle에서 가져온다. 2의 거듭제곱 scale은 컴파일러가 schema로 정하기 때문이다.
+- `run_prof.sh`: `PROF_INPUT=<file>`이면 run 줄의 그림 대신 그 입력을 쓴다.
+- bundle과 model-compiler는 바뀌지 않았다. vta/vtalib로 빌드한 main은 `.i8`을 받지 않는다(`VTA_INPUT_INT8` 없음).
+
+```bash
+# 보드 (vtabundles_xcmpl/hw_multievtax4/MultiEVTAMobileNetV2TfTest, bitstream을 올린 뒤)
+sudo INPUT_INT8_SAVE=/tmp/i8 ./singlevtaMobileNetV2TfBundle_pcsysubun <cat_285.png>     # -> /tmp/i8/cat_285.i8
+sudo EVAL_LIST=<list> INPUT_INT8_SAVE=<dir> ./singlevtaMobileNetV2TfBundle_pcsysubun     # 셋 전체 + <dir>/eval_list.txt
+sudo /bin/sh -c "PROF_INPUT=/tmp/i8/cat_285.i8 hw_multievtax4/script/run_prof.sh -s _pcsysubun MultiEVTAMobileNetV2TfTest"
+```
+
+**맞는지:**
+- cat_285: float / int8 100번씩, EVTA conv 출력 5,200개(`EVTA_DUMP_CONV`)가 모두 같다. 분류 282 (0.322088).
+- ImageNet val 200장(`EVAL_LIST`, `EVAL_HASH=1`): 출력 hash 200개가 모두 같다. top-1 141 / 200. 셋 전체 시간은 5.7 → 3.5 s(PNG 풀기가 빠짐).
+
+**보드**(`_amul` hp322, §6.9의 bundle, 25회, 번갈아 3번):
+
+| | float(png) | int8(`.i8`) |
+|---|---|---|
+| CPU 묶기(`EVTA_INPUT_STREAM_TIME`), 혼자 | 0.88–0.90 ms | 0.37 ms |
+| CPU 묶기, 4개 동시 | 1.02–1.09 ms (flush 0.11–0.17) | 0.59–0.61 ms (flush 0.07–0.08) |
+| 혼자 1장 | 14.01–14.03 ms | **13.79 ms** |
+| 4개 동시 | 247.1 / 248.5 / 246.5 fps | **252.1 / 254.3 / 253.1 fps** |
+
+- int8 입력으로 multi4가 평균 247.4 → 253.2 fps(+2.3 %)다.
+- **기준이 §6.9와 다르다.** 오늘 float는 §6.9(13.85 ms, 254.5 fps)보다 느리다. 묶기도 §6.8의 0.73 ms가 아니라 0.88 ms다.
+  - 바꾸기 전 vtalib(`167ab44`)로 다시 빌드해도 같았다(묶기 0.88 ms, 1장 14.016 ms). 그래서 바뀐 코드 탓이 아니라 그날 보드 상태로 본다.
+  - 같은 때 번갈아 잰 위 표가 비교 기준이다.
+- **줄어든 몫이 묶기 줄어든 몫보다 작다.** 혼자일 때 묶기는 0.5 ms 줄었지만 1장은 0.22 ms 줄었다. 묶기가 conv0의 EVTA run과 겹쳐 돌기 때문이다(§6.8).
+- **DPU와 견줄 때:** DPU 수치가 미리 int8로 만든 입력으로 잰 것인지는 확인하지 못했다(§7). 두 경우를 함께 적는다.
+
 ## 7. 조건이 다른 점 (해석할 때 주의)
 
 - **calibration 셋:**
