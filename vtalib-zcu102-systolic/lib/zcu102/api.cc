@@ -5,6 +5,9 @@
 #include <cstdlib>
 #include <map>
 #include <mutex>
+#include <thread>
+#include <map>
+#include <vector>
 #include <unordered_map>
 
 #include <vta/driver.h>
@@ -22,8 +25,13 @@
 //#### 2.6 ms of cma_alloc / cma_free ioctls) only calls cma_alloc in its first run. A reused buffer keeps the data of
 //#### its last user (cma_alloc does not clear either). At most EVTA_BUF_POOL_MB (default 32) MB are kept, the rest is
 //#### freed; EVTA_BUF_POOL_MB=0 frees at once as before. The kept buffers are released when the process exits.
+//#### JO changed (2026-11-25, docs/mobilenetv2_multi4_sw.md 6): a free list per thread and size, last freed first out (was
+//#### one list by size for all threads): the copies of a multi-EVTA run took each other's buffers in a different order
+//#### every inference, so every replayed call found new addresses (instructions rewritten and flushed, cmd_queue.h
+//#### RunReplay). A thread with no free buffer of the size takes another thread's (the first inference), else allocates.
+//#### EVTA_BUF_POOL_SHARED=1: the old shared list.
 static std::mutex buf_pool_mutex;
-static std::multimap<size_t, vta::DataBuffer*> buf_pool;     // free buffers by size
+static std::map<std::pair<std::thread::id, size_t>, std::vector<vta::DataBuffer*>> buf_pool;  // free buffers
 static std::unordered_map<vta::DataBuffer*, size_t> buf_size; // size of every buffer from VTABufferAlloc
 static size_t buf_pool_bytes = 0;
 
@@ -35,13 +43,24 @@ static size_t BufPoolLimit() {
   return limit;
 }
 
+static std::thread::id BufPoolOwner() {
+  static const bool shared = getenv("EVTA_BUF_POOL_SHARED") && atoi(getenv("EVTA_BUF_POOL_SHARED")) > 0;
+  return shared ? std::thread::id() : std::this_thread::get_id();
+}
+
 void* VTABufferAlloc(size_t size) {
   {
     std::lock_guard<std::mutex> lock(buf_pool_mutex);
-    auto it = buf_pool.find(size);
-    if (it != buf_pool.end()) {
-      vta::DataBuffer* b = it->second;
-      buf_pool.erase(it);
+    auto it = buf_pool.find({BufPoolOwner(), size});
+    if (it == buf_pool.end() || it->second.empty())
+      for (auto j = buf_pool.begin(); j != buf_pool.end(); ++j)
+        if (j->first.second == size && !j->second.empty()) {
+          it = j;
+          break;
+        }
+    if (it != buf_pool.end() && !it->second.empty()) {
+      vta::DataBuffer* b = it->second.back();
+      it->second.pop_back();
       buf_pool_bytes -= size;
       return b;
     }
@@ -58,7 +77,7 @@ void VTABufferFree(void* buffer) {
     std::lock_guard<std::mutex> lock(buf_pool_mutex);
     auto it = buf_size.find(b);
     if (it != buf_size.end() && buf_pool_bytes + it->second <= BufPoolLimit()) {
-      buf_pool.emplace(it->second, b);
+      buf_pool[{BufPoolOwner(), it->second}].push_back(b);
       buf_pool_bytes += it->second;
       return;
     }

@@ -28,7 +28,7 @@ namespace vta {
 //#### Gaps over 3 ms (between inferences) are left out.
 struct CallTimeAcc {
   double bundle{0}, pre{0}, find{0}, start{0}, hook{0}, wait{0};
-  long calls{0}, runs{0};
+  long calls{0}, runs{0}, rewrites{0}, variants{0};   // instructions rewritten for new addresses, variants made
 };
 struct CallTimes {
   double last_end{0}, mark{0};
@@ -47,13 +47,14 @@ struct CallTimes {
               id, a.calls, a.runs, a.bundle / a.calls, a.pre / a.calls, a.find / a.calls, a.start / a.calls, a.hook / a.calls,
               a.wait / a.calls);
       all.bundle += a.bundle, all.pre += a.pre, all.find += a.find, all.start += a.start, all.hook += a.hook;
-      all.wait += a.wait, all.calls += a.calls, all.runs += a.runs;
+      all.wait += a.wait, all.calls += a.calls, all.runs += a.runs, all.rewrites += a.rewrites, all.variants += a.variants;
     }
     // ids shared by several calls of one inference: the most frequent id's count is an upper bound of the inferences;
     // the totals are printed per call and in all
-    fprintf(stderr, "EVTA_CALL_TIME all calls %ld runs %ld ms in all: bundle %.3f pre %.3f find %.3f start %.3f hook %.3f wait %.3f\n",
+    fprintf(stderr, "EVTA_CALL_TIME all calls %ld runs %ld ms in all: bundle %.3f pre %.3f find %.3f start %.3f hook %.3f wait %.3f;"
+            " rewrites %ld variants %ld\n",
             all.calls, all.runs, all.bundle / 1e3, all.pre / 1e3, all.find / 1e3, all.start / 1e3, all.hook / 1e3,
-            all.wait / 1e3);
+            all.wait / 1e3, all.rewrites, all.variants);
   }
 };
 inline bool CallTimeOn() {
@@ -423,12 +424,23 @@ class CommandQueue {
     const double tb = CallTimeOn() ? CallTimeNow() : 0;   //#### JO added (2026-11-25): EVTA_CALL_TIME
     if (rec_) DropRecording();
     if (insn_queue_.count() != 0) return 0;
+    //#### JO added (2026-11-25, docs/mobilenetv2_multi4_sw.md 6): a bundle calls its EVTA entries in the same order every
+    //#### inference: the replay after the last one is guessed first (one compare instead of a string and a hash lookup)
+    Replay *guess = last_replay_ ? last_replay_->next : nullptr;
+    if (guess && guess->key.size() == (size_t)key_bytes && !memcmp(guess->key.data(), key, key_bytes)) {
+      last_replay_ = guess;
+      RunReplay(*guess, bufs, nbufs, tb);
+      return 1;
+    }
     std::string k(static_cast<const char *>(key), key_bytes);
     auto it = replays_.find(k);
     if (it != replays_.end()) {
+      if (last_replay_) last_replay_->next = it->second;
+      last_replay_ = it->second;
       RunReplay(*it->second, bufs, nbufs, tb);
       return 1;
     }
+    last_replay_ = nullptr;
     if (replay_bytes_ >= ReplayLimit()) return 0;
     rec_ = new Replay;
     rec_key_ = k;
@@ -455,6 +467,7 @@ class CommandQueue {
       fprintf(stderr, "EVTA %d replay %zu: %zu runs, %u instructions, %zu relocations, %zu bytes (%zu in all)\n",
               evta_index_, replays_.size(), rec_->segs.size(), rec_->insns, rec_->relocs.size(), rec_->bytes,
               replay_bytes_);
+    rec_->key = rec_key_;
     replays_[rec_key_] = rec_;
     rec_ = nullptr;
     rec_bufs_.clear();
@@ -633,6 +646,12 @@ class CommandQueue {
     std::vector<vta_phy_addr_t> bufs;  // the buffers' addresses in the copies
     size_t bytes{0};
     uint32_t insns{0}, id{0};
+    //#### JO added (2026-11-25): copies of the instructions for other buffer addresses (RunReplay; uops shared)
+    std::vector<Replay *> variants;
+    bool variant{false};   // a variant: its segs' uop is the owner's
+    //#### JO added (2026-11-25): its key, and the replay that followed it last time (ReplayBegin's guess)
+    std::string key;
+    Replay *next{nullptr};
   };
   static int ReplayEnv(const char *name, int def) {
     const char *e = getenv(name);
@@ -745,11 +764,49 @@ class CommandQueue {
     return mb << 20;
   }
   static void FreeReplay(Replay *r) {
+    if (!r) return;
+    for (Replay *v : r->variants) FreeReplay(v);
     for (auto &g : r->segs) {
       if (g.insn) VTAMemFree(g.insn);
-      if (g.uop) VTAMemFree(g.uop);
+      if (g.uop && !r->variant) VTAMemFree(g.uop);
     }
     delete r;
+  }
+  //#### JO added (2026-11-25, docs/mobilenetv2_multi4_sw.md 6): several calls of one shape (one replay) with different
+  //#### buffers had their instructions' addresses rewritten and flushed at every call (5-10 us, more with 4 EVTAs at
+  //#### once). EVTA_REPLAY_VARIANTS (default 8, 0 = as before) copies of the instructions per replay, one per buffer
+  //#### address set, made at the first call with that set; past the limit the owner is rewritten as before.
+  static int ReplayVariants() {
+    static const int n = ReplayEnv("EVTA_REPLAY_VARIANTS", 8);
+    return n;
+  }
+  // a copy of r's instructions for the addresses a (nullptr: no memory / over the limit)
+  Replay *MakeVariant(Replay &r, const std::vector<vta_phy_addr_t> &a) {
+    if ((int)r.variants.size() >= ReplayVariants() || replay_bytes_ >= ReplayLimit()) return nullptr;
+    Replay *v = new Replay;
+    v->variant = true;
+    v->id = r.id;
+    v->insns = r.insns;
+    v->bufs = a;
+    for (const ReplaySeg &g : r.segs) {
+      ReplaySeg c = g;
+      const size_t ib = g.count * sizeof(VTAGenericInsn);
+      c.insn = VTAMemAlloc(ib, 1);
+      if (!c.insn) {
+        FreeReplay(v);
+        return nullptr;
+      }
+      c.insn_phy = VTAMemGetPhyAddr(c.insn);
+      memcpy(c.insn, g.insn, ib);
+      v->segs.push_back(c);
+      v->bytes += ib;
+    }
+    for (auto &c : r.relocs)
+      InsnAt(v->segs[c.seg].insn, c.idx)->dram_base = (uint32_t)(a[c.buf] / c.elem_bytes) + c.elem_offset;
+    for (auto &g : v->segs) VTAFlushCache(g.insn, g.insn_phy, g.count * sizeof(VTAGenericInsn));
+    replay_bytes_ += v->bytes;
+    r.variants.push_back(v);
+    return v;
   }
   static VTAMemInsn *InsnAt(void *insns, uint32_t i) {
     return reinterpret_cast<VTAMemInsn *>(static_cast<VTAGenericInsn *>(insns) + i);
@@ -806,20 +863,35 @@ class CommandQueue {
     rec_->bytes += ib + g.uop_bytes;
     rec_->insns += g.count;
   }
-  void RunReplay(Replay &r, void *const *bufs, int nbufs, double tb = 0) {
-    CHECK_EQ((size_t)nbufs, r.bufs.size());
+  void RunReplay(Replay &owner, void *const *bufs, int nbufs, double tb = 0) {
+    CHECK_EQ((size_t)nbufs, owner.bufs.size());
     const bool ct = CallTimeOn();
-    bool moved = false;
-    for (int i = 0; i < nbufs; i++) {
-      vta_phy_addr_t a = bufs[i] ? DataBuffer::FromHandle(bufs[i])->phy_addr() : 0;
-      if (a != r.bufs[i]) moved = true;
-      r.bufs[i] = a;
+    //#### JO changed (2026-11-25): the owner or a variant with these addresses (MakeVariant); else rewrite the owner
+    vta_phy_addr_t a[16];
+    CHECK_LE(nbufs, 16);
+    for (int i = 0; i < nbufs; i++) a[i] = bufs[i] ? DataBuffer::FromHandle(bufs[i])->phy_addr() : 0;
+    auto same = [&](const Replay &x) {
+      for (int i = 0; i < nbufs; i++)
+        if (x.bufs[i] != a[i]) return false;
+      return true;
+    };
+    Replay *pick = same(owner) ? &owner : nullptr;
+    for (size_t k = 0; !pick && k < owner.variants.size(); k++)
+      if (same(*owner.variants[k])) pick = owner.variants[k];
+    bool made = false, rewrote = false;
+    if (!pick && ReplayVariants() > 0 && !owner.relocs.empty())
+      made = (pick = MakeVariant(owner, std::vector<vta_phy_addr_t>(a, a + nbufs))) != nullptr;
+    if (!pick) {
+      rewrote = !owner.relocs.empty();
+      pick = &owner;
+      for (int i = 0; i < nbufs; i++) owner.bufs[i] = a[i];
+      if (!owner.relocs.empty())
+      for (auto &c : owner.relocs)
+        InsnAt(owner.segs[c.seg].insn, c.idx)->dram_base = (uint32_t)(owner.bufs[c.buf] / c.elem_bytes) + c.elem_offset;
+      if (!owner.relocs.empty())
+        for (auto &g : owner.segs) VTAFlushCache(g.insn, g.insn_phy, g.count * sizeof(VTAGenericInsn));
     }
-    if (moved) {
-      for (auto &c : r.relocs)
-        InsnAt(r.segs[c.seg].insn, c.idx)->dram_base = (uint32_t)(r.bufs[c.buf] / c.elem_bytes) + c.elem_offset;
-      for (auto &g : r.segs) VTAFlushCache(g.insn, g.insn_phy, g.count * sizeof(VTAGenericInsn));
-    }
+    Replay &r = *pick;
     CallTimeAcc *acc = nullptr;
     double tc = 0;
     if (ct) {
@@ -834,6 +906,8 @@ class CommandQueue {
       acc->find += tc - tb;
       acc->calls++;
       acc->runs += r.segs.size();
+      acc->rewrites += rewrote;
+      acc->variants += made;
     }
     for (size_t s = 0; s < r.segs.size(); s++) {
       ReplaySeg &g = r.segs[s];
@@ -881,6 +955,7 @@ class CommandQueue {
     if (ct) CallTimesTL().last_end = CallTimeNow();
   }
   std::unordered_map<std::string, Replay *> replays_;
+  Replay *last_replay_{nullptr};   //#### JO added (2026-11-25): the last replay run (ReplayBegin's guess)
   int seg_tag_{-1};
   void (*seg_hook_)(void *, int){nullptr};
   void *seg_hook_ctx_{nullptr};
