@@ -13,8 +13,6 @@ case " $* " in *" -h "*|*" --help "*) echo "usage: sudo $0 [-t <threads>] [Dir .
   exit 0;; esac
 [ -n "${BIN:-}" ] && BSRC="BIN= in the environment" || BSRC="BIN of $0"
 BIN=${BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_380mhz.bin}
-#### JO changed (2026-11-26): the depthwise window unit build (_dw, HP 304.3 MHz; docs/evta_dw_unit.md 9), was ..._sa_amul_400mhz_hp322_rq.bin
-#SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_amul_400mhz_hp322_rq.bin}
 SYS_BIN=${SYS_BIN:-vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_amul_dw_400mhz_hp304_rq.bin}
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-1}
 #### JO added (2026-11-10): -t <threads> = OMP_NUM_THREADS; other options (-s ...) belong to run_prof.sh; a Dir that is not a
