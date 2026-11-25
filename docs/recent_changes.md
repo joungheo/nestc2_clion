@@ -7,7 +7,15 @@
 - `git pull` 한 뒤 이 파일의 맨 위부터 지난번에 본 줄까지 읽는다.
 - push할 때, 다른 PC나 보드가 무엇을 해야 하는 변경이면 **맨 위에** 항목을 하나 더한다(같은 commit에 넣는다).
   - 해야 할 일이 없는 변경(문서만, 측정 기록만)은 적지 않아도 된다.
-- 항목 형식: `### <날짜 시각> <PC> <commit> — <한 줄 요약>`, 그 아래에
+- 항목 형식: `### 2026-11-25 ubun b5c4e7d — vtalib-systolic: conv0 입력 묶기를 빠르게 (MobileNetV2 1.23 → 0.73 ms, 같은 바이트)
+- **바뀐 것:** `vtalib-zcu102-systolic/lib/Bundle/CPUBundle_generic.cpp` `conv0packRows`, `preprocess_conv0pack_rows`
+  (3×3 / 2를 3채널에 거는 conv0의 묶기, prefetch, offset 0이면 덧셈 없음). `VTABundle.cpp`: `EVTA_INPUT_STREAM_TIME=1`(`163dd9b`).
+  MobileNetV2Tf 혼자 14.84 → 14.35 ms, multi4 238.3 → 246.5 fps([evta_dpu_compare.md](evta_dpu_compare.md) §6.8). 다른 모델의 conv0(7×7 등)은 그대로다.
+- **다른 쪽이 할 일:** `실행 파일 다시 빌드`(systolic vtalib의 build dir; bundle은 그대로). 보드 공유 트리는 ubuntu2의 commit하지 않은
+  수정(`vtalib-zcu102-systolic` 15개 파일, `run_prof.sh`, `sched_search.py`)이 있어 pull하지 않았다. 측정은 `~/JO/ubun_wt/`(git archive)의
+  따로 빌드한 실행 파일(`<Dir>/*_pcsysubun`)로 했다.
+
+### <날짜 시각> <PC> <commit> — <한 줄 요약>`, 그 아래에
   - **바뀐 것**: 파일과 내용 한두 줄
   - **다른 쪽이 할 일**: 아래 중 해당하는 것
     - `pull`만

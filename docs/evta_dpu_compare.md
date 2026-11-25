@@ -388,7 +388,7 @@ depthwise 장치와 conv 개선을 정하려고 다시 쟀다.
 | 나머지 conv 28개 | 하한의 1.5–2배 | run마다 약 30–60 us 더 |
 
 - 먼저 할 것(소프트웨어만, EVTA 1개에도 듣는다):
-  1. conv0 입력 묶기를 빠르게 한다(1.31 ms; 입력 600 KB float → 416 KB).
+  1. conv0 입력 묶기를 빠르게 한다(1.31 ms; 입력 600 KB float → 416 KB). 끝(§6.8): 혼자 1.23 → 0.73 ms, multi4 238.3 → 246.5 fps.
   2. 출력을 EVTA만 읽는 buffer의 invalidate를 뺀다(0.5 ms). 단, CPU가 그 buffer에 남긴 dirty line이 없는지(buffer pool 재사용) 확인해야 한다.
   3. 호출마다의 CPU 쪽 시간을 줄인다(1.3 ms).
 - 셋을 합쳐 copy당 2 ms 남짓이면, depthwise 장치 없이도 DPU S(14.8 ms)에 닿는다(계산값).
@@ -402,6 +402,37 @@ sudo /bin/sh -c "PROF_EXE=singlevtaMobileNetV2TfBundle EVTA_REPLAY_LOG=2 EVTA_SC
 ```
 - `EVTA_RUN` 줄의 필드는 EVTA, replay id, segment, 명령 수, us, GEMM 반복, ALU 반복, 그리고 uop / wgt / inp / acc / out 바이트다.
 - 같은 모양의 호출은 replay id를 같이 쓴다(40개 id, EVTA 호출 54개). 그래서 마지막 run의 `segment 0` 순서와 `timing.csv`의 EVTA 호출 순서로 짝을 지었다. EVTA run이 없는 호출(`preprocess_conv0pack_stream`)은 빼야 한다.
+
+### 6.8 conv0 입력 묶기를 빠르게 (2026-11-25, ubun, vtalib-systolic `b5c4e7d`)
+
+§6.7의 1번이다.
+
+**나눠 잼:** vtalib-systolic `EVTA_INPUT_STREAM_TIME=1`(`163dd9b`)은 stream마다 CPU 묶기 시간과 flush 시간을 찍는다.
+- 결과는 묶기 1.23 ms, flush 0.05 ms였다.
+- 묶기 함수만 떼어 보드에서 잰 bench(OMP 1, 입력이 cache에 없을 때)도 1.24 ms였다. 그중 quantize가 0.51 ms, 묶기 table이 0.28 ms, 나머지는 입력 600 KB를 DRAM에서 읽는 몫이다.
+
+**바꾼 것**(`CPUBundle_generic.cpp`, 출력 바이트는 같음):
+- `conv0packRows`: 3×3 / 2를 3채널에 거는 경우(`run` 9, `CO` 32; MobileNetV2 conv0)는 pixel마다 `vqtbl4q` 두 번 대신 `vext` + `vbsl` / `vand`로 묶는다.
+  - channel 0–15는 0번 줄의 바이트 0–8과 1번 줄의 바이트 0–6이다.
+  - channel 16–17은 1번 줄의 바이트 7–8이다.
+- `preprocess_conv0pack_rows`(NCHW, 3채널): 같은 plane의 다음 줄을 prefetch한다. offset이 0이고 scale이 2의 거듭제곱이면 `vaddq`를 뺀다(`preprocessQuant16Mul`).
+- bench: 1.24 → 0.86 ms.
+
+**보드**(`_amul` hp322, 25회; 실행 파일은 보드에서 따로 빌드한 `_pcsysubun`, 같은 bundle):
+
+| | 전 (§6.7) | 후 |
+|---|---|---|
+| CPU 묶기(`EVTA_INPUT_STREAM_TIME`), 혼자 | 1.23 ms | 0.73 ms |
+| CPU 묶기, 4개 동시 | | 0.98–1.07 ms (flush 0.09–0.16) |
+| conv0 호출(stream 포함), 혼자 / 4개 동시 copy 0 | 1.66 / 1.83 ms | **0.97 / 1.35 ms** |
+| 혼자 1장 | 14.84 ms | **14.35 ms** |
+| 4개 동시 | 238.3 fps (copy당 16.43–16.75) | **246.5 fps** (15.87–16.19) |
+
+- 분류는 같다: 282 (0.322088).
+- **혼자 돌 때** conv0은 이제 EVTA run(0.78 ms)에 묶인다.
+- **4개 동시이면** 묶기가 1.0 ms로 늘어 아직 CPU에 묶인다. 4개 core가 DRAM을 같이 쓰기 때문이다.
+- **더 줄이려면** 입력 자체를 줄여야 한다. float 600 KB 대신 uint8 그림 150 KB를 받고, 채널별 256칸 표로 정규화와 quantize를 한 번에 한다. 그러려면 bundle 입력 형식(VTASave, main)을 바꿔야 한다.
+  - DPU의 성능 수치는 int8로 준비한 입력으로 잰다고 알고 있다(확인 필요). 이 입력 쪽 시간은 견줄 때 따로 적는다.
 
 ## 7. 조건이 다른 점 (해석할 때 주의)
 
