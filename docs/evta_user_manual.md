@@ -299,11 +299,12 @@ sudo cp /home/xilinx/JO/npuprg/bit/<목적>_<YYMMDD>/vtahw_<dir>.bin /lib/firmwa
   - `..._sa_amul_400mhz_rq.bin`(11-23): ALU 확장 중 MUL immediate만(`_amul`, avgpool on EVTA). MobileNetV2가 `_alux3`보다 0.26 ms 느리다.
   - `..._sa_amul_bc_400mhz_rq2.bin`(11-24): `_amul` + broadcast vector 연산 II 1(`_amul_bc`). CNN 다섯 모델은 `_alux3`와 같은 시간, LUT 45.0k(`_alux3` 69.8k). DeiT 확장 연산은 없다.
     `rq2`는 고쳐서 다시 합성한 두 번째 판이다. 첫 판 `..._sa_amul_bc_400mhz_rq.bin`은 depthwise가 틀려 쓰지 않는다.
-- **systolic, EVTA 4개:** `SYS_BIN` 기본은 2026-11-24부터 `..._16_15_18_17_4evta_sa_amul_400mhz_hp322_rq.bin`(11-23, MUL immediate, HP 포트 321.7 MHz)이다.
+- **systolic, EVTA 4개:** `SYS_BIN` 기본은 2026-11-26부터 `..._16_15_18_17_4evta_sa_amul_dw_400mhz_hp304_rq.bin`(11-25, `_amul` + depthwise 창 장치, HP 포트 304.3 MHz)이다.
+  - 그 전 기본(11-24 ~ 25) `..._4evta_sa_amul_400mhz_hp322_rq.bin`(11-23, MUL immediate, HP 포트 321.7 MHz).
   - 그 전 기본 `..._4evta_sa_400mhz_rq.bin`(11-04, ALU 확장 없음, avgpool CPU). per copy MobileNetV2 19.23 → 18.69, Resnet50 78.47 → 77.99 ms.
   - `..._4evta_sa_amul_bc_400mhz_hp282_rq.bin`(11-24): 보드는 통과했지만 CNN 이득이 없고 HP 클럭이 낮아(281.7 MHz) Resnet50이 1.3 ms 느리다. 쓰지 않는다.
   - `..._4evta_sa_amul_dw_400mhz_hp304_rq.bin`(11-25): `_amul` + depthwise 창 장치(`_dw`, HP 304.3 MHz). MobileNetV2Tf 4개 동시 260.1 → 287.4 fps,
-    혼자 13.54 → 12.09 ms. 아직 기본은 아니다(`BIN=`으로). 만든 과정과 명령: [evta_dw_unit.md](evta_dw_unit.md) §9.
+    혼자 13.54 → 12.09 ms. 11-26부터 기본(위). 만든 과정과 명령: [evta_dw_unit.md](evta_dw_unit.md) §9.
     multi4 빌드는 이 판부터 `VTA_CONTAIN=1`(`run_flow.sh` / `m4_build.sh` 앞 환경 변수; pblock `CONTAIN_ROUTING`)을 쓴다.
   - single `..._16_16_19_18_sa_alux3_dw_375mhz_rq.bin`(11-25): `_alux3` + `_dw`, 375 MHz. MobileNetV2Tf 1장 13.90 ms.
   - 이름 조각(`_amul`, `_amul_bc`, `_rq2`, `_hp322` …)의 뜻: [evta_isa_ext.md](evta_isa_ext.md) §5 "bitstream 이름 읽는 법".

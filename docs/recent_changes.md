@@ -21,6 +21,11 @@
 
 ---
 
+### 2026-11-26 ubuntu2 (이 commit) — multi4 `SYS_BIN` 기본 = `..._4evta_sa_amul_dw_400mhz_hp304_rq.bin`
+- **바뀐 것:** `vtabundles_xcmpl/hw_multievtax4/script/run_all.sh`, `collect_hw_bundles.py`(다음 collect가 옛 이름을 되쓰지 않게). 전 기본 `..._amul_400mhz_hp322_rq.bin`은 `BIN=`으로.
+- **다른 쪽이 할 일:** `pull`만(bitstream은 보드 `/lib/firmware`에 있다). 818a73c 전 vtalib으로 만든 실행 파일도 이 판에서 돈다(창 모드 없이, `_amul`과 같은 결과).
+  창 모드를 쓰려면 systolic 실행 파일을 818a73c 이후로 다시 빌드한다. HP 클럭이 322 → 304 MHz라 DMA가 많은 모델(Resnet50)은 조금 느릴 수 있다(재지 않음).
+
 ### 2026-11-25 ubuntu2 (이 commit, "depthwise window unit") — depthwise 창 장치 `_dw`: multi4 MobileNetV2Tf 260.1 → 287.4 fps
 - **바뀐 것:** ISA(`dw_win`, uop `dw` / `emit`), `vta-hw-zcu102-systolic` / `-multi4` HLS·RTL(`sa_dw.v`, Makefile `DWU=1`), multi4 `place_d.tcl` / `run_flow.sh`
   `VTA_CONTAIN=1`, `vtalib-zcu102-systolic`(`dw_convolution_evta` 창 판, `VTAHasDwUnit`, `EVTA_DWU`, `VTABufferFreeHook`, 시뮬레이터). bundle / 컴파일러는 그대로.

@@ -307,4 +307,5 @@ python3 vtabundles_xcmpl/hwtest/bit2bin.py rs_mamuldwc_h.bit vtahw_zcu102_1x16_i
 
 - 같은 bitstream에서 `EVTA_DWU=0`(대각 GEMM)은 260.6 fps로 `_amul`과 같다: 이득은 모두 창 모드에서 왔다.
 - 4개 동시에서 copy당 EVTA conv 시간이 6.7 → 5.3 ms로 줄었다.
-- 남은 것: multi4 기본 `SYS_BIN`을 이 판으로 바꿀지(아직 `_amul`), DPU 비교 문서([evta_dpu_compare.md](evta_dpu_compare.md)) 갱신, PP8(§7).
+- 2026-11-26부터 multi4 기본 `SYS_BIN`이 이 판이다(`hw_multievtax4/script/run_all.sh`, `collect_hw_bundles.py`).
+- 남은 것: DPU 비교 문서([evta_dpu_compare.md](evta_dpu_compare.md)) 갱신, PP8(§7).

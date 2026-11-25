@@ -119,7 +119,9 @@ SYS_BINS = {
     'single': 'vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_alux3_400mhz_rq.bin',
     #### JO changed (2026-11-24): multi4 = the ALU MUL immediate build, HP ports 321.7 MHz (docs/evta_isa_ext.md 5)
     #'multievtax4': 'vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz_rq.bin',
-    'multievtax4': 'vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_amul_400mhz_hp322_rq.bin',
+    #### JO changed (2026-11-26): + the depthwise window unit (_dw, HP 304.3 MHz; docs/evta_dw_unit.md 9)
+    #'multievtax4': 'vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_amul_400mhz_hp322_rq.bin',
+    'multievtax4': 'vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_amul_dw_400mhz_hp304_rq.bin',
 }
 #### JO added: per set, dirs made by a script here: (dir, executable, arguments, golden, generator command)
 #### JO changed (2026-10-26): + the hw/ dir the generator copies from (ResConv10Test: the fastest conv shape)
