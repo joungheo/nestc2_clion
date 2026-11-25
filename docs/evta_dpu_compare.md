@@ -475,6 +475,11 @@ sudo /bin/sh -c "PROF_EXE=singlevtaMobileNetV2TfBundle EVTA_REPLAY_LOG=2 EVTA_SC
 | 4개 동시 | 246.5 fps | **254.5 fps** (copy당 15.72–16.00 ms) |
 
 - 분류는 같다: 282 (0.322088).
+- **진짜 model-compiler로 확인**(같은 날 18:10, 보드 공유 트리를 pull한 뒤):
+  - 보드 `Debug2_remote`의 model-compiler를 다시 빌드하고(`VTASave.cpp`만), multi4 MobileNetV2(QAT) / Resnet18 / VGG16을 옵션을 켜고 끄고 만들었다.
+  - 차이는 invalidate 줄(52 → 1, 21 → 1, 17 → 1)과 옵션 주석 한 줄뿐이다. weights는 같고, 측정에 쓴 도구의 출력과 바이트가 같다.
+  - MobileNetV2 실행: conv 출력 dump 208개가 켜고 끈 것 사이에 같다. `EVTA_RES_CHECK` 228개 0 differ, 282 (0.920282).
+  - MobileNetV2Tf의 model(`mobilenetv2_tf_f32.onnx`)과 profile은 보드와 ubun에 없다(ubuntu2에서 만듦). 그래서 같은 구조의 QAT model로 확인했다.
 - 오늘 바꾼 두 가지(§6.8, §6.9)를 합치면 multi4가 238.3 → 254.5 fps(+6.8 %)이고, DPU S 270 fps의 94 %다.
 
 ### 6.10 int8 입력을 미리 만들어 읽음 (2026-11-25, ubun, `d4d8ddf2`)

@@ -31,8 +31,9 @@
   CNN bundle의 invalidate가 하나만 남는다. DeiT는 그대로다. MobileNetV2Tf multi4 246.5 → 254.5 fps([evta_dpu_compare.md](evta_dpu_compare.md) §6.9).
 - **다른 쪽이 할 일:** `model-compiler 다시 빌드`(보드 `Debug2_remote`, PC `nestc-build`). `bundle 다시 생성`: CNN bundle(MobileNetV2 / Resnet / VGG16, single과 multi4)은
   다시 만들 때 invalidate가 빠진다. 다시 만들지 않아도 결과는 같다(시간만 다름). vtalib는 바뀌지 않았다.
-  - 이 commit의 model-compiler로는 아직 bundle을 만들어 보지 않았다(ubun에 `nestc-build`가 없고 보드 공유 트리는 pull 못 함). 측정은 같은 함수를 떼어 만든 도구로
-    바꾼 bundle로 했다. 처음 다시 만드는 쪽은 invalidate 수(위 표)와 `EVTA_RES_CHECK` 0 differ를 확인해 주면 좋다.
+  - 2026-11-25 18:10 ubun 확인: 보드 `Debug2_remote`의 model-compiler를 다시 빌드했다(`VTASave.cpp`만, 2분 44초). multi4 MobileNetV2 / Resnet18 / VGG16을 옵션을
+    켜고 끄고 만들어 비교했다(`~/JO/ubun_wt/gen/`). 바뀐 것은 invalidate 줄(52 → 1, 21 → 1, 17 → 1)과 옵션 주석 한 줄뿐이고, weights는 같다. 측정에 쓴 도구의 출력과
+    바이트가 같다. MobileNetV2 실행: conv 출력 dump 208개 같음, `EVTA_RES_CHECK` 228개 0 differ, 282 (0.920282). 공유 `Debug2_remote/vta/multievta_bundles`의 bundle은 다시 만들지 않았다.
 
 ### 2026-11-25 ubun b5c4e7d — vtalib-systolic: conv0 입력 묶기를 빠르게 (MobileNetV2 1.23 → 0.73 ms, 같은 바이트)
 - **바뀐 것:** `vtalib-zcu102-systolic/lib/Bundle/CPUBundle_generic.cpp` `conv0packRows`, `preprocess_conv0pack_rows`
