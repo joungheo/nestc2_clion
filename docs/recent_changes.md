@@ -21,6 +21,12 @@
 
 ---
 
+### 2026-11-26 ubun (이 commit) — `perf_record.sh`: lock을 기다리고 새 로그만 읽음, 문서 GOPS
+- **바뀐 것:** `vtabundles_xcmpl/perf_record.sh`. 다른 EVTA 실행이 `/tmp/evta_run.lock`을 잡고 있으면 `run_prof.sh` / `load_bit.sh`가 바로 끝나는데,
+  전에는 남아 있던 옛 로그를 새 결과처럼 읽었다. 이제 30초마다 다시 시도하고(`LOCK_WAIT`, 기본 1800 s) 그 실행이 쓴 로그만 읽는다(없으면 `no new log`).
+  보드 공유 `build_sys`, `build_multievtax4_sys`는 `38e3da6`으로 다시 빌드해 두었다.
+- **다른 쪽이 할 일:** `pull`만.
+
 ### 2026-11-26 ubun (이 commit) — vtalib-systolic: 1×1 conv weight를 한 번에 LOAD (MobileNetV2 7×7 project conv)
 - **바뀐 것:** `vtalib-zcu102-systolic/lib/Bundle/VTABundle.cpp` `conv_kernel`. 1×1 conv에서 thread의 weight가 wgt 몫에 안 들어가면 filter 묶음을 줄여 들어가게 한다.
   residual add가 있어도 마지막 thread의 weight가 identity entry(1023) 아래에서 끝나면 weight 한 번 LOAD 길을 쓴다. `EVTA_WGT_FIT=0` = 전과 같음.

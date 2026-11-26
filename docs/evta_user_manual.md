@@ -794,6 +794,8 @@ sudo /bin/sh -c "hw_multievtax4/script/run_prof.sh -s _sysprof -n 25 -l -r Multi
 sudo /bin/sh -c "vtabundles_xcmpl/perf_record.sh -r 3 [i8] [check] [m4] [single]"     # 기본 bitstream = 각 run_all.sh의 SYS_BIN
 sudo /bin/sh -c "M4_BITS='<a>.bin <b>.bin' S1_BITS='<c>.bin <d>.bin' vtabundles_xcmpl/perf_record.sh -r 3 m4 single"
 ```
+- 다른 사용자의 EVTA 실행이 `/tmp/evta_run.lock`을 잡고 있으면 30초마다 다시 시도한다(`LOCK_WAIT=<초>`, 기본 1800). 그때까지 못 잡으면 `ERROR: ... not run`.
+  시간은 그 실행이 새로 쓴 로그에서만 읽는다(없으면 `no new log`). 11-26 오후까지는 거절된 실행 뒤에 남아 있던 옛 로그를 읽었다.
 
 넣을 것:
 - `<suffix>`: 실행 파일을 빌드한 build dir(§4.1 표). systolic bitstream이면 `_sysprof`(EVTA 호출마다 시간) 또는 `_systimed`(문장마다 시간)

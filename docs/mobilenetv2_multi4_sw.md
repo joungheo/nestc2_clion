@@ -2,7 +2,7 @@
 
 DPU S(B4096 하나, 270장/s)를 EVTA 4개(`MultiEVTAMobileNetV2TfTest`)로 넘으려고, 2026-11-25에 하드웨어를 바꾸지 않고 소프트웨어만 고친 기록이다.
 - 측정과 단계별 자세한 표는 [evta_dpu_compare.md](evta_dpu_compare.md) §6.7–§6.10에 있다. 여기서는 무엇을 왜 바꿨고 얼마나 줄었는지를 한곳에 모은다.
-- 모델: TF-slim float MobileNetV2(`mobilenetv2_tf_f32.onnx`, DPU `tf_mobilenetv2_1.0`의 float 모델). 입력 224 × 224 × 3, 연산량 0.658 GOP.
+- 모델: TF-slim float MobileNetV2(`mobilenetv2_tf_f32.onnx`, DPU `tf_mobilenetv2_1.0`의 float 모델). 입력 224 × 224 × 3, 연산량 0.658 GOP(EVTA에 보내는 conv / depthwise / fc의 2 × MAC, `run_prof.sh`가 찍는 값). GOPS = 0.658 × fps.
 - 보드: ZCU102. bitstream은 multi4 `..._4evta_sa_amul_400mhz_hp322_rq.bin`, single `..._sa_alux3_400mhz_rq.bin`이다(둘 다 systolic 400 MHz).
 - 시간: `run_prof.sh -s _systimed` 계열, 25회, run 2부터의 중앙값. "4개 동시"는 copy 넷이 한 장씩 함께 도는 처리량이다(lockstep 없음, OMP 1).
 
@@ -10,23 +10,23 @@ DPU S(B4096 하나, 270장/s)를 EVTA 4개(`MultiEVTAMobileNetV2TfTest`)로 넘�
 
 | 단계 | 무엇을 | 혼자 1장 | 4개 동시 | commit |
 |---|---|---|---|---|
-| 출발 (§6.7) | 11-22 bundle + 새 schedule(`EVTA_SCHED`) | 14.84 ms | 238.3 fps | |
-| conv0 입력 묶기 (§3.1) | float → int8 + 묶기를 NEON으로 다시 씀 | 14.35 ms | 246.5 fps | `b5c4e7d` |
-| invalidate 빼기 (§3.2) | EVTA만 읽는 출력의 cache invalidate를 안 함 | 13.85 ms | 254.5 fps | `0b1439b` |
-| bundle 다시 만듦 (§3.3) | 위 둘 + schedule이 bundle 안에 | 13.43 ms¹ | 251.6 fps² | 보드 19:00 |
-| int8 입력 (§3.4) | 미리 quantize한 `.i8`을 읽음(저녁부터 기본, 없으면 float) | | 257.0 fps² | `d4d8ddf2`, `9680e43f` |
-| 호출마다 CPU 시간 (§6) | 명령 사본, thread별 buffer pool, 다음 replay 짐작 | | 262.2 fps² | `1cdf422d` |
-| 창 장치 `_dw` (ubuntu2, [evta_dw_unit.md](evta_dw_unit.md) §9) | depthwise 3×3를 창 장치로 (multi4 `..._amul_dw_..._hp304_rq.bin`) | | 284.9 fps⁴ | `818a73c3` |
-| 1×1 weight 한 번 LOAD (§7) | 7×7 project conv 세 개의 weight를 thread마다 한 LOAD로 | 11.77 ms³ | **292.0 fps**⁴ | `38e3da66` |
-| 11-25 저녁 (공유 `_systimed`, 번갈아 3번) | int8 입력 | **13.04 ms**¹ / 13.54 ms³ | **263.5 fps** | |
-| | float 입력(`INPUT_INT8=0`) | 13.28 ms¹ / 13.77 ms³ | 256.4 fps | |
+| 출발 (§6.7) | 11-22 bundle + 새 schedule(`EVTA_SCHED`) | 14.84 ms | 238.3 fps (157 GOPS) | |
+| conv0 입력 묶기 (§3.1) | float → int8 + 묶기를 NEON으로 다시 씀 | 14.35 ms | 246.5 fps (162 GOPS) | `b5c4e7d` |
+| invalidate 빼기 (§3.2) | EVTA만 읽는 출력의 cache invalidate를 안 함 | 13.85 ms | 254.5 fps (167 GOPS) | `0b1439b` |
+| bundle 다시 만듦 (§3.3) | 위 둘 + schedule이 bundle 안에 | 13.43 ms¹ | 251.6 fps (166 GOPS)² | 보드 19:00 |
+| int8 입력 (§3.4) | 미리 quantize한 `.i8`을 읽음(저녁부터 기본, 없으면 float) | | 257.0 fps (169 GOPS)² | `d4d8ddf2`, `9680e43f` |
+| 호출마다 CPU 시간 (§6) | 명령 사본, thread별 buffer pool, 다음 replay 짐작 | | 262.2 fps (173 GOPS)² | `1cdf422d` |
+| 창 장치 `_dw` (ubuntu2, [evta_dw_unit.md](evta_dw_unit.md) §9) | depthwise 3×3를 창 장치로 (multi4 `..._amul_dw_..._hp304_rq.bin`) | | 284.9 fps (187 GOPS)⁴ | `818a73c3` |
+| 1×1 weight 한 번 LOAD (§7) | 7×7 project conv 세 개의 weight를 thread마다 한 LOAD로 | 11.77 ms³ | **292.0 fps (192 GOPS)**⁴ | `38e3da66` |
+| 11-25 저녁 (공유 `_systimed`, 번갈아 3번) | int8 입력 | **13.04 ms**¹ / 13.54 ms³ | **263.5 fps (173 GOPS)** | |
+| | float 입력(`INPUT_INT8=0`) | 13.28 ms¹ / 13.77 ms³ | 256.4 fps (169 GOPS) | |
 
 1. single bitstream(`_alux3`) 위의 `MobileNetV2TfTest`.
 2. 그 단계를 잴 때 같은 때 번갈아 3번씩 잰 평균(§4, §6.3). 위아래 줄의 측정 때가 달라서 단계끼리는 ±2 fps쯤 흔들린다.
 3. multi4 bitstream 위 copy 0(`singlevta`). 같은 bundle이라도 bitstream에 따라 0.4–0.5 ms 다르다. §7 줄은 `_dw` bitstream 위다.
 4. 같은 실행 파일(`_pcsysubun` timed 빌드)로 `EVTA_WGT_FIT=0/1`을 번갈아 4번씩 잰 평균(§7.3). 11-25 저녁 줄과는 bitstream, 빌드가 다르다.
 
-- 하루 동안 4개 동시 처리량이 238.3 → 263.5 fps(+10.6 %, int8 입력)이다. float 입력이면 256.4 fps(+7.6 %)다.
+- 하루 동안 4개 동시 처리량이 238.3 → 263.5 fps(157 → 173 GOPS, +10.6 %, int8 입력)이다. float 입력이면 256.4 fps(169 GOPS, +7.6 %)다.
 - DPU S 270장/s와 견주면 int8 입력이 97.6 %, float 입력이 95.0 %다. DPU 수치가 미리 int8로 만든 입력으로 잰 것인지는 확인하지 못했다.
 - 모든 단계에서 출력 바이트가 같다. EVTA conv 출력 dump, `EVTA_RES_CHECK`, ImageNet val 출력 hash(200장, 1,000장)로 확인했다. 분류는 cat_285가 계속 282 (0.322088)이다.
 
@@ -145,7 +145,7 @@ conv 쪽에서 GEMM 하한(GEMM 반복 / 400 MHz) 밖의 시간이 소프트웨�
 
   | | 전 (`EVTA_REPLAY_VARIANTS=0 EVTA_BUF_POOL_SHARED=1`) | 후 |
   |---|---|---|
-  | 4개 동시 | 257.5 / 257.8 / 257.2 fps (평균 257.5) | 261.0 / 262.0 / 263.6 fps (평균 **262.2**, +1.8 %) |
+  | 4개 동시 | 257.5 / 257.8 / 257.2 fps (평균 257.5, 169 GOPS) | 261.0 / 262.0 / 263.6 fps (평균 **262.2**, 173 GOPS, +1.8 %) |
   | 혼자 1장 (multi4 bitstream copy 0) | 13.80 / 13.78 ms | **13.54** / 13.54 ms (−0.25 ms) |
 
 - 맞는지: conv 출력 dump 416개(2장)가 전과 같다. `EVTA_RES_CHECK`(multi4) 228건 0 differ, 282 (0.322088).
@@ -191,24 +191,26 @@ bitstream은 multi4 창 장치 판 `..._4evta_sa_amul_dw_400mhz_hp304_rq.bin`이
 ### 7.4 결과 (같은 실행 파일, `EVTA_WGT_FIT=0/1` 번갈아)
 | | 끔 | 켬 |
 |---|---|---|
-| MobileNetV2Tf 4개 동시 | 284.5 / 282.3 / 287.8 fps (258.5 하나는 튐) | 288.2 / 292.0 / 296.2 / 291.4 fps (평균 **292.0**, +2.5 %) |
+| MobileNetV2Tf 4개 동시 | 284.5 / 282.3 / 287.8 fps (258.5 하나는 튐; 셋 평균 284.9, 187 GOPS) | 288.2 / 292.0 / 296.2 / 291.4 fps (평균 **292.0**, 192 GOPS, +2.5 %) |
 | MobileNetV2Tf 혼자 1장 (copy 0) | 12.10 / 12.10 ms | **11.76** / 11.77 ms |
 
 - 맞는지: copy 0 conv dump 208개가 공유 `_sys` 실행 파일과 바이트까지 같다. `EVTA_RES_CHECK`(multi4) 228건 0 differ, 282 (0.322088).
 
 ## 8. 다른 모델에 미친 영향 (2026-11-26)
 
+한 장의 연산량(GOP, `run_prof.sh`가 찍는 값): Resnet18 3.700, Resnet50 / Resnet50Tv 8.178, VGG16 0.630, MobileNetV2 / MobileNetV2Tf 0.658, DeiT 2.182. GOPS = GOP × fps(4개 동시면 네 EVTA 합).
+
 ### 8.1 11-25까지의 vtalib 변경 (11-24 실행 파일 대 새 실행 파일)
 bundle은 그대로(invalidate 빼기는 bundle을 다시 만들어야 들어간다), vtalib만 다르다(§6의 replay 사본, thread별 pool 등). 25회 중앙값.
 
 | 모델 | single 전 | single 후 | multi4 전 | multi4 후 |
 |---|---|---|---|---|
-| Resnet18 | 22.72 ms | 22.48 ms | 169.9 fps | 172.0 fps |
-| Resnet50 | 64.48 ms | 63.33 ms | 52.5 fps | 53.3 fps |
-| Resnet50Tv | 63.75 ms | 62.86 ms | 56.1 fps | 57.0 fps |
-| VGG16 | 6.75 ms | 6.73 ms | ~501.7 fps | ~507.3 fps |
-| MobileNetV2 | 14.40 ms | 13.86 ms | 232.8 fps | 243.2 fps¹ / 270.2 fps² |
-| DeiT | 37.06 ms | 36.64 ms | ~43.8 fps | ~43.9 fps |
+| Resnet18 | 22.72 ms | 22.48 ms | 169.9 fps (629 GOPS) | 172.0 fps (636 GOPS) |
+| Resnet50 | 64.48 ms | 63.33 ms | 52.5 fps (429 GOPS) | 53.3 fps (436 GOPS) |
+| Resnet50Tv | 63.75 ms | 62.86 ms | 56.1 fps (459 GOPS) | 57.0 fps (466 GOPS) |
+| VGG16 | 6.75 ms | 6.73 ms | ~501.7 fps (316 GOPS) | ~507.3 fps (320 GOPS) |
+| MobileNetV2 | 14.40 ms | 13.86 ms | 232.8 fps (153 GOPS) | 243.2 fps (160 GOPS)¹ / 270.2 fps (178 GOPS)² |
+| DeiT | 37.06 ms | 36.64 ms | ~43.8 fps (96 GOPS) | ~43.9 fps (96 GOPS) |
 
 1. `EVTA_DWU=0`(창 장치 끔): 소프트웨어 몫만 +4.5 %. 2. 창 장치 켬.
 - 나빠진 모델은 없다. 결과(분류, 0 wrong)는 본 로그에서 모두 같았다(VGG16, Resnet50Tv 로그는 안 봄).
@@ -219,12 +221,12 @@ bundle은 그대로(invalidate 빼기는 bundle을 다시 만들어야 들어간
 
 | 모델 | multi4 끔 | multi4 켬 | 혼자 끔 (200회) | 혼자 켬 | copy 0 dump |
 |---|---|---|---|---|---|
-| Resnet18 | 173.2 fps | 173.5 fps | 22.546 ms | 22.549 ms | 80 / 80 같음 |
-| Resnet50 | 57.35 fps | **58.9 fps** | 66.72 ms | **64.41 ms** | 212 / 212 같음 |
-| VGG16 | 511.5 fps | 508.8 fps³ | 7.084 ms | 7.083 ms | 52 / 52 같음 |
-| MobileNetV2 | 278.9 fps | **288.0 fps** | 12.31 ms | **11.98 ms** | 208 / 208 같음 |
-| DeiT | 43.8 fps | 43.75 fps | 82.89 ms | 82.89 ms | 295 / 295 같음 |
-| MobileNetV2Tf | 286.4 fps | **294.7 fps** | 12.09 ms | **11.77 ms** | 208 / 208 같음 |
+| Resnet18 | 173.2 fps (641 GOPS) | 173.5 fps (642 GOPS) | 22.546 ms | 22.549 ms | 80 / 80 같음 |
+| Resnet50 | 57.35 fps (469 GOPS) | **58.9 fps (482 GOPS)** | 66.72 ms | **64.41 ms** | 212 / 212 같음 |
+| VGG16 | 511.5 fps (322 GOPS) | 508.8 fps (321 GOPS)³ | 7.084 ms | 7.083 ms | 52 / 52 같음 |
+| MobileNetV2 | 278.9 fps (184 GOPS) | **288.0 fps (190 GOPS)** | 12.31 ms | **11.98 ms** | 208 / 208 같음 |
+| DeiT | 43.8 fps (96 GOPS) | 43.75 fps (95 GOPS) | 82.89 ms | 82.89 ms | 295 / 295 같음 |
+| MobileNetV2Tf | 286.4 fps (188 GOPS) | **294.7 fps (194 GOPS)** | 12.09 ms | **11.77 ms** | 208 / 208 같음 |
 
 3. VGG16은 3×3 conv뿐이라 명령이 같다. 잡음이다.
 - multi4 `EVTA_RES_CHECK`는 모든 모델에서 0 differ다.

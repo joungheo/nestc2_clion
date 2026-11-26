@@ -27,6 +27,24 @@ VIMG=$(cd .. && pwd)/examples/bundles/vgg16_cifar10/cifar10/test/airplane/0001.p
 export OMP_NUM_THREADS=1
 tag() { local t=${1#vtahw_zcu102_1x16_i8w8a32_}; echo ${t%.bin}; }
 log() { echo "$*" | tee -a $OUT/summary.txt; }
+#### JO added (2026-11-26, ubun): run_prof.sh / load_bit.sh exit at once when another EVTA run holds /tmp/evta_run.lock, and the
+#### <Dir> logs of an earlier run stay where they were, so the steps read old times as new. Now every run waits for the lock
+#### (retry every 30 s, up to LOCK_WAIT seconds, default 1800) and only logs written after the run started are read (fresh);
+#### a Dir with no fresh log prints "no new log".
+LOCK_WAIT=${LOCK_WAIT:-1800}
+STAMP=$OUT/.stamp
+locked() { grep -q 'another EVTA run is active' $1; }
+runlk() { # <output file> <command...>: the command, again while the lock is held; 1 if it never got the lock
+  local l=$1 w=0; shift
+  while :; do
+    touch $STAMP; "$@" > $l 2>&1
+    locked $l || return 0
+    [ $w -ge $LOCK_WAIT ] && { log "ERROR: $l: /tmp/evta_run.lock still held after $LOCK_WAIT s (another EVTA run), not run"; return 1; }
+    [ $w = 0 ] && log "wait: /tmp/evta_run.lock held by another EVTA run ($l)"
+    sleep 30; w=$((w + 30))
+  done
+}
+fresh() { for f; do [ -f "$f" ] && [ ! "$f" -ot $STAMP ] && echo $f; done; }  # not older than the run start
 log "== perf_record.sh $(date '+%F %T')  rounds $R  steps $STEPS  git $(git -C .. log -1 --format=%h)"
 for step in $STEPS; do case $step in
 i8)
@@ -36,36 +54,39 @@ i8)
     case $p in hw/*) e=$(ls $p/vta*Bundle_sys 2>/dev/null | head -1); b=$(echo $S1_BITS | cut -d' ' -f1);;
                *) e=$(ls $p/singlevta*Bundle_sys 2>/dev/null | head -1); b=$(echo $M4_BITS | cut -d' ' -f1);; esac
     [ -n "$e" ] || { log "i8: $p has no _sys executable"; continue; }
-    hw/script/load_bit.sh $b > /dev/null 2>&1
+    runlk $OUT/load_bit.log hw/script/load_bit.sh $b || continue
     log "i8: $p: $(cd $p && INPUT_INT8_SAVE=i8 timeout 300 ./$(basename $e) $im 2>&1 | tail -1)"
   done ;;
 check)
   for b in $(echo $M4_BITS | cut -d' ' -f1); do
-    EVTA_RES_CHECK=1 BIN=$b hw_multievtax4/script/run_prof.sh -s _sys -n 2 $M4 > $OUT/check_m4.log 2>&1
-    for d in $M4; do for f in hw_multievtax4/$d/sys_*.log; do
+    runlk $OUT/check_m4.log env EVTA_RES_CHECK=1 BIN=$b hw_multievtax4/script/run_prof.sh -s _sys -n 2 $M4 || continue
+    for d in $M4; do fs=$(fresh hw_multievtax4/$d/sys_*.log); [ -n "$fs" ] || log "check $(tag $b) hw_multievtax4/$d: no new log"
+    for f in $fs; do
       log "check $(tag $b) $f: $(grep -c differ $f) checks, $(grep -oE '[0-9]+ of [0-9]+ differ' $f | awk '{s+=$1} END {print s+0}') differ, $(grep -m1 -oE 'Result: [0-9]+|top1: [0-9]+' $f)"
     done; done
   done
   for b in $(echo $S1_BITS | cut -d' ' -f1); do
-    EVTA_RES_CHECK=1 BIN=$b hw/script/run_prof.sh -s _sys -n 2 $S1 > $OUT/check_s1.log 2>&1
-    for d in $S1; do f=hw/$d/sys.log
+    runlk $OUT/check_s1.log env EVTA_RES_CHECK=1 BIN=$b hw/script/run_prof.sh -s _sys -n 2 $S1 || continue
+    for d in $S1; do f=$(fresh hw/$d/sys.log); [ -n "$f" ] || { log "check $(tag $b) hw/$d: no new log"; continue; }
       log "check $(tag $b) $f: $(grep -c differ $f) checks, $(grep -oE '[0-9]+ of [0-9]+ differ' $f | awk '{s+=$1} END {print s+0}') differ, $(grep -m1 -oE 'Result: [0-9]+|top1: [0-9]+' $f)"
     done
   done ;;
 m4)
   for r in $(seq $R); do for b in $M4_BITS; do t=$(tag $b)
-    BIN=$b hw_multievtax4/script/run_prof.sh -s _sys -n 25 $M4 > $OUT/m4_${t}_r$r.log 2>&1
+    runlk $OUT/m4_${t}_r$r.log env BIN=$b hw_multievtax4/script/run_prof.sh -s _sys -n 25 $M4 || continue
     for d in $M4; do
-      m=$(grep -h 'THROUGHPUT 4' hw_multievtax4/$d/sys_multivta*.log | sed -E 's/.*= ([0-9.]+) images.*\(([0-9.]+) ms.*/\1 fps \2 ms/')
-      s=$(grep -h 'THROUGHPUT 1' hw_multievtax4/$d/sys_singlevta*.log | sed -E 's/.*\(([0-9.]+) ms.*/\1 ms/')
+      fm=$(fresh hw_multievtax4/$d/sys_multivta*.log); fs=$(fresh hw_multievtax4/$d/sys_singlevta*.log)
+      m="no new log"; [ -n "$fm" ] && m=$(grep -h 'THROUGHPUT 4' $fm | sed -E 's/.*= ([0-9.]+) images.*\(([0-9.]+) ms.*/\1 fps \2 ms/')
+      s="no new log"; [ -n "$fs" ] && s=$(grep -h 'THROUGHPUT 1' $fs | sed -E 's/.*\(([0-9.]+) ms.*/\1 ms/')
       log "m4 $t r$r $d: 4 at once $m per copy; alone $s"
     done
   done; done ;;
 single)
   for r in $(seq $R); do for b in $S1_BITS; do t=$(tag $b)
-    BIN=$b hw/script/run_prof.sh -s _sys -n 25 $S1 > $OUT/s1_${t}_r$r.log 2>&1
+    runlk $OUT/s1_${t}_r$r.log env BIN=$b hw/script/run_prof.sh -s _sys -n 25 $S1 || continue
     for d in $S1; do
-      log "s1 $t r$r $d: $(grep -h 'THROUGHPUT 1' hw/$d/sys.log | sed -E 's/.*: ([0-9]+) images.*\(([0-9.]+) ms.*/\2 ms (\1 images)/')"
+      f=$(fresh hw/$d/sys.log); [ -n "$f" ] || { log "s1 $t r$r $d: no new log"; continue; }
+      log "s1 $t r$r $d: $(grep -h 'THROUGHPUT 1' $f | sed -E 's/.*: ([0-9]+) images.*\(([0-9.]+) ms.*/\2 ms (\1 images)/')"
     done
   done; done ;;
 *) log "unknown step $step";;
