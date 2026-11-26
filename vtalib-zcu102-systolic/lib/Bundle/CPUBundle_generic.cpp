@@ -2426,23 +2426,46 @@ void preprocess_conv0pack_rows_i8(const int8_t *input, int8_t *output, int N, in
 }
 //#### JO added (2026-11-25): the int8 input of preprocess_conv0pack_rows_i8: the quantize (+ table) of the float input,
 //#### in the input's own layout (NCHW stays NCHW), the bytes the float pack would write
+//#### JO changed (2026-11-27): rows r0 .. r1 - 1 of the N x H rows (INPUT_PIPELINE=2 quantizes a row per EVTA wait poll);
+//#### NCHW with 3 channels splits the quantized row into the planes by vld3q_s8 (was a byte loop: 1.47 -> see the doc)
+void preprocess_quantize_input_rows(const float *input, int8_t *output, int N, int H, int W, int C, int nchw, float scale,
+                                    int32_t offset, const int8_t *lut, int r0, int r1) {
+  const PreprocessRow pr(input, H, W, C, nchw, scale, offset, lut);
+  int8_t row[1024 * 3 + 64];
+  std::vector<int8_t> big;
+  int8_t *rb = row;
+  if ((size_t)W * C + 64 > sizeof(row)) {
+    big.resize((size_t)W * C + 64);
+    rb = big.data();
+  }
+  const size_t plane = (size_t)H * W;
+  r1 = std::min(r1, N * H);
+  for (int r = std::max(r0, 0); r < r1; r++) {
+    const int n = r / H, h = r % H;
+    int8_t *o = output + (size_t)n * C * plane + (size_t)h * W * (nchw ? 1 : C);
+    if (!nchw) {
+      pr(n, h, W, o);
+      continue;
+    }
+    pr(n, h, W, rb);
+    int w0 = 0;
+#if defined(__aarch64__)
+    if (C == 3)
+      for (; w0 + 16 <= W; w0 += 16) {
+        const int8x16x3_t v = vld3q_s8(rb + (size_t)w0 * 3);
+        vst1q_s8(o + w0, v.val[0]);
+        vst1q_s8(o + plane + w0, v.val[1]);
+        vst1q_s8(o + 2 * plane + w0, v.val[2]);
+      }
+#endif
+    for (int w = w0; w < W; w++)
+      for (int c = 0; c < C; c++)
+        o[c * plane + w] = rb[(size_t)w * C + c];
+  }
+}
 void preprocess_quantize_input(const float *input, int8_t *output, int N, int H, int W, int C, int nchw, float scale,
                                int32_t offset, const int8_t *lut) {
-  const PreprocessRow pr(input, H, W, C, nchw, scale, offset, lut);
-  std::vector<int8_t> row((size_t)W * C + 64);
-  const size_t plane = (size_t)H * W;
-  for (int n = 0; n < N; n++)
-    for (int h = 0; h < H; h++) {
-      int8_t *o = output + (size_t)n * C * plane + (size_t)h * W * (nchw ? 1 : C);
-      if (!nchw) {
-        pr(n, h, W, o);
-        continue;
-      }
-      pr(n, h, W, row.data());
-      for (int w = 0; w < W; w++)
-        for (int c = 0; c < C; c++)
-          o[c * plane + w] = row[(size_t)w * C + c];
-    }
+  preprocess_quantize_input_rows(input, output, N, H, W, C, nchw, scale, offset, lut, 0, N * H);
 }
 
 void transpose_nhwc2vtaio_zerofill_old(int8_t* input, int8_t* output, int N, int H, int W, int C){

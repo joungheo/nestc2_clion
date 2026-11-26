@@ -217,6 +217,10 @@ static void CheckLoadedBitstream(int index) {
 }
 
 
+//#### JO added (2026-11-27): VTASetWaitWork (Bundle/VTAInputInt8.h): this thread's work during its EVTA run waits
+static thread_local int (*tWaitWork)(void *) = nullptr;
+static thread_local void *tWaitArg = nullptr;
+
 class VTADevice {
  public:
   VTADevice(int index=0) {      
@@ -452,7 +456,11 @@ class VTADevice {
           return 1;
         }
       }
-      std::this_thread::yield();
+      //#### JO added (2026-11-27): work of this thread while it waits (VTASetWaitWork, INPUT_PIPELINE=2): one piece per poll
+      if (tWaitWork && !tWaitWork(tWaitArg))
+        tWaitWork = nullptr;
+      else
+        std::this_thread::yield();
     }
     in_run_ = false;
     gettimeofday(&stop_time, nullptr);
@@ -626,6 +634,10 @@ void VTADeviceRunStart(VTADeviceHandle handle, vta_phy_addr_t insn_phy_addr, uin
   static_cast<VTADevice*>(handle)->RunStart(insn_phy_addr, insn_count);
 }
 
+void VTASetWaitWork(int (*fn)(void *), void *arg) {
+  tWaitWork = fn;
+  tWaitArg = arg;
+}
 int VTADeviceRunWait(VTADeviceHandle handle, uint32_t wait_cycles) {
   return static_cast<VTADevice*>(handle)->RunWait(wait_cycles);
 }

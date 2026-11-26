@@ -4008,6 +4008,19 @@ int VTAInputQuantize(const float *in, int8_t *out) {
   preprocess_quantize_input(in, out, q.N, q.H, q.W, q.C, q.nchw, q.scale, q.offset, lut);
   return 1;
 }
+//#### JO added (2026-11-27): rows r0 .. r1 - 1 of the N x H input rows; returns N x H (0 = no quantize recorded yet)
+int VTAInputQuantizeRows(const float *in, int8_t *out, int r0, int r1) {
+  VTAInputInt8 q;
+  const int8_t *lut;
+  {
+    std::lock_guard<std::mutex> g(gInputQMutex);
+    if (!gInputQSet)
+      return 0;
+    q = gInputQ, lut = gInputQLut;
+  }
+  preprocess_quantize_input_rows(in, out, q.N, q.H, q.W, q.C, q.nchw, q.scale, q.offset, lut, r0, r1);
+  return q.N * q.H;
+}
 void VTASetInputInt8(const VTAInputInt8 *d, const int8_t *data, int hasFloat) {
   gInputI8 = d != nullptr;
   if (d)

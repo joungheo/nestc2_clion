@@ -26,4 +26,11 @@ void preprocess_conv0pack_rows_i8(const int8_t *input, int8_t *output, int N, in
                                   int KW, int stride, int pad, int CO, int q0, int q1, int padEnd = -1);
 void preprocess_quantize_input(const float *input, int8_t *output, int N, int H, int W, int C, int nchw, float scale,
                                int32_t offset, const int8_t *lut);
+//#### JO added (2026-11-27): INPUT_PIPELINE=2 of the generic main. Rows r0 .. r1 - 1 of the N x H input rows (returns N x H,
+//#### 0 = nothing recorded yet), and work for this thread's EVTA waits: the pynq driver's run wait calls fn(arg) once per
+//#### poll until it returns 0 (or VTASetWaitWork(nullptr) / another fn); the simulator never calls it.
+int VTAInputQuantizeRows(const float *in, int8_t *out, int r0, int r1);
+void preprocess_quantize_input_rows(const float *input, int8_t *output, int N, int H, int W, int C, int nchw, float scale,
+                                    int32_t offset, const int8_t *lut, int r0, int r1);
+void VTASetWaitWork(int (*fn)(void *), void *arg);
 #endif // VTALIB_SYSTOLIC_VTAINPUTINT8_H

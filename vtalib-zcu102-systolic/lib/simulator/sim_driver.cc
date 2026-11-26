@@ -668,3 +668,9 @@ int VTADeviceRun(VTADeviceHandle handle,
 
 void VTAProgram(const char* bitstream) {
 }
+
+//#### JO added (2026-11-27): VTASetWaitWork (Bundle/VTAInputInt8.h): the simulator runs synchronously, never waits: ignored
+void VTASetWaitWork(int (*fn)(void *), void *arg) {
+  (void)fn;
+  (void)arg;
+}

@@ -227,7 +227,9 @@ static Input loadAny(const char *filename) {
   //#### JO added (2026-11-27): INPUT_PIPELINE=1 quantizes the float image in a second thread (no .i8 read)
   const char *pl = getenv("INPUT_PIPELINE");
   if (pl && atoi(pl) > 0) {
-    if (!quiet) printf("Input: float %s, INPUT_PIPELINE: quantized in a second thread per copy\n", filename);
+    if (!quiet)
+      printf("Input: float %s, INPUT_PIPELINE=%d: quantized %s\n", filename, atoi(pl),
+             atoi(pl) == 2 ? "in the copy's EVTA waits" : "in a second thread per copy");
     return x;
   }
   if (!e || atoi(e) != 0) {
@@ -432,6 +434,42 @@ struct QuantPipe {
   bool stop = false;
   double quantMs = 0, waitMs = 0;   // the thread's quantize time, the copy's wait for it (runs 2 ..)
 };
+//#### JO added (2026-11-27): INPUT_PIPELINE=2: no second thread (with 4 copies on 4 cores the threads took the copies' cores:
+//#### slower than float). The copy quantizes the next image itself, one input row per poll of its EVTA run waits
+//#### (VTASetWaitWork, pynq driver); rows left when the run ends are done before the next run (in the time).
+struct WaitQuant {
+  WaitQuant(const float *src, size_t n, int rows) : src(src), rows(rows) {
+    buf[0].resize(n);
+    buf[1].resize(n);
+  }
+  static int step(void *a) {
+    WaitQuant *w = static_cast<WaitQuant *>(a);
+    if (w->next >= w->rows)
+      return 0;
+    VTAInputQuantizeRows(w->src, w->buf[w->k & 1].data(), w->next, w->next + 1);
+    return ++w->next < w->rows;
+  }
+  void start(int kk) {
+    k = kk;
+    next = 0;
+    VTASetWaitWork(step, this);
+  }
+  const int8_t *finish() {
+    VTASetWaitWork(nullptr, nullptr);
+    if (next < rows) {
+      const double t0 = nowMs();
+      left += rows - next;
+      VTAInputQuantizeRows(src, buf[k & 1].data(), next, rows);
+      next = rows;
+      finishMs += nowMs() - t0;
+    }
+    return buf[k & 1].data();
+  }
+  const float *src;
+  std::vector<int8_t> buf[2];
+  int rows, next = 0, k = -1, left = 0;   // left: rows quantized after the run instead of in its waits (runs 2 ..)
+  double finishMs = 0;
+};
 #endif
 
 static void *threadMain(void *a) {
@@ -447,8 +485,10 @@ static void *threadMain(void *a) {
   setInputMode(*t->input);   //#### JO added (2026-11-25): int8 input
 #ifdef VTA_INPUT_INT8
   QuantPipe *pipe = nullptr;
+  WaitQuant *wq = nullptr;
   VTAInputInt8 pd;
   bool pl = t->plSrc != nullptr;
+  const int plMode = pl ? atoi(getenv("INPUT_PIPELINE")) : 0;
 #endif
   for (int run = 0; run < t->runs; run++) {
 #ifdef VTA_INPUT_INT8
@@ -457,12 +497,24 @@ static void *threadMain(void *a) {
         if (!VTAInputInt8Info(&pd)) {
           printf("INPUT_PIPELINE: this bundle has no conv0 pack (preprocess_conv0pack_stream), float input\n");
           pl = false;
+        } else if (plMode == 2) {
+          wq = new WaitQuant(t->plSrc, (size_t)pd.N * pd.C * pd.H * pd.W, pd.N * pd.H);
+          wq->start(1);
+          wq->finish();
+          wq->left = 0, wq->finishMs = 0;
         } else {
           pipe = new QuantPipe(t->plSrc, (size_t)pd.N * pd.C * pd.H * pd.W);
           pipe->request(1);
           pipe->wait(1);
           pipe->waitMs = 0;
         }
+      }
+      if (wq) {
+        if (run > 1)
+          wq->finish();   // image run, started in the waits of run - 1
+        VTASetInputInt8(&pd, wq->buf[run & 1].data(), 1);
+        if (run + 1 < t->runs)
+          wq->start(run + 1);
       }
       if (pipe) {
         VTASetInputInt8(&pd, pipe->wait(run), 1);
@@ -491,6 +543,12 @@ static void *threadMain(void *a) {
   t->tEnd = nowMs();
   printf("copy %d: %d runs, Result: %d Confidence: %f, %d wrong\n", t->copy, t->runs, idx, conf, t->bad);
 #ifdef VTA_INPUT_INT8
+  if (wq) {
+    VTASetWaitWork(nullptr, nullptr);
+    printf("INPUT_PIPELINE=2 copy %d: %d images quantized in the EVTA waits; %d of their %d rows after the run (%.3f ms in all)\n",
+           t->copy, t->runs - 2, wq->left, (t->runs - 2) * wq->rows, wq->finishMs);
+    delete wq;
+  }
   if (pipe) {
     const int c = pipe->count;
     const double q = pipe->quantMs, w = pipe->waitMs;
