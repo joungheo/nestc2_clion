@@ -16,12 +16,15 @@ DPU S(B4096 하나, 270장/s)를 EVTA 4개(`MultiEVTAMobileNetV2TfTest`)로 넘�
 | bundle 다시 만듦 (§3.3) | 위 둘 + schedule이 bundle 안에 | 13.43 ms¹ | 251.6 fps² | 보드 19:00 |
 | int8 입력 (§3.4) | 미리 quantize한 `.i8`을 읽음(저녁부터 기본, 없으면 float) | | 257.0 fps² | `d4d8ddf2`, `9680e43f` |
 | 호출마다 CPU 시간 (§6) | 명령 사본, thread별 buffer pool, 다음 replay 짐작 | | 262.2 fps² | `1cdf422d` |
-| **지금** (공유 `_systimed`, 번갈아 3번) | int8 입력 | **13.04 ms**¹ / 13.54 ms³ | **263.5 fps** | |
+| 창 장치 `_dw` (ubuntu2, [evta_dw_unit.md](evta_dw_unit.md) §9) | depthwise 3×3를 창 장치로 (multi4 `..._amul_dw_..._hp304_rq.bin`) | | 284.9 fps⁴ | `818a73c3` |
+| 1×1 weight 한 번 LOAD (§7) | 7×7 project conv 세 개의 weight를 thread마다 한 LOAD로 | 11.77 ms³ | **292.0 fps**⁴ | `38e3da66` |
+| 11-25 저녁 (공유 `_systimed`, 번갈아 3번) | int8 입력 | **13.04 ms**¹ / 13.54 ms³ | **263.5 fps** | |
 | | float 입력(`INPUT_INT8=0`) | 13.28 ms¹ / 13.77 ms³ | 256.4 fps | |
 
 1. single bitstream(`_alux3`) 위의 `MobileNetV2TfTest`.
 2. 그 단계를 잴 때 같은 때 번갈아 3번씩 잰 평균(§4, §6.3). 위아래 줄의 측정 때가 달라서 단계끼리는 ±2 fps쯤 흔들린다.
-3. multi4 bitstream 위 copy 0(`singlevta`). 같은 bundle이라도 bitstream에 따라 0.4–0.5 ms 다르다.
+3. multi4 bitstream 위 copy 0(`singlevta`). 같은 bundle이라도 bitstream에 따라 0.4–0.5 ms 다르다. §7 줄은 `_dw` bitstream 위다.
+4. 같은 실행 파일(`_pcsysubun` timed 빌드)로 `EVTA_WGT_FIT=0/1`을 번갈아 4번씩 잰 평균(§7.3). 11-25 저녁 줄과는 bitstream, 빌드가 다르다.
 
 - 하루 동안 4개 동시 처리량이 238.3 → 263.5 fps(+10.6 %, int8 입력)이다. float 입력이면 256.4 fps(+7.6 %)다.
 - DPU S 270장/s와 견주면 int8 입력이 97.6 %, float 입력이 95.0 %다. DPU 수치가 미리 int8로 만든 입력으로 잰 것인지는 확인하지 못했다.
@@ -94,7 +97,8 @@ conv 쪽에서 GEMM 하한(GEMM 반복 / 400 MHz) 밖의 시간이 소프트웨�
 
 - **호출마다 CPU 쪽 시간**(§6.7의 3번) — §6에서 줄였다. 남은 것은 호출 사이 bundle 코드(한 장 0.27 ms, 4개 동시 0.44 ms)와 run 시작(0.06 ms)이다.
 - **depthwise**(copy당 약 6 ms, 연산에 묶임): ubuntu2가 depthwise 장치를 만들고 있다. tap 9개를 한 번에 하고 채널별 shift를 넣으면 2–2.5 ms가 된다는 계산이다(§6.7).
-- **7×7 project conv 세 개**는 weight LOAD에 묶여 있다(1.02 ms 대 GEMM 하한 0.30 ms).
+- ~~**7×7 project conv 세 개**는 weight LOAD에 묶여 있다(1.02 ms 대 GEMM 하한 0.30 ms).~~ §7에서 weight를 thread마다 한 번에 LOAD하게 했다(0.99 → 0.63 ms).
+- 호출 사이 bundle 코드, 장 사이 구간은 §7.1에서 보았다. 줄일 것이 1 % 안팎이라 손대지 않았다.
 
 ## 6. 호출마다의 CPU 시간 (`1cdf422d`)
 
@@ -150,3 +154,79 @@ conv 쪽에서 GEMM 하한(GEMM 반복 / 400 MHz) 밖의 시간이 소프트웨�
 - bundle(호출 사이 bundle 코드): 혼자 한 장 0.27 ms, 4개 동시 0.44 ms. 호출 하나에 3–5 us이고, epilogue가 있는 호출이나 CPU 문장이 끼는 곳은 9–19 us다. `_timed` 빌드의 문장별 시간 재기도 여기에 들어 있다.
 - start 0.06 ms, find 0.09 ms. 이 둘은 더 줄여도 이득이 작다.
 
+
+## 7. bundle 코드 몫과 7×7 project conv (2026-11-26, `38e3da66`)
+
+bitstream은 multi4 창 장치 판 `..._4evta_sa_amul_dw_400mhz_hp304_rq.bin`이다(11-26부터 multi4 기본).
+
+### 7.1 호출 사이와 장 사이의 bundle 코드
+`EVTA_CALL_TIME=1`의 id 0 "bundle" 구간(전 장의 마지막 호출이 끝난 때부터 다음 장의 첫 호출까지)과 호출 사이 구간을 나눠 봤다.
+
+| | 4개 동시 (barrier) | 4개 동시 (`MULTI_FREE=1`) | 혼자 |
+|---|---|---|---|
+| 장 사이 (id 0) | copy당 100–500 us | 67–80 us | 67 us |
+| 호출 사이 bundle 코드 (호출 53개) | | | 한 장 약 0.17 ms (호출당 약 3 us) |
+
+- 장 사이 구간은 실제로 하는 일이 67 us이고 나머지는 네 copy가 `runBarrier`에서 서로 기다리는 시간이다. barrier를 빼도(`MULTI_FREE=1`) 처리량은 276–278 대 276–284 fps로 같다. 가장 느린 copy가 처리량을 정하기 때문이다.
+- 혼자 99장에 bundle 구간 합이 23.3 ms, 한 장에 236 us = 장 사이 67 us + 호출당 약 3 us × 53이다. find는 한 장 82 us, run 시작 55 us다.
+- 다 없애도 1 % 안팎이라 측정 잡음(±1–2 %) 안이다. 더 손대지 않았다.
+
+### 7.2 7×7 project conv: 무엇이 느렸나
+`EVTA_REPLAY_DUMP`로 명령을 봤다. 7×7×960 → 160 (두 번)과 7×7×960 → 320, schedule 2 thread, 타일 7×7.
+- 전에는 thread의 weight(filter 묶음 10 × 입력 블록 60 = 600 entry)가 thread 몫(wgt 1024 entry / 2 = 512)에 안 들어가서 weight 한 번 LOAD 길(`wgtAll`)을 못 썼다.
+- 그래서 입력 블록 60개를 돌며 매번 wgt LOAD 2개(`y 5 x 1 stride 60`, 256 B 줄 5개씩), inp LOAD 1개, GEMM을 한다. GEMM은 1.2 us인데 한 걸음이 4.45 us였다. 작은 DMA의 지연에 묶여 있었다.
+- 960 → 160은 residual add가 있다. multi buffer는 inp에 위쪽 entry가 없어서(`canUp` 거짓) `wgtAll`이 residual을 막고 있었다.
+- `EVTA_SCHED`로 다른 schedule(1,7,7 / 2,4,7 / 1,4,7 / 2,7,4 / 2,2,7)을 다 봤지만 지금의 2,7,7보다 느렸다.
+
+### 7.3 바꾼 것 (vtalib-systolic `conv_kernel`)
+1. 1×1 conv에서 `nFilterinLoop × cBlocks`가 thread 몫보다 크면 filter 묶음을 줄인다. 몫에 들어가고 `KN/16`을 `n × nVirtualThread`로 나누는 가장 큰 n을 쓴다. 960 → 320: 10 → 5 묶음, 2 group(입력은 group마다 다시 LOAD: 49 entry × 블록).
+2. residual add가 있어도, 마지막 thread의 weight가 identity weight entry(`RES_WGT_ENTRY` 1023) 아래에서 끝나면 `wgtAll`을 쓴다. residual은 전처럼 타일의 GEMM 뒤에 inp 아래쪽으로 LOAD한다. 960 → 160 multi4: 512 + 5 × 60 ≤ 1023.
+3. `EVTA_WGT_FIT=0`이면 전과 같다.
+
+| conv | 전 | 후 | 명령 수 |
+|---|---|---|---|
+| 7×7×960 → 160 (×2) | 267 us | 179 us | 346 → 462 |
+| 7×7×960 → 320 | 459 us | 271 us | 322 → 746 (inp 47,040 → 94,080 B) |
+
+### 7.4 결과 (같은 실행 파일, `EVTA_WGT_FIT=0/1` 번갈아)
+| | 끔 | 켬 |
+|---|---|---|
+| MobileNetV2Tf 4개 동시 | 284.5 / 282.3 / 287.8 fps (258.5 하나는 튐) | 288.2 / 292.0 / 296.2 / 291.4 fps (평균 **292.0**, +2.5 %) |
+| MobileNetV2Tf 혼자 1장 (copy 0) | 12.10 / 12.10 ms | **11.76** / 11.77 ms |
+
+- 맞는지: copy 0 conv dump 208개가 공유 `_sys` 실행 파일과 바이트까지 같다. `EVTA_RES_CHECK`(multi4) 228건 0 differ, 282 (0.322088).
+
+## 8. 다른 모델에 미친 영향 (2026-11-26)
+
+### 8.1 11-25까지의 vtalib 변경 (11-24 실행 파일 대 새 실행 파일)
+bundle은 그대로(invalidate 빼기는 bundle을 다시 만들어야 들어간다), vtalib만 다르다(§6의 replay 사본, thread별 pool 등). 25회 중앙값.
+
+| 모델 | single 전 | single 후 | multi4 전 | multi4 후 |
+|---|---|---|---|---|
+| Resnet18 | 22.72 ms | 22.48 ms | 169.9 fps | 172.0 fps |
+| Resnet50 | 64.48 ms | 63.33 ms | 52.5 fps | 53.3 fps |
+| Resnet50Tv | 63.75 ms | 62.86 ms | 56.1 fps | 57.0 fps |
+| VGG16 | 6.75 ms | 6.73 ms | ~501.7 fps | ~507.3 fps |
+| MobileNetV2 | 14.40 ms | 13.86 ms | 232.8 fps | 243.2 fps¹ / 270.2 fps² |
+| DeiT | 37.06 ms | 36.64 ms | ~43.8 fps | ~43.9 fps |
+
+1. `EVTA_DWU=0`(창 장치 끔): 소프트웨어 몫만 +4.5 %. 2. 창 장치 켬.
+- 나빠진 모델은 없다. 결과(분류, 0 wrong)는 본 로그에서 모두 같았다(VGG16, Resnet50Tv 로그는 안 봄).
+- int8 입력은 multi main에만 있었고 다른 모델은 `.i8` 파일이 없어서 이 비교에 들어가지 않았다(11-26 ubuntu2가 범용 main으로 바꿈, `8f3bda02`).
+
+### 8.2 §7의 1×1 weight 한 번 LOAD
+같은 실행 파일(`~/JO/ubun_wt/build_m4b`, timed)로 `EVTA_WGT_FIT=0/1`을 번갈아 잼, `_dw` bitstream.
+
+| 모델 | multi4 끔 | multi4 켬 | 혼자 끔 (200회) | 혼자 켬 | copy 0 dump |
+|---|---|---|---|---|---|
+| Resnet18 | 173.2 fps | 173.5 fps | 22.546 ms | 22.549 ms | 80 / 80 같음 |
+| Resnet50 | 57.35 fps | **58.9 fps** | 66.72 ms | **64.41 ms** | 212 / 212 같음 |
+| VGG16 | 511.5 fps | 508.8 fps³ | 7.084 ms | 7.083 ms | 52 / 52 같음 |
+| MobileNetV2 | 278.9 fps | **288.0 fps** | 12.31 ms | **11.98 ms** | 208 / 208 같음 |
+| DeiT | 43.8 fps | 43.75 fps | 82.89 ms | 82.89 ms | 295 / 295 같음 |
+| MobileNetV2Tf | 286.4 fps | **294.7 fps** | 12.09 ms | **11.77 ms** | 208 / 208 같음 |
+
+3. VGG16은 3×3 conv뿐이라 명령이 같다. 잡음이다.
+- multi4 `EVTA_RES_CHECK`는 모든 모델에서 0 differ다.
+- 혼자 시간은 multi4 bitstream 위 copy 0(`singlevta`)이다. DeiT 82.9 ms는 timed 빌드에 OMP 1, multi 버퍼라 single `_alux3` 값(36.6 ms)과 다르다.
+- 혜택을 보는 것은 weight가 thread 몫(multi 512 entry, single 1024)을 넘는 1×1 conv다. single bitstream(wgt 2048 entry)은 몫이 두 배라 들어맞는 conv가 적다(재지 않음).
