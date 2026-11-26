@@ -493,7 +493,7 @@ static void *threadMain(void *a) {
   for (int run = 0; run < t->runs; run++) {
 #ifdef VTA_INPUT_INT8
     if (pl && run >= 1) {
-      if (!pipe) {   // the quantize is known after the first (float) run; run 1's input made here, before the timing
+      if (!pipe && !wq) {   // the quantize is known after the first (float) run; run 1's input made here, before the timing
         if (!VTAInputInt8Info(&pd)) {
           printf("INPUT_PIPELINE: this bundle has no conv0 pack (preprocess_conv0pack_stream), float input\n");
           pl = false;
