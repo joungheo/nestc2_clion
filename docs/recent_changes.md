@@ -21,6 +21,14 @@
 
 ---
 
+### 2026-11-27 ubun 24ac3ef1, 6c862f40, 392d1a8 — 공통 main `INPUT_PIPELINE=1|2`(입력 quantize를 EVTA 연산과 겹침), vtalib-systolic `VTASetWaitWork`
+- **바뀐 것:** 공통 main `multi_threads_main.cpp`(15곳 같은 파일), `vtalib-zcu102-systolic`(`VTAInputInt8.h` `VTAInputQuantizeRows` / `VTASetWaitWork`,
+  `pynq_driver.cc` `RunWait`이 기다리는 동안 그 일을 함, `sim_driver.cc` 빈 판, `CPUBundle_generic.cpp` NCHW quantize를 `vld3q_s8`로: 1.47 → 0.64 ms, 같은 바이트).
+  옵션을 켜지 않으면 동작은 전과 같다. [mobilenetv2_multi4_sw.md](mobilenetv2_multi4_sw.md) §10.
+- **다른 쪽이 할 일:** `실행 파일 다시 빌드`(systolic vtalib의 build dir; PC cross build도). **`vtabundles_xcmpl/hw*/<Dir>/multi_threads_main.cpp`는 git 밖 사본이다**:
+  빌드는 그 사본을 쓰므로 git의 `vta/bundles/Resnet18Test/multi_threads_main.cpp`를 복사한 뒤 빌드한다(보드는 공통본 14곳을 복사했고 MobileNetV2Tf `_sys` 세 개를
+  다시 빌드했다; 다른 Dir은 아직).
+
 ### 2026-11-26 ubun (이 commit) — `perf_record.sh`: lock을 기다리고 새 로그만 읽음, 문서 GOPS
 - **바뀐 것:** `vtabundles_xcmpl/perf_record.sh`. 다른 EVTA 실행이 `/tmp/evta_run.lock`을 잡고 있으면 `run_prof.sh` / `load_bit.sh`가 바로 끝나는데,
   전에는 남아 있던 옛 로그를 새 결과처럼 읽었다. 이제 30초마다 다시 시도하고(`LOCK_WAIT`, 기본 1800 s) 그 실행이 쓴 로그만 읽는다(없으면 `no new log`).

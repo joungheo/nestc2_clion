@@ -1,4 +1,4 @@
-# MobileNetV2Tf multi4: 소프트웨어로 줄인 시간 (2026-11-25, 하드웨어 몫 §9: 11-26)
+# MobileNetV2Tf multi4: 소프트웨어로 줄인 시간 (2026-11-25, 하드웨어 몫 §9: 11-26, 입력 quantize 겹치기 §10: 11-27)
 
 DPU S(B4096 하나, 270장/s)를 EVTA 4개(`MultiEVTAMobileNetV2TfTest`)로 넘으려고, 2026-11-25에 하드웨어를 바꾸지 않고 소프트웨어만 고친 기록이다.
 - 그 사이 ubuntu2가 depthwise 창 장치(`_dw`)를 bitstream에 넣었다(multi4 11-25 밤, single 11-26). 하드웨어로 줄어든 몫과 single에서의 효과는 §9에 따로 모은다.
@@ -305,3 +305,49 @@ MobileNetV2Tf 혼자 1장:
   모델마다 어느 것이 얼마인지는 나눠 재지 않았다. DeiT −2.7 ms의 출처도 나누지 않았다(single DeiT bundle은 다시 만들지 않았다).
 - 창 장치는 MobileNetV2 두 모델만 빠르게 한다. 다른 모델은 클럭이 3 % 낮아 1–3 % 느리다. 그래서 single 기본은 `_alux3` 400 MHz 그대로다.
 
+
+## 10. 입력 quantize를 EVTA 연산과 겹치기 (`INPUT_PIPELINE`, 2026-11-27)
+
+입력을 넣는 세 가지 방식이다. 모두 출력 바이트가 같다.
+
+| 방식 | 무엇 | 시간에 든 것 |
+|---|---|---|
+| float (`INPUT_INT8=0`) | bundle의 conv0 입력 묶기(`preprocess_conv0pack_stream`)가 float 그림을 읽으며 quantize한다 | quantize 전부 |
+| `.i8` (기본) | 미리 quantize해 둔 `<그림>.i8`을 읽고 묶기는 바이트만 옮긴다(§3.4) | quantize 없음(전처리를 밖으로 뺌) |
+| 겹친 quantize (`INPUT_PIPELINE=1` / `2`) | run k가 도는 동안 run k+1의 그림을 quantize해 둔다(이중 buffer). 묶기는 `.i8`처럼 바이트만 옮긴다 | 겹치지 못한 몫만 |
+
+- bundle `.cpp`에는 떼어 낼 quantize 함수가 없다. Glow의 `quantize` 자리는 주석이고, 묶기(vtalib) 안에서 한다. 그래서 main이 vtalib의
+  `VTAInputQuantize` / `VTAInputQuantizeRows`(묶기와 같은 `PreprocessRow`, 같은 바이트)로 다음 그림을 만들고 `VTASetInputInt8`로 넘긴다. bundle은 그대로다.
+- `=1`: copy마다 둘째 thread가 quantize한다. `=2`: 둘째 thread 없이 copy가 EVTA run을 기다리는 polling(pynq driver `RunWait`)마다 한 줄씩 한다
+  (vtalib-systolic `VTASetWaitWork`). run이 끝날 때 남은 줄은 다음 run 전에 한다(시간에 든다).
+- run 0은 float(quantize 값 기록), run 1의 입력은 시간을 재기 전에 만든다. 같은 그림을 매번 다시 quantize한다(copy마다 자기 float 사본에서).
+- 함께 고친 것: 미리 quantize하는 함수(`preprocess_quantize_input`)의 NCHW 경로가 바이트 하나씩 plane으로 옮겼다. `vld3q_s8`로 나누어 1.47 → 0.64 ms(혼자),
+  `.i8` 바이트는 옛 파일과 같다.
+- 맞는지: copy 0 conv 출력 dump 416개(8장)가 float와 `=1`, `=2` 모두 같다. 모든 측정에서 0 wrong, 282 (0.322088).
+
+**측정**(같은 때 네 방식을 번갈아 3번, 보드 공유 `_sys`(`392d1a8`), multi4 `_amul_dw` hp304, single `_alux3` 400 MHz, cat_285, 표는 3번의 평균;
+원자료 보드 `~/JO/ubun_wt/pipe_261127b/`):
+
+| | float | `.i8` | `=1` (둘째 thread) | `=2` (기다리는 동안) |
+|---|---|---|---|---|
+| multi4 4개 동시 | 279.0 fps (184 GOPS) | **290.8 fps (191 GOPS)** | 275.3 fps (181 GOPS) | 281.9 fps (186 GOPS) |
+| multi4 copy 0 혼자 | 11.98 ms · 83.5 fps (55 GOPS) | **11.77 ms** · 85.0 fps (56 GOPS) | 11.92 ms · 83.9 fps (55 GOPS) | 11.87 ms · 84.2 fps (55 GOPS) |
+| single 혼자 | 13.09 ms · 76.4 fps (50 GOPS) | **12.87 ms** · 77.7 fps (51 GOPS) | 12.95 ms · 77.2 fps (51 GOPS) | 13.00 ms · 77.0 fps (51 GOPS) |
+| quantize를 기다린 시간 | | | 한 장 0.01–0.03 ms (quantize 0.62–0.96 ms) | 남은 줄 0 |
+
+- 4개 동시의 3번 값은 ±3 %쯤 흔들린다(float 271.5–288.4, `.i8` 284.5–295.4 fps). 혼자 값이 더 믿을 만하다.
+- **quantize 계산은 다 숨었다.** `=1`은 copy가 quantize를 거의 기다리지 않고(0.03 ms 안쪽), `=2`는 run이 끝날 때 남은 줄이 없다.
+- **그래도 `.i8`만큼 빨라지지는 않는다.** float → `.i8`이 혼자 −0.21–0.22 ms인데, 겹친 quantize는 그중 single `=1` 0.14 ms(62 %), `=2` 0.10 ms,
+  multi4 copy 0 `=2` 0.10 ms, `=1` 0.06 ms만 줄인다. 남는 0.1 ms쯤은 EVTA가 도는 동안 CPU가 float 600 KB를 읽고 int8 150 KB를 쓰는 DRAM / cache 몫으로 본다
+  (EVTA DMA와 같은 DDR을 쓴다; 나눠 재지는 않았다). `.i8` 측정은 같은 150 KB가 매번 cache에 남아 있어 조금 낙관적이기도 하다.
+- **multi4는 `=2`가 낫다.** `=1`은 core 4개에 copy thread 넷과 quantize thread 넷이 돌아 4개 동시가 float보다도 낮다(275.3 대 279.0). 첫 판(바이트 loop라
+  quantize 1.5–1.8 ms)에서는 252.5 대 271.4 fps였다. `=2`는 core를 더 쓰지 않는다. single은 노는 core가 있어 `=1`이 조금 낫다.
+- **어느 숫자를 쓸까:** 카메라처럼 그림이 줄지어 오는 실제 쓰임은 겹친 quantize 값이다(multi4 `=2` 약 282 fps, single `=1` 12.95 ms). `.i8`은 입력이 이미 int8로 오는
+  경우(또는 하한), float는 전처리까지 한 줄로 하는 경우다. DPU와 견줄 때는 어느 것인지 함께 적는다. 둘 다 PNG 풀기는 넣지 않았다.
+
+```bash
+# 보드, vtabundles_xcmpl/ (MobileNetV2Tf; 다른 Dir도 같다)
+sudo /bin/sh -c "INPUT_PIPELINE=2 hw_multievtax4/script/run_prof.sh -s _sys -n 25 MultiEVTAMobileNetV2TfTest"
+sudo /bin/sh -c "INPUT_PIPELINE=1 hw/script/run_prof.sh -s _sys -n 25 MobileNetV2TfTest"
+# 로그 끝: INPUT_PIPELINE copy <i>: ... ms each; the copy waited ... ms  /  INPUT_PIPELINE=2 copy <i>: ...; <n> of <m> rows after the run
+```
