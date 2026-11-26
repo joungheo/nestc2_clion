@@ -43,6 +43,9 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <condition_variable>   //#### JO added (2026-11-27): INPUT_PIPELINE
+#include <mutex>
+#include <thread>
 
 #include "multi_model.h"
 #include "vta/runtime.h"
@@ -221,6 +224,12 @@ static Input loadAny(const char *filename) {
   x.hasFloat = true;
 #ifdef VTA_INPUT_INT8
   const char *e = getenv("INPUT_INT8");
+  //#### JO added (2026-11-27): INPUT_PIPELINE=1 quantizes the float image in a second thread (no .i8 read)
+  const char *pl = getenv("INPUT_PIPELINE");
+  if (pl && atoi(pl) > 0) {
+    if (!quiet) printf("Input: float %s, INPUT_PIPELINE: quantized in a second thread per copy\n", filename);
+    return x;
+  }
   if (!e || atoi(e) != 0) {
     const std::string p = filename;
     const size_t sl = p.rfind('/'), b = sl == std::string::npos ? 0 : sl + 1, dot = p.rfind('.');
@@ -345,6 +354,7 @@ struct ThreadArg {
   uint8_t *constantWeights, *mutableWeights, *activations;
   double t1, tEnd;   //#### JO added (2026-11-24): start of run 2 and end of the last run (ms, MULTI_FREE throughput)
   const Input *input;   //#### JO added (2026-11-25)
+  const float *plSrc;   //#### JO added (2026-11-27): INPUT_PIPELINE: this copy's float image (nullptr: off)
 };
 
 //#### JO added (2026-11-24): MULTI_FREE=1: the copies do not wait for each other before each inference (only once before
@@ -360,6 +370,70 @@ static double nowMs() {
   return t.tv_sec * 1000.0 + t.tv_usec / 1000.0;
 }
 
+#ifdef VTA_INPUT_INT8
+//#### JO added (2026-11-27): INPUT_PIPELINE=1: the input quantize of the next image runs in a second thread per copy while the
+//#### copy's EVTA calls run (as a camera / decode pipeline would hand the next image over). Run 0 is float (the bundle's pack
+//#### records the quantize), run 1's int8 input is made before the run (outside the timed runs 1 ..), then before run k the
+//#### copy takes buffer k & 1 (waiting if the thread is not done: that wait is in the time) and asks for run k + 1 in the other
+//#### buffer. The thread quantizes the same float image every time (VTAInputQuantize, the bytes of the float pack) from its
+//#### own copy of it. Same output bytes as float and .i8; the float image stays in the bundle input (hasFloat).
+struct QuantPipe {
+  QuantPipe(const float *src, size_t n) : src(src) {
+    buf[0].resize(n);
+    buf[1].resize(n);
+    th = std::thread([this] { loop(); });
+  }
+  ~QuantPipe() {
+    {
+      std::lock_guard<std::mutex> g(mu);
+      stop = true;
+    }
+    cv.notify_all();
+    th.join();
+  }
+  void request(int k) {
+    {
+      std::lock_guard<std::mutex> g(mu);
+      want = k;
+    }
+    cv.notify_all();
+  }
+  const int8_t *wait(int k) {
+    const double t0 = nowMs();
+    std::unique_lock<std::mutex> l(mu);
+    cv.wait(l, [&] { return done >= k; });
+    waitMs += nowMs() - t0;
+    return buf[k & 1].data();
+  }
+  void loop() {
+    std::unique_lock<std::mutex> l(mu);
+    for (;;) {
+      cv.wait(l, [&] { return stop || want > done; });
+      if (stop)
+        return;
+      const int k = want;
+      l.unlock();
+      const double t0 = nowMs();
+      VTAInputQuantize(src, buf[k & 1].data());
+      const double t1 = nowMs();
+      l.lock();
+      quantMs += t1 - t0;
+      count++;
+      done = k;
+      cv.notify_all();
+    }
+  }
+  const float *src;
+  std::vector<int8_t> buf[2];
+  std::mutex mu;
+  std::condition_variable cv;
+  std::thread th;
+  int want = -1, done = -1, count = 0;
+  bool stop = false;
+  double quantMs = 0, waitMs = 0;   // the thread's quantize time, the copy's wait for it (runs 2 ..)
+};
+#endif
+
 static void *threadMain(void *a) {
   ThreadArg *t = static_cast<ThreadArg *>(a);
   ModelCopy &m = copies[t->copy];
@@ -371,7 +445,32 @@ static void *threadMain(void *a) {
   const char *sg = getenv("MULTI_STAGGER_US");
   const int stagger = sg ? atoi(sg) : 0;
   setInputMode(*t->input);   //#### JO added (2026-11-25): int8 input
+#ifdef VTA_INPUT_INT8
+  QuantPipe *pipe = nullptr;
+  VTAInputInt8 pd;
+  bool pl = t->plSrc != nullptr;
+#endif
   for (int run = 0; run < t->runs; run++) {
+#ifdef VTA_INPUT_INT8
+    if (pl && run >= 1) {
+      if (!pipe) {   // the quantize is known after the first (float) run; run 1's input made here, before the timing
+        if (!VTAInputInt8Info(&pd)) {
+          printf("INPUT_PIPELINE: this bundle has no conv0 pack (preprocess_conv0pack_stream), float input\n");
+          pl = false;
+        } else {
+          pipe = new QuantPipe(t->plSrc, (size_t)pd.N * pd.C * pd.H * pd.W);
+          pipe->request(1);
+          pipe->wait(1);
+          pipe->waitMs = 0;
+        }
+      }
+      if (pipe) {
+        VTASetInputInt8(&pd, pipe->wait(run), 1);
+        if (run + 1 < t->runs)
+          pipe->request(run + 1);
+      }
+    }
+#endif
 #ifndef MULTI_SINGLE
     //pthread_barrier_wait(&runBarrier);
     if (!freeRun || run == 0)
@@ -391,6 +490,15 @@ static void *threadMain(void *a) {
   }
   t->tEnd = nowMs();
   printf("copy %d: %d runs, Result: %d Confidence: %f, %d wrong\n", t->copy, t->runs, idx, conf, t->bad);
+#ifdef VTA_INPUT_INT8
+  if (pipe) {
+    const int c = pipe->count;
+    const double q = pipe->quantMs, w = pipe->waitMs;
+    delete pipe;
+    printf("INPUT_PIPELINE copy %d: %d quantizes in the second thread, %.3f ms each; the copy waited %.3f ms in runs 2 .. %d\n",
+           t->copy, c, c ? q / c : 0.0, w, t->runs - 1);
+  }
+#endif
   m.destroy();
   m.destroyRuntime();
   return nullptr;
@@ -569,9 +677,17 @@ int main(int argc, char **argv) {
     const BundleConfig &c = *copies[i].config;
     args[j] = {i, runs, 0, initConstantWeights(copies[i].weights, c),
                static_cast<uint8_t *>(alignedAlloc(c, c.mutableWeightVarsMemSize)),
-               static_cast<uint8_t *>(alignedAlloc(c, c.activationsMemSize)), 0, 0, &input};
+               static_cast<uint8_t *>(alignedAlloc(c, c.activationsMemSize)), 0, 0, &input, nullptr};
     const SymbolTableEntry &in = getMutableWeightVar(c, MODEL_INPUT);
     copyInput(input, args[j].mutableWeights + in.offset);
+#ifdef VTA_INPUT_INT8
+    const char *pl = getenv("INPUT_PIPELINE");
+    if (pl && atoi(pl) > 0 && input.data) {   //#### JO added (2026-11-27): each copy's thread quantizes its own copy
+      float *f = static_cast<float *>(malloc(input.bytes));
+      memcpy(f, input.data, input.bytes);
+      args[j].plSrc = f;
+    }
+#endif
   }
   free(input.data);   // the int8 input stays: vtalib reads it at every run (freed at the end)
   input.data = nullptr;
@@ -606,6 +722,7 @@ int main(int argc, char **argv) {
     free(a.activations);
     free(a.constantWeights);
     free(a.mutableWeights);
+    free(const_cast<float *>(a.plSrc));
   }
   freeInput(input);
   return bad != 0;
