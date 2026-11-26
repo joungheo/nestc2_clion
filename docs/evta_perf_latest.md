@@ -103,3 +103,41 @@ sudo /bin/sh -c "M4_BITS='<새>.bin <옛>.bin' S1_BITS='<a>.bin <b>.bin' vtabund
 - 실행 파일을 새 vtalib로 다시 빌드할 때: `cd vtabundles_xcmpl/build_multievtax4_sys && make -j2 multivta<X>Bundle singlevta<X>Bundle`,
   `cd build_sys && make -j2 vta<X>Bundle`(`<X>` = MxnetResnet18, Caffe2Resnet50, TvResnet50, VGG16Cifar10, MobileNetV2, MobileNetV2Tf, DeiT).
 - 이번 원자료: 보드 `~/JO/ubuntu2_wt/perf_261126/`(multi4 `m4_<판>_r<n>_<Dir>_{multi,single}.log`, single `sd_<판>x<n>_r1_<Dir>.log`).
+
+## 6. 1×1 weight 한 번 LOAD(`38e3da6`) 뒤 (2026-11-26 17:02–17:13, ubun)
+
+보드 공유 `build_sys`, `build_multievtax4_sys`를 `38e3da6`(vtalib-systolic `EVTA_WGT_FIT`, [mobilenetv2_multi4_sw.md](mobilenetv2_multi4_sw.md) §7)으로 다시 빌드하고,
+같은 실행 파일로 `EVTA_WGT_FIT=0`(전) / `1`(후)을 번갈아 2번씩 `perf_record.sh -r 1 single m4`로 쟀다. 표는 2번의 평균.
+`check`(`EVTA_RES_CHECK=1`)는 21개 실행 파일 모두 0 differ, 분류는 §1과 같다. 원자료: 보드 `~/JO/ubun_wt/perf_261126_wgtfit/`.
+
+**single** (혼자, ms):
+
+| 모델 | `_alux3` 400 전 | `_alux3` 400 후 | `_alux3_dw` 387.5 전 | `_alux3_dw` 387.5 후 |
+|---|---|---|---|---|
+| Resnet18 | 22.21 | 22.16 | 22.80 | 22.81 |
+| Resnet50 | 62.35 | 62.27 | 63.92 | 63.90 |
+| Resnet50Tv | 61.78 | 61.73 | 63.31 | 63.28 |
+| VGG16 | 6.69 | 6.66 | 6.76 | 6.78 |
+| MobileNetV2 | 13.02 | **12.86** | 11.66 | **11.47** |
+| MobileNetV2Tf | 13.05 | **12.89** | 11.69 | **11.52** |
+| DeiT | 34.43 | 34.38 | 35.13 | 35.15 |
+
+**multi4** (`_amul_dw`, 4개 동시 fps / 혼자 copy 0 ms):
+
+| 모델 | 4개 동시 전 | 4개 동시 후 | 혼자 전 | 혼자 후 |
+|---|---|---|---|---|
+| Resnet18 | 166.6 | 171.1 | 22.42 | 22.43 |
+| Resnet50 | 55.6 | 57.1 | 66.54 | **64.23** |
+| Resnet50Tv | 56.0 | 57.8 | 65.94 | **63.66** |
+| VGG16 | 505.7 | 482.6 | 7.06 | 7.06 |
+| MobileNetV2 | 286.8 | 284.3 | 12.21 | **11.77** |
+| MobileNetV2Tf | 284.7 | 286.5 | 12.09 | **11.80** |
+| DeiT | 43.9 | 43.3 | 80.87 | 80.79 |
+
+- 1×1 conv의 thread weight가 wgt 몫을 넘는 모델만 빨라진다. multi4(몫 512 entry): Resnet50 / 50Tv −3.5 %, MobileNetV2 두 모델 −2.4–3.6 %(혼자).
+  single(몫 1024 entry)은 MobileNetV2 두 모델의 7×7 960 → 160 / 320만 해당해 −1.2–1.6 %, Resnet50은 잡음 안이다.
+- 4개 동시는 이 2번에서 ±3–5 % 흔들려(VGG16 466.6–506.6 fps, 명령이 같은데도) 차이를 말할 수 없다. 혼자 값이 기준이다.
+  MobileNetV2Tf 4개 동시는 앞서 같은 실행 파일을 4번씩 번갈아 잰 284.9 → 292.0 fps(§7.4 of mobilenetv2_multi4_sw.md)를 쓴다.
+- single 기본 bitstream은 §3과 같은 결론이다. `_dw` 387.5 MHz가 MobileNetV2 두 모델에서 −10.6 %(11.5 대 12.9 ms), 나머지는 1–3 % 느리다.
+- `perf_record.sh`는 `run_prof.sh`가 lock(다른 사용자의 EVTA 실행)으로 거절되어도 남아 있던 옛 로그를 읽는다. 처음 돌린 것(16:53)은 그래서 버렸다.
+  돌리기 전에 `ps aux | grep -E "[r]un_evta|[r]un_prof"`로 확인하고, 끝난 뒤 `<Dir>/sys*.log` 시각을 본다.
