@@ -1395,6 +1395,20 @@ void conv_kernel(uint32_t sizeOutTileH,
       if ((KN / 16) % (n * nVirtualThread) == 0) break;
     nFilterinLoop = n;
   }
+  //#### JO added (2026-11-26, docs/mobilenetv2_multi4_sw.md 7): a 1x1 conv whose thread weights (nFilterinLoop x cBlocks
+  //#### entries) do not fit the thread's wgt part takes fewer filter blocks per group so that they do (wgtAll below: one
+  //#### LOAD per thread and group instead of nFilterinLoop rows of 256 bytes per input block). MobileNetV2 7x7 960 -> 320:
+  //#### 10 x 60 = 600 > 512 entries, 5 blocks in 2 groups (the input, 49 entries per block, is LOADed twice).
+  //#### EVTA_WGT_FIT=0: as before.
+  static const bool wgtFitEnv = !getenv("EVTA_WGT_FIT") || atoi(getenv("EVTA_WGT_FIT")) != 0;
+  if (wgtFitEnv && evtaConvBurst() && !dw && !pool && KH == 1 && KW == 1 && cBlocks > 1 &&
+      nFilterinLoop * cBlocks > WGT_MEM_ENTRY / nVirtualThread) {
+    uint32_t n = min(nFilterinLoop, WGT_MEM_ENTRY / nVirtualThread / cBlocks);
+    for (; n > 0; n--)
+      if ((KN / 16) % (n * nVirtualThread) == 0) break;
+    if (n > 0)
+      nFilterinLoop = n;
+  }
 #ifdef NESTC_EVTA_PROFILE_AUTOTUNE
   f7 = nFilterinLoop;
   f8 = KN / nFilterinLoop / nVirtualThread / 16;
@@ -1543,7 +1557,12 @@ void conv_kernel(uint32_t sizeOutTileH,
     const bool resPre = resPreEnv && canUp && !ahead;
     const bool resUp = resPre || resAhead;   // the residual above INP_MEM_ENTRY
     //#### JO changed (2026-11-15): also with a residual when resPre keeps the identity entry clear
-    const bool wgtAll = evtaConvBurst() && wgtAllFits && !dw && (!(res && res->add) || resUp) && !pool;
+    //const bool wgtAll = evtaConvBurst() && wgtAllFits && !dw && (!(res && res->add) || resUp) && !pool;
+    //#### JO changed (2026-11-26): also with the residual LOADed after the GEMMs (not resUp: the multi-EVTA inp has no
+    //#### upper entries) when the last thread's weights end below the identity entry RES_WGT_ENTRY (MobileNetV2 7x7
+    //#### 960 -> 160 on multi4: 512 + 5 x 60 <= 1023; the residual goes into inp after the tile's GEMMs as before)
+    const bool resLowOk = !(res && res->add) || resUp || (wgtFitEnv && lastWgt + nFilterinLoop * cBlocks <= RES_WGT_ENTRY);
+    const bool wgtAll = evtaConvBurst() && wgtAllFits && !dw && resLowOk && !pool;
     //#### JO added (2026-11-16, EVTA_LOAD_AHEAD 2): the weights LOADed by the group before stay (one filter group)
     const uint32_t wgtKey = nFilterinLoop | cBlocks << 10 | nVirtualThread << 22;
     const bool wgtKeep = ahead && evtaLoadAhead() >= 2 && wgtAll && nGroups == 1 && gAhead.open &&

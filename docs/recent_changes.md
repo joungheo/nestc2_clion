@@ -21,6 +21,13 @@
 
 ---
 
+### 2026-11-26 ubun (이 commit) — vtalib-systolic: 1×1 conv weight를 한 번에 LOAD (MobileNetV2 7×7 project conv)
+- **바뀐 것:** `vtalib-zcu102-systolic/lib/Bundle/VTABundle.cpp` `conv_kernel`. 1×1 conv에서 thread의 weight가 wgt 몫에 안 들어가면 filter 묶음을 줄여 들어가게 한다.
+  residual add가 있어도 마지막 thread의 weight가 identity entry(1023) 아래에서 끝나면 weight 한 번 LOAD 길을 쓴다. `EVTA_WGT_FIT=0` = 전과 같음.
+  6개 모델 copy 0 conv dump가 켜고 끈 것끼리 바이트까지 같다. multi4 4개 동시: MobileNetV2Tf 286.4 → 294.7, MobileNetV2 278.9 → 288.0, Resnet50 57.35 → 58.9 fps,
+  Resnet18 / VGG16 / DeiT 같음([mobilenetv2_multi4_sw.md](mobilenetv2_multi4_sw.md) §7).
+- **다른 쪽이 할 일:** systolic 실행 파일 다시 빌드(`build_systimed`, `build_sys*`, `build_multievtax4_sys*`, PC `_pcsys*`). bundle은 그대로.
+
 ### 2026-11-26 ubuntu2 (`70a02e0`, `8f3bda0`, `b580636`, 이 commit) — 보드 bundle 다시 생성, 범용 main, 새 single `_dw` bitstream, 최신 성능 기록
 - **바뀐 것:**
   - 보드에서 bundle 다시 생성(지금 컴파일러, invalidate 빼기): single Resnet18 / Resnet50 / Resnet50Tv / VGG16 / MobileNetV2, multi4 같은 다섯 + DeiT.
