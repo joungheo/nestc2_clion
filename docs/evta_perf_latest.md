@@ -5,6 +5,8 @@
 
 용어: **multi4** = EVTA 4개 bitstream, **single** = EVTA 1개 bitstream, **4개 동시** = copy 넷(EVTA마다 하나)이 함께 도는 처리량,
 **혼자** = 실행 파일 하나가 EVTA 하나로 1장씩 도는 시간, **copy 0** = multi4에서 EVTA 0을 쓰는 사본, **fps** = 초당 처리한 그림 수.
+혼자 시간 옆의 fps = 1000 / ms(1장씩 돌기 때문), GOPS = 한 장의 GOP × fps. GOP: Resnet18 3.700, Resnet50 / Resnet50Tv 8.178, VGG16 0.630,
+MobileNetV2 / MobileNetV2Tf 0.658, DeiT 2.182(`run_prof.sh`가 찍는 값).
 
 ## 1. 조건
 
@@ -31,15 +33,15 @@ HP 클럭 = PS의 DDR 포트(HP)와 EVTA DMA 사이 클럭.
 
 ## 2. multi4
 
-| 모델 | 4개 동시 `_dw` (fps) | 4개 동시 `_amul` (fps) | copy당 ms `_dw` / `_amul` | 혼자 ms `_dw` / `_amul` |
+| 모델 | 4개 동시 `_dw` fps (GOPS) | 4개 동시 `_amul` fps (GOPS) | copy당 ms `_dw` / `_amul` | 혼자 `_dw` / `_amul` |
 |---|---|---|---|---|
-| Resnet18 (MXNet) | 170.3 | 171.3 | 23.52 / 23.36 | 22.42 / 22.38 |
-| Resnet50 (Caffe2) | 55.7 | 55.4 | 71.81 / 72.17 | 66.58 / 66.06 |
-| Resnet50Tv (torchvision, DPU 비교) | 55.9 | 55.5 | 71.62 / 72.15 | 65.96 / 65.43 |
-| VGG16 CIFAR-10 | 497.7 | 508.3 | 8.04 / 7.87 | 7.07 / 6.90 |
-| MobileNetV2 (QAT) | **282.6** | 263.9 | 14.17 / 15.16 | **12.10** / 13.55 |
-| MobileNetV2Tf (TF-slim, DPU 비교) | **281.5** | 256.7 | 14.22 / 15.60 | **12.14** / 13.55 |
-| DeiT-tiny | 44.2 | 43.7 | 90.45 / 91.66 | 80.81 / 80.72 |
+| Resnet18 (MXNet) | 170.3 (630 GOPS) | 171.3 (634 GOPS) | 23.52 / 23.36 | 22.42 ms · 44.6 fps (165 GOPS) / 22.38 ms · 44.7 fps (165 GOPS) |
+| Resnet50 (Caffe2) | 55.7 (456 GOPS) | 55.4 (453 GOPS) | 71.81 / 72.17 | 66.58 ms · 15.0 fps (123 GOPS) / 66.06 ms · 15.1 fps (124 GOPS) |
+| Resnet50Tv (torchvision, DPU 비교) | 55.9 (457 GOPS) | 55.5 (454 GOPS) | 71.62 / 72.15 | 65.96 ms · 15.2 fps (124 GOPS) / 65.43 ms · 15.3 fps (125 GOPS) |
+| VGG16 CIFAR-10 | 497.7 (314 GOPS) | 508.3 (320 GOPS) | 8.04 / 7.87 | 7.07 ms · 141.4 fps (89 GOPS) / 6.90 ms · 144.9 fps (91 GOPS) |
+| MobileNetV2 (QAT) | **282.6** (186 GOPS) | 263.9 (174 GOPS) | 14.17 / 15.16 | **12.10** ms · 82.6 fps (54 GOPS) / 13.55 ms · 73.8 fps (49 GOPS) |
+| MobileNetV2Tf (TF-slim, DPU 비교) | **281.5** (185 GOPS) | 256.7 (169 GOPS) | 14.22 / 15.60 | **12.14** ms · 82.4 fps (54 GOPS) / 13.55 ms · 73.8 fps (49 GOPS) |
+| DeiT-tiny | 44.2 (96 GOPS) | 43.7 (95 GOPS) | 90.45 / 91.66 | 80.81 ms · 12.4 fps (27 GOPS) / 80.72 ms · 12.4 fps (27 GOPS) |
 
 - **depthwise 창 장치는 MobileNetV2 두 모델만 빠르게 한다:** 4개 동시 +7–10 %, 혼자 −11 %. 다른 모델에는 depthwise conv가 없다.
 - **HP 클럭(322 → 304 MHz)의 값:** 혼자 Resnet50 +0.5 ms(+0.8 %), VGG16 +0.17 ms(+2.4 %), 4개 동시는 VGG16 −2 %, 나머지는 잡음 안.
@@ -49,15 +51,15 @@ HP 클럭 = PS의 DDR 포트(HP)와 EVTA DMA 사이 클럭.
 
 ## 3. single
 
-| 모델 | `_alux3` 400 MHz (ms) | `_alux3_dw` 387.5 MHz (ms) | 같은 판, `EVTA_DWU=0` |
+| 모델 | `_alux3` 400 MHz | `_alux3_dw` 387.5 MHz | 같은 판, `EVTA_DWU=0` |
 |---|---|---|---|
-| Resnet18 | **22.15** | 22.81 (+2.9 %) | 22.86 |
-| Resnet50 | **62.33** | 63.96 (+2.6 %) | 63.88 |
-| Resnet50Tv | **61.78** | 63.33 (+2.5 %) | 63.34 |
-| VGG16 | **6.68** | 6.75 (+1.1 %) | 6.75 |
-| MobileNetV2 | 13.04 | **11.70** (−10.3 %) | 13.29 |
-| MobileNetV2Tf | 13.06 | **11.65** (−10.8 %) | 13.30 |
-| DeiT | **34.44** | 35.10 (+1.9 %) | 35.10 |
+| Resnet18 | **22.15** ms · 45.1 fps (167 GOPS) | 22.81 ms (+2.9 %) · 43.8 fps (162 GOPS) | 22.86 ms · 43.7 fps (162 GOPS) |
+| Resnet50 | **62.33** ms · 16.0 fps (131 GOPS) | 63.96 ms (+2.6 %) · 15.6 fps (128 GOPS) | 63.88 ms · 15.7 fps (128 GOPS) |
+| Resnet50Tv | **61.78** ms · 16.2 fps (132 GOPS) | 63.33 ms (+2.5 %) · 15.8 fps (129 GOPS) | 63.34 ms · 15.8 fps (129 GOPS) |
+| VGG16 | **6.68** ms · 149.7 fps (94 GOPS) | 6.75 ms (+1.1 %) · 148.1 fps (93 GOPS) | 6.75 ms · 148.1 fps (93 GOPS) |
+| MobileNetV2 | 13.04 ms · 76.7 fps (50 GOPS) | **11.70** ms (−10.3 %) · 85.5 fps (56 GOPS) | 13.29 ms · 75.2 fps (50 GOPS) |
+| MobileNetV2Tf | 13.06 ms · 76.6 fps (50 GOPS) | **11.65** ms (−10.8 %) · 85.8 fps (56 GOPS) | 13.30 ms · 75.2 fps (49 GOPS) |
+| DeiT | **34.44** ms · 29.0 fps (63 GOPS) | 35.10 ms (+1.9 %) · 28.5 fps (62 GOPS) | 35.10 ms · 28.5 fps (62 GOPS) |
 
 - `_dw` 판은 400 MHz를 맞추지 못해 387.5 MHz다. 클럭이 3 % 낮아 MobileNetV2 말고는 1–3 % 느리다. 그래서 **single 기본은 `_alux3` 400 MHz 그대로**다.
   MobileNetV2를 single로 잴 때는 `BIN=…_sa_alux3_dw_387mhz_rq.bin`.
@@ -111,29 +113,29 @@ sudo /bin/sh -c "M4_BITS='<새>.bin <옛>.bin' S1_BITS='<a>.bin <b>.bin' vtabund
 `check`(`EVTA_RES_CHECK=1`)는 21개 실행 파일 모두 0 differ, 분류는 §1과 같다. 원자료: 보드 `~/JO/ubun_wt/perf_261126_wgtfit/`.
 한 장의 연산량(GOP, `run_prof.sh`가 찍는 값): Resnet18 3.700, Resnet50 / Resnet50Tv 8.178, VGG16 0.630, MobileNetV2 / MobileNetV2Tf 0.658, DeiT 2.182. GOPS = GOP × fps.
 
-**single** (혼자, ms):
+**single** (혼자 1장 ms · fps (GOPS)):
 
 | 모델 | `_alux3` 400 전 | `_alux3` 400 후 | `_alux3_dw` 387.5 전 | `_alux3_dw` 387.5 후 |
 |---|---|---|---|---|
-| Resnet18 | 22.21 | 22.16 | 22.80 | 22.81 |
-| Resnet50 | 62.35 | 62.27 | 63.92 | 63.90 |
-| Resnet50Tv | 61.78 | 61.73 | 63.31 | 63.28 |
-| VGG16 | 6.69 | 6.66 | 6.76 | 6.78 |
-| MobileNetV2 | 13.02 | **12.86** | 11.66 | **11.47** |
-| MobileNetV2Tf | 13.05 | **12.89** | 11.69 | **11.52** |
-| DeiT | 34.43 | 34.38 | 35.13 | 35.15 |
+| Resnet18 | 22.21 ms · 45.0 fps (167 GOPS) | 22.16 ms · 45.1 fps (167 GOPS) | 22.80 ms · 43.9 fps (162 GOPS) | 22.81 ms · 43.8 fps (162 GOPS) |
+| Resnet50 | 62.35 ms · 16.0 fps (131 GOPS) | 62.27 ms · 16.1 fps (131 GOPS) | 63.92 ms · 15.6 fps (128 GOPS) | 63.90 ms · 15.6 fps (128 GOPS) |
+| Resnet50Tv | 61.78 ms · 16.2 fps (132 GOPS) | 61.73 ms · 16.2 fps (132 GOPS) | 63.31 ms · 15.8 fps (129 GOPS) | 63.28 ms · 15.8 fps (129 GOPS) |
+| VGG16 | 6.69 ms · 149.5 fps (94 GOPS) | 6.66 ms · 150.2 fps (95 GOPS) | 6.76 ms · 147.9 fps (93 GOPS) | 6.78 ms · 147.5 fps (93 GOPS) |
+| MobileNetV2 | 13.02 ms · 76.8 fps (51 GOPS) | **12.86** ms · 77.8 fps (51 GOPS) | 11.66 ms · 85.8 fps (56 GOPS) | **11.47** ms · 87.2 fps (57 GOPS) |
+| MobileNetV2Tf | 13.05 ms · 76.6 fps (50 GOPS) | **12.89** ms · 77.6 fps (51 GOPS) | 11.69 ms · 85.5 fps (56 GOPS) | **11.52** ms · 86.8 fps (57 GOPS) |
+| DeiT | 34.43 ms · 29.0 fps (63 GOPS) | 34.38 ms · 29.1 fps (63 GOPS) | 35.13 ms · 28.5 fps (62 GOPS) | 35.15 ms · 28.4 fps (62 GOPS) |
 
-**multi4** (`_amul_dw`, 4개 동시 fps (GOPS, 네 EVTA 합) / 혼자 copy 0 ms):
+**multi4** (`_amul_dw`, 4개 동시 fps (GOPS, 네 EVTA 합) / 혼자 copy 0 ms · fps (GOPS)):
 
 | 모델 | 4개 동시 전 | 4개 동시 후 | 혼자 전 | 혼자 후 |
 |---|---|---|---|---|
-| Resnet18 | 166.6 (616) | 171.1 (633) | 22.42 | 22.43 |
-| Resnet50 | 55.6 (455) | 57.1 (467) | 66.54 | **64.23** |
-| Resnet50Tv | 56.0 (458) | 57.8 (473) | 65.94 | **63.66** |
-| VGG16 | 505.7 (319) | 482.6 (304) | 7.06 | 7.06 |
-| MobileNetV2 | 286.8 (189) | 284.3 (187) | 12.21 | **11.77** |
-| MobileNetV2Tf | 284.7 (187) | 286.5 (189) | 12.09 | **11.80** |
-| DeiT | 43.9 (96) | 43.3 (94) | 80.87 | 80.79 |
+| Resnet18 | 166.6 (616) | 171.1 (633) | 22.42 ms · 44.6 fps (165 GOPS) | 22.43 ms · 44.6 fps (165 GOPS) |
+| Resnet50 | 55.6 (455) | 57.1 (467) | 66.54 ms · 15.0 fps (123 GOPS) | **64.23** ms · 15.6 fps (127 GOPS) |
+| Resnet50Tv | 56.0 (458) | 57.8 (473) | 65.94 ms · 15.2 fps (124 GOPS) | **63.66** ms · 15.7 fps (128 GOPS) |
+| VGG16 | 505.7 (319) | 482.6 (304) | 7.06 ms · 141.6 fps (89 GOPS) | 7.06 ms · 141.6 fps (89 GOPS) |
+| MobileNetV2 | 286.8 (189) | 284.3 (187) | 12.21 ms · 81.9 fps (54 GOPS) | **11.77** ms · 85.0 fps (56 GOPS) |
+| MobileNetV2Tf | 284.7 (187) | 286.5 (189) | 12.09 ms · 82.7 fps (54 GOPS) | **11.80** ms · 84.7 fps (56 GOPS) |
+| DeiT | 43.9 (96) | 43.3 (94) | 80.87 ms · 12.4 fps (27 GOPS) | 80.79 ms · 12.4 fps (27 GOPS) |
 
 - 1×1 conv의 thread weight가 wgt 몫을 넘는 모델만 빨라진다. multi4(몫 512 entry): Resnet50 / 50Tv −3.5 %, MobileNetV2 두 모델 −2.4–3.6 %(혼자).
   single(몫 1024 entry)은 MobileNetV2 두 모델의 7×7 960 → 160 / 320만 해당해 −1.2–1.6 %, Resnet50은 잡음 안이다.
