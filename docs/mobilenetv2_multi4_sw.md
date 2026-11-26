@@ -1,6 +1,7 @@
-# MobileNetV2Tf multi4: 소프트웨어로 줄인 시간 (2026-11-25)
+# MobileNetV2Tf multi4: 소프트웨어로 줄인 시간 (2026-11-25, 하드웨어 몫 §9: 11-26)
 
 DPU S(B4096 하나, 270장/s)를 EVTA 4개(`MultiEVTAMobileNetV2TfTest`)로 넘으려고, 2026-11-25에 하드웨어를 바꾸지 않고 소프트웨어만 고친 기록이다.
+- 그 사이 ubuntu2가 depthwise 창 장치(`_dw`)를 bitstream에 넣었다(multi4 11-25 밤, single 11-26). 하드웨어로 줄어든 몫과 single에서의 효과는 §9에 따로 모은다.
 - 측정과 단계별 자세한 표는 [evta_dpu_compare.md](evta_dpu_compare.md) §6.7–§6.10에 있다. 여기서는 무엇을 왜 바꿨고 얼마나 줄었는지를 한곳에 모은다.
 - 모델: TF-slim float MobileNetV2(`mobilenetv2_tf_f32.onnx`, DPU `tf_mobilenetv2_1.0`의 float 모델). 입력 224 × 224 × 3, 연산량 0.658 GOP(EVTA에 보내는 conv / depthwise / fc의 2 × MAC, `run_prof.sh`가 찍는 값). GOPS = 0.658 × fps.
 - 보드: ZCU102. bitstream은 multi4 `..._4evta_sa_amul_400mhz_hp322_rq.bin`, single `..._sa_alux3_400mhz_rq.bin`이다(둘 다 systolic 400 MHz).
@@ -231,4 +232,75 @@ bundle은 그대로(invalidate 빼기는 bundle을 다시 만들어야 들어간
 3. VGG16은 3×3 conv뿐이라 명령이 같다. 잡음이다.
 - multi4 `EVTA_RES_CHECK`는 모든 모델에서 0 differ다.
 - 혼자 시간은 multi4 bitstream 위 copy 0(`singlevta`)이다. DeiT 82.9 ms는 timed 빌드에 OMP 1, multi 버퍼라 single `_alux3` 값(36.6 ms)과 다르다.
-- 혜택을 보는 것은 weight가 thread 몫(multi 512 entry, single 1024)을 넘는 1×1 conv다. single bitstream(wgt 2048 entry)은 몫이 두 배라 들어맞는 conv가 적다(재지 않음).
+- 혜택을 보는 것은 weight가 thread 몫(multi 512 entry, single 1024)을 넘는 1×1 conv다. single bitstream(wgt 2048 entry)은 몫이 두 배라 들어맞는 conv가 적다: MobileNetV2 두 모델만 −1.2–1.6 %([evta_perf_latest.md](evta_perf_latest.md) §6, §9.2).
+
+## 9. 하드웨어가 바뀐 몫 (depthwise 창 장치 `_dw`, 2026-11-25 / 26)
+
+§1–§8은 소프트웨어(vtalib, bundle, main)만 바꾼 것이다. 그 사이 ubuntu2가 depthwise 3×3을 GEMM 대각 weight 대신 창(window) 장치로 하는
+bitstream을 만들었다. 하드웨어 자체(ISA, `sa_dw.v`, 빌드, 타이밍)는 [evta_dw_unit.md](evta_dw_unit.md)에 있고, 여기서는 성능만 그 문서의 표를 따라 모은다.
+GOPS = 0.658 GOP × fps (MobileNetV2 / MobileNetV2Tf).
+
+| bitstream | EVTA | 클럭 | 언제부터 | 성능 표 |
+|---|---|---|---|---|
+| `..._16_15_18_17_4evta_sa_amul_400mhz_hp322_rq.bin` | 4 | 400 / HP 322 MHz | 11-24 multi4 기본 (§1–§6의 측정) | |
+| `..._16_15_18_17_4evta_sa_amul_dw_400mhz_hp304_rq.bin` | 4 | 400 / HP 304 MHz | 11-26 multi4 기본 | [evta_dw_unit.md](evta_dw_unit.md) §9.5, [evta_perf_latest.md](evta_perf_latest.md) §2 |
+| `..._16_16_19_18_sa_alux3_400mhz_rq.bin` | 1 | 400 MHz | single 기본 (그대로) | |
+| `..._16_16_19_18_sa_alux3_dw_387mhz_rq.bin` | 1 | 387.5 MHz | 11-26 새로 (기본 아님) | [evta_perf_latest.md](evta_perf_latest.md) §3, §6 |
+
+### 9.1 multi4
+[evta_dw_unit.md](evta_dw_unit.md) §9.5(같은 실행 파일 `_pcsysdwt`, 세 판을 번갈아 3번, vtalib `1cdf422` + dw):
+
+| | `_amul` hp322 | `_amul_dw` hp304, `EVTA_DWU=0` | `_amul_dw` hp304, 창 모드 |
+|---|---|---|---|
+| 4개 동시 | 260.1 fps (171 GOPS) | 260.6 fps (171 GOPS) | **287.4 fps (189 GOPS)**, +10.5 % |
+| 혼자 1장 (copy 0) | 13.54 ms | 13.71 ms | **12.09 ms** |
+| copy당 EVTA conv / fc (4개 동시) | 6.71–6.76 ms | 6.73–6.76 ms | 5.26–5.37 ms |
+
+- 같은 bitstream에서 창 모드를 끄면(`EVTA_DWU=0`) `_amul`과 같다. 이득은 모두 창 장치에서 왔다. HP 클럭(322 → 304 MHz)은 혼자 +0.17 ms, 4개 동시는 잡음 안이다.
+- depthwise 17층 합은 6.05 → 4.21 ms다(single 375 MHz 시험판, [evta_dw_unit.md](evta_dw_unit.md) §8).
+- 다른 모델에는 depthwise가 없어 빨라지지 않는다. HP 클럭 때문에 VGG16이 혼자 +2.4 %, Resnet50 +0.8 % 느리다([evta_perf_latest.md](evta_perf_latest.md) §2).
+
+**소프트웨어와 하드웨어로 나누면** (4개 동시, MobileNetV2Tf; 줄마다 측정 때가 달라 ±2 fps쯤 흔들린다):
+
+| 단계 | 바뀐 것 | 4개 동시 | 늘어난 비율 |
+|---|---|---|---|
+| 11-25 출발 | | 238.3 fps (157 GOPS) | |
+| 11-25 저녁 | 소프트웨어 (§3, §6) | 263.5 fps (173 GOPS) | +10.6 % |
+| 11-26 `_amul_dw` | **하드웨어** (창 장치) | 284.9–287.4 fps (187–189 GOPS) | +8–10 % |
+| 11-26 `38e3da66` | 소프트웨어 (§7) | **292.0 fps (192 GOPS)** | +2.5 % |
+
+- 이틀에 238.3 → 292.0 fps(+22.5 %)다. 소프트웨어가 약 +13 %(§3–§7), 하드웨어가 약 +10 %다. DPU S 270 fps의 108 %다.
+
+### 9.2 single (EVTA 1개)
+single은 기본 bitstream(`_alux3` 400 MHz)이 그대로라 처음에는 소프트웨어만 효과가 있었다. 11-26 `_dw` 판(387.5 MHz)이 생겼다.
+
+MobileNetV2Tf 혼자 1장:
+
+| 단계 | bitstream | 1장 | fps (GOPS) |
+|---|---|---|---|
+| 11-25 출발 (§1) | `_alux3` 400 | 14.84 ms | 67.4 (44) |
+| 11-25 저녁, 소프트웨어 (§1, `_systimed`) | `_alux3` 400 | 13.04 ms | 76.7 (50) |
+| 11-26 공유 `_sys`, `38e3da6`, `EVTA_WGT_FIT=0` | `_alux3` 400 | 13.05 ms | 76.6 (50) |
+| 같은 실행 파일, `EVTA_WGT_FIT=1` (§7) | `_alux3` 400 | 12.89 ms | 77.6 (51) |
+| 같은 실행 파일, **하드웨어** (창 장치) | `_alux3_dw` 387.5 | **11.52 ms** | **86.8 (57)** |
+
+- 아래 세 줄은 같은 실행 파일로 같은 때 번갈아 2번 잰 평균이다([evta_perf_latest.md](evta_perf_latest.md) §6). 위 두 줄은 빌드(`_systimed`)와 측정 때가 다르다.
+- 이틀에 14.84 → 11.52 ms(−22 %)다. 소프트웨어 −13 %, 창 장치 −10.6 %(클럭이 3 % 낮은데도)다.
+
+모델 7개, 11-24 실행 파일과 지금 공유 `_sys`(`38e3da6`, 11-26 보드에서 다시 만든 bundle, int8 입력) (ms):
+
+| 모델 (GOP) | 11-24 실행 파일 `_alux3` | 지금 `_alux3` 400 | 지금 `_alux3_dw` 387.5 | 빠른 쪽 fps (GOPS) |
+|---|---|---|---|---|
+| Resnet18 (3.700) | 22.72 | **22.16** (−2.5 %) | 22.81 | 45.1 (167) |
+| Resnet50 (8.178) | 64.48 | **62.27** (−3.4 %) | 63.90 | 16.1 (131) |
+| Resnet50Tv (8.178) | 63.75 | **61.73** (−3.2 %) | 63.28 | 16.2 (132) |
+| VGG16 (0.630) | 6.75 | **6.66** (−1.3 %) | 6.78 | 150.2 (95) |
+| MobileNetV2 (0.658) | 14.40 | 12.86 (−10.7 %) | **11.47** (−20.3 %) | 87.2 (57) |
+| MobileNetV2Tf (0.658) | (14.84, 11-25 출발) | 12.89 | **11.52** | 86.8 (57) |
+| DeiT (2.182) | 37.06 | **34.38** (−7.2 %) | 35.15 | 29.1 (63) |
+
+- 11-24 줄은 §8.1의 측정(25회 중앙값)이고, 지금 두 줄은 `perf_record.sh`(4 × 25장 평균)다. 재는 법과 때가 달라 1 % 안쪽은 차이로 보지 않는다.
+- 줄어든 것은 소프트웨어에서 왔다: vtalib의 호출마다 CPU 시간(§6), 1×1 weight 한 번 LOAD(§7), ubuntu2가 다시 만든 bundle(EVTA만 읽는 출력의 invalidate 빼기, §3.2)과 범용 main의 int8 입력(`70a02e07`).
+  모델마다 어느 것이 얼마인지는 나눠 재지 않았다. DeiT −2.7 ms의 출처도 나누지 않았다(single DeiT bundle은 다시 만들지 않았다).
+- 창 장치는 MobileNetV2 두 모델만 빠르게 한다. 다른 모델은 클럭이 3 % 낮아 1–3 % 느리다. 그래서 single 기본은 `_alux3` 400 MHz 그대로다.
+
