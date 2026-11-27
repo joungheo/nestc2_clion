@@ -90,6 +90,8 @@ if [ -n "$IMGS" ]; then
 else
   echo "$D: profile $P"
 fi
+#### JO added (2026-11-27): an -vta-evta-depthwise=<v> in the arguments replaces the one of MC (model-compiler takes an option once)
+case " $* " in *" -vta-evta-depthwise="*) MC=$(echo " $MC " | sed 's/ -vta-evta-depthwise / /');; esac
 # model-compiler reads ./VTASkipQuantizeNodes.txt (a skip-quant ON build may have left one)
 rm -f VTASkipQuantizeNodes.txt
 $B/glow/bin/model-compiler -g -model=$M -backend=VTA -emit-bundle=$O -bundle-api=dynamic -model-input=$IN,float,$SHAPE \
