@@ -21,6 +21,7 @@
 | 9 | 하드웨어 시험 (`hwtest/`) | 보드 |
 | 10 | 그 밖의 도구 | |
 | 11 | 자주 하는 일의 순서 | |
+| 12 | MobileNetV2 시간 줄이기에 쓴 명령과 옵션(bundle, 컴파일러 / 런타임 옵션과 끄면 늘어나는 시간, 확인, 시간 재기, bitstream, 하나씩 켜기 / 끄기) | 보드 + PC |
 
 **읽는 법:**
 - 명령 안의 `<이름>`은 **골라서 넣는 값**이다. 각 명령 아래 "넣을 것"에 무엇이 들어가는지와 예를 적었다. 꺾쇠는 쓰지 않는다.
@@ -1133,3 +1134,209 @@ sudo ./gemmprobe ident                         # 새 bitstream의 GEMM 기본 �
 2. `gen_mobilenetv2_bundle.sh`나 `gen_deit_bundle.sh`를 본떠 스크립트를 만든다. profile과 model-compiler를 직접 부르는 방식이다.
 3. 요약(§3.4)에서 CPU로 간 GEMM과 합쳐지지 않은 꼬리를 본다. `VTA_FUSION_LOG=1`로 자세히 보고 하나씩 줄인다.
 4. `vta/bundles/<Dir>`의 main, `vtabundles_xcmpl/CMakeLists.txt`에 target을 더하고, 이 문서 §3.1에 한 줄을 더한다.
+
+## 12. MobileNetV2 시간 줄이기에 쓴 명령과 옵션 (2026-11-07 ~ 27)
+
+MobileNetV2를 487 ms에서 11.6 ms(EVTA 1개), 291 fps(EVTA 4개)로 줄이면서 쓴 명령과 옵션을 작업 순서대로 모았다.
+각 옵션이 무엇을 하는지는 표에 적었고, 끄면 얼마나 느려지는지는 [mobilenetv2_evta_paper.md](mobilenetv2_evta_paper.md) 표 4의 값을 옮겼다.
+값은 MobileNetV2Tf, `_alux3_dw` 387.5 MHz, float 입력, 다 켬 11.70 ms 기준이다.
+코드는 [mobilenetv2_code_review.md](mobilenetv2_code_review.md), 날짜순 기록은 [mobilenetv2_optimization.md](mobilenetv2_optimization.md) /
+[mobilenetv2_optimize_sw_hw_allmodels.md](mobilenetv2_optimize_sw_hw_allmodels.md)에 있다. 다른 모델도 같은 명령을 쓴다(`<Dir>`만 바꾼다).
+
+| Dir | 모델 | 쓰임 |
+|---|---|---|
+| `MobileNetV2TfTest` | TF-slim MobileNetV2(float ONNX, AMD DPU가 쓰는 모델) | DPU 비교, 지금 주로 재는 것 |
+| `MobileNetV2Test` | ETRI가 준 TFLite QAT 모델의 float ONNX | 처음 작업한 모델 |
+| `MultiEVTAMobileNetV2TfTest`, `MultiEVTAMobileNetV2Test` | 위 둘의 multi4(EVTA마다 copy 하나) | 4개 동시 처리량 |
+
+### 12.1 순서
+
+1. bundle 만들기(§12.2): profile → model-compiler(옵션 §12.3) → `collect_hw_bundles.py`
+2. 실행 파일 빌드(§12.4)
+3. 맞는지 확인(§12.5): `EVTA_RES_CHECK=1`, 필요하면 `EVTA_DUMP_CONV`
+4. 시간 재기(§12.6): `run_prof.sh -s _sys`. 어디에 갔는지는 `_systimed` / `_sysprof` / `EVTA_CALL_TIME`
+5. 런타임 기능 켜고 끄기(§12.7), bitstream 바꾸기(§12.8)
+6. 기능마다의 몫(§12.9): `ablation_mnv2.sh`
+7. 기록(§12.10): `perf_record.sh`, 문서, `save_exe_set.sh`
+
+### 12.2 bundle 만들기
+
+```bash
+# PC nestc-build 컨테이너 또는 보드, <tree>/vtabundles_xcmpl/ (Debug2_remote에 model-compiler / image-classifier가 있어야 한다)
+# single: 200장 profile(2048칸)로. profile은 git에 있다(.gz는 bundle dir에 풀어서 쓴다)
+./gen_calib_bundle.sh MobileNetV2TfTest ../vta/bundles/MobileNetV2TfTest/calib/mobilenetv2_tf_calib_n200_b2048.yaml.gz
+./gen_calib_bundle.sh MobileNetV2Test   ../vta/bundles/MobileNetV2Test/calib/mobilenetv2_calib_n200_b2048.yaml.gz
+# 옵션을 바꿔서: 뒤에 붙인 것은 model-compiler로 간다. 끄기는 =0
+./gen_calib_bundle.sh MobileNetV2TfTest <profile> -vta-evta-depthwise=0 -vta-conv0-pack=0
+OUT=<dir> ./gen_calib_bundle.sh MobileNetV2TfTest <profile .yaml> <옵션>     # bundle을 다른 dir에(지금 bundle을 덮지 않는다)
+# multi4: copy 0 = single bundle(먼저 만들어 둔다), copy 1..3은 EVTA 1..3용
+./gen_multi4_bundles.sh MultiEVTAMobileNetV2TfTest
+PROF=<Debug2_remote>/vta/bundles/MobileNetV2Test/mobilenetv2_calib_n200_b2048.yaml ./gen_multi4_bundles.sh MultiEVTAMobileNetV2Test
+# hw*/<Dir>로 모으기
+python3 collect_hw_bundles.py MobileNetV2TfTest
+python3 collect_hw_bundles.py --set multievtax4 MultiEVTAMobileNetV2TfTest
+# 확인
+head -20 <Debug2_remote>/vta/bundles/MobileNetV2TfTest/mobilenetv2.cpp    # model-compiler commit, 쓴 -vta-* 옵션(기본값 포함), 무엇이 CPU로 갔나
+VTA_FUSION_LOG=1 ./gen_calib_bundle.sh ...                                # 명령마다 한 줄(어느 fusion, 왜 안 됐나)
+```
+
+- `gen_calib_bundle.sh`가 늘 넣는 옵션:
+  - `-enable-channelwise-depthwise -vta-round-shift`: 정확도에 필요해서 끄지 않는다.
+  - DPU 비교 Dir(`MobileNetV2TfTest`, `Resnet50TvTest`)은 KL + `-quantization-pow2-mse=2`(power-of-two scale을 histogram MSE로 고름)도 넣는다.
+- `-vta-evta-depthwise=<v>`를 뒤에 주면 스크립트가 넣는 것 대신 그 값을 쓴다. model-compiler는 같은 옵션을 두 번 받지 않는다.
+- `MultiEVTAMobileNetV2Test`의 기본 profile은 `n200`(2048칸 전)이다. single과 같은 bundle을 만들려면 위처럼 `PROF=`로 2048칸 profile을 준다.
+  `Resnet50`은 `PROF=…/resnet50_calib_n200.yaml MCX=-vta-round-shift`다(`MCX` = 더할 model-compiler 옵션).
+- 처음 모델(QAT)만 있을 때는 `gen_mobilenetv2_bundle.sh [옵션]`(그림 한 장 profile, `-do-not-lower-nodes-for-profiling=Convolution`으로 27 s)을 썼다.
+
+### 12.3 컴파일러 옵션 (model-compiler, `lib/Backends/VTA/VTA.cpp` / `VTASave.cpp`)
+
+| 옵션 | 기본 | 하는 일 | 끄면 |
+|---|---|---|---|
+| `-enable-channelwise-depthwise` | 끔(스크립트가 켬) | depthwise weight만 채널별 scale. 다른 conv는 tensor 하나에 scale 하나 | 분류가 틀린다(293) |
+| `-vta-round-shift` | 끔(스크립트가 켬) | EVTA conv 출력 shift를 반올림(bias에 2^(shift−1)) | 정확도(confidence 0.91 → 0.84) |
+| `-vta-pad-channels` | 켬 | 24채널 conv / add의 activation을 0 weight로 32채널로. 이웃 conv와 depthwise가 EVTA layout을 쓴다 | +267.8 ms |
+| `-vta-conv0-pack` | 켬 | 첫 conv 3 × 3 / 2 over 3채널을 2 × 1 / 1 over 18채널로(TF SAME 비대칭 pad 포함) | +153.3 ms |
+| `-vta-keep-layout` | 켬 | conv 사이 activation을 EVTA layout N{C/16}HW16으로 둔다. depthwise도 그 layout을 읽고 쓴다 | +35.4 ms |
+| `-vta-evta-depthwise` | 켬 | depthwise 3 × 3를 EVTA에서(`dw_convolution_evta`). `=0`이면 CPU NEON `cw_convolution` | +19.5 ms |
+| `-vta-evta-fc` | 켬 | logits(1 × 1 입력 위 1 × 1 conv)를 EVTA fc로 | +5.3 ms |
+| `-vta-fuse-preprocess` | 켬 | float 입력의 quantize와 transpose를 첫 conv 입력 복사에 합침 | +1.6 ms |
+| `-vta-fuse-residual`, `-vta-fuse-residual-norelu`, `-vta-conv-epilogue`, `-vta-evta-elemadd` | 켬 | residual add를 앞 conv의 epilogue로(relu 없는 add는 `_rq` 판의 requantize 반올림으로 정확). 넷을 같이 끈다 | +0.7 ms(`_rq` 없는 판에서는 켜면 오히려 +4.3) |
+| `-vta-evta-avgpool` | 켬 | global avgpool을 EVTA ALU로(`_alux*` / `_amul` 판에서만, 아니면 CPU) | 약 +0.5 ms(`EVTA_ALUX=0`으로 잰 값; MobileNetV2가 쓰는 ALU 확장은 avgpool뿐) |
+| `-vta-skip-evta-invalidate` | 켬 | 다음 EVTA 호출만 읽는 출력에는 `VTABufferInvalidate`를 부르지 않음 | +0.5 ms |
+| `-vta-fuse-pool`, `-vta-evta-maxpool` 등 | 켬 | MobileNetV2에는 해당하는 연산이 없다(Resnet / VGG용) | |
+
+- 다른 옵션까지 포함한 전체 표는 §3.3이다.
+- 옵션 값은 bundle `.cpp`의 맨 위 주석에 모두 남는다. 두 bundle의 차이는 `diff <(head -20 a.cpp) <(head -20 b.cpp)`로 본다.
+- **CPU에 남은 것:** 요약 주석(`VTA_FUSION_LOG`)에 conv / fc가 CPU로 간 까닭이 적힌다. MobileNetV2는 지금 0개이고, 합쳐지지 않은 꼬리는 avgpool 하나다.
+
+### 12.4 실행 파일 빌드
+
+```bash
+# 보드, vtabundles_xcmpl/ (systolic vtalib)
+cd build_sys && make -j2 vtaMobileNetV2TfBundle vtaMobileNetV2Bundle                 # -> ../hw/<Dir>/vta*Bundle_sys
+cd ../build_multievtax4_sys && make -j2 multivtaMobileNetV2TfBundle singlevtaMobileNetV2TfBundle
+# 시간을 나눠 재는 판: build_systimed(문장마다), build_sysprof(EVTA 호출마다), 같은 target 이름 (-s _systimed / _sysprof)
+# PC cross build: §4.2 (build_pc_* , -DBUNDLE_EXE_SUFFIX=_pcsys...)
+```
+
+- `hw*/<Dir>/multi_threads_main.cpp`, `multi_model.h`는 git 밖의 사본이다. git의 공통 main(`vta/bundles/Resnet18Test/multi_threads_main.cpp`, 15곳 같은 파일)이 바뀌면
+  빌드 전에 복사한다. 예: `cp ../vta/bundles/MobileNetV2TfTest/multi_threads_main.cpp hw/MobileNetV2TfTest/`.
+- 실행 파일에는 vtalib commit(`NESTC_BUILD`)이 들어 있다. `run_prof.sh`가 실행마다 찍는다.
+
+### 12.5 맞는지 확인
+
+```bash
+# 보드, vtabundles_xcmpl/
+sudo /bin/sh -c "EVTA_RES_CHECK=1 hw/script/run_prof.sh -s _sys -n 2 MobileNetV2TfTest"       # EVTA 호출마다 CPU로 다시 계산해 비교
+grep -c differ hw/MobileNetV2TfTest/sys.log; grep -oE '[0-9]+ of [0-9]+ differ' hw/MobileNetV2TfTest/sys.log | sort | uniq -c   # 152건, 모두 0 of N
+sudo /bin/sh -c "EVTA_RES_CHECK=1 hw_multievtax4/script/run_prof.sh -s _sys -n 2 MultiEVTAMobileNetV2TfTest"   # 4개 동시 / 혼자
+# 바꾸기 전과 후의 EVTA conv 출력을 바이트로 비교 (하나씩, _CHECK 변수 없이)
+sudo /bin/sh -c "EVTA_DUMP_CONV=/tmp/d_new BIN=<bin> hw/script/run_prof.sh -s _sys -n 1 MobileNetV2TfTest"
+cmp -s ... ; diff -rq /tmp/d_old /tmp/d_new          # 다 본 뒤 지운다 (디스크)
+# 창 장치: 시뮬레이터(PC) vtalib-zcu102-systolic/tests/run_dw_test.sh, 보드 run_alux_board_tests.sh 안의 dw_evta_test (창 / 대각)
+```
+
+- 분류는 MobileNetV2Tf 282 (0.322088), MobileNetV2 282 (0.920282)다. 옵션이나 vtalib를 바꿔도 출력 바이트가 같아야 한다.
+  - 바이트가 달라지는 변경(양자화, 반올림)은 정확도를 다시 잰다(§6, `imagenet_eval/`).
+- `_CHECK` 변수를 켜면 기준 계산용 conv도 dump된다. 그래서 dump 비교는 그 변수 없이 한다.
+
+### 12.6 시간 재기
+
+```bash
+# 보드, vtabundles_xcmpl/. 1장 시간 = THROUGHPUT 1 줄, 4개 동시 = THROUGHPUT 4 줄
+sudo /bin/sh -c "hw/script/run_prof.sh -s _sys -n 25 MobileNetV2TfTest"                  # SYS_BIN(single 기본 _alux3 400)
+sudo /bin/sh -c "BIN=vtahw_zcu102_1x16_i8w8a32_16_16_19_18_sa_alux3_dw_387mhz_rq.bin hw/script/run_prof.sh -s _sys -n 25 MobileNetV2TfTest"
+sudo /bin/sh -c "hw_multievtax4/script/run_prof.sh -s _sys -n 25 MultiEVTAMobileNetV2TfTest"   # multivta(4개 동시) + singlevta(copy 0 혼자)
+grep THROUGHPUT hw/MobileNetV2TfTest/sys.log
+#   THROUGHPUT 1 copies ...: 99 images in 1137.8 ms = 87.0 images/s (11.493 ms per image per copy)
+```
+
+| 입력 | 쓰는 법 | 뜻 |
+|---|---|---|
+| int8 `.i8`(기본) | `<Dir>/i8/<그림>.i8`이 있으면 쓴다. 만들기: `cd hw/<Dir> && sudo INPUT_INT8_SAVE=i8 ./<exe> <그림.png>`(`perf_record.sh i8`도 만든다) | quantize가 시간 밖. 입력이 이미 int8로 오는 경우 |
+| float | `INPUT_INT8=0` | 매 장 float를 읽어 첫 conv 입력 복사에서 quantize. DPU의 end-to-end와 가장 가깝다 |
+| 겹친 quantize | `INPUT_PIPELINE=1`(single에 맞다: 둘째 thread) / `=2`(multi4에 맞다: EVTA를 기다리는 polling 사이에 한 줄씩) | 그림이 줄지어 오는 경우. 끝에 `INPUT_PIPELINE copy <i>: ... waited ...` 줄 |
+
+시간이 어디에 갔는지:
+
+| 명령 | 보는 것 |
+|---|---|
+| `run_prof.sh -s _systimed -n 25 <Dir>` | bundle 문장마다 시간(`timing.csv`, summary의 큰 순서). CPU 연산과 EVTA 호출의 몫 |
+| `run_prof.sh -s _sysprof -n 25 <Dir>` | EVTA 호출마다 시간, GOPS(`prof_summary.py`, `<log>.sum`) |
+| `EVTA_CALL_TIME=1` (`_sys`에 붙임) | replay된 호출마다 CPU 시간을 bundle / pre / find / start / hook / wait로. EVTA run 밖 시간이 어디서 나는지 |
+| `EVTA_REPLAY_LOG=2` | replay된 run마다 GEMM / ALU 반복 수, DRAM 바이트, µs(`EVTA_RUN` 줄) |
+| `EVTA_MATMUL_TIME`, `EVTA_LN_TIME` 등 | DeiT용(§7). MobileNetV2에는 해당 없음 |
+
+- **multi4 옵션** (`hw_multievtax4/script/run_prof.sh`):
+  - `-l`: copy 넷을 lockstep으로(`MULTI_LOCKSTEP`).
+  - `-r`: `chrt -f 10` 실시간 우선순위.
+  - `MULTI_FREE=1`: 장마다 barrier 없이 각자.
+  - `MULTI_STAGGER_US=<us>`: copy i를 i × us 늦게 출발.
+  - `MULTI_MASK=<bits>`: 그 copy만.
+  - `PROF_EXE=<exe>`: Dir의 두 실행 파일 중 하나만.
+- **흔들림:** single 혼자는 같은 구성 3번이 0.5 % 안이다. 4개 동시는 ±3–5 %다. 그래서 비교는 bitstream이나 변수를 번갈아 3번 돌려 평균한다(`perf_record.sh`, `ablation_mnv2.sh`가 그렇게 한다).
+- 보드에 다른 사람 실행이 있으면 `run_prof.sh`는 lock(`/tmp/evta_run.lock`)을 못 잡고 바로 끝난다. `perf_record.sh` / `ablation_mnv2.sh`는 기다렸다가 다시 한다(`LOCK_WAIT`). 측정은 보드가 빌 때 한다.
+
+### 12.7 런타임 기능 (vtalib-systolic, 실행할 때 변수로)
+
+모두 기본은 켬이다. 변수로 하나씩 끄고 같은 실행 파일로 비교한다. 예: `sudo /bin/sh -c "EVTA_REPLAY=0 hw/script/run_prof.sh -s _sys -n 25 MobileNetV2TfTest"`.
+
+| 끄는 법 | 기능 | 끄면 |
+|---|---|---|
+| `EVTA_REPLAY=0` | record / replay: 첫 호출의 명령과 uop을 기록해 두고 다시 보냄 | +15.3 ms |
+| `EVTA_BUF_POOL_MB=0` | buffer pool: 해제한 VTA buffer를 크기별로 다시 씀(`cma_alloc` ioctl 없음) | +7.2 ms |
+| `EVTA_CONV_BURST=0` | DMA 묶기: 연속 행을 한 LOAD / STORE로, 1 × 1 weight를 한 LOAD로 | +5.5 ms |
+| `EVTA_LOAD_AHEAD=0` | 다음 filter group / tile의 LOAD를 앞 GEMM 동안 시작(기본 2: 상주 weight 다시 안 읽음) | +1.4 ms |
+| `EVTA_INPUT_STREAM=0` | 첫 conv를 tile 행마다 run으로 나눠 다음 행의 입력 묶기를 겹침 | +0.6 ms |
+| `EVTA_REPLAY_VARIANTS=0` | buffer 주소 조합마다 명령 사본(기본 8개). 0이면 호출마다 주소를 고치고 flush | +0.2 ms(4개 동시에서 더 큼) |
+| `EVTA_BUF_POOL_SHARED=1` | (켜면 옛 방식) pool을 thread 모두에 하나로. 기본은 thread마다 | 4개 동시에서 느려짐 |
+| `EVTA_WGT_FIT=0` | wgt 몫을 넘는 1 × 1 conv는 filter 묶음을 줄여 한 LOAD로 | +0.2 ms |
+| `EVTA_DWU=0` | depthwise 창 모드(`_dw` 판에서만). 0이면 대각 GEMM | +1.7 ms |
+| `EVTA_ALUX=0` | ALU 확장(`_alux*` 판). MobileNetV2에서는 avgpool이 CPU로 간다 | +0.5 ms |
+| `EVTA_AVGPOOL=0` | avgpool만 CPU로(`_alux*` / `_amul` 판) | |
+| `EVTA_REQUANT=0`, `EVTA_BIAS_RESET=0` | `_rq` 판의 out 쓰기 requantize, bias reset | +8.2 ms, +0.7 ms |
+| `EVTA_ALUMUL=0` | `_amul` 판의 ALU MUL immediate(avgpool이 CPU로) | |
+
+- 판에 없는 기능을 `=1`로 강제로 켜면 결과가 틀린다. 끄는 것(`=0`)만 안전하다.
+- 전체 변수 목록은 §7이다.
+
+### 12.8 bitstream (하드웨어 몫)
+
+같은 실행 파일에 `BIN=`만 바꿔 잰다. 판의 기능은 이름으로 켜진다(§2.6, [evta_hw_versions.md](evta_hw_versions.md)).
+
+| `BIN=` (`vtahw_zcu102_1x16_i8w8a32_` 뒤) | 더한 것 | MobileNetV2Tf 1장 |
+|---|---|---|
+| `16_16_19_18_sa_400mhz.bin` | systolic GEMM 400 MHz(기준) | 27.03 ms |
+| `..._sa_400mhz_alu1_epr.bin` | ALU immediate II 1 | 23.71 |
+| `..._sa_400mhz_bias.bin` | bias reset | 21.57 |
+| `..._sa_400mhz_rq.bin` | out 쓰기 requantize | 13.90 |
+| `..._sa_alux_400mhz_rq.bin`, `_alux2_`, `_alux3_` | ALU 확장(avgpool on EVTA) | 13.42, 13.08, 13.08 |
+| `..._sa_alux3_dw_387mhz_rq.bin` | depthwise 창 장치, 387.5 MHz | 11.71 |
+| multi4 `16_15_18_17_4evta_sa_amul_dw_400mhz_hp304_rq.bin`(기본) | `_amul` + 창 장치 | 4개 동시 약 282–291 fps |
+
+- 시간은 [mobilenetv2_evta_paper.md](mobilenetv2_evta_paper.md) 표 3의 값이다(float 입력, 다 켠 소프트웨어).
+- 하드웨어를 새로 만드는 make 옵션:
+  - `DWU=1`: 창 장치(`_dw`)
+  - `ALUMUL=1`: MUL immediate(`_amul`)
+  - `ALUX=1`: ALU 확장
+  - `FREQ=<MHz>`
+  - 명령은 §2, 과정은 [evta_dw_hw_report.md](evta_dw_hw_report.md)에 있다.
+
+### 12.9 기능마다의 몫: `ablation_mnv2.sh`
+
+§5.3에 명령이 있다. 요약하면 이렇다.
+
+- `gen`: 옵션을 바꾼 bundle 18개를 만든다.
+  - `c0` = 모두 끔, `c1`–`c8` = 컴파일러 단계를 하나씩 켬, `all` = 기본, `no_<옵션>` = 그것만 끔.
+- `build`: systolic / HLS vtalib로 빌드한다.
+- `run ladder|loo|hls`: 목록 전체를 R바퀴 번갈아 잰다.
+  - ladder = 하나씩 켜기, loo = 하나씩 끄기(leave-one-out), hls = HLS bitstream.
+- `list <목록>`, `opts <tag>`: 구성마다 bundle / bitstream / 변수 / 옵션을 보여 준다.
+- 구성은 `"<이름>|<bundle tag>|<suffix>|<bitstream>|<변수>"` 줄이다. 새 기능은 스크립트 안 `list_ladder` / `list_loo`에, 컴파일러 옵션이면 `OFF`와 `BUNDLES`에도 더한다.
+- 측정 한 번(ladder 27 구성 × 3바퀴)에 약 11분 걸린다. 로그와 `summary.txt`는 `OUT=<dir>`(기본 `~/JO/ubun_wt/abl_<목록>_<날짜>`)에 남는다.
+
+### 12.10 기록하기
+
+- 모델 7개를 같은 방법으로: `sudo /bin/sh -c "vtabundles_xcmpl/perf_record.sh -r 3"`(§5.3). 결과는 [evta_perf_latest.md](evta_perf_latest.md)에 새 날짜로 고친다.
+- 그 측정에 쓴 실행 파일 남기기: `vtabundles_xcmpl/save_exe_set.sh exe_<yymmdd>_<vtalib commit> hw/MobileNetV2TfTest hw_multievtax4/MultiEVTAMobileNetV2TfTest`(§2.6).
+- 다른 PC / 보드가 해야 할 일이 생기면(bundle 다시 생성, 실행 파일 다시 빌드) `docs/recent_changes.md` 맨 위에 적는다.
