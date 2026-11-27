@@ -142,6 +142,8 @@ GEMM과 ALU 명령에 그 값이 들어가고, `en = 0`으로 다시 끈다(`cmd
 
 ## 5. bitstream과 vtalib의 짝
 
+주요 판의 소스 tag, `build_info.txt`, 보관 dir, 시험한 실행 파일 세트와 예전 판을 다시 돌리는 법(2026-11-27): [evta_hw_versions.md](evta_hw_versions.md).
+
 | bitstream (`/lib/firmware`) | EVTA | bias reset | requantize | ALU 확장 | vtalib | vtalib가 그 기능을 쓰기 시작한 commit | 실행 파일 |
 |---|---|---|---|---|---|---|---|
 | `zcu102_1x16_i8w8a32_16_16_19_18.bin` (etri) | 1 | × | × | × | `vta/vtalib` | | `build/`, `build_prof/`, `build_timed/` |

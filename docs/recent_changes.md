@@ -21,6 +21,19 @@
 
 ---
 
+### 2026-11-27 ubuntu2 — 하드웨어 판 관리: `build_info.txt`(make bin), tag `hw-*`, 보관 dir 실행 파일 세트, `old_vtalib.sh`
+- **바뀐 것:**
+  - 네 하드웨어 트리(systolic, multi4, single, multi2)의 Makefile이 `utils/hwver/build_info.sh`를 부른다. HLS / Vivado 시작 때 소스 commit stamp를 남기고, `.bin` 옆에 `<이름>.build_info.txt`를 쓴다.
+  - 기본 판의 소스에 annotated tag `hw-*` 7개를 붙였다.
+  - 보드 보관 dir `/home/xilinx/JO/npuprg/bit/`의 주요 판 8개에 `build_info.txt`를 채워 넣었다. 새로 만든 판 5개에는 `README.md`도 썼다.
+  - 시험한 실행 파일 세트 3개를 저장했다(`bit/exe_sets/`, `vtabundles_xcmpl/save_exe_set.sh` / `run_exe_set.sh`).
+  - 예전 vtalib로 빌드하는 `utils/hwver/old_vtalib.sh`를 넣었다.
+  - 11-25 / 26 판(`evta_*_dw_*`)은 실수로 `/lib/firmware/bit/`에 두었던 것을 보관 dir로 복사했다. `/lib/firmware/bit/`는 같은 내용의 사본으로 남아 있다.
+  - 자세히: [evta_hw_versions.md](evta_hw_versions.md).
+- **다른 쪽이 할 일:** `pull`, `git fetch --tags`.
+  - bitstream을 새로 만들면 `build_info.txt`를 보관 dir에 같이 둔다.
+  - 기본 판을 바꾸면 tag를 붙이고 [evta_hw_versions.md](evta_hw_versions.md) §3에 줄을 더한다.
+
 ### 2026-11-27 ubun 24ac3ef1, 6c862f40, 392d1a8 — 공통 main `INPUT_PIPELINE=1|2`(입력 quantize를 EVTA 연산과 겹침), vtalib-systolic `VTASetWaitWork`
 - **바뀐 것:** 공통 main `multi_threads_main.cpp`(15곳 같은 파일), `vtalib-zcu102-systolic`(`VTAInputInt8.h` `VTAInputQuantizeRows` / `VTASetWaitWork`,
   `pynq_driver.cc` `RunWait`이 기다리는 동안 그 일을 함, `sim_driver.cc` 빈 판, `CPUBundle_generic.cpp` NCHW quantize를 `vld3q_s8`로: 1.47 → 0.64 ms, 같은 바이트).

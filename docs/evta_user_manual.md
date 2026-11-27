@@ -279,6 +279,7 @@ make bin SYSTOLIC=1 ALUX=3 FREQ=400 JOBS=4 IMPL_STRATEGY=Performance_ExplorePost
 # PC에서
 ssh xilinx@192.168.20.2 mkdir -p /home/xilinx/JO/npuprg/bit/<목적>_<YYMMDD>
 scp <export>/vtahw_<dir>.{bin,bit,hwh,timing.rpt,utilization.rpt} xilinx@192.168.20.2:/home/xilinx/JO/npuprg/bit/<목적>_<YYMMDD>/
+scp <export>/vtahw_<dir>.build_info.txt xilinx@192.168.20.2:/home/xilinx/JO/npuprg/bit/<목적>_<YYMMDD>/build_info.txt   # 2026-11-27부터 make bin이 쓴다 (§2.6)
 # 보드에서
 sudo cp /home/xilinx/JO/npuprg/bit/<목적>_<YYMMDD>/vtahw_<dir>.bin /lib/firmware/
 ```
@@ -311,7 +312,7 @@ sudo cp /home/xilinx/JO/npuprg/bit/<목적>_<YYMMDD>/vtahw_<dir>.bin /lib/firmwa
     클럭 때문에 1–3 % 느려 single 기본은 `_alux3` 그대로. [evta_perf_latest.md](evta_perf_latest.md) §3.
   - 이름 조각(`_amul`, `_amul_bc`, `_rq2`, `_hp322` …)의 뜻: [evta_isa_ext.md](evta_isa_ext.md) §5 "bitstream 이름 읽는 법".
 - **최종판은 아니다.** 다음 판의 후보(RQ ALU 연산, multi4 ALU 확장, KV260)가 있다.
-- **짝이 되는 vtalib:** `_alux3`의 기능은 `vtalib-zcu102-systolic` commit `8191320`(11-15) 뒤로 빌드한 실행 파일만 쓴다. 보드의 `_sys*`는 그 전 판이다(§4.3).
+- **짝이 되는 vtalib:** `_alux3`의 기능은 `vtalib-zcu102-systolic` commit `8191320`(11-15) 뒤로 빌드한 실행 파일만 쓴다. 보드의 `build_sys` / `build_multievtax4_sys`는 11-26에 다시 빌드했다(`38e3da6`).
 - 판마다 날짜, 클럭, 더한 기능, WNS, 지금 소스와의 관계: [evta_isa_ext.md](evta_isa_ext.md) §5.1.
   판마다 하드웨어 / vtalib / 컴파일러에서 더한 것: §5.2. 판별 성능 표(bitstream만 바꾼 효과, 판마다 소프트웨어가 줄인 시간, `_alux3`에서 한 일): §5.3.
 
@@ -328,6 +329,21 @@ sudo cp /home/xilinx/JO/npuprg/bit/<목적>_<YYMMDD>/vtahw_<dir>.bin /lib/firmwa
 - `VTA_ALUX_WINDOW=16`: 16 step 안에서는 같은 자리를 다시 읽지 않는 프로그램만 쓴다.
 - `VTA_ALUX_DIST=14,15,16,17,18`: 재사용 거리 d를 하나씩 시험한다.
 - `VTA_ALUX_HAZARD_OK=1`: 17-step 규칙을 어기는 프로그램을 일부러 넣는다. 이때는 FAIL이 나와야 맞다.
+
+### 2.6 판 기록과 예전 판 다시 돌리기 (2026-11-27)
+
+자세히: [evta_hw_versions.md](evta_hw_versions.md)(원칙, 주요 판 표, 실행 파일 세트, 예전 vtalib 빌드).
+
+- **기록:** `make bin`(네 하드웨어 트리)이 HLS / Vivado 시작 때 소스 commit을 적고(`src_hls.txt`, `src_vivado.txt`, 고친 파일은 `.diff`),
+  `.bin` 옆에 `<이름>.build_info.txt`(commit, `VTA_*` make 변수, WNS / WHS, 클럭, 자원)를 쓴다. 보관 dir에는 `build_info.txt`로 둔다.
+  배선 뒤 단계가 있으면 `utils/hwver/build_info.sh write <최종 .bin> --timing ... --step "..."`, 보드 시험 뒤 `build_info.sh add <info> test|role|exe "..."`.
+- **tag:** 기본 판의 소스 commit에 `hw-<종류>-<기능>-<날짜>`(`git tag -l 'hw-*' -n1`, ubun은 `git fetch --tags`).
+- **예전 판 돌리기:**
+  1. 대부분: 최신 실행 파일에 `BIN=<예전 판>`(vtalib가 판 이름으로 기능을 고른다).
+  2. 그때 잰 실행 파일: `sudo /bin/sh -c "BIN=<판> vtabundles_xcmpl/run_exe_set.sh <세트> [-n 25] [hw*/Dir ...]"`. 저장은
+     `vtabundles_xcmpl/save_exe_set.sh [-s <끝 이름>] exe_<yymmdd>_<vtalib commit> hw*/<Dir> ...`(보드 `bit/exe_sets/`).
+  3. 예전 vtalib: `utils/hwver/old_vtalib.sh <tag|commit> [single|multievtax4] <target> ...`(worktree `../nestc_hwver/<이름>`,
+     build dir `build_pc*_pcsysv_<이름>` / 보드 `build*_sysv_<이름>`, 실행 파일 `<target>_pcsysv_<이름>`, `run_prof.sh -s <그 이름>`).
 
 ## 3. bundle 소스 만들기 (시뮬레이터 빌드 `Debug2_remote`)
 

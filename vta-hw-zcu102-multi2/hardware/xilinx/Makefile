@@ -18,6 +18,8 @@
 # Directories
 ROOTDIR = $(CURDIR)
 VTA_HW_DIR = $(CURDIR)/../..
+#### JO added (2026-11-27, docs/evta_hw_versions.md): source commit stamps at HLS / Vivado start, build_info.txt beside the .bin
+BUILD_INFO := $(VTA_HW_DIR)/../utils/hwver/build_info.sh
 BUILD_DIR = $(VTA_HW_DIR)/build/hardware/xilinx
 SCRIPT_DIR = $(CURDIR)/scripts
 SRC_DIR = $(CURDIR)/src
@@ -101,6 +103,7 @@ $(CONFIG_TCL): $(VTA_CONFIG_DEPS) $(VTA_HW_DIR)/include/vta/hw_spec.h
 #$(IP_PATH): $(SRC_DIR)/* $(CONFIG_TCL)
 $(IP_PATH): $(SRC_DIR)/* $(VTA_HW_DIR)/include/vta/hw_spec.h $(SCRIPT_DIR)/hls.tcl $(CONFIG_TCL)
 	mkdir -p $(IP_BUILD_PATH)
+	-$(BUILD_INFO) src $(IP_BUILD_PATH)/src_hls.txt
 	cd $(IP_BUILD_PATH) && \
 		$(VIVADO_HLS) \
 		-f $(SCRIPT_DIR)/hls.tcl \
@@ -116,6 +119,7 @@ $(IP_PATH): $(SRC_DIR)/* $(VTA_HW_DIR)/include/vta/hw_spec.h $(SCRIPT_DIR)/hls.t
 #$(BIT_PATH): $(IP_PATH)
 $(BIT_PATH): $(IP_PATH) $(SCRIPT_DIR)/vivado.tcl
 	mkdir -p $(HW_BUILD_PATH)
+	-$(BUILD_INFO) src $(HW_BUILD_PATH)/src_vivado.txt
 	cd $(HW_BUILD_PATH) && \
 		$(VIVADO) \
 		-mode batch \
@@ -131,6 +135,8 @@ $(BIT_PATH): $(IP_PATH) $(SCRIPT_DIR)/vivado.tcl
 #### JO added
 $(BIN_PATH): $(BIT_PATH)
 	$(PYTHON) $(SCRIPT_DIR)/bit2bin.py $< $@
+	-$(BUILD_INFO) write $@ --src $(IP_BUILD_PATH)/src_hls.txt --src $(HW_BUILD_PATH)/src_vivado.txt \
+		--timing $(@:.bin=.timing.rpt) --util $(@:.bin=.utilization.rpt)
 
 clean:
 	rm -rf *.out *.log
