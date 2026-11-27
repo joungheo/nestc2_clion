@@ -364,7 +364,7 @@ vtaMxnetResnet18Bundle                   OK     6s
 | NEST-C CMake에 있는 bundle (시험 번들, Resnet18 / 50, VGG16) | `vtabundles_xcmpl/build_sim_bundles.sh [-f] [target ...]` | `Debug2_remote/vta/bundles/<Dir>/`, 로그 `Debug2_remote/bundle_logs/<target>.log`, `summary.txt` |
 | MobileNetV2 | `vtabundles_xcmpl/gen_mobilenetv2_bundle.sh [model-compiler 옵션]` | `Debug2_remote/vta/bundles/MobileNetV2Test/` (`gen.log`, `prof.log`) |
 | DeiT-tiny | `vtabundles_xcmpl/gen_deit_bundle.sh [model-compiler 옵션]` | `Debug2_remote/vta/bundles/DeiTTest/` (`gen.log`) |
-| CNN 네 모델을 여러 그림의 profile로 | `vtabundles_xcmpl/gen_calib_bundle.sh <Dir> <그림 목록 \| profile.yaml[.gz]> [model-compiler 옵션]` (`BINS=2048` histogram 칸; DPU 비교 dir `Resnet50TvTest`, `MobileNetV2TfTest`, `MobileNetV2ValTest`는 KL + `-quantization-pow2-mse=2`가 기본) | `Debug2_remote/vta/bundles/<Dir>/` (`prof.log`, `gen.log`). [evta_accuracy.md](evta_accuracy.md) §6, §7 |
+| CNN 네 모델을 여러 그림의 profile로 | `vtabundles_xcmpl/gen_calib_bundle.sh <Dir> <그림 목록 \| profile.yaml[.gz]> [model-compiler 옵션]` (`BINS=2048` histogram 칸; `OUT=<dir>` bundle을 그 dir에; DPU 비교 dir `Resnet50TvTest`, `MobileNetV2TfTest`, `MobileNetV2ValTest`는 KL + `-quantization-pow2-mse=2`가 기본) | `Debug2_remote/vta/bundles/<Dir>/` (`prof.log`, `gen.log`). [evta_accuracy.md](evta_accuracy.md) §6, §7 |
 | torchvision ResNet-50 ONNX | `~/.venvs/onnxeval/bin/python vtabundles_xcmpl/export_tv_resnet50.py Debug2_remote/vta/bundles/Resnet50TvTest/resnet50.onnx` (torch, torchvision 필요) | Caffe2 resnet50.onnx와 입력 / 출력이 같은 ONNX (`Resnet50TvTest`) |
 | TF-slim float MobileNetV2 ONNX | `vta/bundles/MobileNetV2TfTest/CMakeLists.txt` 머리의 curl / `tfl2onnx.py` 두 줄 (tflite, onnx 필요) | `Debug2_remote/vta/bundles/MobileNetV2TfTest/mobilenetv2_tf_f32.onnx` (logits, 1001 클래스) |
 | multi4 copy 4개 | `[MODEL=<onnx>] [PROF=<yaml>] [MCX="<옵션>"] vtabundles_xcmpl/gen_multi4_bundles.sh <Dir> ...` (`MultiEVTAResnet18Test`, `MultiEVTAResnet50Test`, `MultiEVTAVgg16Cifar10Test`, `MultiEVTADeiTTest`, `MultiEVTAMobileNetV2Test`, DPU 비교 `MultiEVTAResnet50TvTest`, `MultiEVTAMobileNetV2TfTest`) | `Debug2_remote/vta/multievta_bundles/<Dir>/` (`gen_<i>.log`). single bundle이 먼저 있어야 한다(모델과 profile을 거기서 읽음) |
@@ -797,6 +797,18 @@ sudo /bin/sh -c "M4_BITS='<a>.bin <b>.bin' S1_BITS='<c>.bin <d>.bin' vtabundles_
 - 다른 사용자의 EVTA 실행이 `/tmp/evta_run.lock`을 잡고 있으면 30초마다 다시 시도한다(`LOCK_WAIT=<초>`, 기본 1800). 그때까지 못 잡으면 `ERROR: ... not run`.
   시간은 그 실행이 새로 쓴 로그에서만 읽는다(없으면 `no new log`). 11-26 오후까지는 거절된 실행 뒤에 남아 있던 옛 로그를 읽었다.
 
+**기능 하나씩 켜기 / 끄기(`ablation_mnv2.sh`, MobileNetV2Tf, EVTA 1개, 2026-11-27):** 컴파일러 옵션을 바꾼 bundle 18개(`hw/AblMnv2_<tag>`),
+런타임 변수, bitstream을 구성마다 바꿔 목록 전체를 R바퀴 번갈아 잰다. 결과와 해석은 [mobilenetv2_evta_paper.md](mobilenetv2_evta_paper.md).
+```bash
+cd vtabundles_xcmpl
+./ablation_mnv2.sh gen [<tag> ...]      # c0 (모두 끔) .. c8 (= 지금 bundle), all, no_<옵션>; Debug2_remote의 model-compiler, 하나 18 s
+./ablation_mnv2.sh build                # build_sysabl (systolic vtalib, -s _sysabl), build_abl (vta/vtalib, -s _abl)
+sudo /bin/sh -c "R=3 ./ablation_mnv2.sh run ladder|loo|hls"   # 하나씩 켜기 / 하나씩 끄기 / HLS bitstream; OUT=<log dir>, N=<장 수>
+./ablation_mnv2.sh list ladder          # 구성마다 bundle / bitstream / 변수
+./ablation_mnv2.sh opts c5              # 그 bundle의 model-compiler 옵션
+```
+- `gen_calib_bundle.sh`의 `OUT=<dir>`(bundle을 그 dir에)와 `run_prof.sh`의 `RUN_LIST=<file>`(run 줄을 그 파일에서; `BIN=`을 함께 준다)을 쓴다.
+
 넣을 것:
 - `<suffix>`: 실행 파일을 빌드한 build dir(§4.1 표). systolic bitstream이면 `_sysprof`(EVTA 호출마다 시간) 또는 `_systimed`(문장마다 시간)
 - `<runs>`: 추론 횟수. 예: `25`, 빨리 볼 때 `5`
@@ -945,6 +957,7 @@ diff -r /tmp/dumpA /tmp/dumpB && echo same; sudo rm -rf /tmp/dumpA /tmp/dumpB   
 | `MULTI_FREE`, `MULTI_STAGGER_US` | 0, 0 | multi-EVTA main: 1이면 추론마다 barrier 없이 각자 돈다, copy i의 출발을 i × us 늦춘다. 2번째 run부터의 처리량을 `THROUGHPUT` 줄로 찍는다(`_sys`로 잴 것; 2026-11-24) |
 | `PROF_EXE` | (없음) | `run_prof.sh`: Dir의 run 줄 가운데 그 실행 파일만 돌린다(multi4 Dir의 multivta / singlevta 중 하나) |
 | `PROF_INPUT=<file>` | (없음) | `run_prof.sh`: run 줄의 그림 대신 이 입력을 모든 실행 파일에 준다(예: int8 입력 `<name>.i8`). golden 비교는 하지 않는다(2026-11-25) |
+| `RUN_LIST=<file>` | (없음) | `run_prof.sh`: run 줄(과 bitstream 줄)을 `script/run_all.sh` 대신 이 파일에서 읽는다. 파일에 bitstream 줄이 없으면 `BIN=`을 함께 준다(`ablation_mnv2.sh`, 2026-11-27) |
 | `INPUT_INT8`, `INPUT_INT8_DIR=<dir>` | 1, (없음) | 공통 main(systolic vtalib): 그림 `<dir>/<이름>.png`의 int8 입력 `<이름>.i8`을 `$INPUT_INT8_DIR`, 그림의 dir, 실행 Dir의 `i8/` 차례로 찾아 있으면 그것으로 돈다(기본, 2026-11-25 저녁부터). 없으면 float. `INPUT_INT8=0`이면 늘 float. float 그림도 함께 넘겨서, `.i8`의 quantize가 bundle과 다르면 경고 한 번 찍고 float로 돈다. main은 `Input: int8 ...` / `Input: float ...` 줄을 찍고 `run_prof.sh` summary에 `input int8 <file>` / `input float <png>`가 붙는다 |
 | `INPUT_PIPELINE` | 0 | 공통 main(systolic vtalib): `.i8`을 읽지 않고 float 그림을 run k가 도는 동안 run k+1 몫으로 quantize해 둔다(이중 buffer, `VTAInputQuantize`; 카메라 / 디코드에서 그림이 줄지어 오는 경우). `1` = copy마다 둘째 thread, `2` = 둘째 thread 없이 copy가 EVTA run을 기다리는 polling마다 한 줄씩(vtalib-systolic `VTASetWaitWork`; core를 copy가 다 쓰는 multi4에 맞다). run 0은 float(quantize 값 기록), run 1 입력은 시간 재기 전에 만든다. 기다린 시간 / 남은 줄은 시간에 들고 끝에 `INPUT_PIPELINE copy <i>: ...` 줄로 찍는다. 출력 바이트는 float / `.i8`과 같다(2026-11-27, [mobilenetv2_optimize_sw_hw_allmodels.md](mobilenetv2_optimize_sw_hw_allmodels.md) §10) |
 | `EVTA_REPLAY_VARIANTS` | 8 | systolic(보드): replay 하나에 buffer 주소 조합마다 둘 명령 사본 수. `0`이면 호출마다 주소를 고치고 flush(전 방식). [mobilenetv2_optimize_sw_hw_allmodels.md](mobilenetv2_optimize_sw_hw_allmodels.md) §6 |

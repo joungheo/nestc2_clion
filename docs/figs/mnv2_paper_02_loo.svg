@@ -1,0 +1,76 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='860' height='552' viewBox='0 0 860 552' font-family='Noto Sans CJK KR, Noto Sans KR, sans-serif'>
+<rect width='860' height='552' fill='#ffffff'/>
+<text x='430.0' y='26' font-size='17' font-weight='bold' text-anchor='middle' fill='#111827'>다 켠 상태(11.70 ms)에서 하나만 끄면 늘어나는 시간 (_alux3_dw 387.5 MHz)</text>
+<line x1='250.0' y1='58' x2='250.0' y2='482' stroke='#e5e7eb'/>
+<text x='250.0' y='498' font-size='11' text-anchor='middle' fill='#4b5563'>0.1</text>
+<line x1='386.0' y1='58' x2='386.0' y2='482' stroke='#e5e7eb'/>
+<text x='386.0' y='498' font-size='11' text-anchor='middle' fill='#4b5563'>1</text>
+<line x1='522.1' y1='58' x2='522.1' y2='482' stroke='#e5e7eb'/>
+<text x='522.1' y='498' font-size='11' text-anchor='middle' fill='#4b5563'>10</text>
+<line x1='658.1' y1='58' x2='658.1' y2='482' stroke='#e5e7eb'/>
+<text x='658.1' y='498' font-size='11' text-anchor='middle' fill='#4b5563'>100</text>
+<text x='495.0' y='516' font-size='12' text-anchor='middle' fill='#374151'>늘어난 시간 (ms, log)</text>
+<text x='242' y='79' font-size='12' text-anchor='end' fill='#111827'>24채널을 32로</text>
+<rect x='250' y='68' width='466.3' height='15' fill='#2563eb' rx='2'/>
+<text x='721.3' y='79' font-size='11' fill='#374151'>+267.84 ms</text>
+<text x='242' y='101' font-size='12' text-anchor='end' fill='#111827'>conv0 묶기</text>
+<rect x='250' y='90' width='433.4' height='15' fill='#2563eb' rx='2'/>
+<text x='688.4' y='101' font-size='11' fill='#374151'>+153.34 ms</text>
+<text x='242' y='123' font-size='12' text-anchor='end' fill='#111827'>EVTA layout 유지</text>
+<rect x='250' y='112' width='346.7' height='15' fill='#2563eb' rx='2'/>
+<text x='601.7' y='123' font-size='11' fill='#374151'>+35.36 ms</text>
+<text x='242' y='145' font-size='12' text-anchor='end' fill='#111827'>depthwise를 EVTA로</text>
+<rect x='250' y='134' width='311.5' height='15' fill='#2563eb' rx='2'/>
+<text x='566.5' y='145' font-size='11' fill='#374151'>+19.49 ms</text>
+<text x='242' y='167' font-size='12' text-anchor='end' fill='#111827'>record / replay</text>
+<rect x='250' y='156' width='297.3' height='15' fill='#16a34a' rx='2'/>
+<text x='552.3' y='167' font-size='11' fill='#374151'>+15.33 ms</text>
+<text x='242' y='189' font-size='12' text-anchor='end' fill='#111827'>out 쓰기 requantize</text>
+<rect x='250' y='178' width='260.1' height='15' fill='#dc2626' rx='2'/>
+<text x='515.1' y='189' font-size='11' fill='#374151'>+8.17 ms</text>
+<text x='242' y='211' font-size='12' text-anchor='end' fill='#111827'>buffer pool</text>
+<rect x='250' y='200' width='252.8' height='15' fill='#16a34a' rx='2'/>
+<text x='507.8' y='211' font-size='11' fill='#374151'>+7.22 ms</text>
+<text x='242' y='233' font-size='12' text-anchor='end' fill='#111827'>DMA 묶기</text>
+<rect x='250' y='222' width='236.5' height='15' fill='#16a34a' rx='2'/>
+<text x='491.5' y='233' font-size='11' fill='#374151'>+5.48 ms</text>
+<text x='242' y='255' font-size='12' text-anchor='end' fill='#111827'>logits를 EVTA fc로</text>
+<rect x='250' y='244' width='234.8' height='15' fill='#2563eb' rx='2'/>
+<text x='489.8' y='255' font-size='11' fill='#374151'>+5.32 ms</text>
+<text x='242' y='277' font-size='12' text-anchor='end' fill='#111827'>depthwise 창 장치</text>
+<rect x='250' y='266' width='166.7' height='15' fill='#dc2626' rx='2'/>
+<text x='421.7' y='277' font-size='11' fill='#374151'>+1.68 ms</text>
+<text x='242' y='299' font-size='12' text-anchor='end' fill='#111827'>전처리 합치기</text>
+<rect x='250' y='288' width='164.5' height='15' fill='#2563eb' rx='2'/>
+<text x='419.5' y='299' font-size='11' fill='#374151'>+1.62 ms</text>
+<text x='242' y='321' font-size='12' text-anchor='end' fill='#111827'>LOAD 앞당기기</text>
+<rect x='250' y='310' width='153.8' height='15' fill='#16a34a' rx='2'/>
+<text x='408.8' y='321' font-size='11' fill='#374151'>+1.35 ms</text>
+<text x='242' y='343' font-size='12' text-anchor='end' fill='#111827'>RMW bias reset</text>
+<rect x='250' y='332' width='117.4' height='15' fill='#dc2626' rx='2'/>
+<text x='372.4' y='343' font-size='11' fill='#374151'>+0.73 ms</text>
+<text x='242' y='365' font-size='12' text-anchor='end' fill='#111827'>residual add 합치기</text>
+<rect x='250' y='354' width='116.6' height='15' fill='#2563eb' rx='2'/>
+<text x='371.6' y='365' font-size='11' fill='#374151'>+0.72 ms</text>
+<text x='242' y='387' font-size='12' text-anchor='end' fill='#111827'>conv0 입력 stream</text>
+<rect x='250' y='376' width='108.7' height='15' fill='#16a34a' rx='2'/>
+<text x='363.7' y='387' font-size='11' fill='#374151'>+0.63 ms</text>
+<text x='242' y='409' font-size='12' text-anchor='end' fill='#111827'>ALU 확장</text>
+<rect x='250' y='398' width='100.7' height='15' fill='#dc2626' rx='2'/>
+<text x='355.7' y='409' font-size='11' fill='#374151'>+0.55 ms</text>
+<text x='242' y='431' font-size='12' text-anchor='end' fill='#111827'>invalidate 빼기</text>
+<rect x='250' y='420' width='91.4' height='15' fill='#2563eb' rx='2'/>
+<text x='346.4' y='431' font-size='11' fill='#374151'>+0.47 ms</text>
+<text x='242' y='453' font-size='12' text-anchor='end' fill='#111827'>명령 사본</text>
+<rect x='250' y='442' width='41.0' height='15' fill='#16a34a' rx='2'/>
+<text x='296.0' y='453' font-size='11' fill='#374151'>+0.20 ms</text>
+<text x='242' y='475' font-size='12' text-anchor='end' fill='#111827'>1×1 weight 한 LOAD</text>
+<rect x='250' y='464' width='27.8' height='15' fill='#16a34a' rx='2'/>
+<text x='282.8' y='475' font-size='11' fill='#374151'>+0.16 ms</text>
+<rect x='250' y='38' width='12' height='12' fill='#2563eb' rx='2'/>
+<text x='267' y='48' font-size='12' fill='#374151'>컴파일러</text>
+<rect x='340' y='38' width='12' height='12' fill='#16a34a' rx='2'/>
+<text x='357' y='48' font-size='12' fill='#374151'>런타임</text>
+<rect x='430' y='38' width='12' height='12' fill='#dc2626' rx='2'/>
+<text x='447' y='48' font-size='12' fill='#374151'>하드웨어</text>
+</svg>
