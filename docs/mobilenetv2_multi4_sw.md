@@ -18,7 +18,7 @@ DPU S(B4096 하나, 270장/s)를 EVTA 4개(`MultiEVTAMobileNetV2TfTest`)로 넘�
 | bundle 다시 만듦 (§3.3) | 위 둘 + schedule이 bundle 안에 | 13.43 ms · 74.5 fps (49 GOPS)¹ | 251.6 fps (166 GOPS)² | 보드 19:00 |
 | int8 입력 (§3.4) | 미리 quantize한 `.i8`을 읽음(저녁부터 기본, 없으면 float) |  | 257.0 fps (169 GOPS)² | `d4d8ddf2`, `9680e43f` |
 | 호출마다 CPU 시간 (§6) | 명령 사본, thread별 buffer pool, 다음 replay 짐작 |  | 262.2 fps (173 GOPS)² | `1cdf422d` |
-| 창 장치 `_dw` (ubuntu2, [evta_dw_unit.md](evta_dw_unit.md) §9) | depthwise 3×3를 창 장치로 (multi4 `..._amul_dw_..._hp304_rq.bin`) |  | 284.9 fps (187 GOPS)⁴ | `818a73c3` |
+| 창 장치 `_dw` (ubuntu2, [evta_dw_hw_report.md](evta_dw_hw_report.md) §5) | depthwise 3×3를 창 장치로 (multi4 `..._amul_dw_..._hp304_rq.bin`) |  | 284.9 fps (187 GOPS)⁴ | `818a73c3` |
 | 1×1 weight 한 번 LOAD (§7) | 7×7 project conv 세 개의 weight를 thread마다 한 LOAD로 | 11.77 ms · 85.0 fps (56 GOPS)³ | **292.0 fps (192 GOPS)**⁴ | `38e3da66` |
 | 11-25 저녁 (공유 `_systimed`, 번갈아 3번) | int8 입력 | **13.04 ms · 76.7 fps (50 GOPS)**¹ / 13.54 ms · 73.9 fps (49 GOPS)³ | **263.5 fps (173 GOPS)** | |
 | | float 입력(`INPUT_INT8=0`) | 13.28 ms · 75.3 fps (50 GOPS)¹ / 13.77 ms · 72.6 fps (48 GOPS)³ | 256.4 fps (169 GOPS) | |
@@ -238,28 +238,50 @@ bundle은 그대로(invalidate 빼기는 bundle을 다시 만들어야 들어간
 ## 9. 하드웨어가 바뀐 몫 (depthwise 창 장치 `_dw`, 2026-11-25 / 26)
 
 §1–§8은 소프트웨어(vtalib, bundle, main)만 바꾼 것이다. 그 사이 ubuntu2가 depthwise 3×3을 GEMM 대각 weight 대신 창(window) 장치로 하는
-bitstream을 만들었다. 하드웨어 자체(ISA, `sa_dw.v`, 빌드, 타이밍)는 [evta_dw_unit.md](evta_dw_unit.md)에 있고, 여기서는 성능만 그 문서의 표를 따라 모은다.
+bitstream을 만들었다.
+- 하드웨어를 어떻게 바꿨고, 빌드를 어떻게 거쳐 WNS가 나왔고, 어떤 소프트웨어 판으로 쟀고, 다른 모델에 어떤 영향이 있었는지는 [evta_dw_hw_report.md](evta_dw_hw_report.md)에 있다.
+  여기서는 성능만 그 보고서 §5의 표를 따라 모은다.
+- 창 장치의 구조(ISA, `sa_dw.v`)와 날짜순 설계 기록은 [evta_dw_unit.md](evta_dw_unit.md)에 있다.
 GOPS = 0.658 GOP × fps (MobileNetV2 / MobileNetV2Tf).
 
 | bitstream | EVTA | 클럭 | 언제부터 | 성능 표 |
 |---|---|---|---|---|
 | `..._16_15_18_17_4evta_sa_amul_400mhz_hp322_rq.bin` | 4 | 400 / HP 322 MHz | 11-24 multi4 기본 (§1–§6의 측정) | |
-| `..._16_15_18_17_4evta_sa_amul_dw_400mhz_hp304_rq.bin` | 4 | 400 / HP 304 MHz | 11-26 multi4 기본 | [evta_dw_unit.md](evta_dw_unit.md) §9.5, [evta_perf_latest.md](evta_perf_latest.md) §2 |
+| `..._16_15_18_17_4evta_sa_amul_dw_400mhz_hp304_rq.bin` | 4 | 400 / HP 304 MHz | 11-26 multi4 기본 | [evta_dw_hw_report.md](evta_dw_hw_report.md) §3, §5, [evta_perf_latest.md](evta_perf_latest.md) §2 |
 | `..._16_16_19_18_sa_alux3_400mhz_rq.bin` | 1 | 400 MHz | single 기본 (그대로) | |
-| `..._16_16_19_18_sa_alux3_dw_387mhz_rq.bin` | 1 | 387.5 MHz | 11-26 새로 (기본 아님) | [evta_perf_latest.md](evta_perf_latest.md) §3, §6 |
+| `..._16_16_19_18_sa_alux3_dw_387mhz_rq.bin` | 1 | 387.5 MHz | 11-26 새로 (기본 아님) | [evta_dw_hw_report.md](evta_dw_hw_report.md) §4, §5, [evta_perf_latest.md](evta_perf_latest.md) §3, §6 |
 
 ### 9.1 multi4
-[evta_dw_unit.md](evta_dw_unit.md) §9.5(같은 실행 파일 `_pcsysdwt`, 세 판을 번갈아 3번, vtalib `1cdf422` + dw):
+[evta_dw_hw_report.md](evta_dw_hw_report.md) §5.1–§5.2. 같은 실행 파일(보드 공유 `build_multievtax4_sys`, vtalib `818a73c` = `1cdf422`까지의 소프트웨어 + 창 장치, int8 입력)에 bitstream만 바꿔
+번갈아 3번 잰 평균이다(`perf_record.sh`). 그래서 차이는 하드웨어(창 장치와 HP 클럭)에서만 온다.
 
-| | `_amul` hp322 | `_amul_dw` hp304, `EVTA_DWU=0` | `_amul_dw` hp304, 창 모드 |
+| | `_amul` hp322 | `_amul_dw` hp304 | 변화 |
 |---|---|---|---|
-| 4개 동시 | 260.1 fps (171 GOPS) | 260.6 fps (171 GOPS) | **287.4 fps (189 GOPS)**, +10.5 % |
-| 혼자 1장 (copy 0) | 13.54 ms · 73.9 fps (49 GOPS) | 13.71 ms · 72.9 fps (48 GOPS) | **12.09 ms · 82.7 fps (54 GOPS)** |
-| copy당 EVTA conv / fc (4개 동시) | 6.71–6.76 ms | 6.73–6.76 ms | 5.26–5.37 ms |
+| 4개 동시 | 256.7 fps (169 GOPS) | **281.5 fps (185 GOPS)** | +9.7 %, DPU S 270 fps의 104 % |
+| copy당 (4개 동시) | 15.60 ms | 14.22 ms | −8.8 % |
+| 혼자 1장 (copy 0) | 13.55 ms · 73.8 fps (49 GOPS) | **12.14 ms · 82.4 fps (54 GOPS)** | −10.4 % |
 
-- 같은 bitstream에서 창 모드를 끄면(`EVTA_DWU=0`) `_amul`과 같다. 이득은 모두 창 장치에서 왔다. HP 클럭(322 → 304 MHz)은 혼자 +0.17 ms, 4개 동시는 잡음 안이다.
-- depthwise 17층 합은 6.05 → 4.21 ms다(single 375 MHz 시험판, [evta_dw_unit.md](evta_dw_unit.md) §8).
-- 다른 모델에는 depthwise가 없어 빨라지지 않는다. HP 클럭 때문에 VGG16이 혼자 +2.4 %, Resnet50 +0.8 % 느리다([evta_perf_latest.md](evta_perf_latest.md) §2).
+- 4개 동시는 3번 값이 ±3 % 흔들린다. 11-25에 따로 잰 값([evta_dw_unit.md](evta_dw_unit.md) §9.5, `_pcsysdwt`, ubun vtalib + dw)은 아래와 같다.
+  같은 bitstream에서 창 모드를 끄면(`EVTA_DWU=0`) `_amul`과 같으므로, 이득은 모두 창 장치에서 온다.
+
+  | | `_amul` hp322 | `_amul_dw`, `EVTA_DWU=0` | `_amul_dw`, 창 모드 |
+  |---|---|---|---|
+  | 4개 동시 | 260.1 fps (171 GOPS) | 260.6 fps (171 GOPS) | 287.4 fps (189 GOPS), +10.5 % |
+  | 혼자 1장 (copy 0) | 13.54 ms | 13.71 ms | 12.09 ms |
+  | copy당 EVTA conv / fc (4개 동시) | 6.71–6.76 ms | 6.73–6.76 ms | 5.26–5.37 ms |
+
+- depthwise 17층 합은 6.05 → 4.21 ms다(single 375 MHz 시험판, 보고서 §5.2). 큰 층(112 × 112 1.05 → 0.53 ms)이 많이 줄고, 작은 층(7 × 7 × 960 0.20 → 0.17 ms)은 덜 줄었다.
+  depthwise GEMM 하한 1.39 ms와는 아직 약 2배다(LOAD / STORE와 requantize 시간).
+- MobileNetV2(QAT)도 같다. 4개 동시 263.9 → 282.6 fps, 혼자 13.55 → 12.10 ms.
+- 다른 모델에는 depthwise가 없어 빨라지지 않는다. EVTA 클럭은 400 MHz 그대로이고 HP 클럭만 322 → 304 MHz로 낮아, DMA가 많은 모델만 조금 느려진다(보고서 §5.3).
+
+  | 모델 | 4개 동시 fps | 혼자 ms |
+  |---|---|---|
+  | Resnet18 | 171.3 → 170.3 (−0.6 %) | 22.38 → 22.42 (+0.2 %) |
+  | Resnet50 | 55.4 → 55.7 (+0.5 %) | 66.06 → 66.58 (+0.8 %) |
+  | Resnet50Tv | 55.5 → 55.9 (+0.7 %) | 65.43 → 65.96 (+0.8 %) |
+  | VGG16 CIFAR-10 | 508.3 → 497.7 (**−2.1 %**) | 6.90 → 7.07 (**+2.5 %**) |
+  | DeiT-tiny | 43.7 → 44.2 (+1.1 %) | 80.72 → 80.81 (+0.1 %) |
 
 **소프트웨어와 하드웨어로 나누면** (4개 동시, MobileNetV2Tf; 줄마다 측정 때가 달라 ±2 fps쯤 흔들린다):
 
@@ -267,13 +289,16 @@ GOPS = 0.658 GOP × fps (MobileNetV2 / MobileNetV2Tf).
 |---|---|---|---|
 | 11-25 출발 | | 238.3 fps (157 GOPS) | |
 | 11-25 저녁 | 소프트웨어 (§3, §6) | 263.5 fps (173 GOPS) | +10.6 % |
-| 11-26 `_amul_dw` | **하드웨어** (창 장치) | 284.9–287.4 fps (187–189 GOPS) | +8–10 % |
+| 11-26 `_amul_dw` | **하드웨어** (창 장치) | 281.5–287.4 fps (185–189 GOPS) | +7–9 % (같은 때 `_amul`과 번갈아 재면 +9.7–10.5 %) |
 | 11-26 `38e3da66` | 소프트웨어 (§7) | **292.0 fps (192 GOPS)** | +2.5 % |
 
 - 이틀에 238.3 → 292.0 fps(+22.5 %)다. 소프트웨어가 약 +13 %(§3–§7), 하드웨어가 약 +10 %다. DPU S 270 fps의 108 %다.
 
 ### 9.2 single (EVTA 1개)
 single은 기본 bitstream(`_alux3` 400 MHz)이 그대로라 처음에는 소프트웨어만 효과가 있었다. 11-26 `_dw` 판(387.5 MHz)이 생겼다.
+- `_alux3`의 ALU ↔ acc_mem 경로가 400 MHz에서 −0.070 ns 남아, 배치와 배선은 그대로 두고 PLL만 387.5 MHz로 낮췄다(보고서 §4).
+- 보고서 §5.2(`818a73c`, 번갈아 3번): MobileNetV2Tf 13.06 → **11.65 ms**(−10.8 %). 같은 `_dw` 판에서 `EVTA_DWU=0`(대각 GEMM)은 13.30 ms라, 창 모드 덕이 −12.4 %, 클럭 3 % 낮은 손해가 +1.8 %쯤이다.
+- 다른 다섯 모델은 클럭만큼 1–3 % 느리다(Resnet18 +2.9, Resnet50 +2.6, Resnet50Tv +2.5, VGG16 +1.1, DeiT +1.9 %; 보고서 §5.3). 그래서 single 기본은 `_alux3` 400 MHz 그대로이고, MobileNetV2는 `BIN=…_sa_alux3_dw_387mhz_rq.bin`으로 잰다.
 
 MobileNetV2Tf 혼자 1장:
 
