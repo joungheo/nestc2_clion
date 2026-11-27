@@ -22,6 +22,9 @@ umask 022
 #### JO changed (2026-10-27): this script is in <hw dir>/script/ (the part of the hw dir in git); runs in the hw dir
 #cd "$(dirname "$0")"
 cd "$(dirname "$0")/.."; RUN_ALL=script/run_all.sh
+#### JO added (2026-11-27): RUN_LIST=<file> (relative to the hw dir) takes the run lines from that file instead (ablation_mnv2.sh);
+#### the bitstream lines are still read from it, so pass BIN= too
+RUN_ALL=${RUN_LIST:-$RUN_ALL}
 #### JO added: build dir prefix of this hw dir (hw/ -> ../build, hw_<set>/ -> ../build_<set>)
 HWD=$(basename "$PWD"); BLD=../build${HWD#hw}
 #### JO changed: bitstream from run_all.sh of this hw dir (hw/: single EVTA, hw_multievtax2/: 2 EVTAs)

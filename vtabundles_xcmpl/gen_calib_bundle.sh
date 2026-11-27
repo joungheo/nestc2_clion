@@ -27,7 +27,9 @@ set -u
 D=$1; L=$2; shift 2
 H=$(cd "$(dirname "$0")" && pwd)
 B=$(cd "$H/../Debug2_remote" && pwd)
-O=$B/vta/bundles/$D; mkdir -p $O
+#### JO added (2026-11-27): OUT=<dir> writes the bundle there instead of Debug2_remote/vta/bundles/<Dir> (option ablations,
+#### ablation_mnv2.sh); give the profile as a .yaml then (the default profile path is in <dir>)
+O=${OUT:-$B/vta/bundles/$D}; mkdir -p $O
 case $L in
   *.yaml|*.yaml.gz) IMGS="" ;;
   *) IMGS=$(awk -v d="${IMGDIR:-}" '{ print (d != "" && substr($1, 1, 1) != "/") ? d "/" $1 : $1 }' "$L") ;;
