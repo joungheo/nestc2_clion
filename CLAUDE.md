@@ -492,7 +492,7 @@ make ip && make bin                    # ~30 min; PROFILE=1 adds compute counter
   EVTA ratios in * w / out are powers of two (`VTA.cpp` `-vta-pow2-ratio`, `gen_deit_bundle.sh` `QSCHEMA=symmetric` default) and the
   integer layer norm (default, `NESTC_LN_INT=0` = the int8 chain); 1 core 75.7 ms, `-t 4` 52.9 ms. No `rq_mul` / per-channel weights needed.
   The whole DeiT path (what changed, how much each step saved, where the time goes now, software and hardware next steps
-  ordered against the overall plan): [docs/deit_optimization.md](docs/deit_optimization.md).
+  ordered against the overall plan): [docs/deit_optimization.md](docs/deit_optimization.md); the code it changed (compiler, vtalib, the ALU extension HLS), feature by feature with before / after code (git diffs and DeiT bundles regenerated with one option off) and review notes: [docs/deit_code_review.md](docs/deit_code_review.md).
   multi4 systolic (2026-11-10, §6.5): `vta/multievta_bundles/MultiEVTADeiTTest` (`gen_multi4_bundles.sh MultiEVTADeiTTest`; VTASave
   matmul calls now carry the copy's handle and idEVTA), 4 copies at once 106.6 ms each = 37.5 images/s (one copy 88.3 ms);
   the 18 ms per copy is mostly memory-bound CPU ops (layout transposes, quantize) sharing L2 / DDR.

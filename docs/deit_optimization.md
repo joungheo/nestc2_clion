@@ -1,8 +1,9 @@
-# DeiT-tiny 실행 시간을 줄여 온 과정과 다음 계획 (2026-11-09 ~ 11-10)
+# DeiT-tiny 실행 시간을 줄여 온 과정과 다음 계획 (2026-11-09 ~ 11-26)
 
-ZCU102 위 EVTA(16×16 int8 GEMM)와 NEST-C로 DeiT-tiny 1장을 3.77 s에서 88.5 ms(1코어) / 55.7–57.9 ms(4코어)로 줄인 과정을 정리했다. 뭘 바꿔서 얼마나 줄었는지, 지금 시간이 어디에 쓰이는지, 앞으로 할 만한 것(소프트웨어, 하드웨어)을 담았다. 하드웨어는 전체 계획에 맞춰 어떤 순서로 바꾸면 좋을지도 적었다.
+ZCU102 위 EVTA(16×16 int8 GEMM)와 NEST-C로 DeiT-tiny 1장을 3.77 s에서 88.5 ms(1코어) / 55.7–57.9 ms(4코어)로 줄인 과정을 정리했다. 11-11 ~ 17에는 EVTA ALU를 넓혀(ALU 확장 1–3단계, 하드웨어) layer norm, softmax, GELU, residual add까지 EVTA로 옮겼다. 그래서 **37.03 ms**(11-17), 지금은 **34.38 ms**(11-26, 1코어, 29.1 fps)다. EVTA 4개(multi4)에 copy 4개를 동시에 돌리면 **44.2 fps**다(§2.1, §6.5). 뭘 바꿔서 얼마나 줄었는지, 지금 시간이 어디에 쓰이는지, 앞으로 할 만한 것(소프트웨어, 하드웨어)을 담았다. 하드웨어는 전체 계획에 맞춰 어떤 순서로 바꾸면 좋을지도 적었다.
 
-- **자세한 기록:** `docs/evta_runtime_compare.md` §7.22–§7.29
+- **바꾼 코드의 전 / 후와 리뷰(소프트웨어, 하드웨어):** [deit_code_review.md](deit_code_review.md)
+- **자세한 기록:** `docs/evta_runtime_compare.md` §7.22–§7.29, 11-11 뒤는 `docs/evta_isa_ext.md` §8, §5.3(표 A–D)
 - **이 모델을 고른 이유와 다른 NPU 비교:** `docs/kv260_product_compare.md`
 - **전체 하드웨어 / 소프트웨어 계획:** `docs/npu_stack_survey.md` §1, §5.3, `docs/evta_runtime_compare.md` §8
 
@@ -32,22 +33,53 @@ ZCU102 위 EVTA(16×16 int8 GEMM)와 NEST-C로 DeiT-tiny 1장을 3.77 s에서 88
 
 ## 2. 한눈에: 시간이 줄어 온 길
 
-| 날짜 | 단계 (§) | 1장 OMP 1 | `-t 4` | EVTA 바쁜 시간 | 바뀐 것의 성격 |
-|---|---|---|---|---|---|
-| 11-09 | 처음 보드에서 끝까지 (§7.22) | 3,770 ms | 1,520 ms | – | 대부분 CPU float |
-| 11-09 | Linear를 EVTA로 (§7.23) | 475 ms | | 56 ms (HLS) | 컴파일러 |
-| 11-09 | attention matmul을 EVTA로 (§7.24) | 359 ms | | | 컴파일러 + vtalib |
-| 11-09 | GELU 표, softmax int8, LayerNorm 조각 (§7.25) | 206 ms | | | CPU 함수 |
-| 11-10 | matmul 포장 NEON (HLS) / 같은 번들 systolic 400 MHz (§7.26) | 198.9 / 184.4 ms | | 46.2 ms (conv) | vtalib / 비트스트림 |
-| 11-10 | Linear bias 접기, int8 attention 전치, LayerNorm 한 함수 (§7.26) | 137.2 ms | | | 컴파일러 + CPU 함수 |
-| 11-10 | Q/K를 EVTA 배치 그대로, 3 head 한 호출 (§7.27) | 130.7 ms | | | 컴파일러 + vtalib |
-| 11-10 | softmax / LayerNorm 역수 곱 (§7.27) | 123.5 ms | 91.9 ms | 55.8 ms | CPU 함수 (값이 바뀔 수 있는 근사) |
-| 11-10 | schedule 가상 스레드 2개, vt 2 결함 수정 (§7.28) | 107.4 ms | 75.2 ms | 38.3 ms | schedule + vtalib |
-| 11-10 | conv DMA 묶기 `EVTA_CONV_BURST` (§7.29) | **88.5 ms** | **55.7–57.9 ms** | **19.4 ms (130 GOPS)** | vtalib (명령 모양) |
+| 날짜 | 단계 (§) | 1장 OMP 1 | fps (GOPS) | `-t 4` | EVTA 바쁜 시간 | 바뀐 것의 성격 |
+|---|---|---|---|---|---|---|
+| 11-09 | 처음 보드에서 끝까지 (§7.22) | 3,770 ms | 0.3 (0.6) | 1,520 ms | – | 대부분 CPU float |
+| 11-09 | Linear를 EVTA로 (§7.23) | 475 ms | 2.1 (4.6) | | 56 ms (HLS) | 컴파일러 |
+| 11-09 | attention matmul을 EVTA로 (§7.24) | 359 ms | 2.8 (6.1) | | | 컴파일러 + vtalib |
+| 11-09 | GELU 표, softmax int8, LayerNorm 조각 (§7.25) | 206 ms | 4.9 (10.6) | | | CPU 함수 |
+| 11-10 | matmul 포장 NEON (HLS) / 같은 번들 systolic 400 MHz (§7.26) | 198.9 / 184.4 ms | 5.4 (11.8) | | 46.2 ms (conv) | vtalib / 비트스트림 |
+| 11-10 | Linear bias 접기, int8 attention 전치, LayerNorm 한 함수 (§7.26) | 137.2 ms | 7.3 (15.9) | | | 컴파일러 + CPU 함수 |
+| 11-10 | Q/K를 EVTA 배치 그대로, 3 head 한 호출 (§7.27) | 130.7 ms | 7.7 (16.7) | | | 컴파일러 + vtalib |
+| 11-10 | softmax / LayerNorm 역수 곱 (§7.27) | 123.5 ms | 8.1 (17.7) | 91.9 ms | 55.8 ms | CPU 함수 (값이 바뀔 수 있는 근사) |
+| 11-10 | schedule 가상 스레드 2개, vt 2 결함 수정 (§7.28) | 107.4 ms | 9.3 (20.3) | 75.2 ms | 38.3 ms | schedule + vtalib |
+| 11-10 | conv DMA 묶기 `EVTA_CONV_BURST` (§7.29) | **88.5 ms** | 11.3 (24.7) | **55.7–57.9 ms** | **19.4 ms (130 GOPS)** | vtalib (명령 모양) |
 
+- **fps, GOPS:** fps = 1000 / 1장 ms(1장씩 돌기 때문)이다. GOPS = 2.182 GOP × fps다. 2.182는 지금 bundle에서 `run_prof.sh`가 찍는 값이고 `evta_perf_latest.md`와 같은 기준이다. 11-16에 마지막 블록을 2행만 계산하게 된 뒤의 연산량이다(§1의 2.52 GOP는 그 전, 198행 모두). 그 전 단계도 같은 일을 한 것으로 보고 같은 값으로 나눴다.
 - 1코어 기준으로 **42.6배**(3,770 → 88.5 ms) 빨라졌다. 하드웨어(RTL) 변경은 없었다. 바꾼 것은 컴파일러(VTA.cpp / VTASave.cpp), 런타임(vtalib), schedule, CPU 함수다.
 - **확률의 변화:** cat / dog / zebra 확률은 §7.22 0.547 / 0.918 / 0.980 → §7.24 0.738 / 0.900 / 0.953 → §7.26 이후 **0.755 / 0.950 / 0.963**이다. 분류는 처음부터 같다. 중간 양자화가 줄면서 확률이 올라갔다.
 - **EVTA 시간:** 19.4 ms다. DRAM 전송을 모두 뺀 하한(19.6 ms, §7.28 `EVTA_MEMEXP`)과 같은 수준이다. MAC 하한(12.2 ms)과의 차이는 ALU, 패딩(198 → 208), 고정비다.
+
+### 2.1 11-11 뒤: ALU 확장(하드웨어)과 그 위의 소프트웨어
+
+11-11부터는 하드웨어도 바꿨다. EVTA ALU에 연산을 더해(ALU 확장 1–3단계) layer norm, softmax, GELU 표, residual add를 EVTA로 옮겼다.
+아래는 단계마다 같은 날 번갈아 잰 전 → 후다(OMP 1, 25회 중앙값). 기록은 `evta_isa_ext.md` §5.3 표 A–D, §8.12–§8.22와 이 문서 §6.6–§6.10에 있다.
+같은 단계의 "전"과 앞 단계의 "후"가 조금 다른 것은 날마다 잰 값의 차이다.
+
+| 날짜 | 단계 | bitstream | 1장 OMP 1 | fps (GOPS) | `-t 4` | 바뀐 것 | 자세히 |
+|---|---|---|---|---|---|---|---|
+| 11-11 | 자유 scale + 비율만 2의 거듭제곱, 정수 LayerNorm(정확도 56.17 → 60.47 %) | `_rq` | 88.8 → **75.7** | 13.2 (28.8) | 52.9 | 컴파일러 + CPU 함수 | §6.6.3 |
+| 11-14 | ALU 확장 1단계 bitstream `_alux` 400 MHz, `layernorm_evta` replay / NEON 입력(전 84.84는 EVTA layer norm 첫 판이 CPU보다 느렸던 값: 19.0 대 8.0 ms) | `_alux` | 84.84 → **75.07** | 13.3 (29.1) | | **하드웨어** + vtalib | isa_ext §8.13 |
+| 11-15 | ALU 확장 2단계 `_alux2`(slot 루프 II 1, 합친 연산 MADD / MULSHR / SHRV / SHRR) | `_alux2` | 76.14 → **71.73** | 13.9 (30.4) | 57.40 → 53.82 | **하드웨어** + vtalib | isa_ext §8.14 |
+| 11-15 | `softmax_evta`, ALU 프로그램의 int8 입력 | `_alux2` | 71.73 → **60.55** | 16.5 (36.0) | | vtalib + 컴파일러 | isa_ext 표 B |
+| 11-15 | ALU 확장 3단계 `_alux3`(SQACC, LUTC) | `_alux3` | 60.82 → **60.14** | 16.6 (36.3) | 51.77 → 51.12 | **하드웨어** + vtalib | isa_ext §8.15 |
+| 11-15 | `-vta-pack-rows`(residual stream, LN 출력을 EVTA layout으로; transpose 121 → 25) | `_alux3` | 59.82 → **49.93** | 20.0 (43.7) | 50.96 → 47.43 | 컴파일러 + vtalib | isa_ext §8.16 |
+| 11-15 | `-vta-evta-elemadd`(residual add 24개를 EVTA 정수 add로) | `_alux3` | 49.85 → **47.01** | 21.3 (46.4) | 47.38 → 44.41 | 컴파일러 + vtalib | isa_ext §8.17 |
+| 11-16 | `EVTA_LOAD_AHEAD=2` | `_alux3` | 47.09 → **46.23** | 21.6 (47.2) | | vtalib | isa_ext §8.21 |
+| 11-16 | attention `Div` 표를 Q K^T의 출력 LUT로 | `_alux3` | 46.17 → **44.21** | 22.6 (49.4) | 43.58 → 41.52 | 컴파일러 + vtalib | isa_ext §8.22 |
+| 11-16 | 마지막 블록은 2행만 | `_alux3` | 44.28 → **41.07** | 24.3 (53.1) | 41.73 → 38.42 | 모델 변환 + 컴파일러 | §6.7 |
+| 11-16 | A x V에서 V와 출력을 EVTA layout 그대로 | `_alux3` | 41.00 → **37.82** | 26.4 (57.7) | 38.33 → 36.46 | 컴파일러 + vtalib | §6.8 |
+| 11-16 | patch embedding의 위치 임베딩 add를 conv epilogue로 | `_alux3` | 37.79 → **37.35** | 26.8 (58.4) | | 컴파일러 | §6.9 |
+| 11-17 | `-vta-alu-softmax` 기본, 앞 행 slice 복사 | `_alux3` | 37.37 → **37.03** | 27.0 (58.9) | **35.92** | 컴파일러 | §6.10 |
+| 11-22 | 같은 실행 파일을 `_rq`(확장 없음)와 `_alux3`에서 | `_rq` / `_alux3` | 83.18 / **37.06** | 27.0 (58.9) | 50.10 / 35.95 | (비교) | isa_ext 표 D |
+| 11-25 | 호출마다 CPU 시간 줄이기(replay 명령 사본, thread별 pool) | `_alux3` | 37.06 → **36.64** | 27.3 (59.6) | | vtalib | `mobilenetv2_optimize_sw_hw_allmodels.md` §8.1 |
+| 11-26 | `perf_record.sh`(4 × 25장 평균, int8 입력) | `_alux3` | **34.38** | **29.1 (63.5)** | | vtalib + main | `evta_perf_latest.md` §3 |
+
+- **88.5 → 34.38 ms(2.6배)**다. 처음(3,770 ms)부터는 **110배**다.
+- 11-26의 −2.3 ms(36.64 → 34.38)는 어디서 왔는지 나눠 재지 않았다. 재는 법(25회 중앙값 → 4 × 25장 평균), int8 입력, vtalib 변경이 함께 바뀌었다. single DeiT bundle은 11-17 뒤 다시 만들지 않았다.
+- **ALU 확장이 없는 bitstream(`_rq`)에서는 83.18 ms다(11-22).** 가장 큰 몫은 softmax다. `-vta-alu-softmax` bundle은 `_rq`에서 CPU 정수 softmax(`nestc_cpu::softmaxIntQ`, 36.9 ms)로 가는데, 이 함수는 대체 경로로만 만들어 빠르게 다듬지 않았다. 확장 없는 판을 쓸 거라면 `-vta-alu-softmax=0`으로 만든 bundle로 재야 한다.
+- **정확도:** ImageNetV2 앞 9,000장 top-1은 11-17 bundle에서 60.13 %다(float 62.34 %). 바이트가 바뀐 단계마다 잰 기록은 §6.10에 있다.
 
 ## 3. 단계별로 뭘 바꿨나
 
@@ -188,7 +220,25 @@ ZCU102 위 EVTA(16×16 int8 GEMM)와 NEST-C로 DeiT-tiny 1장을 3.77 s에서 88
 | `-vta-round-shift` 빠뜨림 | bias가 128씩 다름(조용히) | `gen_deit_bundle.sh`가 늘 넣음 (§7.28) |
 | `prof_summary.py`가 stream conv에서 표를 건너뜀 | `_sysprof` 표 없음 | stream run 합치기 (§7.28) |
 
-## 5. 지금 시간이 어디에 쓰이나 (`-t 4`, 11-10, 1장 57.9 ms)
+## 5. 시간이 어디에 쓰이나
+
+### 5.1 11-22 (`_alux3`, OMP 1, 1장 37.06 ms)
+
+문장별 시간을 호출 이름으로 묶었다(25번째 run, `evta_isa_ext.md` 표 D). 같은 실행 파일을 ALU 확장이 없는 `_rq`에서 돌린 값을 옆에 두었다.
+
+| 호출 | `_alux3` | `_rq` | `_rq`에서 하는 일 |
+|---|---|---|---|
+| `convolution_wo_tr` (Linear, patch) | 16.67 ms | 19.37 ms | `_rq`에는 GELU 표 없이 conv만(표는 CPU) |
+| `softmax_evta` | 5.27 | 36.91 | CPU 정수 softmax |
+| `layernorm_evta2` | 4.20 | 9.93 | CPU `layerNormI8Rows` |
+| `matmul_evta_qk` / `_av` | 4.03 / 3.20 | 3.71 / 3.17 | 같다(EVTA). `_alux3`의 qk에는 `Div` 표가 붙는다 |
+| `elemadd_evta` | 1.43 | 2.79 | CPU `elemaddInt` |
+| GELU 표 | 0 | 4.91 | CPU `lut8` |
+
+- 11-10(§5.2)에 CPU가 하던 layer norm, softmax, GELU, residual add, 배치 변환이 거의 모두 EVTA로 갔다. 이제 시간의 대부분이 EVTA 호출이다.
+- EVTA conv 16.67 ms에는 GEMM 말고도 ALU 일(requantize, GELU 표)과 패딩, 호출마다의 고정비가 들어 있다. 11-22 뒤로 MAC 하한과 나눠 잰 기록은 없다.
+
+### 5.2 11-10 (`-t 4`, 1장 57.9 ms)
 
 | 항목 | 시간 | 어디서 | 비고 |
 |---|---|---|---|
@@ -298,6 +348,18 @@ DeiT가 필요로 하는 것도 같은 순서로 놓으면 서로 도움이 된�
 | **multi4, copy 4개 동시** | **106.6 ms** (copy마다) | 19.2–19.4 ms | **37.5장/s** |
 
 - 처리량은 copy 하나의 **3.32배**, single EVTA를 4코어로 돌릴 때의 약 2.1배다.
+
+**11-24 뒤 (multi4 `_amul` / `_amul_dw`, copy마다 25장).**
+
+| 날짜 | 바뀐 것 | copy당 1장 | 4개 동시 fps (GOPS) | 자세히 |
+|---|---|---|---|---|
+| 11-24 | multi4 bundle을 지금 컴파일러로 다시 만듦(행 pruning, attention layout 등 11-10 뒤의 DeiT 최적화가 처음 들어감) | 117.6 → **97.1 ms** | 41.2 (89.9) | `evta_isa_ext.md` §5 끝 |
+| 11-25 | 호출마다 CPU 시간 줄이기 | | 43.8 → 43.9 (95.8) | `mobilenetv2_optimize_sw_hw_allmodels.md` §8.1 |
+| 11-26 | `perf_record.sh`, `_dw` / `_amul` | 90.45 / 91.66 ms | **44.2 (96.4)** / 43.7 (95.4) | `evta_perf_latest.md` §2 |
+
+- multi4 bitstream에는 ALU 확장 2 / 3단계가 없다(EVTA 4개에 넣으면 287.9k LUT로 들어가지 않아 MUL immediate만 넣었다, `evta_multi4_alux3.md`). 그래서 layer norm, softmax가 CPU로 간다. copy 하나 혼자 80.8 ms로, single(34.4 ms)보다 훨씬 느리다.
+- 4 copy에서는 그 CPU 일이 L2 / DDR을 나눠 써 혼자보다 copy마다 약 10 ms 더 걸린다.
+- 그래서 지금은 **single EVTA 하나(29.1 fps)가 multi4 copy 하나보다 빠르고, multi4 넷을 합쳐야 1.5배(44.2 fps)다.** multi4에 ALU 확장 2 / 3단계를 넣으면 크게 늘 자리다(§6.2).
 - 4개를 같이 돌리면 copy마다 18 ms 느려진다. copy 0의 함수별 시간을 비교했다(혼자 → 4개 동시, ms).
 
 | 함수 | 혼자 | 4개 동시 | 차이 |
