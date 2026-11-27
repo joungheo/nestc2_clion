@@ -2,6 +2,7 @@
 
 MobileNetV2의 depthwise 3 × 3 conv를 지금보다 약 3배 빠르게 하는 GEMM 옆 장치다. 왜 이것을 먼저 하는지는
 [evta_dpu_compare.md](evta_dpu_compare.md) §6.6과 이 문서 §1, 픽셀 병렬(PP8)과 비교한 것은 §7에 있다.
+하드웨어 수정 보고(multi4 `_amul_dw`, single `_alux3_dw`의 빌드 과정과 WNS, 성능, 다른 모델 영향): [evta_dw_hw_report.md](evta_dw_hw_report.md).
 **결과만 보려면 §9**(바뀐 것, 빌드가 어떻게 성공했는지, 다시 만드는 명령, 성능). §8은 날짜순 기록이다.
 
 ## 1. 지금 depthwise가 느린 이유
