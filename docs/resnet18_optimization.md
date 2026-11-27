@@ -1,6 +1,11 @@
-# Resnet18 실행 시간을 줄여 온 과정 (2026-10-23 ~ 11-10)
+# Resnet18 실행 시간을 줄여 온 과정 (2026-10-23 ~ 11-27)
 
-ZCU102 위 EVTA(VTA 계열 int8 NPU)와 NEST-C로 Resnet18 1장을 줄인 과정을 정리했다. 시작은 134.8 ms(HLS GEMM 333 MHz, conv0은 CPU float)였고, 지금은 **23.3 ms**(systolic 400 MHz, 1코어)다. 단계마다 왜 바꿨는지, 어떻게 바꿨는지, 얼마나 줄었는지, 어떻게 검증했는지를 적었다.
+ZCU102 위 EVTA(VTA 계열 int8 NPU)와 NEST-C로 Resnet18 1장을 줄인 과정을 정리했다. 시작은 134.8 ms(HLS GEMM 333 MHz, conv0은 CPU float)였다. 11-10에 **23.3 ms**(systolic 400 MHz, 1코어), 11-26에 **22.15 ms**(`_alux3` 400 MHz, 45.1 fps)가 됐다. 단계마다 왜 바꿨는지, 어떻게 바꿨는지, 얼마나 줄었는지, 어떻게 검증했는지를 적었다.
+
+**EVTA 4개(multi4):**
+- 11-04에 EVTA 4개가 동시에 도는 시간 기준으로 **610.4 GOPS**(busy union, 이론 최대 819.2 GOPS의 75 %)가 나왔다.
+- 11-26에 4개 동시 처리량이 **173.5 fps**(그림 기준 642 GOPS)가 됐다.
+- 두 GOPS는 재는 법이 다르다(§6.1).
 
 - **발표 자료(PowerPoint, 34장, 그림 32장 + 차트):** [slides/resnet18_optimization.pptx](slides/resnet18_optimization.pptx). 단계마다 그림, 전후 시간, 자세한 설명은 발표자 노트에 있다. 다시 만들기: `docs/slides/make_resnet18_deck.py`(python-pptx, cairosvg 필요). 10장으로 줄인 판: [slides/resnet18_optimization_short.pptx](slides/resnet18_optimization_short.pptx) (`make_resnet18_short.py`)
 - **자세한 기록:** `docs/evta_runtime_compare.md` §3, §7–§7.19, §7.29
@@ -34,8 +39,13 @@ ZCU102 위 EVTA(VTA 계열 int8 NPU)와 NEST-C로 Resnet18 1장을 줄인 과정
 | 11-05 | systolic 최소 tile 1 | 25.53 → 25.42 ms | | vtalib | §7.19 ③ |
 | 11-06 | conv0 입력 복사를 conv와 겹침 | 25.43 → 24.08 ms | | vtalib runtime + 컴파일러 | §7.19 ⑥ |
 | 11-10 | conv DMA 묶기 (`EVTA_CONV_BURST`) | 24.08 → **23.27 ms** | | vtalib | §7.29 |
+| 11-14 | ALU 확장 + 레지스터 추가, 400 MHz `_alux` | 24.10 → 23.05 ms (380 → 400 MHz) | | **하드웨어** | `evta_isa_ext.md` §8.13 |
+| 11-16 | 다음 tile LOAD 앞당기기 (`EVTA_LOAD_AHEAD=2`) | 23.05 → **22.55 ms** | | vtalib | `evta_isa_ext.md` §8.21 |
+| 11-25 | 호출마다 CPU 시간 (replay 명령 사본, thread별 pool) | 22.72 → 22.48 ms | | vtalib runtime | `mobilenetv2_optimize_sw_hw_allmodels.md` §8.1 |
+| 11-26 | bundle 다시 만듦(invalidate 빼기), int8 입력 | 22.72 → **22.16 ms** (`perf_record.sh` 22.15) | | 컴파일러 + main | `evta_perf_latest.md` §3 |
 
-- **줄어든 폭:** 1코어 기준 148.7 → 23.3 ms로 **6.4배**다(conv0 EVTA 이후 기준). 시작점(134.8 ms, OMP 4)과 비교하면 약 5.8배다.
+- **줄어든 폭:** 1코어 기준 148.7 → 23.3 ms(11-10)로 **6.4배**, 22.15 ms(11-26)로 **6.7배**다(conv0 EVTA 이후 기준). 시작점(134.8 ms, OMP 4)과 비교하면 약 6.1배다.
+- **11-14 뒤 줄:** 다른 모델 일(DeiT, MobileNetV2)에서 넣은 기능이 Resnet18에도 준 효과다. 줄마다 그 문서의 측정이라 기준 시간이 서로 조금 다르다(예: 11-14의 24.10은 380 MHz 판).
 - **모든 단계의 검증:** 결과가 이전과 같다. EVTA 출력 dump(`EVTA_DUMP_CONV`)가 byte 단위로 같거나, 실행 중 CPU 경로와 비교(`EVTA_RES_CHECK=1`)해 0 불일치이고, golden(single 30, multi2 3, multi4 3)을 통과했다. 분류는 처음부터 281이고, 확률 0.655530도 그대로다.
 - **"a → b" 표기:** 같은 날 이전 비트스트림이나 이전 vtalib과 번갈아 잰 값이다. 날짜가 다르면 ±0.2 ms 정도 흔들린다.
 
@@ -431,7 +441,7 @@ multi4: EVTA마다 25.23–25.37 → 24.49–24.62 ms
 | Resnet18 EVTA | 24.153 ms | **23.053 ms** (−1.10) |
 | **Resnet18 single, OMP 1** | 26.611 ms | **25.493 ms** |
 
-multi4: 395.8 MHz 판(MMCM 배수 조정)으로 먼저 통과했다. 그 다음 placer directive를 바꾸고 Y219 net 하나를 RapidWright로 다시 배선해 400 MHz로 통과했다. EVTA마다 24.49–24.62 → **23.44–23.56 ms**, busy union 583.8 → **610.4 GOPS**다.
+multi4: 395.8 MHz 판(MMCM 배수 조정)으로 먼저 통과했다. 그 다음 placer directive를 바꾸고 Y219 net 하나를 RapidWright로 다시 배선해 400 MHz로 통과했다. EVTA마다 24.49–24.62 → **23.44–23.56 ms**, busy union 583.8 → **610.4 GOPS**다. busy union으로 잰 Resnet18 EVTA 4개 동시의 최고값이다(§6.1).
 
 ### 4.5 하드웨어 세 단계를 함께 (11-05, 같은 실행 파일에서 비트스트림만 바꿈)
 
@@ -439,7 +449,7 @@ multi4: 395.8 MHz 판(MMCM 배수 조정)으로 먼저 통과했다. 그 다음 
 |---|---|---|---|---|---|
 | Resnet18 EVTA | 26.43 ms (137 GOPS) | 24.89 | 24.15 | **23.05 ms (157 GOPS)** | −12.8 % |
 
-## 5. 그 뒤 (11-05 ~ 11-10)
+## 5. 그 뒤 (11-05 ~ 11-27)
 
 | 날짜 | 바꾼 것 | 왜 / 어떻게 | Resnet18 single OMP 1 |
 |---|---|---|---|
@@ -447,6 +457,12 @@ multi4: 395.8 MHz 판(MMCM 배수 조정)으로 먼저 통과했다. 그 다음 
 | 11-05 | bias entry가 thread 1의 acc를 덮던 결함 (§7.19 ⑤) | `conv_kernel`이 bias 자리를 빼지 않아 VGG16에서 틀림. Resnet18은 영향 없음(dump 같음) | 그대로 |
 | 11-06 | conv0 입력 복사를 conv와 겹침 (§7.19 ⑥) | conv0 입력 복사(quantize + packing) 1.65 ms는 NEON 명령 수가 한계라 더 줄지 않았다. 그래서 숨겼다. 내용은 아래와 같다 | 25.43 → **24.08 ms** |
 | 11-10 | conv DMA 묶기 (§7.29, `EVTA_CONV_BURST`) | 연속인 LOAD / STORE 행을 한 행으로, 1×1 conv의 weight를 한 번에, 폭 전체 tile의 출력 블록을 STORE 하나로 보낸다. Resnet18은 3×3이 대부분이라 효과가 작다 | 24.08 → **23.27 ms** |
+| 11-14 | ALU 확장 bitstream `_alux` 400 MHz (`evta_isa_ext.md` §8.13) | DeiT용 ALU 확장을 넣으며 vector loop / requantize에 register를 더해 400 MHz를 맞췄다. Resnet18은 확장 연산을 쓰지 않는다. 380 MHz 판과 비교한 값이다 | 24.10 → **23.05 ms** |
+| 11-16 | `EVTA_LOAD_AHEAD=2` (`evta_isa_ext.md` §8.21, [evta_load_ahead_guide.md](evta_load_ahead_guide.md)) | 한 EVTA run 안에서 다음 filter 묶음 / tile의 첫 LOAD가 앞 GEMM의 token을 받아 먼저 간다. 1×1 conv의 weight는 그대로 둔다 | 23.05 → **22.55 ms** |
+| 11-21 | conv schedule 다시 찾기 ([evta_sched_search.md](evta_sched_search.md)) | DMA / LOAD 앞당기기 뒤의 모양별 schedule을 다시 찾았다. Resnet18은 바뀐 것이 없다 | 22.55 → 22.55 ms |
+| 11-22 | 200장 calibration, 첫 conv 반올림 결함 ([evta_calib_images.md](evta_calib_images.md)) | 첫 conv의 bias에 `-vta-round-shift` 항이 빠져 있었다. 시간이 아니라 정확도를 고친 것이다 | 정확도 |
+| 11-25 | 호출마다 CPU 시간 줄이기 (`mobilenetv2_optimize_sw_hw_allmodels.md` §6, §8.1) | buffer 주소 조합마다 replay 명령 사본, thread별 buffer pool, 다음 replay 짐작 | 22.72 → **22.48 ms** |
+| 11-26 | bundle 다시 만듦 + int8 입력 (`evta_perf_latest.md`) | EVTA만 읽는 출력의 invalidate 빼기(`-vta-skip-evta-invalidate`), main이 `.i8` 입력을 넘김 | 22.72 → **22.16 ms** (`_alux3` 400 MHz) |
 
 **11-06 겹치기의 내용:**
 - pynq driver의 `Run`을 `RunStart` + `RunWait`로 나눴다.
@@ -472,8 +488,49 @@ EVTA 4개에 bundle copy 4개를 동시에 돌린다(OMP 1).
 | 11-02 | replay | 977.9 ms | 34.99 ms |
 | 11-02 | conv0 pack | 827.3 ms | 29.76 ms |
 | 11-02 | conv0 + pool | **820.3 ms** | 29.37 ms |
-| 11-04 | 하드웨어 세 단계 (multi4 400 MHz rq) | | EVTA마다 23.44–23.56 ms, 610.4 GOPS |
+| 11-04 | 하드웨어 세 단계 (multi4 400 MHz rq) | (25회 678.6 ms, `_sysprof -l -r`) | EVTA마다 23.44–23.56 ms, **610.4 GOPS** (busy union) |
 | 11-06 | conv0 입력 겹침 | | **24.58–24.67 ms** |
+| 11-24 | multi4 `_amul` hp322 bitstream, bundle을 지금 컴파일러로 다시 만듦 | | 24.02 ms, 4개 동시 166.5 fps |
+| 11-25 | 호출마다 CPU 시간 줄이기 (replay 명령 사본, thread별 pool) | | 169.9 → 172.0 fps (629 → 636 GOPS) |
+| 11-26 | 1×1 weight 한 LOAD (`EVTA_WGT_FIT`), `_dw` bitstream | | **173.5 fps (642 GOPS)** |
+| 11-26 | `perf_record.sh`(한 가지 방법, 3번 평균) | | `_amul` 171.3 fps (634 GOPS), copy당 23.36 ms / `_dw` 170.3 fps (630 GOPS) |
+
+- 11-24부터의 fps는 copy마다 25장, 4개 동시의 처리량이다. GOPS는 3.700 GOP × fps다(아래 §6.1).
+- 11-26의 173.5와 171.3 fps는 재는 법이 다르다(실행 파일, 횟수). 최고값은 173.5 fps, 같은 방법으로 다른 모델과 함께 잰 값은 `evta_perf_latest.md`의 171.3 fps다.
+
+### 6.1 EVTA 4개 동시 GOPS: 610.4 GOPS (11-04)와 그 뒤
+
+**두 가지 GOPS.** 이 문서와 그 근거 문서에는 multi4 GOPS가 두 가지로 나온다.
+
+| | busy union GOPS (`_sysprof`) | 그림 기준 GOPS (`_sys`, `perf_record.sh`) |
+|---|---|---|
+| 식 | copy 4개의 conv 연산량 / EVTA가 하나라도 도는 시간 | 1장 GOP(3.700) × 4개 동시 fps |
+| 시간에 드는 것 | EVTA가 도는 시간만 | CPU 일, 호출 사이 빈틈까지 전부 |
+| 1장 연산량 | 3,628 Mops(§0의 하한 계산과 같은 값) | 3,700 Mops(`run_prof.sh`가 찍는 값) |
+| 묻는 것 | EVTA 4개가 얼마나 같이 바쁜가 | 한 초에 그림을 몇 장 처리하나 |
+
+**610.4 GOPS(11-04)의 조건과 뜻:**
+- bitstream: `vtahw_zcu102_1x16_i8w8a32_16_15_18_17_4evta_sa_400mhz_rq.bin`
+  - systolic GEMM 400 MHz, 하드웨어 세 단계(ALU imm II 1, bias reset, requantize)
+  - placer `ExtraNetDelay_high`, post-route phys_opt, Y219 행의 net 하나를 RapidWright로 다시 배선. WNS +0.002 ns
+- 재는 법: `hw_multievtax4/script/run_prof.sh -s _sysprof -n 25 -l -r MultiEVTAResnet18Test`
+  - `-l`은 EVTA 호출마다 copy 넷이 barrier에서 만나는 lockstep, `-r`은 `chrt -f 10`이다.
+  - runs 2–25의 중앙값을 번갈아 두 번 쟀다.
+- 결과:
+  - EVTA마다 23.44 / 23.56 / 23.56 / 23.44 ms
+  - busy union 610.4 GOPS, 25회 `total_time` 678.6 ms
+  - 이론 최대 4 × 204.8 = 819.2 GOPS의 **75 %**다. EVTA 하나는 3,628 / 23.5 ≈ 154 GOPS이므로, 넷이 거의 끝까지 함께 돌았다(4 × 154 = 617).
+  - 바로 앞 단계(bias reset, 583.8 GOPS)보다 +4.6 %이고, 395.8 MHz 판(605.1)보다 +0.9 %다.
+- 확인: probes 40/40, golden 3 PASS, Resnet18 `EVTA_DUMP_CONV` 80개가 395.8 MHz 판과 바이트까지 같다.
+- 자세한 기록: `evta_runtime_compare.md` §7.18, `evta_isa_ext.md`
+
+**다른 GOPS 숫자와의 관계:**
+- **10-29의 617.2 GOPS**(`evta_runtime_aot.md` §5)도 busy union이다. 그러나 그때는 EVTA 하나가 29.75 ms에 156 GOPS로 적혀 있다. 이는 1장 연산량을 약 4.64 Gops로 센 것이라 11-04 값과 바로 비교하지 않는다.
+- **10-26의 609.7 GOPS**([evta_multi4_609gops_report.md](evta_multi4_609gops_report.md))는 Resnet18이 아니다. ResConv10(3 × 3, 7 × 7 × 512) 하나를 EVTA마다 400번 되풀이한 값이다(333 MHz HLS GEMM, 이론 최대의 89 %).
+- **11-26의 642 GOPS**(173.5 fps)는 그림 기준이다. CPU 일까지 든 시간인데도 11-04의 busy union보다 크다.
+  그 사이 LOAD 앞당기기(EVTA 시간), 호출마다 CPU 시간 줄이기, 1×1 weight 한 LOAD가 들어갔기 때문이다.
+  같은 연산량(3,628 Mops)으로 고치면 173.5 × 3.628 = 629 GOPS다.
+- 11-04 뒤의 Resnet18 busy union 기록은 문서에 없다. 지금 판의 값은 `_sysprof` 실행 파일을 지금 bitstream(`BIN=`)으로 위 명령처럼 돌리면 나온다.
 
 **4 copy를 같이 돌리면 copy마다 조금 느려진다(§7.19 ⑧, Resnet50으로 잼):**
 - 어느 쌍이든 약 +0.9 ms다. DDR controller를 같이 쓰기 때문이다.
@@ -496,7 +553,9 @@ EVTA 4개에 bundle copy 4개를 동시에 돌린다(OMP 1).
 
 ## 8. 지금 상태와 남은 것
 
-### 8.1 지금 (11-10, single, OMP 1, 23.27 ms)
+### 8.1 11-10의 상태 (single, OMP 1, 23.27 ms)
+
+11-26 지금은 single 22.15 ms(`_alux3` 400 MHz, 45.1 fps, 167 GOPS), multi4 4개 동시 171–174 fps다(§0, §6). 아래 나누기는 11-10에 잰 것이다.
 
 | 항목 | 시간 |
 |---|---|
