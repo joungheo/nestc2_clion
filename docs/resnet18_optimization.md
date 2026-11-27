@@ -16,35 +16,36 @@ ZCU102 위 EVTA(VTA 계열 int8 NPU)와 NEST-C로 Resnet18 1장을 줄인 과정
 
 ## 0. 한눈에
 
-| 날짜 | 단계 | 1장 OMP 1 | 1장 OMP 4 | 바꾼 곳 | § (`evta_runtime_compare.md`) |
-|---|---|---|---|---|---|
-| 10-23 ~ 26 | 시작: HLS GEMM 333 MHz, conv0 CPU float | | 134.8 ms | – | `evta_runtime_aot.md` §3 |
-| 10-28 | conv0 CPU (10-28 측정; 클럭 380 MHz / systolic 400 MHz 작업과 같은 시기) | | 131.8 ms | 비트스트림 | overview §3 |
-| 10-28 | conv0을 16채널로 0 채워 EVTA로 | | 78.6 ms | 컴파일러 | overview §3 |
-| 10-29 | conv0 schedule (vt 2, 8×16) | 148.7 ms | 73.6 ms | schedule | §3 |
-| 10-31 | ① 층 사이 EVTA layout 유지 | 91.1 ms | 56.4 ms | 컴파일러 | §7.1 |
-| 10-31 | ② conv + elemadd + relu 한 호출 | 67.1 ms | 50.2 ms | 컴파일러 + vtalib | §7.2 |
-| 10-31 | maxpool EVTA | 52.5 ms | 48.7 ms | 컴파일러 + vtalib | §7.3 |
-| 11-01 | transpose 16 byte 복사 | 46.9 ms | 41.8 ms | vtalib CPU | §7.4 |
-| 11-01 | VTA buffer pool | 44.3 ms | 39.1 ms | vtalib runtime | §7.5 |
-| 11-01 | CPU fc NEON | 40.6 ms | 38.7 ms | vtalib CPU | §7.6 |
-| 11-02 | fc EVTA | 39.9 ms | 38.0 ms | 컴파일러 + vtalib | §7.8 |
-| 11-02 | 입력 전처리 합치기 | 37.1 ms | 36.0 ms | 컴파일러 + vtalib | §7.9 |
-| 11-02 | 명령 record / replay | 34.5 ms | 33.5 ms | vtalib runtime | §7.10 |
-| 11-02 | conv0 packed 입력 (4×1 conv) | 29.2 ms | 28.0 ms | 컴파일러 + vtalib | §7.12 |
-| 11-02 | conv0 + maxpool 한 호출 | 28.83 ms | 27.71 ms | 컴파일러 + vtalib | §7.13 |
-| 11-03 | ALU imm II = 1 | 28.98 → 27.32 ms | | **하드웨어** | §7.15 |
-| 11-04 | RMW reset에 bias | 27.30 → 26.59 ms | | **하드웨어** + vtalib | §7.16 |
-| 11-04 | requantize를 out 쓰기에 | 26.61 → 25.49 ms | | **하드웨어(ISA)** + vtalib | §7.18 |
-| 11-05 | systolic 최소 tile 1 | 25.53 → 25.42 ms | | vtalib | §7.19 ③ |
-| 11-06 | conv0 입력 복사를 conv와 겹침 | 25.43 → 24.08 ms | | vtalib runtime + 컴파일러 | §7.19 ⑥ |
-| 11-10 | conv DMA 묶기 (`EVTA_CONV_BURST`) | 24.08 → **23.27 ms** | | vtalib | §7.29 |
-| 11-14 | ALU 확장 + 레지스터 추가, 400 MHz `_alux` | 24.10 → 23.05 ms (380 → 400 MHz) | | **하드웨어** | `evta_isa_ext.md` §8.13 |
-| 11-16 | 다음 tile LOAD 앞당기기 (`EVTA_LOAD_AHEAD=2`) | 23.05 → **22.55 ms** | | vtalib | `evta_isa_ext.md` §8.21 |
-| 11-25 | 호출마다 CPU 시간 (replay 명령 사본, thread별 pool) | 22.72 → 22.48 ms | | vtalib runtime | `mobilenetv2_optimize_sw_hw_allmodels.md` §8.1 |
-| 11-26 | bundle 다시 만듦(invalidate 빼기), int8 입력 | 22.72 → **22.16 ms** (`perf_record.sh` 22.15) | | 컴파일러 + main | `evta_perf_latest.md` §3 |
+| 날짜 | 단계 | 1장 OMP 1 | 1장 OMP 4 | OMP 1 fps (GOPS) | OMP 4 fps (GOPS) | 바꾼 곳 | § (`evta_runtime_compare.md`) |
+|---|---|---|---|---|---|---|---|
+| 10-23 ~ 26 | 시작: HLS GEMM 333 MHz, conv0 CPU float | | 134.8 ms |  | 7.4 (27) | – | `evta_runtime_aot.md` §3 |
+| 10-28 | conv0 CPU (10-28 측정; 클럭 380 MHz / systolic 400 MHz 작업과 같은 시기) | | 131.8 ms |  | 7.6 (28) | 비트스트림 | overview §3 |
+| 10-28 | conv0을 16채널로 0 채워 EVTA로 | | 78.6 ms |  | 12.7 (47) | 컴파일러 | overview §3 |
+| 10-29 | conv0 schedule (vt 2, 8×16) | 148.7 ms | 73.6 ms | 6.7 (25) | 13.6 (50) | schedule | §3 |
+| 10-31 | ① 층 사이 EVTA layout 유지 | 91.1 ms | 56.4 ms | 11.0 (41) | 17.7 (66) | 컴파일러 | §7.1 |
+| 10-31 | ② conv + elemadd + relu 한 호출 | 67.1 ms | 50.2 ms | 14.9 (55) | 19.9 (74) | 컴파일러 + vtalib | §7.2 |
+| 10-31 | maxpool EVTA | 52.5 ms | 48.7 ms | 19.0 (70) | 20.5 (76) | 컴파일러 + vtalib | §7.3 |
+| 11-01 | transpose 16 byte 복사 | 46.9 ms | 41.8 ms | 21.3 (79) | 23.9 (89) | vtalib CPU | §7.4 |
+| 11-01 | VTA buffer pool | 44.3 ms | 39.1 ms | 22.6 (84) | 25.6 (95) | vtalib runtime | §7.5 |
+| 11-01 | CPU fc NEON | 40.6 ms | 38.7 ms | 24.6 (91) | 25.8 (96) | vtalib CPU | §7.6 |
+| 11-02 | fc EVTA | 39.9 ms | 38.0 ms | 25.1 (93) | 26.3 (97) | 컴파일러 + vtalib | §7.8 |
+| 11-02 | 입력 전처리 합치기 | 37.1 ms | 36.0 ms | 27.0 (100) | 27.8 (103) | 컴파일러 + vtalib | §7.9 |
+| 11-02 | 명령 record / replay | 34.5 ms | 33.5 ms | 29.0 (107) | 29.9 (110) | vtalib runtime | §7.10 |
+| 11-02 | conv0 packed 입력 (4×1 conv) | 29.2 ms | 28.0 ms | 34.2 (127) | 35.7 (132) | 컴파일러 + vtalib | §7.12 |
+| 11-02 | conv0 + maxpool 한 호출 | 28.83 ms | 27.71 ms | 34.7 (128) | 36.1 (134) | 컴파일러 + vtalib | §7.13 |
+| 11-03 | ALU imm II = 1 | 28.98 → 27.32 ms | | 36.6 (135) |  | **하드웨어** | §7.15 |
+| 11-04 | RMW reset에 bias | 27.30 → 26.59 ms | | 37.6 (139) |  | **하드웨어** + vtalib | §7.16 |
+| 11-04 | requantize를 out 쓰기에 | 26.61 → 25.49 ms | | 39.2 (145) |  | **하드웨어(ISA)** + vtalib | §7.18 |
+| 11-05 | systolic 최소 tile 1 | 25.53 → 25.42 ms | | 39.3 (146) |  | vtalib | §7.19 ③ |
+| 11-06 | conv0 입력 복사를 conv와 겹침 | 25.43 → 24.08 ms | | 41.5 (154) |  | vtalib runtime + 컴파일러 | §7.19 ⑥ |
+| 11-10 | conv DMA 묶기 (`EVTA_CONV_BURST`) | 24.08 → **23.27 ms** | | 43.0 (159) |  | vtalib | §7.29 |
+| 11-14 | ALU 확장 + 레지스터 추가, 400 MHz `_alux` | 24.10 → 23.05 ms (380 → 400 MHz) | | 43.4 (161) |  | **하드웨어** | `evta_isa_ext.md` §8.13 |
+| 11-16 | 다음 tile LOAD 앞당기기 (`EVTA_LOAD_AHEAD=2`) | 23.05 → **22.55 ms** | | 44.3 (164) |  | vtalib | `evta_isa_ext.md` §8.21 |
+| 11-25 | 호출마다 CPU 시간 (replay 명령 사본, thread별 pool) | 22.72 → 22.48 ms | | 44.5 (165) |  | vtalib runtime | `mobilenetv2_optimize_sw_hw_allmodels.md` §8.1 |
+| 11-26 | bundle 다시 만듦(invalidate 빼기), int8 입력 | 22.72 → **22.16 ms** (`perf_record.sh` 22.15) | | 45.1 (167) |  | 컴파일러 + main | `evta_perf_latest.md` §3 |
 
 - **줄어든 폭:** 1코어 기준 148.7 → 23.3 ms(11-10)로 **6.4배**, 22.15 ms(11-26)로 **6.7배**다(conv0 EVTA 이후 기준). 시작점(134.8 ms, OMP 4)과 비교하면 약 6.1배다.
+- **fps, GOPS:** fps = 1000 / 1장 ms(1장씩 돌기 때문, "a → b"면 b)다. GOPS = 1장 3.700 GOP × fps다. 3.700은 `run_prof.sh`가 찍는 값이고 `evta_perf_latest.md`와 같은 기준이다. 아래 하한 계산의 3,628 Mops와는 2 % 다르다.
 - **11-14 뒤 줄:** 다른 모델 일(DeiT, MobileNetV2)에서 넣은 기능이 Resnet18에도 준 효과다. 줄마다 그 문서의 측정이라 기준 시간이 서로 조금 다르다(예: 11-14의 24.10은 380 MHz 판).
 - **모든 단계의 검증:** 결과가 이전과 같다. EVTA 출력 dump(`EVTA_DUMP_CONV`)가 byte 단위로 같거나, 실행 중 CPU 경로와 비교(`EVTA_RES_CHECK=1`)해 0 불일치이고, golden(single 30, multi2 3, multi4 3)을 통과했다. 분류는 처음부터 281이고, 확률 0.655530도 그대로다.
 - **"a → b" 표기:** 같은 날 이전 비트스트림이나 이전 vtalib과 번갈아 잰 값이다. 날짜가 다르면 ±0.2 ms 정도 흔들린다.
@@ -451,18 +452,18 @@ multi4: 395.8 MHz 판(MMCM 배수 조정)으로 먼저 통과했다. 그 다음 
 
 ## 5. 그 뒤 (11-05 ~ 11-27)
 
-| 날짜 | 바꾼 것 | 왜 / 어떻게 | Resnet18 single OMP 1 |
-|---|---|---|---|
-| 11-05 | systolic 최소 tile 1 (§7.19 ③) | HLS GEMM은 acc hazard 검사가 없어 tile이 7×7 이상이어야 했다. systolic `sa_rmw.v`는 forwarding이 있어 최소가 필요 없다. 이 결함을 고치다 vt 2 더미 tile의 채널 블록 식 결함도 찾았다(두 vtalib) | 25.53 → **25.42 ms** (EVTA 23.05 → 22.99) |
-| 11-05 | bias entry가 thread 1의 acc를 덮던 결함 (§7.19 ⑤) | `conv_kernel`이 bias 자리를 빼지 않아 VGG16에서 틀림. Resnet18은 영향 없음(dump 같음) | 그대로 |
-| 11-06 | conv0 입력 복사를 conv와 겹침 (§7.19 ⑥) | conv0 입력 복사(quantize + packing) 1.65 ms는 NEON 명령 수가 한계라 더 줄지 않았다. 그래서 숨겼다. 내용은 아래와 같다 | 25.43 → **24.08 ms** |
-| 11-10 | conv DMA 묶기 (§7.29, `EVTA_CONV_BURST`) | 연속인 LOAD / STORE 행을 한 행으로, 1×1 conv의 weight를 한 번에, 폭 전체 tile의 출력 블록을 STORE 하나로 보낸다. Resnet18은 3×3이 대부분이라 효과가 작다 | 24.08 → **23.27 ms** |
-| 11-14 | ALU 확장 bitstream `_alux` 400 MHz (`evta_isa_ext.md` §8.13) | DeiT용 ALU 확장을 넣으며 vector loop / requantize에 register를 더해 400 MHz를 맞췄다. Resnet18은 확장 연산을 쓰지 않는다. 380 MHz 판과 비교한 값이다 | 24.10 → **23.05 ms** |
-| 11-16 | `EVTA_LOAD_AHEAD=2` (`evta_isa_ext.md` §8.21, [evta_load_ahead_guide.md](evta_load_ahead_guide.md)) | 한 EVTA run 안에서 다음 filter 묶음 / tile의 첫 LOAD가 앞 GEMM의 token을 받아 먼저 간다. 1×1 conv의 weight는 그대로 둔다 | 23.05 → **22.55 ms** |
-| 11-21 | conv schedule 다시 찾기 ([evta_sched_search.md](evta_sched_search.md)) | DMA / LOAD 앞당기기 뒤의 모양별 schedule을 다시 찾았다. Resnet18은 바뀐 것이 없다 | 22.55 → 22.55 ms |
-| 11-22 | 200장 calibration, 첫 conv 반올림 결함 ([evta_calib_images.md](evta_calib_images.md)) | 첫 conv의 bias에 `-vta-round-shift` 항이 빠져 있었다. 시간이 아니라 정확도를 고친 것이다 | 정확도 |
-| 11-25 | 호출마다 CPU 시간 줄이기 (`mobilenetv2_optimize_sw_hw_allmodels.md` §6, §8.1) | buffer 주소 조합마다 replay 명령 사본, thread별 buffer pool, 다음 replay 짐작 | 22.72 → **22.48 ms** |
-| 11-26 | bundle 다시 만듦 + int8 입력 (`evta_perf_latest.md`) | EVTA만 읽는 출력의 invalidate 빼기(`-vta-skip-evta-invalidate`), main이 `.i8` 입력을 넘김 | 22.72 → **22.16 ms** (`_alux3` 400 MHz) |
+| 날짜 | 바꾼 것 | 왜 / 어떻게 | Resnet18 single OMP 1 | fps (GOPS) |
+|---|---|---|---|---|
+| 11-05 | systolic 최소 tile 1 (§7.19 ③) | HLS GEMM은 acc hazard 검사가 없어 tile이 7×7 이상이어야 했다. systolic `sa_rmw.v`는 forwarding이 있어 최소가 필요 없다. 이 결함을 고치다 vt 2 더미 tile의 채널 블록 식 결함도 찾았다(두 vtalib) | 25.53 → **25.42 ms** (EVTA 23.05 → 22.99) | 39.3 (146) |
+| 11-05 | bias entry가 thread 1의 acc를 덮던 결함 (§7.19 ⑤) | `conv_kernel`이 bias 자리를 빼지 않아 VGG16에서 틀림. Resnet18은 영향 없음(dump 같음) | 그대로 | |
+| 11-06 | conv0 입력 복사를 conv와 겹침 (§7.19 ⑥) | conv0 입력 복사(quantize + packing) 1.65 ms는 NEON 명령 수가 한계라 더 줄지 않았다. 그래서 숨겼다. 내용은 아래와 같다 | 25.43 → **24.08 ms** | 41.5 (154) |
+| 11-10 | conv DMA 묶기 (§7.29, `EVTA_CONV_BURST`) | 연속인 LOAD / STORE 행을 한 행으로, 1×1 conv의 weight를 한 번에, 폭 전체 tile의 출력 블록을 STORE 하나로 보낸다. Resnet18은 3×3이 대부분이라 효과가 작다 | 24.08 → **23.27 ms** | 43.0 (159) |
+| 11-14 | ALU 확장 bitstream `_alux` 400 MHz (`evta_isa_ext.md` §8.13) | DeiT용 ALU 확장을 넣으며 vector loop / requantize에 register를 더해 400 MHz를 맞췄다. Resnet18은 확장 연산을 쓰지 않는다. 380 MHz 판과 비교한 값이다 | 24.10 → **23.05 ms** | 43.4 (161) |
+| 11-16 | `EVTA_LOAD_AHEAD=2` (`evta_isa_ext.md` §8.21, [evta_load_ahead_guide.md](evta_load_ahead_guide.md)) | 한 EVTA run 안에서 다음 filter 묶음 / tile의 첫 LOAD가 앞 GEMM의 token을 받아 먼저 간다. 1×1 conv의 weight는 그대로 둔다 | 23.05 → **22.55 ms** | 44.3 (164) |
+| 11-21 | conv schedule 다시 찾기 ([evta_sched_search.md](evta_sched_search.md)) | DMA / LOAD 앞당기기 뒤의 모양별 schedule을 다시 찾았다. Resnet18은 바뀐 것이 없다 | 22.55 → 22.55 ms | 44.3 (164) |
+| 11-22 | 200장 calibration, 첫 conv 반올림 결함 ([evta_calib_images.md](evta_calib_images.md)) | 첫 conv의 bias에 `-vta-round-shift` 항이 빠져 있었다. 시간이 아니라 정확도를 고친 것이다 | 정확도 | |
+| 11-25 | 호출마다 CPU 시간 줄이기 (`mobilenetv2_optimize_sw_hw_allmodels.md` §6, §8.1) | buffer 주소 조합마다 replay 명령 사본, thread별 buffer pool, 다음 replay 짐작 | 22.72 → **22.48 ms** | 44.5 (165) |
+| 11-26 | bundle 다시 만듦 + int8 입력 (`evta_perf_latest.md`) | EVTA만 읽는 출력의 invalidate 빼기(`-vta-skip-evta-invalidate`), main이 `.i8` 입력을 넘김 | 22.72 → **22.16 ms** (`_alux3` 400 MHz) | 45.1 (167) |
 
 **11-06 겹치기의 내용:**
 - pynq driver의 `Run`을 `RunStart` + `RunWait`로 나눴다.
@@ -474,27 +475,28 @@ multi4: 395.8 MHz 판(MMCM 배수 조정)으로 먼저 통과했다. 그 다음 
 
 EVTA 4개에 bundle copy 4개를 동시에 돌린다(OMP 1).
 
-| 날짜 | 단계 | 100회 wall (4 copy) | copy 하나 1장 |
-|---|---|---|---|
-| 10-29 | 시작 | 약 3,909 ms | 153–160 ms |
-| 10-31 | ① layout 유지 | 2,793 ms | 94.9 ms |
-| 10-31 | ② residual fusion | 1,851 ms | 70.7 ms |
-| 10-31 | maxpool EVTA | 1,471 ms | 56.1–56.5 ms |
-| 11-01 | transpose 16 byte | 1,314 ms | 49.5 ms |
-| 11-01 | buffer pool | 1,189 ms | |
-| 11-01 | CPU fc NEON | 1,089–1,131 ms | 41.2 ms |
-| 11-02 | fc EVTA | | 40.56 ms |
-| 11-02 | 전처리 합치기 | 1,060.5 ms | 37.59 ms |
-| 11-02 | replay | 977.9 ms | 34.99 ms |
-| 11-02 | conv0 pack | 827.3 ms | 29.76 ms |
-| 11-02 | conv0 + pool | **820.3 ms** | 29.37 ms |
-| 11-04 | 하드웨어 세 단계 (multi4 400 MHz rq) | (25회 678.6 ms, `_sysprof -l -r`) | EVTA마다 23.44–23.56 ms, **610.4 GOPS** (busy union) |
-| 11-06 | conv0 입력 겹침 | | **24.58–24.67 ms** |
-| 11-24 | multi4 `_amul` hp322 bitstream, bundle을 지금 컴파일러로 다시 만듦 | | 24.02 ms, 4개 동시 166.5 fps |
-| 11-25 | 호출마다 CPU 시간 줄이기 (replay 명령 사본, thread별 pool) | | 169.9 → 172.0 fps (629 → 636 GOPS) |
-| 11-26 | 1×1 weight 한 LOAD (`EVTA_WGT_FIT`), `_dw` bitstream | | **173.5 fps (642 GOPS)** |
-| 11-26 | `perf_record.sh`(한 가지 방법, 3번 평균) | | `_amul` 171.3 fps (634 GOPS), copy당 23.36 ms / `_dw` 170.3 fps (630 GOPS) |
+| 날짜 | 단계 | 100회 wall (4 copy) | copy 하나 1장 | 4개 동시 fps (GOPS), copy 시간 기준 | 같은 값, wall 기준 |
+|---|---|---|---|---|---|
+| 10-29 | 시작 | 약 3,909 ms | 153–160 ms | 25.0 (92) | 25.6 (95) |
+| 10-31 | ① layout 유지 | 2,793 ms | 94.9 ms | 42.1 (156) | 35.8 (132) |
+| 10-31 | ② residual fusion | 1,851 ms | 70.7 ms | 56.6 (209) | 54.0 (200) |
+| 10-31 | maxpool EVTA | 1,471 ms | 56.1–56.5 ms | 70.8 (262) | 68.0 (252) |
+| 11-01 | transpose 16 byte | 1,314 ms | 49.5 ms | 80.8 (299) | 76.1 (282) |
+| 11-01 | buffer pool | 1,189 ms | |  | 84.1 (311) |
+| 11-01 | CPU fc NEON | 1,089–1,131 ms | 41.2 ms | 97.1 (359) | 88.4 – 91.8 (327 – 340) |
+| 11-02 | fc EVTA | | 40.56 ms | 98.6 (365) |  |
+| 11-02 | 전처리 합치기 | 1,060.5 ms | 37.59 ms | 106.4 (394) | 94.3 (349) |
+| 11-02 | replay | 977.9 ms | 34.99 ms | 114.3 (423) | 102.3 (378) |
+| 11-02 | conv0 pack | 827.3 ms | 29.76 ms | 134.4 (497) | 120.9 (447) |
+| 11-02 | conv0 + pool | **820.3 ms** | 29.37 ms | 136.2 (504) | 121.9 (451) |
+| 11-04 | 하드웨어 세 단계 (multi4 400 MHz rq) | (25회 678.6 ms, `_sysprof -l -r`) | EVTA마다 23.44–23.56 ms, **610.4 GOPS** (busy union) | (EVTA 시간만 잼) |  |
+| 11-06 | conv0 입력 겹침 | | **24.58–24.67 ms** | 162.1 (600) |  |
+| 11-24 | multi4 `_amul` hp322 bitstream, bundle을 지금 컴파일러로 다시 만듦 | | 24.02 ms, 4개 동시 166.5 fps | (옆 칸) |  |
+| 11-25 | 호출마다 CPU 시간 줄이기 (replay 명령 사본, thread별 pool) | | 169.9 → 172.0 fps (629 → 636 GOPS) | (옆 칸) |  |
+| 11-26 | 1×1 weight 한 LOAD (`EVTA_WGT_FIT`), `_dw` bitstream | | **173.5 fps (642 GOPS)** | (옆 칸) |  |
+| 11-26 | `perf_record.sh`(한 가지 방법, 3번 평균) | | `_amul` 171.3 fps (634 GOPS), copy당 23.36 ms / `_dw` 170.3 fps (630 GOPS) | (옆 칸) |  |
 
+- **fps 계산:** copy 시간 기준은 4 × 1000 / (copy 하나 1장 ms, 범위면 느린 쪽)이다. 11-24부터의 fps도 이 기준이다. wall 기준은 100장 / 100회 wall이다. 첫 장과 시작 시간이 들어 있어 대개 copy 시간 기준보다 낮다(10-31 ~ 11-02에 5–15 %). GOPS = 3.700 GOP × fps다.
 - 11-24부터의 fps는 copy마다 25장, 4개 동시의 처리량이다. GOPS는 3.700 GOP × fps다(아래 §6.1).
 - 11-26의 173.5와 171.3 fps는 재는 법이 다르다(실행 파일, 횟수). 최고값은 173.5 fps, 같은 방법으로 다른 모델과 함께 잰 값은 `evta_perf_latest.md`의 171.3 fps다.
 
