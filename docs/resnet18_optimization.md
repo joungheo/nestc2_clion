@@ -8,6 +8,7 @@ ZCU102 위 EVTA(VTA 계열 int8 NPU)와 NEST-C로 Resnet18 1장을 줄인 과정
 - 두 GOPS는 재는 법이 다르다(§6.1).
 
 - **발표 자료(PowerPoint, 34장, 그림 32장 + 차트):** [slides/resnet18_optimization.pptx](slides/resnet18_optimization.pptx). 단계마다 그림, 전후 시간, 자세한 설명은 발표자 노트에 있다. 다시 만들기: `docs/slides/make_resnet18_deck.py`(python-pptx, cairosvg 필요). 10장으로 줄인 판: [slides/resnet18_optimization_short.pptx](slides/resnet18_optimization_short.pptx) (`make_resnet18_short.py`)
+- **바꾼 코드의 전 / 후와 리뷰:** [resnet18_code_review.md](resnet18_code_review.md)
 - **자세한 기록:** `docs/evta_runtime_compare.md` §3, §7–§7.19, §7.29
 - **날짜순 요약과 그림:** `docs/evta_overview.md`
 - **AOT와 replay:** `docs/evta_runtime_aot.md`
