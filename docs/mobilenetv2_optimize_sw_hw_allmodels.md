@@ -1,4 +1,4 @@
-# MobileNetV2Tf multi4: 소프트웨어로 줄인 시간 (2026-11-25, 하드웨어 몫 §9: 11-26, 입력 quantize 겹치기 §10: 11-27)
+# MobileNetV2Tf 최적화 기록: 소프트웨어와 하드웨어, multi4와 single, 다른 모델에 준 영향 (2026-11-25 ~ 27; 소프트웨어 §1–§8, 하드웨어 §9, 입력 quantize 겹치기 §10)
 
 DPU S(B4096 하나, 270장/s)를 EVTA 4개(`MultiEVTAMobileNetV2TfTest`)로 넘으려고, 2026-11-25에 하드웨어를 바꾸지 않고 소프트웨어만 고친 기록이다.
 - 그 사이 ubuntu2가 depthwise 창 장치(`_dw`)를 bitstream에 넣었다(multi4 11-25 밤, single 11-26). 하드웨어로 줄어든 몫과 single에서의 효과는 §9에 따로 모은다.

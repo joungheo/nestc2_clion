@@ -24,7 +24,7 @@
 ### 2026-11-27 ubun 24ac3ef1, 6c862f40, 392d1a8 — 공통 main `INPUT_PIPELINE=1|2`(입력 quantize를 EVTA 연산과 겹침), vtalib-systolic `VTASetWaitWork`
 - **바뀐 것:** 공통 main `multi_threads_main.cpp`(15곳 같은 파일), `vtalib-zcu102-systolic`(`VTAInputInt8.h` `VTAInputQuantizeRows` / `VTASetWaitWork`,
   `pynq_driver.cc` `RunWait`이 기다리는 동안 그 일을 함, `sim_driver.cc` 빈 판, `CPUBundle_generic.cpp` NCHW quantize를 `vld3q_s8`로: 1.47 → 0.64 ms, 같은 바이트).
-  옵션을 켜지 않으면 동작은 전과 같다. [mobilenetv2_multi4_sw.md](mobilenetv2_multi4_sw.md) §10.
+  옵션을 켜지 않으면 동작은 전과 같다. [mobilenetv2_optimize_sw_hw_allmodels.md](mobilenetv2_optimize_sw_hw_allmodels.md) §10.
 - **다른 쪽이 할 일:** `실행 파일 다시 빌드`(systolic vtalib의 build dir; PC cross build도). **`vtabundles_xcmpl/hw*/<Dir>/multi_threads_main.cpp`는 git 밖 사본이다**:
   빌드는 그 사본을 쓰므로 git의 `vta/bundles/Resnet18Test/multi_threads_main.cpp`를 복사한 뒤 빌드한다(보드는 공통본 14곳을 복사했고 MobileNetV2Tf `_sys` 세 개를
   다시 빌드했다; 다른 Dir은 아직).
@@ -39,7 +39,7 @@
 - **바뀐 것:** `vtalib-zcu102-systolic/lib/Bundle/VTABundle.cpp` `conv_kernel`. 1×1 conv에서 thread의 weight가 wgt 몫에 안 들어가면 filter 묶음을 줄여 들어가게 한다.
   residual add가 있어도 마지막 thread의 weight가 identity entry(1023) 아래에서 끝나면 weight 한 번 LOAD 길을 쓴다. `EVTA_WGT_FIT=0` = 전과 같음.
   6개 모델 copy 0 conv dump가 켜고 끈 것끼리 바이트까지 같다. multi4 4개 동시: MobileNetV2Tf 286.4 → 294.7, MobileNetV2 278.9 → 288.0, Resnet50 57.35 → 58.9 fps,
-  Resnet18 / VGG16 / DeiT 같음([mobilenetv2_multi4_sw.md](mobilenetv2_multi4_sw.md) §7).
+  Resnet18 / VGG16 / DeiT 같음([mobilenetv2_optimize_sw_hw_allmodels.md](mobilenetv2_optimize_sw_hw_allmodels.md) §7).
 - **다른 쪽이 할 일:** systolic 실행 파일 다시 빌드(`build_systimed`, `build_sys*`, `build_multievtax4_sys*`, PC `_pcsys*`). bundle은 그대로.
 
 ### 2026-11-26 ubuntu2 (`70a02e0`, `8f3bda0`, `b580636`, 이 commit) — 보드 bundle 다시 생성, 범용 main, 새 single `_dw` bitstream, 최신 성능 기록
@@ -73,13 +73,13 @@
 
 ### 2026-11-25 ubun 1cdf422d — vtalib-systolic: 호출마다 CPU 시간을 줄임 (MobileNetV2Tf multi4 257.5 → 262.2 fps)
 - **바뀐 것:** `vtalib-zcu102-systolic/include/zcu102/cmd_queue.h`(buffer 조합마다 명령 사본 `EVTA_REPLAY_VARIANTS`, 다음 replay 짐작), `lib/zcu102/api.cc`(buffer pool을 thread마다;
-  `EVTA_BUF_POOL_SHARED=1`이면 전처럼). 출력 바이트는 같다. [mobilenetv2_multi4_sw.md](mobilenetv2_multi4_sw.md) §6.
+  `EVTA_BUF_POOL_SHARED=1`이면 전처럼). 출력 바이트는 같다. [mobilenetv2_optimize_sw_hw_allmodels.md](mobilenetv2_optimize_sw_hw_allmodels.md) §6.
 - **다른 쪽이 할 일:** `실행 파일 다시 빌드`(systolic vtalib의 build dir; PC cross build도). 보드의 MobileNetV2Tf `_sys` / `_systimed` 네 build dir은 다시 빌드했다.
 
 ### 2026-11-25 ubun 9680e43f — int8 입력이 기본(`.i8`이 없거나 맞지 않으면 float), `EVTA_CALL_TIME`
 - **바뀐 것:** 공통 main `multi_threads_main.cpp`(10곳), `vtalib-zcu102-systolic`(`VTASetInputInt8(d, data, hasFloat)`, `cmd_queue.h` `CallTimes`, `api.cc`),
   `run_prof.sh`(summary에 `input int8 / float`). main은 그림 `<이름>.png`의 `<이름>.i8`을 `$INPUT_INT8_DIR`, 그림의 dir, 실행 Dir의 `i8/`에서 찾는다.
-  [mobilenetv2_multi4_sw.md](mobilenetv2_multi4_sw.md) §3.4, 사용법은 [evta_user_manual.md](evta_user_manual.md) 환경 변수 표.
+  [mobilenetv2_optimize_sw_hw_allmodels.md](mobilenetv2_optimize_sw_hw_allmodels.md) §3.4, 사용법은 [evta_user_manual.md](evta_user_manual.md) 환경 변수 표.
 - **다른 쪽이 할 일:** `실행 파일 다시 빌드`(systolic vtalib의 build dir; PC cross build도). `.i8`이 없는 Dir은 전처럼 float로 돈다(로그 `Input: float`).
   보드 `hw/MobileNetV2TfTest/i8/`, `hw_multievtax4/MultiEVTAMobileNetV2TfTest/i8/`에는 `cat_285.i8`을 만들어 두었다. 같은 그림으로 float를 재려면 `INPUT_INT8=0`.
 

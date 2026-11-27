@@ -108,7 +108,7 @@ sudo /bin/sh -c "M4_BITS='<새>.bin <옛>.bin' S1_BITS='<a>.bin <b>.bin' vtabund
 
 ## 6. 1×1 weight 한 번 LOAD(`38e3da6`) 뒤 (2026-11-26 17:02–17:13, ubun)
 
-보드 공유 `build_sys`, `build_multievtax4_sys`를 `38e3da6`(vtalib-systolic `EVTA_WGT_FIT`, [mobilenetv2_multi4_sw.md](mobilenetv2_multi4_sw.md) §7)으로 다시 빌드하고,
+보드 공유 `build_sys`, `build_multievtax4_sys`를 `38e3da6`(vtalib-systolic `EVTA_WGT_FIT`, [mobilenetv2_optimize_sw_hw_allmodels.md](mobilenetv2_optimize_sw_hw_allmodels.md) §7)으로 다시 빌드하고,
 같은 실행 파일로 `EVTA_WGT_FIT=0`(전) / `1`(후)을 번갈아 2번씩 `perf_record.sh -r 1 single m4`로 쟀다. 표는 2번의 평균.
 `check`(`EVTA_RES_CHECK=1`)는 21개 실행 파일 모두 0 differ, 분류는 §1과 같다. 원자료: 보드 `~/JO/ubun_wt/perf_261126_wgtfit/`.
 한 장의 연산량(GOP, `run_prof.sh`가 찍는 값): Resnet18 3.700, Resnet50 / Resnet50Tv 8.178, VGG16 0.630, MobileNetV2 / MobileNetV2Tf 0.658, DeiT 2.182. GOPS = GOP × fps.
@@ -140,7 +140,7 @@ sudo /bin/sh -c "M4_BITS='<새>.bin <옛>.bin' S1_BITS='<a>.bin <b>.bin' vtabund
 - 1×1 conv의 thread weight가 wgt 몫을 넘는 모델만 빨라진다. multi4(몫 512 entry): Resnet50 / 50Tv −3.5 %, MobileNetV2 두 모델 −2.4–3.6 %(혼자).
   single(몫 1024 entry)은 MobileNetV2 두 모델의 7×7 960 → 160 / 320만 해당해 −1.2–1.6 %, Resnet50은 잡음 안이다.
 - 4개 동시는 이 2번에서 ±3–5 % 흔들려(VGG16 466.6–506.6 fps, 명령이 같은데도) 차이를 말할 수 없다. 혼자 값이 기준이다.
-  MobileNetV2Tf 4개 동시는 앞서 같은 실행 파일을 4번씩 번갈아 잰 284.9 → 292.0 fps(187 → 192 GOPS, §7.4 of mobilenetv2_multi4_sw.md)를 쓴다.
+  MobileNetV2Tf 4개 동시는 앞서 같은 실행 파일을 4번씩 번갈아 잰 284.9 → 292.0 fps(187 → 192 GOPS, §7.4 of mobilenetv2_optimize_sw_hw_allmodels.md)를 쓴다.
 - single 기본 bitstream은 §3과 같은 결론이다. `_dw` 387.5 MHz가 MobileNetV2 두 모델에서 −10.6 %(11.5 대 12.9 ms), 나머지는 1–3 % 느리다.
 - 처음 돌린 것(16:53)은 다른 사용자의 EVTA 실행이 lock을 잡고 있어 하나도 돌지 않았는데, `perf_record.sh`가 남아 있던 옛 로그를 읽어 결과처럼 적었다. 그래서 버렸다.
   `perf_record.sh`는 이제 lock을 기다리고(`LOCK_WAIT`, 기본 1800 s) 새로 쓰인 로그만 읽는다(`no new log`).
