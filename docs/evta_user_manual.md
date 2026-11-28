@@ -325,6 +325,9 @@ sudo cp /home/xilinx/JO/npuprg/bit/<목적>_<YYMMDD>/vtahw_<dir>.bin /lib/firmwa
 | `sim/run_csim.sh PROG=1 [rows] [seed]` | layer norm / softmax ALU 프로그램을 HLS ALU 위에서, bundle CPU 함수와 비교 | |
 | `sim/run_cosim.sh [seeds] [insns]` | `compute()`의 C/RTL co-simulation(vivado_hls, 컨테이너). 결과 `build/hardware/xilinx/cosim_alux/cosim.log` | 수십 분 |
 | `rtl/tb/run_xsim.sh <vector dir>` | systolic RTL 단위 시험([evta_systolic_design.md](evta_systolic_design.md)) | |
+| `rtl/tb/run_sa_array.sh [seeds]` | DSP 묶기 실험(2026-11-28): 배열만 xsim, `sa_array` / `sa_array_pk`(출력 채널 2개) / `sa_array_px`(픽셀 2개, x는 −127..127)을 참조값과 비교. `MODES=0 1 2` | |
+| `rtl/tb/run_gemm_sa_px.sh [seeds]` | `gemm_sa_px`(픽셀 2개, inp / acc / out 짝·홀 bank, RMW 2개, uop pair bit 67)를 같은 무작위 프로그램의 `gemm_sa`와 비교. `GAP=` | |
+| `vivado -mode batch -source rtl/syn/ooc_array.tcl -tclargs <0\|1\|2> 2.5 <out>` / `ooc_gemm.tcl -tclargs <ports\|mem> <0\|1> 2.5 <out>` | 배열만 / GEMM unit의 OOC 배치·배선(Y219 아래). `mem`은 BRAM과 HLS port mux 포함(`ooc_gemm_mem.v`) | |
 
 `run_cosim.sh`의 변형은 이렇다. 자세한 것은 스크립트 머리말에 있다.
 - `VTA_ALUX_WINDOW=16`: 16 step 안에서는 같은 자리를 다시 읽지 않는 프로그램만 쓴다.
@@ -961,6 +964,7 @@ diff -r /tmp/dumpA /tmp/dumpB && echo same; sudo rm -rf /tmp/dumpA /tmp/dumpB   
 | `EVTA_AVGPOOL=0` | 1 | systolic: `avgpool_evta`를 끄고 CPU avgpool |
 | `EVTA_LOAD_AHEAD` | 2 | systolic: 다음 filter group / tile의 LOAD를 앞당김. `0` 끔, `2`는 1x1 conv 상주 weight 재LOAD도 생략([evta_load_ahead_guide.md](evta_load_ahead_guide.md)) |
 | `EVTA_CONV_BURST=0` | 1 | systolic: conv DMA를 길게 묶는 것을 끔 |
+| `EVTA_1X1_XINNER=0` | 1 | systolic: 1x1 conv GEMM uop를 옛 순서(줄 y가 안쪽)로. 기본은 x가 안쪽(이웃 step이 dst+1): 픽셀 2개 GEMM 실험용, 결과·시간 같음(2026-11-29) |
 | `EVTA_INPUT_STREAM=0` | 1 | systolic: conv0 입력을 conv 전에 한 번에 채움. 기본은 tile 행마다 run을 나눠 겹침 |
 | `EVTA_MIN_TILE=<n>` | bitstream 이름 | systolic: 가장 작은 conv 출력 tile. 이름에 `_sa_`면 1, 아니면 7 |
 | `EVTA_SCHED=<H>,<W>,<C>,<KN>,<K>,<stride>:<vt>,<tileH>,<tileW>[;...]`, `EVTA_SCHED_LOG=1` | 없음 | systolic: conv 모양의 schedule을 실행 중에 바꾸기, conv마다 모양과 schedule 출력(compare §7.19) |
@@ -1046,6 +1050,7 @@ WS=7,17 python3 hazard_dump.py /tmp/rd
 | `run_epi_test.sh` | PC | conv epilogue를 세 방식(rq 끔, `EVTA_REQUANT=1`, `EVTA_ALUX=0`)으로 CPU와 비교 |
 | `sudo -n /bin/sh -c "run_alux_board_tests.sh [build\|run\|all]"` | 보드 (`_alux` bitstream 올린 뒤) | 위 시험들을 보드 EVTA에서. `EVTA_ALUX=0`이면 CPU 대체 경로. `CROSS=1`이면 PC에서 빌드 |
 | `WS=7,17 hazard_dump.py <EVTA_REPLAY_DUMP dir>` | 아무 데 | ALU hazard 검사: vector ALU 명령이 최근 W step 안에 쓴 acc 자리를 읽는지 |
+| `gemm_pair_est.py <EVTA_REPLAY_DUMP dir>` (+ `<dir>.runs` = `EVTA_RUN` 줄, `NINF=2` stock main) | 아무 데 | GEMM을 픽셀 2개 / 출력 채널 2개로 묶을 때의 GEMM cycle과 EVTA 시간 상한(2026-11-29, rtl `gemm_sa_px.v`) |
 
 ## 9. 하드웨어 시험 (보드, `vtabundles_xcmpl/hwtest/`)
 

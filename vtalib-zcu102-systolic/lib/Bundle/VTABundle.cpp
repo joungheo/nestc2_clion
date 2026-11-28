@@ -301,9 +301,32 @@ int gemmop_dw(void *param, VTACommandHandle cmdh) {
 
 //#### JO changed (2026-10-27, systolic GEMM): weight-stationary order as gemmop_mxn, same number of uops.
 //#### Old order: it_out = x, it_in = kernelIdx, uops = y. New order: it_out = kernelIdx, it_in = x, uops = y.
+//#### JO changed (2026-11-29, pixel pairs, rtl/gemm_sa_px.v, vtalib-zcu102-systolic/tests/gemm_pair_est.py): x innermost.
+//#### it_out = kernelIdx (as before), it_in = y, uops = ky x x: consecutive steps of a weight run are the pixels x, x+1 of a
+//#### row (dst + 1, src + stride_w) instead of the rows y, y+1 (dst + tile_w), so a two-pixel GEMM can pair them (Resnet50 /
+//#### MobileNetV2 / DeiT 1x1 convs: 43 / 39 / 16 % -> 84 / 76 / 99 % of the steps pairable). The same steps in another
+//#### order (the integer accumulation of one dst is unchanged: each dst once per kernel); tile_w uops instead of tile_h.
+//#### EVTA_1X1_XINNER=0: the order before.
+static bool Gemm1x1XInner() {
+  static const bool on = [] { const char *e = getenv("EVTA_1X1_XINNER"); return !e || atoi(e) != 0; }();
+  return on;
+}
+static int gemmop_1x1_xinner(struct gemmop_mxn *ctx, VTACommandHandle cmdh) {
+  VTAUopLoopBegin(cmdh, ctx->n_kernel_, ctx->tile_size_w_ * ctx->tile_size_h_, 0, ctx->wgt_kernel_factor_);
+  VTAUopLoopBegin(cmdh, ctx->tile_size_h_, ctx->tile_size_w_, ctx->stride_h_ * ctx->in_tile_size_w_, 0);
+  for (int dx = 0; dx < ctx->kernel_h_; dx++)
+    for (int x = 0; x < ctx->tile_size_w_; x++)
+      VTAUopPush(cmdh, 0, 0, ctx->output_base_addr_ + x, ctx->input_base_addr_ + dx * ctx->in_tile_size_w_ + x * ctx->stride_w_,
+                 ctx->weight_base_addr_ + dx * ctx->kernel_w_, 0, 0, 0);
+  VTAUopLoopEnd(cmdh);
+  VTAUopLoopEnd(cmdh);
+  return 0;
+}
+
 int gemmop_1x1(void *param,VTACommandHandle cmdh) {
 
   struct gemmop_mxn *ctx = (struct gemmop_mxn *) (param);
+  if (Gemm1x1XInner()) return gemmop_1x1_xinner(ctx, cmdh);
   // VTAUopLoopBegin(cmdh, ctx->tile_size_w_, 1, ctx->stride_w_, 0);
   // VTAUopLoopBegin(cmdh, ctx->n_kernel_, ctx->tile_size_w_ * ctx->tile_size_h_, 0, 1);
   // VTAUopLoopBegin(cmdh, ctx->n_kernel_, ctx->tile_size_w_ * ctx->tile_size_h_, 0, 1);
